@@ -90,6 +90,16 @@ enum NetworkCommand {
     Configure {
         selection: optn_transport::chain_sources::WireConnectionPolicy,
     },
+    Add {
+        request: optn_transport::chain_sources::AddSourceRequest,
+    },
+    Disposition {
+        source: String,
+        disposition: String,
+    },
+    Remove {
+        source: String,
+    },
 }
 
 async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkCommand) -> Value {
@@ -100,7 +110,10 @@ async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkC
             NetworkCommand::Credentials { .. } => "network configure",
             NetworkCommand::Select { .. } => "network select",
             NetworkCommand::Configure { .. } => "network configure",
-            NetworkCommand::Policy { .. } => "network configure",
+            NetworkCommand::Policy { .. }
+            | NetworkCommand::Add { .. }
+            | NetworkCommand::Disposition { .. }
+            | NetworkCommand::Remove { .. } => "network configure",
         };
         crate::skills::enforce(crate::skills::Policy::from_env()?, skill)?;
         if runtime.state().network != cli.network {
@@ -151,6 +164,29 @@ async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkC
                 &selection,
             )
             .map_err(CliError::Usage)?,
+            NetworkCommand::Add { request } => crate::network_settings::add_source(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &request,
+            )
+            .map_err(CliError::Usage)?,
+            NetworkCommand::Disposition {
+                source,
+                disposition,
+            } => crate::network_settings::set_source_disposition(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &source,
+                &disposition,
+            )
+            .map_err(CliError::Usage)?,
+            NetworkCommand::Remove { source } => crate::network_settings::remove_source(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &source,
+            )
+            .await
+            .map_err(CliError::Usage)?,
         }
         crate::shared_network_status(cli)
     }
@@ -168,6 +204,15 @@ fn network_prompt(argument: &str) -> Result<NetworkCommand> {
             .map(|selection| NetworkCommand::Configure { selection })
             .map_err(|_| {
                 CliError::Usage("Use network configure followed by a selection JSON object.".into())
+            });
+    }
+    if let Some(json) = argument.strip_prefix("add ") {
+        return serde_json::from_str(json)
+            .map(|request| NetworkCommand::Add { request })
+            .map_err(|_| {
+                CliError::Usage(
+                    "Use network add followed by an AddSourceRequest JSON object.".into(),
+                )
             });
     }
     let parts = crate::console::split(argument)?;
@@ -191,7 +236,11 @@ fn network_prompt(argument: &str) -> Result<NetworkCommand> {
             Ok(NetworkCommand::Select { source: source.clone(), protocol: crate::ChainProtocol::from_str(protocol, false)
                 .map_err(|_| CliError::Usage("Use electrum, bip37, neutrino, node-rpc or node-events.".into()))? })
         },
-        _ => Err(CliError::Usage("Use network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, or network configure <JSON>.".into())),
+        [remove, source] if remove == "remove" => Ok(NetworkCommand::Remove { source: source.clone() }),
+        [disposition, source, value] if disposition == "disposition" => Ok(NetworkCommand::Disposition {
+            source: source.clone(), disposition: value.clone(),
+        }),
+        _ => Err(CliError::Usage("Use network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, network add <JSON>, network disposition <id> enabled|disabled|banned, network remove <id>, or network configure <JSON>.".into())),
     }
 }
 
@@ -219,7 +268,7 @@ fn birthday_prompt(argument: &str) -> Result<optn_transport::security::WalletBir
     }
 }
 
-const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, assets, nfts, network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
+const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, assets, nfts, network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, network add <JSON>, network disposition <id> enabled|disabled|banned, network remove <id>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]

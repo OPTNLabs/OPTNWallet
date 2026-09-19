@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use optn_chain_native::network_config::NetworkConfigFile;
 use optn_core::endpoint::{parse_electrum_endpoint, ElectrumEndpoint};
 use optn_core::network::Network;
-use optn_runtime::chain::{ConnectionPolicy, SourceCatalog};
+use optn_runtime::chain::{
+    ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceDisposition, SourceId,
+};
 use optn_runtime::network_config::{
     legacy_network_servers_from_overlay, resolve_shipped_chain_selection, NetworkConfigEnvelope,
     NetworkConfigStore,
@@ -110,8 +112,12 @@ pub fn select_source(
     NetworkConfigFile::new(directory.join(file_name(network)))
         .update(|existing| {
             let mut envelope = existing.unwrap_or_else(|| {
-                NetworkConfigEnvelope::current("optn-shipped-v1", Default::default())
+                NetworkConfigEnvelope::current(
+                    optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
+                    Default::default(),
+                )
             });
+            optn_runtime::network_config::promote_legacy_policy(&mut envelope);
             let (catalog, _) = resolve_shipped_chain_selection(network, Some(&envelope))
                 .map_err(|error| format!("invalid network settings: {error:?}"))?;
             let id = optn_runtime::chain::SourceId::new(source);
@@ -129,6 +135,171 @@ pub fn select_source(
             Ok(envelope)
         })
         .map(|_| ())
+}
+
+/// Add one user-entered endpoint with the same request shape as the GUI host.
+///
+/// The requested network, when present, is an assertion from an imported or
+/// scripted payload. It may not redirect a command into another network file.
+pub fn add_source(
+    network: Network,
+    directory: Option<&Path>,
+    request: &optn_transport::chain_sources::AddSourceRequest,
+) -> Result<(), String> {
+    validate_request_network(network, request.network.as_deref())?;
+    let endpoint = Endpoint {
+        kind: parse_endpoint_kind(&request.kind)?,
+        host: request.host.clone(),
+        port: request.port,
+    };
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    NetworkConfigFile::new(directory.join(file_name(network)))
+        .update(|existing| {
+            let mut envelope = existing.unwrap_or_else(|| {
+                NetworkConfigEnvelope::current(
+                    optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
+                    Default::default(),
+                )
+            });
+            optn_runtime::network_config::promote_legacy_policy(&mut envelope);
+            optn_runtime::network_config::add_user_source(
+                &mut envelope.overlay,
+                &request.label,
+                endpoint.clone(),
+                request.infrastructure_group.as_deref(),
+            )?;
+            Ok(envelope)
+        })
+        .map(|_| ())
+}
+
+/// Change a source disposition without accepting an arbitrary override key.
+pub fn set_source_disposition(
+    network: Network,
+    directory: Option<&Path>,
+    source: &str,
+    disposition: &str,
+) -> Result<(), String> {
+    let disposition = parse_source_disposition(disposition)?;
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    NetworkConfigFile::new(directory.join(file_name(network)))
+        .update(|existing| {
+            let mut envelope = existing.unwrap_or_else(|| {
+                NetworkConfigEnvelope::current(
+                    optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
+                    Default::default(),
+                )
+            });
+            optn_runtime::network_config::promote_legacy_policy(&mut envelope);
+            let (catalog, _) = resolve_shipped_chain_selection(network, Some(&envelope))
+                .map_err(|error| format!("invalid network settings: {error:?}"))?;
+            let id = SourceId::new(source);
+            if catalog.get(&id).is_none() {
+                return Err("source is not in this network catalog".into());
+            }
+            optn_runtime::network_config::set_source_disposition(
+                &mut envelope.overlay,
+                &id,
+                disposition,
+            )?;
+            Ok(envelope)
+        })
+        .map(|_| ())
+}
+
+/// Clear any endpoint-bound local RPC credential before removing its source.
+///
+/// Clearing first is deliberately fail-closed: secure-storage trouble leaves
+/// the route configured instead of deleting its visible configuration while a
+/// machine-local credential remains behind.
+pub async fn remove_source(
+    network: Network,
+    directory: Option<&Path>,
+    source: &str,
+) -> Result<(), String> {
+    use optn_runtime::rpc_credentials as rpc;
+
+    let selection =
+        shared_chain_selection(network, directory)?.ok_or("Source catalog is unavailable.")?;
+    let id = SourceId::new(source);
+    let configured = selection
+        .catalog
+        .get(&id)
+        .ok_or("source is not in this network catalog")?;
+    if !configured.can_remove() {
+        return Err(
+            "bootstrap sources cannot be deleted; disable or ban the source instead".into(),
+        );
+    }
+
+    let store = optn_platform_native::NativeSecureStorage::new(rpc::RPC_CREDENTIAL_SERVICE);
+    rpc::remove(&store, network, &selection.catalog, source)
+        .await
+        .map_err(|_| "RPC credential operation failed; source was not removed.".to_owned())?;
+
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    NetworkConfigFile::new(directory.join(file_name(network)))
+        .update(|existing| {
+            let mut envelope = existing.ok_or("source configuration was not found")?;
+            optn_runtime::network_config::promote_legacy_policy(&mut envelope);
+            let (catalog, _) = resolve_shipped_chain_selection(network, Some(&envelope))
+                .map_err(|error| format!("invalid network settings: {error:?}"))?;
+            let current = catalog
+                .get(&id)
+                .ok_or("source is not in this network catalog")?;
+            if !current.can_remove() {
+                return Err(
+                    "bootstrap sources cannot be deleted; disable or ban the source instead".into(),
+                );
+            }
+            if current.endpoints != configured.endpoints {
+                return Err(
+                    "source endpoints changed while clearing RPC credentials; source was not removed"
+                        .into(),
+                );
+            }
+            optn_runtime::network_config::remove_user_source(&mut envelope.overlay, &id)?;
+            Ok(envelope)
+        })
+        .map(|_| ())
+}
+
+fn validate_request_network(network: Network, requested: Option<&str>) -> Result<(), String> {
+    let Some(requested) = requested else {
+        return Ok(());
+    };
+    let parsed = requested
+        .parse::<Network>()
+        .map_err(|_| "source request has an invalid network".to_owned())?;
+    if parsed != network {
+        return Err("source request targets a different network".into());
+    }
+    Ok(())
+}
+
+fn parse_endpoint_kind(value: &str) -> Result<EndpointKind, String> {
+    match value {
+        "p2p" => Ok(EndpointKind::BchP2p),
+        "electrum-tls" => Ok(EndpointKind::ElectrumTls),
+        "electrum-tcp" => Ok(EndpointKind::ElectrumTcp),
+        "node-rpc" => Ok(EndpointKind::BchnRpc),
+        "node-zmq" => Ok(EndpointKind::BchnZmq),
+        "explorer-https" => Ok(EndpointKind::ExplorerHttps),
+        "explorer-http" => Ok(EndpointKind::ExplorerHttp),
+        other => Err(format!("unknown endpoint kind '{other}'")),
+    }
+}
+
+fn parse_source_disposition(value: &str) -> Result<SourceDisposition, String> {
+    match value {
+        "enabled" => Ok(SourceDisposition::Enabled),
+        "disabled" => Ok(SourceDisposition::Disabled),
+        "banned" => Ok(SourceDisposition::Banned),
+        other => Err(format!("unknown source disposition '{other}'")),
+    }
 }
 
 pub fn parse_policy_preset(
