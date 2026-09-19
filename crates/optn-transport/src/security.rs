@@ -2,10 +2,42 @@
 use optn_app::SecretText;
 use serde::{Deserialize, Serialize};
 
+/// User-supplied wallet-origin information.
+///
+/// This deliberately has no `CreatedAt` variant. A creation anchor is a
+/// host-authenticated fact and can only be exposed as read-only status after
+/// the runtime has verified it against its header view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WalletBirthdayInput {
+    #[default]
+    Unknown,
+    Height {
+        height: u32,
+    },
+    Time {
+        requested_time: u32,
+    },
+}
+
+/// Read-only birthday information returned by the authenticated runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WalletBirthdayView {
+    Unknown,
+    ImportedAtHeight { height: u32 },
+    ImportedAtTime { requested_time: u32 },
+    CreatedAt { height: u32, block_hash: [u8; 32] },
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum WalletSecurityRequest {
     Status,
+    SetBirthday {
+        epoch: u64,
+        birthday: WalletBirthdayInput,
+    },
     NextReceive {
         epoch: u64,
         #[serde(default)]
@@ -67,6 +99,10 @@ pub struct WalletSecurityStatus {
     pub warning: Option<String>,
     #[serde(default)]
     pub needs_auto_lock_confirmation: bool,
+    /// Authenticated, read-only restore provenance. `None` means no wallet is
+    /// open or the host has not installed restore metadata yet.
+    #[serde(default)]
+    pub restore_birthday: Option<WalletBirthdayView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

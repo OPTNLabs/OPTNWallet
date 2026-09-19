@@ -1,4 +1,5 @@
 //! Wallet-password lifecycle shared by native GUI and CLI hosts.
+use crate::wallet_birthday::{WalletBirthday, WalletRestoreState};
 use crate::wallet_checkpoint::{WalletCheckpoint, WalletCheckpointStorage};
 use crate::wallet_sync::WalletReconciliation;
 use optn_app::{AppAction, AppState, AutoLockMinutes, Network, SecretText, WalletKind};
@@ -8,7 +9,8 @@ use optn_core::{
 };
 use optn_platform::{WalletBiometrics, WalletStorage};
 use optn_transport::{
-    StoredWallet, TransportError, WalletSecurityRequest as Request, WalletSecurityStatus,
+    StoredWallet, TransportError, WalletBirthdayInput, WalletBirthdayView,
+    WalletSecurityRequest as Request, WalletSecurityStatus,
 };
 use zeroize::Zeroizing;
 
@@ -102,6 +104,7 @@ struct Session {
     epoch: u64,
     xpub: String,
     network: Network,
+    restore_state: WalletRestoreState,
     checkpoint: Option<CheckpointSession>,
 }
 
@@ -192,6 +195,7 @@ impl WalletSecurity {
         &mut self,
         app: &AppState,
         state: &WalletReconciliation,
+        restore_state: &WalletRestoreState,
         header_progress: Option<&crate::wallet_checkpoint::StoredHeaderProgress>,
     ) -> Result<(), TransportError> {
         let Some(storage) = &self.checkpoints else {
@@ -202,7 +206,8 @@ impl WalletSecurity {
             .checkpoint
             .as_ref()
             .ok_or_else(|| failure("Wallet checkpoint session is unavailable."))?;
-        let mut checkpoint = WalletCheckpoint::capture(app, state).map_err(failure)?;
+        let mut checkpoint =
+            WalletCheckpoint::capture(app, state, restore_state).map_err(failure)?;
         // Sealed with the record, because a commitment a file asserts about
         // itself proves nothing; the AEAD is what makes it trustworthy.
         if let Some(progress) = header_progress {
@@ -235,6 +240,9 @@ impl WalletSecurity {
         ))?;
         if bytes != session.bytes {
             return Err(failure("Wallet changed on disk. Lock and reopen it."));
+        }
+        if let Some(session) = self.session.as_mut() {
+            session.restore_state = restore_state.clone();
         }
         Ok(())
     }
@@ -346,7 +354,26 @@ impl WalletSecurity {
                 .auto_lock_minutes()
                 .map_err(policy_error)?
                 .is_none(),
+            restore_birthday: active.map(|session| match &session.restore_state.birthday {
+                WalletBirthday::Unknown => WalletBirthdayView::Unknown,
+                WalletBirthday::ImportedAtHeight { height } => {
+                    WalletBirthdayView::ImportedAtHeight { height: *height }
+                }
+                WalletBirthday::ImportedAtTime { requested_time } => {
+                    WalletBirthdayView::ImportedAtTime {
+                        requested_time: *requested_time,
+                    }
+                }
+                WalletBirthday::CreatedAt(anchor) => WalletBirthdayView::CreatedAt {
+                    height: anchor.height,
+                    block_hash: anchor.block_hash,
+                },
+            }),
         })
+    }
+
+    pub(crate) fn restore_state(&self) -> Option<&WalletRestoreState> {
+        self.session.as_ref().map(|session| &session.restore_state)
     }
 
     fn open(
@@ -453,6 +480,11 @@ impl WalletSecurity {
         {
             restored.validate_wallet(&candidate).map_err(failure)?;
         }
+        let restore_state = checkpoint
+            .as_ref()
+            .and_then(|binding| binding.restored.as_ref())
+            .map(|checkpoint| checkpoint.restore_state().clone())
+            .unwrap_or_default();
         if let (Some(binding), Some(storage)) = (checkpoint.as_mut(), self.checkpoints.as_ref()) {
             let history = binding
                 .restored
@@ -471,7 +503,8 @@ impl WalletSecurity {
             candidate.hd_addresses = Some(previous.clone().unwrap_or_default());
             crate::wallet_checkpoint::observe_allocation(&mut candidate, &history)
                 .map_err(failure)?;
-            let mut restored = WalletCheckpoint::capture(&candidate, &history).map_err(failure)?;
+            let mut restored =
+                WalletCheckpoint::capture(&candidate, &history, &restore_state).map_err(failure)?;
             if let Some(progress) = binding
                 .restored
                 .as_ref()
@@ -504,6 +537,7 @@ impl WalletSecurity {
             epoch: state.lock.unlock_epoch,
             xpub,
             network,
+            restore_state,
             checkpoint,
         });
         Ok(())
@@ -525,6 +559,37 @@ impl WalletSecurity {
         }
         match request {
             Request::Status => {}
+            Request::SetBirthday { epoch, birthday } => {
+                self.bound(state, epoch)?;
+                if self.checkpoints.is_none() {
+                    return Err(failure("Durable wallet restore storage is unavailable."));
+                }
+                let mut next = self
+                    .restore_state()
+                    .cloned()
+                    .ok_or_else(|| failure("Unlock the wallet first."))?;
+                let birthday = match birthday {
+                    WalletBirthdayInput::Unknown => WalletBirthday::Unknown,
+                    WalletBirthdayInput::Height { height } => {
+                        WalletBirthday::ImportedAtHeight { height }
+                    }
+                    WalletBirthdayInput::Time { requested_time } => {
+                        WalletBirthday::ImportedAtTime { requested_time }
+                    }
+                };
+                let changed = next.set_birthday(birthday).map_err(failure)?;
+                if changed {
+                    // A corrected imported hint invalidates the old coverage
+                    // projection before the new sealed state is exposed.
+                    let mut candidate = state.clone();
+                    candidate.wallet_sync.scan_coverage = None;
+                    candidate.wallet_sync.rescan_requested =
+                        next.manual_rescan.map(|rescan| rescan.from_height);
+                    self.persist_checkpoint(&candidate, history, &next, header_progress)?;
+                    *state = candidate;
+                    self.checkpoint_published();
+                }
+            }
             Request::NextReceive {
                 epoch,
                 acknowledge_gap,
@@ -544,7 +609,11 @@ impl WalletSecurity {
                     .map_err(crypto)?;
                 crate::wallet_checkpoint::update_receive_address(&mut candidate)
                     .map_err(failure)?;
-                self.persist_checkpoint(&candidate, history, header_progress)?;
+                let restore_state = self
+                    .restore_state()
+                    .cloned()
+                    .ok_or_else(|| failure("Unlock the wallet first."))?;
+                self.persist_checkpoint(&candidate, history, &restore_state, header_progress)?;
                 *state = candidate;
                 self.checkpoint_published();
             }
@@ -822,6 +891,70 @@ pub(crate) mod tests {
             Ok(())
         }
     }
+
+    #[derive(Clone, Default)]
+    struct TestCheckpoints {
+        files: Arc<Mutex<BTreeMap<[u8; 32], Vec<u8>>>>,
+        writes: Arc<AtomicU8>,
+    }
+
+    impl TestCheckpoints {
+        fn invalidate_revision(&self) {
+            self.files
+                .lock()
+                .unwrap()
+                .values_mut()
+                .next()
+                .expect("created wallet checkpoint")
+                .push(0);
+        }
+    }
+
+    impl WalletCheckpointStorage for TestCheckpoints {
+        fn load(
+            &self,
+            id: &[u8; 32],
+            key: &optn_core::wallet_pack::PackKey,
+        ) -> Result<Option<(WalletCheckpoint, [u8; 32])>, String> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(id)
+                .map(|bytes| {
+                    Ok((
+                        WalletCheckpoint::open(key, bytes)?,
+                        optn_core::header_hash::sha256d(bytes),
+                    ))
+                })
+                .transpose()
+        }
+
+        fn store(
+            &self,
+            id: &[u8; 32],
+            checkpoint: &WalletCheckpoint,
+            key: &optn_core::wallet_pack::PackKey,
+            expected: Option<[u8; 32]>,
+        ) -> Result<[u8; 32], String> {
+            let mut files = self.files.lock().unwrap();
+            if files
+                .get(id)
+                .map(|bytes| optn_core::header_hash::sha256d(bytes))
+                != expected
+            {
+                return Err("stale checkpoint revision".into());
+            }
+            let sequence = u64::from(self.writes.fetch_add(1, Ordering::SeqCst)) + 1;
+            let nonce = core::array::from_fn(|index| {
+                sequence.wrapping_add(index as u64).to_le_bytes()[0].wrapping_add(1)
+            });
+            let bytes = checkpoint.seal(key, &nonce)?;
+            let revision = optn_core::header_hash::sha256d(&bytes);
+            files.insert(*id, bytes);
+            Ok(revision)
+        }
+    }
+
     #[derive(Clone, Default)]
     struct Biometric(Arc<Mutex<BTreeMap<String, Vec<u8>>>>);
     impl WalletBiometrics for Biometric {
@@ -848,6 +981,187 @@ pub(crate) mod tests {
     }
     fn secret(value: &str) -> SecretText {
         SecretText::new(value.into())
+    }
+
+    fn create_request() -> Request {
+        Request::Create {
+            name: "Public durable birthday fixture".into(),
+            mnemonic: secret(hd::BIP39_TEST_VECTOR_MNEMONIC),
+            bip39_passphrase: secret(""),
+            password: secret(""),
+            confirmation: secret(""),
+            network: "chipnet".into(),
+            account_path: "m/44'/1'/0'".into(),
+        }
+    }
+
+    #[test]
+    fn set_birthday_requires_durable_checkpoint_storage() {
+        let storage = Storage::default();
+        let mut security = WalletSecurity::new(Box::new(storage), None);
+        let mut state = AppState::default();
+        let history = WalletReconciliation::default();
+        let opened = security
+            .handle(&mut state, create_request(), 1, &history, None)
+            .unwrap();
+        let before = state.clone();
+
+        let error = security
+            .handle(
+                &mut state,
+                Request::SetBirthday {
+                    epoch: opened.epoch,
+                    birthday: WalletBirthdayInput::Height { height: 0 },
+                },
+                2,
+                &history,
+                None,
+            )
+            .expect_err("a birthday must not be acknowledged without durable storage");
+        assert!(matches!(
+            error,
+            TransportError::Other(message) if message.contains("restore storage is unavailable")
+        ));
+        assert_eq!(state, before);
+        assert_eq!(
+            security.status(&state).unwrap().restore_birthday,
+            Some(WalletBirthdayView::Unknown)
+        );
+    }
+
+    #[test]
+    fn failed_birthday_cas_preserves_hint_coverage_and_balance() {
+        let storage = Storage::default();
+        let checkpoints = TestCheckpoints::default();
+        let mut security = WalletSecurity::new(Box::new(storage), None)
+            .with_checkpoints(Box::new(checkpoints.clone()));
+        let mut state = AppState::default();
+        let history = WalletReconciliation::default();
+        let opened = security
+            .handle(&mut state, create_request(), 1, &history, None)
+            .unwrap();
+        security
+            .handle(
+                &mut state,
+                Request::SetBirthday {
+                    epoch: opened.epoch,
+                    birthday: WalletBirthdayInput::Height { height: 7 },
+                },
+                2,
+                &history,
+                None,
+            )
+            .unwrap();
+        state.wallet_sync.scan_coverage = Some(optn_app::ScanCoverageView {
+            from_height: 7,
+            skipped_below: Some(7),
+            chosen_by_holder: true,
+        });
+        let before = state.clone();
+        let before_status = security.status(&state).unwrap();
+        checkpoints.invalidate_revision();
+        let before_files = checkpoints.files.lock().unwrap().clone();
+        let error = security
+            .handle(
+                &mut state,
+                Request::SetBirthday {
+                    epoch: opened.epoch,
+                    birthday: WalletBirthdayInput::Time {
+                        requested_time: 172_800,
+                    },
+                },
+                3,
+                &history,
+                None,
+            )
+            .expect_err("a failed checkpoint save must not publish the hint");
+        assert!(matches!(
+            error,
+            TransportError::Other(message) if message.contains("stale checkpoint revision")
+        ));
+        assert_eq!(state, before);
+        assert_eq!(state.coins, before.coins);
+        assert_eq!(
+            state.wallet_sync.scan_coverage,
+            before.wallet_sync.scan_coverage
+        );
+        assert_eq!(security.status(&state).unwrap(), before_status);
+        assert_eq!(*checkpoints.files.lock().unwrap(), before_files);
+    }
+
+    #[test]
+    fn imported_birthday_can_be_corrected_after_progress_and_survives_reopen() {
+        let storage = Storage::default();
+        let checkpoints = TestCheckpoints::default();
+        let mut security = WalletSecurity::new(Box::new(storage.clone()), None)
+            .with_checkpoints(Box::new(checkpoints.clone()));
+        let mut state = AppState::default();
+        let history = WalletReconciliation::default();
+        let opened = security
+            .handle(&mut state, create_request(), 1, &history, None)
+            .unwrap();
+        security
+            .handle(
+                &mut state,
+                Request::SetBirthday {
+                    epoch: opened.epoch,
+                    birthday: WalletBirthdayInput::Height { height: 7 },
+                },
+                2,
+                &history,
+                None,
+            )
+            .unwrap();
+        security
+            .session
+            .as_mut()
+            .expect("open session")
+            .restore_state
+            .record_scanned_through(70);
+        state.wallet_sync.scan_coverage = Some(optn_app::ScanCoverageView {
+            from_height: 7,
+            skipped_below: Some(7),
+            chosen_by_holder: true,
+        });
+
+        let corrected = security
+            .handle(
+                &mut state,
+                Request::SetBirthday {
+                    epoch: opened.epoch,
+                    birthday: WalletBirthdayInput::Time {
+                        requested_time: 172_800,
+                    },
+                },
+                3,
+                &history,
+                None,
+            )
+            .expect("a user supplied birthday remains correctable");
+        assert_eq!(
+            corrected.restore_birthday,
+            Some(WalletBirthdayView::ImportedAtTime {
+                requested_time: 172_800
+            })
+        );
+        assert_eq!(state.wallet_sync.scan_coverage, None);
+
+        let mut restarted =
+            WalletSecurity::new(Box::new(storage), None).with_checkpoints(Box::new(checkpoints));
+        let mut reopened_state = AppState::default();
+        let reopened = restarted
+            .handle(
+                &mut reopened_state,
+                Request::Open {
+                    handle: opened.active.expect("wallet handle"),
+                    password: secret(""),
+                },
+                4,
+                &history,
+                None,
+            )
+            .expect("corrected birthday reopens");
+        assert_eq!(reopened.restore_birthday, corrected.restore_birthday);
     }
 
     #[tokio::test]
