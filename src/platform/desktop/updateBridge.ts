@@ -10,6 +10,15 @@ import { invoke } from '@tauri-apps/api/core';
  * prerelease is one.
  */
 export type UpdateCheck = {
+  /**
+   * Whether this build can verify an update's signature, and so whether it may
+   * install one.
+   *
+   * False when no public key is configured. The check still works and still
+   * links to the release page; what is withheld is the install button, because
+   * installing what cannot be verified is the whole danger.
+   */
+  verified_install: boolean;
   /** The running build, as a tag. */
   current: string;
   channel: 'stable' | 'beta' | 'alpha';
@@ -25,4 +34,15 @@ export function checkForUpdate(
   alpha: boolean
 ): Promise<UpdateCheck> {
   return invoke('optn_check_for_update', { beta, alpha });
+}
+
+/**
+ * Download and install the update, verifying its signature first.
+ *
+ * Only offered when `verified_install` is true. Every byte is checked against
+ * the public key compiled into this build before anything runs; a missing or
+ * wrong signature fails rather than warns. Resolves with the version installed.
+ */
+export function installUpdate(): Promise<string> {
+  return invoke('optn_install_update');
 }

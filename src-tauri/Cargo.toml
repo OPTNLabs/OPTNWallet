@@ -119,6 +119,13 @@ hex = "0.4"
 optn-platform-native = { path = "../crates/optn-platform-native", version = "=1.7.3", features = ["clipboard"] }
 hidapi = "2.6"
 tauri-plugin-keyring = "=0.1.0"
+# Signature-verified desktop updates. rustls rather than the platform TLS
+# stack, to match every other outbound path in this shell; `zip` is what the
+# Windows and macOS update archives are.
+tauri-plugin-updater = { version = "=2.11.0", default-features = false, features = [
+  "rustls-tls",
+  "zip",
+] }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-clipboard-manager = "=2.3.2"

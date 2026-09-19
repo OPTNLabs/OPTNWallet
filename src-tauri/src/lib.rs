@@ -1114,6 +1114,14 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_keyring::init());
 
+    // Desktop only: mobile builds are updated by their stores. Registering the
+    // plugin does not by itself enable updates -- without a public key in the
+    // configuration it has no way to verify anything, and every call returns an
+    // error that `app_update` reports as "signature checking is not configured"
+    // rather than falling back to an unverified download.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
 
@@ -1124,6 +1132,7 @@ pub fn run() {
             chain_sources::optn_chain_set_policy,
             chain_sources::optn_chain_trust_socks_proxy,
             app_update::optn_check_for_update,
+            app_update::optn_install_update,
             chain_sources::optn_chain_set_source_disposition,
             chain_sources::optn_chain_add_source,
             chain_sources::optn_chain_remove_source,

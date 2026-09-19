@@ -619,6 +619,43 @@ jobs:
           fi
           echo "signed $count bundled Tor binaries"
 
+      - name: Configure update signing
+        shell: bash
+        env:
+          UPDATER_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
+          UPDATER_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # Two states and no third. With a key pair this build produces
+          # artifacts the installed application will verify before running; with
+          # neither, it produces exactly what it produces today and the app has
+          # no installer at all. A half-configured pair is an error rather than
+          # a silent downgrade to one of those.
+          if [ -n "$UPDATER_PUBLIC_KEY" ] && [ -n "$UPDATER_PRIVATE_KEY" ]; then
+            config=src-tauri/tauri.updater.runtime.conf.json
+            python3 - "$config" <<'PY'
+          import json, os, sys
+          template = json.load(open('src-tauri/tauri.updater.conf.json'))
+          template.pop('$comment', None)
+          key = os.environ['UPDATER_PUBLIC_KEY'].strip()
+          placeholder = template['plugins']['updater']['pubkey']
+          assert placeholder.startswith('REPLACE_WITH_'), placeholder
+          assert key and not key.startswith('REPLACE_WITH_'), 'refusing to ship the placeholder key'
+          template['plugins']['updater']['pubkey'] = key
+          json.dump(template, open(sys.argv[1], 'w'), indent=2)
+          PY
+            echo "TAURI_BUILD_ARGS=--config $config" >> "$GITHUB_ENV"
+            echo "UPDATE_SIGNING=true" >> "$GITHUB_ENV"
+            echo "::notice::Desktop updates will be signed and verifiable."
+          elif [ -z "$UPDATER_PUBLIC_KEY" ] && [ -z "$UPDATER_PRIVATE_KEY" ]; then
+            echo "TAURI_BUILD_ARGS=" >> "$GITHUB_ENV"
+            echo "UPDATE_SIGNING=false" >> "$GITHUB_ENV"
+            echo "::notice::No update signing key; this release checks for updates but cannot install them. See docs/desktop-update-signing.md."
+          else
+            echo "::error::Partial update signing configuration. Set both the TAURI_SIGNING_PUBLIC_KEY variable and the TAURI_SIGNING_PRIVATE_KEY secret, or neither."
+            exit 1
+          fi
+
       - name: Build non-macOS desktop bundles
         if: "!startsWith(matrix.platform, 'macos')"
         env:
@@ -626,7 +663,7 @@ jobs:
           NO_STRIP: 'true'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build --target ${{ matrix.target }}
+        run: npx tauri build --target ${{ matrix.target }} ${TAURI_BUILD_ARGS}
 
       - name: Build signed and notarized macOS bundles
         if: startsWith(matrix.platform, 'macos') && env.MACOS_SIGNING_AVAILABLE == 'true'
@@ -648,7 +685,7 @@ jobs:
           attempt=1
           max=3
           while true; do
-            if npx tauri build --target "$target"; then
+            if npx tauri build --target "$target" ${TAURI_BUILD_ARGS:-}; then
               exit 0
             fi
             if [ "$attempt" -ge "$max" ]; then
@@ -683,7 +720,7 @@ jobs:
           attempt=1
           max=3
           while true; do
-            if npx tauri build --target "$target"; then
+            if npx tauri build --target "$target" ${TAURI_BUILD_ARGS:-}; then
               exit 0
             fi
             if [ "$attempt" -ge "$max" ]; then
@@ -1571,6 +1608,40 @@ jobs:
                 esac
                 ;;
               *.deb|*.rpm)       place "$src" "$base" ;;
+              # Update artifacts and their detached signatures. The .app.tar.gz
+              # exists only for updating; the .dmg stays the thing a person
+              # downloads. A .sig is published beside each so the manifest can
+              # point at both, and so a holder can verify by hand.
+              *.app.tar.gz|*.app.tar.gz.sig)
+                ext=""
+                case "$base" in *.sig) ext=".sig" ;; esac
+                case "$base" in
+                  *aarch64*|*arm64*) place "$src" "OPTNWallet-${VERSION}-macos-arm64.app.tar.gz${ext}" ;;
+                  *x64*|*x86_64*)    place "$src" "OPTNWallet-${VERSION}-macos-x64.app.tar.gz${ext}" ;;
+                  *)
+                    echo "::error::unrecognised architecture in $base; add it to the rename map"
+                    exit 1
+                    ;;
+                esac
+                ;;
+              *-setup.exe.sig)   place "$src" "OPTNWallet-${VERSION}-windows-x64-setup.exe.sig" ;;
+              *.AppImage.sig)
+                case "$base" in
+                  *aarch64*|*arm64*) place "$src" "OPTNWallet-${VERSION}-linux-arm64.AppImage.sig" ;;
+                  *amd64*|*x86_64*)  place "$src" "OPTNWallet-${VERSION}-linux-x64.AppImage.sig" ;;
+                  *riscv64*)         place "$src" "OPTNWallet-${VERSION}-linux-riscv64.AppImage.sig" ;;
+                  *armv7*|*armhf*)   place "$src" "OPTNWallet-${VERSION}-linux-armv7.AppImage.sig" ;;
+                  *)
+                    echo "::error::unrecognised architecture in $base; add it to the rename map"
+                    exit 1
+                    ;;
+                esac
+                ;;
+              # Anything else Tauri signed that this map does not place.
+              *.sig)
+                echo "::error::$base is a signature for an artifact with no rename rule"
+                exit 1
+                ;;
               # Two APKs are produced now, one per store flavour. A single
               # *.apk rule sent both to the same destination, which the
               # duplicate guard would have caught as a release failure — the
@@ -1671,19 +1742,41 @@ jobs:
       #
       # Both halves are generated from packaging/release-assets.json, so the
       # list of what ships and the check that it shipped cannot drift apart.
+      - name: Build the update manifest
+        shell: bash
+        env:
+          UPDATER_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          if [ -z "$UPDATER_PUBLIC_KEY" ]; then
+            # No key, so nothing was signed and there is nothing to advertise.
+            # Publishing an unsigned manifest would be worse than none: an
+            # installed wallet would poll it and find entries it cannot verify.
+            echo 'UPDATE_SIGNING=false' >> "$GITHUB_ENV"
+            echo '::notice::No update signing key; publishing without latest.json. See docs/desktop-update-signing.md.'
+            exit 0
+          fi
+          echo 'UPDATE_SIGNING=true' >> "$GITHUB_ENV"
+          node scripts/build-update-manifest.mjs release-files "$VERSION"             "https://github.com/OPTNLabs/OPTNWallet/releases/tag/${RELEASE_TAG}"
+
       - name: Assets completeness
         run: |
           VERSION="${RELEASE_TAG#v}"
           CLI_PRESENT='${{ needs.resolve.outputs.cli_present }}'
+          SIGNED="${UPDATE_SIGNING:-false}"
 
           # Expand the config into `required<TAB>pattern<TAB>label` lines.
           # json rather than yaml so this needs nothing installed.
-          python3 - "$VERSION" "$CLI_PRESENT" > expected.tsv <<'PY'
+          python3 - "$VERSION" "$CLI_PRESENT" "$SIGNED" > expected.tsv <<'PY'
           import json, sys
           version, cli_present = sys.argv[1], sys.argv[2] == 'true'
+          signed = sys.argv[3] == 'true'
+          present = {'cli': cli_present, 'updater': signed}
           config = json.load(open('packaging/release-assets.json'))
           for asset in config['assets']:
-              if asset.get('when') == 'cli' and not cli_present:
+              when = asset.get('when')
+              if when is not None and not present.get(when, False):
                   continue
               pattern = asset['pattern'].replace('${VERSION}', version)
               required = 'yes' if asset.get('required', True) else 'no'
