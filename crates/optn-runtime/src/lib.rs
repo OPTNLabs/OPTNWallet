@@ -451,8 +451,11 @@ impl AppRuntimeDriver {
                         continue;
                     }
                     let is_query = matches!(request, WalletSecurityRequest::Status);
-                    let changes_birthday =
-                        matches!(request, WalletSecurityRequest::SetBirthday { .. });
+                    let changes_birthday = matches!(
+                        request,
+                        WalletSecurityRequest::SetBirthday { .. }
+                            | WalletSecurityRequest::ClearRescan { .. }
+                    );
                     let previous_restore_state = self.wallet_sync.restore_state().clone();
                     let opens_wallet = matches!(
                         request,

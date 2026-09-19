@@ -805,6 +805,33 @@ mod tests {
             .iter()
             .all(|floor| *floor == Some(2)));
 
+        runtime.request_wallet_rescan(1).await.unwrap();
+        *backend.expected_floor.lock().unwrap() = Some(1);
+        runtime
+            .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins.spendable_sats(), before);
+        let cleared = runtime
+            .wallet_security(Request::ClearRescan {
+                epoch: reopened.epoch,
+            })
+            .await
+            .unwrap();
+        assert_eq!(cleared.manual_rescan_from, None);
+        assert_eq!(
+            cleared.restore_birthday,
+            Some(optn_transport::WalletBirthdayView::ImportedAtHeight { height: 2 })
+        );
+        assert_eq!(runtime.state().coins.spendable_sats(), before);
+        assert!(!runtime.state().wallet_sync.utxos_fresh);
+        *backend.expected_floor.lock().unwrap() = Some(2);
+        runtime
+            .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins.spendable_sats() + 77, before);
+
         runtime
             .wallet_security(Request::SetBirthday {
                 epoch: reopened.epoch,

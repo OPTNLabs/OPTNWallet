@@ -851,7 +851,12 @@ fn BirthdaySection(transport: UiTransport, state: RwSignal<AppState>) -> impl In
     let height = RwSignal::new(String::new());
     let date = RwSignal::new(None::<u32>);
     let confirming = RwSignal::new(false);
+    let clearing_rescan = RwSignal::new(false);
+    let restore_revision = Memo::new(move |_| {
+        state.with(|state| (state.lock.unlock_epoch, state.wallet_sync.rescan_requested))
+    });
     Effect::new(move |_| {
+        restore_revision.get();
         crate::security::submit(transport, state, Request::Status, status, error, busy);
     });
     let selection = move || match kind.get().as_str() {
@@ -906,24 +911,41 @@ fn BirthdaySection(transport: UiTransport, state: RwSignal<AppState>) -> impl In
                 </label>
             </Show>
             <p class="muted">"Saved separately from a manual rescan, which takes precedence. Choose Unknown if you are unsure when this wallet first received funds."</p>
+            {move || status.get().and_then(|s| s.manual_rescan_from).map(|height| view! {
+                <p class="muted">{format!("Manual rescan override: block {height}.")}</p>
+            })}
             {move || error.get().map(|message| view! { <p class="warning" role="alert">{message}</p> })}
             <Show when=move || confirming.get() fallback=move || view! {
                 <button class="secondary" type="button"
                     disabled=move || busy.get() || selection().is_none() || status.get().and_then(|s| s.restore_birthday).is_none()
-                    on:click=move |_| confirming.set(true)>"Save history start"</button>
+                    on:click=move |_| { clearing_rescan.set(false); confirming.set(true); }>"Save history start"</button>
             }>
-                <p class="warning">"A start later than your first payment can hide funds and history. Save this choice? Refresh the wallet afterward to apply it."</p>
+                <p class="warning">{move || if clearing_rescan.get() {
+                    "Remove the manual override and return to the saved wallet history start? A later start can hide earlier funds. Refresh afterward to apply it."
+                } else {
+                    "A start later than your first payment can hide funds and history. Save this choice? Refresh the wallet afterward to apply it."
+                }}</p>
                 <div class="row">
                     <button class="primary" type="button" disabled=move || busy.get()
                         on:click=move |_| {
-                            let (Some(birthday), Some(current)) = (selection(), status.get_untracked()) else { return };
+                            let Some(current) = status.get_untracked() else { return };
+                            let request = if clearing_rescan.get_untracked() {
+                                Request::ClearRescan { epoch: current.epoch }
+                            } else {
+                                let Some(birthday) = selection() else { return };
+                                Request::SetBirthday { epoch: current.epoch, birthday }
+                            };
                             confirming.set(false);
-                            crate::security::submit(transport, state, Request::SetBirthday {
-                                epoch: current.epoch, birthday,
-                            }, status, error, busy);
+                            crate::security::submit(transport, state, request, status, error, busy);
                         }>"Confirm history start"</button>
                     <button class="secondary" type="button" on:click=move |_| confirming.set(false)>"Cancel"</button>
                 </div>
+            </Show>
+            <Show when=move || !confirming.get() && status.get().and_then(|s| s.manual_rescan_from).is_some()>
+                <button class="secondary" type="button" disabled=move || busy.get()
+                    on:click=move |_| { clearing_rescan.set(true); confirming.set(true); }>
+                    "Use saved wallet history start"
+                </button>
             </Show>
         </section>
     }
