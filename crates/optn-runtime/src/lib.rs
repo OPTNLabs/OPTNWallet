@@ -42,6 +42,7 @@ pub mod network_config;
 pub mod reconciliation;
 /// Native-only Cash Code discovery and public spending recipes.
 pub mod rpa_receive;
+pub mod source_selection;
 /// Progressive capability-route wallet synchronization.
 pub mod sync_worker;
 /// Broadcast state tracking. Timeout/offline ambiguity is preserved rather than

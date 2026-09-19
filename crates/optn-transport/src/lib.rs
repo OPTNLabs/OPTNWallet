@@ -21,6 +21,7 @@ use optn_app::{
 };
 use std::collections::BTreeMap;
 pub mod airgap;
+pub mod chain_sources;
 pub mod host;
 pub use airgap::{AirgapRequest, AirgapResponse};
 pub mod security;
@@ -58,6 +59,25 @@ pub trait AppTransport {
     fn next_event<'a>(&'a self) -> TransportFuture<'a, Option<AppEvent>>;
 
     fn airgap<'a>(&'a self, _request: AirgapRequest) -> TransportFuture<'a, AirgapResponse> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    fn export_network_configuration<'a>(&'a self, _network: String) -> TransportFuture<'a, String> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    fn chain_sources<'a>(
+        &'a self,
+        _network: String,
+    ) -> TransportFuture<'a, chain_sources::ChainSourcesView> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    fn edit_chain_sources<'a>(
+        &'a self,
+        _network: String,
+        _edit: chain_sources::ChainSourceEdit,
+    ) -> TransportFuture<'a, ()> {
         Box::pin(async { Err(TransportError::Unsupported) })
     }
 

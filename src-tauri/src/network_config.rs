@@ -51,6 +51,16 @@ impl NetworkSettingsStore {
         }
     }
 
+    pub fn export_portable(&self, network: Network) -> Result<String, String> {
+        self.file_for(network).export_portable(network)
+    }
+
+    pub fn import_portable(&self, network: Network, json: &str) -> Result<(), String> {
+        self.file_for(network)
+            .import_portable(network, json)
+            .map(|_| ())
+    }
+
     /// Restore every network into a clone, publishing only after all reads
     /// succeed. Rich overlays remain available to the chain runtime without
     /// being flattened into the legacy server fields; missing files leave

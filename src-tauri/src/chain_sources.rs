@@ -24,92 +24,9 @@ use optn_runtime::network_config::{
     add_user_source, remove_user_source, set_policy_preset, set_source_disposition,
     ChainPolicyPreset,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct EndpointView {
-    /// `electrum-tls`, `p2p`, … — the same labels the source ids are built from.
-    pub kind: String,
-    pub host: String,
-    pub port: Option<u16>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SourceFailureView {
-    pub protocol: String,
-    pub endpoint: EndpointView,
-    pub error: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ChainSourceView {
-    pub id: String,
-    pub label: String,
-    /// `bootstrap` | `user` | `own-infrastructure`.
-    pub origin: String,
-    pub group: Option<String>,
-    /// `enabled` | `disabled` | `banned`.
-    pub disposition: String,
-    pub priority: u16,
-    /// Bootstrap entries are disabled, never deleted: the base catalog has to
-    /// stay recoverable for a later refresh to be deterministic.
-    pub can_remove: bool,
-    pub endpoints: Vec<EndpointView>,
-    pub capabilities: Vec<String>,
-    /// In the current selection plan: `primary`, `fallback`, or absent.
-    pub role: Option<String>,
-    /// Protocols this source has a live provider for right now. An empty list
-    /// next to a `primary` role is the honest way to show a route that was
-    /// selected but could not be opened.
-    pub live_protocols: Vec<String>,
-    pub failures: Vec<SourceFailureView>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct VerifiedTipView {
-    pub height: u32,
-    pub hash: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ChainSourcesView {
-    pub network: String,
-    /// `auto` | `privacy` | `own_infrastructure` | `electrum_only` |
-    /// `bip37_only` | `neutrino_only` | `custom`.
-    pub policy: String,
-    pub protocols: Vec<String>,
-    /// `all-enabled` | `own-infrastructure` | `explicit`.
-    pub scope: String,
-    pub sources: Vec<ChainSourceView>,
-    /// A persisted policy that could not be resolved. No provider is registered
-    /// in that state, which is why it is surfaced rather than swallowed.
-    pub configuration_error: Option<String>,
-    /// How many routes can answer a wallet refresh right now. Zero with sources
-    /// present means the policy or the transport refused them, not that the
-    /// wallet has no servers configured.
-    pub wallet_routes: usize,
-    /// Tip of the accepted chain this host has verified (SHV/MMR), if any.
-    pub verified_tip: Option<VerifiedTipView>,
-    /// What this host found when it went looking for a proxy.
-    pub tor: TorProxyView,
-}
-
-/// The proxy situation, for a screen that has to explain a refusal.
-///
-/// "No Tor found" and "a proxy is there but I cannot tell whether it is yours"
-/// call for different actions from the holder -- start Tor, or confirm the Tor
-/// they already run -- and a screen that cannot tell them apart can only offer
-/// the wrong one half the time.
-#[derive(Debug, Clone, Serialize)]
-pub struct TorProxyView {
-    /// `verified` | `unverified` | `absent` | `not_needed`.
-    pub status: String,
-    /// The port a proxy answered on, whether or not it is trusted.
-    pub socks_port: Option<u16>,
-    /// Ports the holder has already confirmed.
-    pub trusted_ports: Vec<u16>,
-}
+pub use optn_transport::chain_sources::*;
 
 fn endpoint_view(endpoint: &Endpoint) -> EndpointView {
     EndpointView {
@@ -286,8 +203,12 @@ pub async fn optn_chain_sources(
             // claim the wallet has no servers at all, which is false and leaves
             // no way to disable one before opening a wallet. `wallet_routes`
             // still reports what is actually connected.
-            let (catalog, policy) =
-                crate::chain_runtime::catalog_and_policy_from_app_state(&runtime.state());
+            let state = runtime.state();
+            let (catalog, policy) = if state.network == network {
+                crate::chain_runtime::catalog_and_policy_from_app_state(&state)
+            } else {
+                (SourceCatalog::default(), ConnectionPolicy::auto())
+            };
             if catalog.iter().next().is_none() {
                 (
                     optn_runtime::bootstrap::shipped_source_catalog(network),
@@ -304,6 +225,7 @@ pub async fn optn_chain_sources(
         .await
         .unwrap_or_default();
 
+    let observed_network = runtime.state().network;
     let live = native
         .with_service(|service| {
             let service = service.try_lock().ok()?;
@@ -319,8 +241,19 @@ pub async fn optn_chain_sources(
         .flatten()
         .unwrap_or_default();
 
-    Ok(ChainSourcesView {
+    // Diagnostics belong to the active stack, not a different network whose
+    // saved catalog a renderer is inspecting. Refuse a racing switch.
+    if runtime.state().network != observed_network {
+        return Err("Network changed while reading chain sources; retry.".into());
+    }
+    let (live, failures) = if network == observed_network {
+        (live, native.failures().await)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let view = ChainSourcesView {
         network: network.to_string(),
+        selection: optn_runtime::source_selection::view(&policy),
         policy: serde_json::to_value(ChainPolicyPreset::describe(&policy))
             .ok()
             .and_then(|value| value.as_str().map(str::to_owned))
@@ -337,7 +270,7 @@ pub async fn optn_chain_sources(
         .map(|protocol| protocol_label(protocol).to_owned())
         .collect(),
         scope: scope_label(&policy.primary_scope).to_owned(),
-        sources: source_views(&catalog, &policy, &live, &native.failures().await),
+        sources: source_views(&catalog, &policy, &live, &failures),
         configuration_error: native.configuration_error().await,
         wallet_routes: live.len(),
         // Height 0 is the shipped genesis anchor, not a header this host
@@ -357,7 +290,11 @@ pub async fn optn_chain_sources(
                 }
             }),
         tor: tor_view(&catalog, &policy, &trusted_ports).await,
-    })
+    };
+    if runtime.state().network != observed_network {
+        return Err("Network changed while reading chain sources; retry.".into());
+    }
+    Ok(view)
 }
 
 /// Ask the same question the stack builder asks, with the same trust.
@@ -409,19 +346,6 @@ pub async fn optn_chain_rebuild(
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-pub struct AddSourceRequest {
-    pub network: Option<String>,
-    pub label: String,
-    pub kind: String,
-    pub host: String,
-    pub port: Option<u16>,
-    /// Naming a group declares this as the holder's own infrastructure, which
-    /// is what `own_infrastructure` policy selects and what may be dialled
-    /// directly rather than through Tor.
-    pub infrastructure_group: Option<String>,
-}
-
 fn network_or_current(
     runtime: &optn_runtime::AppRuntime,
     network: Option<String>,
@@ -462,6 +386,54 @@ pub async fn optn_chain_set_policy(
         set_policy_preset(overlay, preset)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn optn_chain_set_selection(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, NetworkSettingsStore>,
+    network: Option<String>,
+    selection: optn_transport::chain_sources::WireConnectionPolicy,
+) -> Result<(), String> {
+    let network = network_or_current(&runtime, network)?;
+    edit_overlay(&network_settings, network, move |overlay| {
+        let envelope = optn_runtime::network_config::NetworkConfigEnvelope::current(
+            optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
+            overlay.clone(),
+        );
+        let (catalog, _) =
+            optn_runtime::network_config::resolve_shipped_chain_selection(network, Some(&envelope))
+                .map_err(|error| format!("Invalid source catalog: {error:?}"))?;
+        overlay.connection_policy = optn_runtime::source_selection::policy(&catalog, &selection)?;
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn optn_chain_export_configuration(
+    network_settings: tauri::State<'_, NetworkSettingsStore>,
+    network: String,
+) -> Result<String, String> {
+    let network = parse_network(&network)?;
+    let settings = (*network_settings).clone();
+    tokio::task::spawn_blocking(move || settings.export_portable(network))
+        .await
+        .map_err(|_| "Network settings reader stopped".to_owned())?
+}
+
+#[tauri::command]
+pub async fn optn_chain_import_configuration(
+    network_settings: tauri::State<'_, NetworkSettingsStore>,
+    network: String,
+    configuration: String,
+) -> Result<(), String> {
+    let network = parse_network(&network)?;
+    let settings = (*network_settings).clone();
+    let _guard = network_settings.write_lock.lock().await;
+    tokio::task::spawn_blocking(move || settings.import_portable(network, &configuration))
+        .await
+        .map_err(|_| "Network settings writer stopped".to_owned())?
 }
 
 /// The proxy situation, in the shape every renderer reads.

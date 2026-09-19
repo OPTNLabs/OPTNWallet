@@ -291,14 +291,44 @@ pub trait NetworkConfigStore: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortableNetworkConfig {
     pub schema_version: u32,
+    /// The chain this overlay belongs to. CashAddr prefixes are shared by
+    /// several test networks, so a prefix or a file name is not enough.
+    pub network: Network,
     pub overlay: UserNetworkOverlay,
 }
 
-impl From<&NetworkConfigEnvelope> for PortableNetworkConfig {
-    fn from(value: &NetworkConfigEnvelope) -> Self {
+impl PortableNetworkConfig {
+    /// Snapshot a network's user intent for transfer to another installation.
+    ///
+    /// The legacy server bridge encoded a narrow selection as Auto plus a
+    /// user source. Make that effective policy explicit before dropping the
+    /// local catalog marker, otherwise an import could widen it to public
+    /// bootstrap sources. Proxy confirmations are machine-local provenance,
+    /// so they never enter a portable backup.
+    pub fn from_envelope(network: Network, value: &NetworkConfigEnvelope) -> Self {
+        let mut normalized = value.clone();
+        promote_legacy_policy(&mut normalized);
+        normalized.overlay.trusted_socks_ports.clear();
         Self {
-            schema_version: value.schema_version,
-            overlay: value.overlay.clone(),
+            schema_version: normalized.schema_version,
+            network,
+            overlay: normalized.overlay,
+        }
+    }
+
+    /// Turn imported user intent back into a current durable envelope.
+    ///
+    /// The installed application supplies the current bootstrap catalog; the
+    /// overlay is the portable part. A portable value never grants proxy
+    /// provenance, even if a caller constructed one directly rather than via
+    /// [`Self::from_envelope`].
+    pub fn into_envelope(self) -> NetworkConfigEnvelope {
+        let mut overlay = self.overlay;
+        overlay.trusted_socks_ports.clear();
+        NetworkConfigEnvelope {
+            schema_version: self.schema_version,
+            bootstrap_catalog_version_seen: SHIPPED_CATALOG_VERSION.to_owned(),
+            overlay,
         }
     }
 }
@@ -313,6 +343,8 @@ impl From<&NetworkConfigEnvelope> for PortableNetworkConfig {
 pub enum NetworkConfigCodecError {
     Json(String),
     UnsupportedSchema { found: u32, current: u32 },
+    NetworkMismatch { expected: Network, found: Network },
+    PortableTrustNotTransferable,
     InvalidUserSourceOrigin,
     InvalidEndpoint(String),
 }
@@ -327,7 +359,18 @@ struct StoredEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredPortable {
     schema_version: u32,
+    network: StoredNetwork,
     overlay: StoredOverlay,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredNetwork {
+    Mainnet,
+    Testnet3,
+    Testnet4,
+    Chipnet,
+    Regtest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -338,7 +381,7 @@ struct StoredOverlay {
     explorer: Option<StoredEndpoint>,
     /// Absent in records written before this field existed, which is the
     /// safe reading: no proxy was trusted then either.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     trusted_socks_ports: Vec<u16>,
 }
 
@@ -413,6 +456,30 @@ enum StoredScope {
     Explicit { source_ids: Vec<String> },
 }
 
+impl From<Network> for StoredNetwork {
+    fn from(value: Network) -> Self {
+        match value {
+            Network::Mainnet => Self::Mainnet,
+            Network::Testnet3 => Self::Testnet3,
+            Network::Testnet4 => Self::Testnet4,
+            Network::Chipnet => Self::Chipnet,
+            Network::Regtest => Self::Regtest,
+        }
+    }
+}
+
+impl From<StoredNetwork> for Network {
+    fn from(value: StoredNetwork) -> Self {
+        match value {
+            StoredNetwork::Mainnet => Self::Mainnet,
+            StoredNetwork::Testnet3 => Self::Testnet3,
+            StoredNetwork::Testnet4 => Self::Testnet4,
+            StoredNetwork::Chipnet => Self::Chipnet,
+            StoredNetwork::Regtest => Self::Regtest,
+        }
+    }
+}
+
 pub fn encode_envelope_json(
     value: &NetworkConfigEnvelope,
 ) -> Result<String, NetworkConfigCodecError> {
@@ -438,19 +505,45 @@ pub fn decode_envelope_json(value: &str) -> Result<NetworkConfigEnvelope, Networ
 pub fn export_portable_json(
     value: &PortableNetworkConfig,
 ) -> Result<String, NetworkConfigCodecError> {
+    let mut overlay = StoredOverlay::from_overlay(&value.overlay)?;
+    // A SOCKS confirmation is provenance for this installation, not portable
+    // configuration. Keep the field available to the durable codec, but never
+    // put it in a transfer payload.
+    overlay.trusted_socks_ports.clear();
     let stored = StoredPortable {
         schema_version: value.schema_version,
-        overlay: StoredOverlay::from_overlay(&value.overlay)?,
+        network: value.network.into(),
+        overlay,
     };
     serde_json::to_string_pretty(&stored).map_err(|e| NetworkConfigCodecError::Json(e.to_string()))
 }
 
-pub fn import_portable_json(value: &str) -> Result<PortableNetworkConfig, NetworkConfigCodecError> {
+/// Decode a portable overlay only for the network the caller selected.
+///
+/// A portable file is allowed to move user endpoints and policy, never the
+/// fact that a proxy was trusted on another machine. Older or hand-edited
+/// payloads that try to carry that provenance are rejected rather than
+/// silently granting it.
+pub fn import_portable_json(
+    value: &str,
+    expected_network: Network,
+) -> Result<PortableNetworkConfig, NetworkConfigCodecError> {
     let stored: StoredPortable =
         serde_json::from_str(value).map_err(|e| NetworkConfigCodecError::Json(e.to_string()))?;
     ensure_schema(stored.schema_version)?;
+    let network = stored.network.into();
+    if network != expected_network {
+        return Err(NetworkConfigCodecError::NetworkMismatch {
+            expected: expected_network,
+            found: network,
+        });
+    }
+    if !stored.overlay.trusted_socks_ports.is_empty() {
+        return Err(NetworkConfigCodecError::PortableTrustNotTransferable);
+    }
     Ok(PortableNetworkConfig {
         schema_version: stored.schema_version,
+        network,
         overlay: stored.overlay.into_overlay()?,
     })
 }
@@ -1412,16 +1505,66 @@ mod tests {
     }
 
     #[test]
-    fn portable_export_contains_no_wallet_secret_fields() {
+    fn portable_export_is_network_bound_and_excludes_local_proxy_provenance() {
         let mut overlay = UserNetworkOverlay::default();
-        overlay.user_sources.push(user_source("my-node"));
+        let mut own = user_source("my-node");
+        own.origin = SourceOrigin::UserInfrastructure {
+            group: "home-rack".into(),
+        };
+        own.priority = 4;
+        overlay.user_sources.push(own.clone());
+        overlay
+            .bootstrap_overrides
+            .insert(SourceId::new("bootstrap:bad"), SourceDisposition::Banned);
+        overlay.connection_policy = ConnectionPolicy::own_infrastructure();
+        overlay.connection_policy.preferred = vec![own.id.clone()];
+        overlay.trusted_socks_ports = vec![9050];
         let envelope = NetworkConfigEnvelope::current("v1", overlay);
-        let portable = PortableNetworkConfig::from(&envelope);
+        let portable = PortableNetworkConfig::from_envelope(Network::Chipnet, &envelope);
         let json = export_portable_json(&portable).unwrap();
         assert!(!json.contains("seed"));
         assert!(!json.contains("private_key"));
         assert!(!json.contains("mnemonic"));
-        assert_eq!(import_portable_json(&json).unwrap(), portable);
+        assert!(json.contains("\"network\": \"chipnet\""));
+        assert!(!json.contains("trusted_socks_ports"));
+        assert!(portable.overlay.trusted_socks_ports.is_empty());
+        assert_eq!(
+            import_portable_json(&json, Network::Chipnet).unwrap(),
+            portable
+        );
+        assert!(matches!(
+            import_portable_json(&json, Network::Mainnet),
+            Err(NetworkConfigCodecError::NetworkMismatch {
+                expected: Network::Mainnet,
+                found: Network::Chipnet,
+            })
+        ));
+        assert_eq!(portable.overlay.user_sources[0].origin, own.origin);
+        assert_eq!(
+            portable
+                .overlay
+                .bootstrap_overrides
+                .get(&SourceId::new("bootstrap:bad")),
+            Some(&SourceDisposition::Banned)
+        );
+        assert_eq!(
+            portable.overlay.connection_policy.preferred,
+            vec![SourceId::new("my-node")]
+        );
+    }
+
+    #[test]
+    fn portable_import_rejects_proxy_provenance_injected_into_payload() {
+        let envelope = NetworkConfigEnvelope::current("v1", UserNetworkOverlay::default());
+        let portable = PortableNetworkConfig::from_envelope(Network::Chipnet, &envelope);
+        let json = export_portable_json(&portable).unwrap();
+        let mut payload: serde_json::Value = serde_json::from_str(&json).unwrap();
+        payload["overlay"]["trusted_socks_ports"] = serde_json::json!([9050]);
+        let injected = serde_json::to_string(&payload).unwrap();
+        assert!(matches!(
+            import_portable_json(&injected, Network::Chipnet),
+            Err(NetworkConfigCodecError::PortableTrustNotTransferable)
+        ));
     }
 
     #[test]
