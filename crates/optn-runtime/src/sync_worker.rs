@@ -10,12 +10,8 @@ use crate::chain_service::{
     CapabilityRoute, ChainOperation, ChainPayload, ChainRequest, ChainService, ChainServiceError,
     ChainTip, ObservedTransaction, WalletInterest,
 };
-use crate::header_recovery::{
-    AcceptedCommitment, HistoricalReplay, ReplayBudget, ReplayStep,
-};
-use crate::header_store::{
-    BlockHeaderSource, HeaderStoreError, RetainedHeaders, SharedHeaders,
-};
+use crate::header_recovery::{AcceptedCommitment, HistoricalReplay, ReplayBudget, ReplayStep};
+use crate::header_store::{BlockHeaderSource, HeaderStoreError, RetainedHeaders, SharedHeaders};
 use crate::header_verifier::{shipped_header_verifier, ShvMmrError, ShvMmrHeaderVerifier};
 use crate::header_view::{HeaderViewError, VerifiedHeaderView};
 use crate::reconciliation::{evidence_strength, ReconciliationDecision, ReconciliationState};
@@ -842,10 +838,9 @@ impl ProgressiveSyncWorker {
             // store this method could safely publish into.
             return Ok(());
         };
-        let target_hash = view
-            .tip()
-            .map(|(_, hash)| hash)
-            .ok_or_else(|| ProgressiveSyncError::HeaderRecovery("restored view has no tip".into()))?;
+        let target_hash = view.tip().map(|(_, hash)| hash).ok_or_else(|| {
+            ProgressiveSyncError::HeaderRecovery("restored view has no tip".into())
+        })?;
         if store.range_inclusive(0, target.height).is_ok()
             && store.hash_at(target.height) == Some(target_hash)
         {
@@ -879,10 +874,7 @@ impl ProgressiveSyncWorker {
         if required_headers > MAX_HISTORICAL_REPLAY_HEADERS {
             return Err(ProgressiveSyncError::HeaderSafetyLimit);
         }
-        let max_batches = target
-            .height
-            .saturating_add(batch_size.saturating_sub(1))
-            / batch_size;
+        let max_batches = target.height.saturating_add(batch_size.saturating_sub(1)) / batch_size;
         let budget = ReplayBudget {
             max_headers: required_headers,
             max_batches: max_batches.saturating_add(1),
@@ -930,16 +922,15 @@ impl ProgressiveSyncWorker {
             }
         }
 
-        self
-            .replay_headers_into_store(
-                service,
-                &header_route,
-                &mut staged,
-                replay,
-                target.height,
-                max_batches,
-            )
-            .await?;
+        self.replay_headers_into_store(
+            service,
+            &header_route,
+            &mut staged,
+            replay,
+            target.height,
+            max_batches,
+        )
+        .await?;
         staged
             .range_inclusive(0, target.height)
             .map_err(ProgressiveSyncError::HeaderStore)?;
@@ -1027,8 +1018,8 @@ impl ProgressiveSyncWorker {
                 ReplayStep::Incomplete(reason) => reason.next_height().saturating_sub(start),
                 ReplayStep::Diverged(_) => 0,
             };
-            let consumed = usize::try_from(consumed)
-                .map_err(|_| ProgressiveSyncError::HeaderSafetyLimit)?;
+            let consumed =
+                usize::try_from(consumed).map_err(|_| ProgressiveSyncError::HeaderSafetyLimit)?;
             if consumed > batch.len() {
                 return Err(ProgressiveSyncError::InvalidHeaderRange);
             }
@@ -1071,26 +1062,31 @@ impl ProgressiveSyncWorker {
         count: usize,
     ) -> Result<(), ProgressiveSyncError> {
         if start == 0 || store.hash_at(start - 1).is_none() {
-            return Err(ProgressiveSyncError::HeaderStore(HeaderStoreError::Linkage {
-                height: start,
-            }));
+            return Err(ProgressiveSyncError::HeaderStore(
+                HeaderStoreError::Linkage { height: start },
+            ));
         }
         for (offset, header) in batch.iter().take(count).enumerate() {
             let height = start
                 .checked_add(offset as u32)
                 .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
             let hash = sha256d(&header.0);
-            if store.hash_at(height).is_some_and(|existing| existing != hash) {
-                return Err(ProgressiveSyncError::HeaderStore(HeaderStoreError::Linkage {
-                    height,
-                }));
+            if store
+                .hash_at(height)
+                .is_some_and(|existing| existing != hash)
+            {
+                return Err(ProgressiveSyncError::HeaderStore(
+                    HeaderStoreError::Linkage { height },
+                ));
             }
             if let Some(next_height) = height.checked_add(1) {
                 if let Some(next) = store.header_at(next_height) {
                     if next.0[4..36] != hash {
-                        return Err(ProgressiveSyncError::HeaderStore(HeaderStoreError::Linkage {
-                            height: next_height,
-                        }));
+                        return Err(ProgressiveSyncError::HeaderStore(
+                            HeaderStoreError::Linkage {
+                                height: next_height,
+                            },
+                        ));
                     }
                 }
             }
@@ -1118,9 +1114,7 @@ pub(crate) mod tests {
         ConnectionPolicy, Endpoint, EndpointKind, Evidence, ProviderHealth, SourceCatalog,
         SourceDisposition, SourceOrigin,
     };
-    use crate::chain_service::{
-        BackendObservation, ChainBackend, ChainBackendError, ChainFuture,
-    };
+    use crate::chain_service::{BackendObservation, ChainBackend, ChainBackendError, ChainFuture};
     use std::sync::Arc;
 
     #[derive(Default)]
@@ -1170,8 +1164,7 @@ pub(crate) mod tests {
             Box::pin(async move {
                 if matches!(
                     request,
-                    ChainRequest::HeaderSync { .. }
-                        | ChainRequest::HeaderSyncFromLocator { .. }
+                    ChainRequest::HeaderSync { .. } | ChainRequest::HeaderSyncFromLocator { .. }
                 ) {
                     if let Some((store, probe)) = &self.probe {
                         let span = store.retained_span();
@@ -1643,9 +1636,8 @@ pub(crate) mod tests {
             };
             assert_eq!(*start_height, index as u32 + 1);
             assert_eq!(*locator, expected_locator);
-            expected_locator = crate::header_verifier::header_leaf(&BlockHeaderBytes(
-                headers[index],
-            ));
+            expected_locator =
+                crate::header_verifier::header_leaf(&BlockHeaderBytes(headers[index]));
         }
         assert_eq!(store.retained_span(), Some((0, 4)));
         assert_eq!(store.hash_at(4), Some(expected_locator));
