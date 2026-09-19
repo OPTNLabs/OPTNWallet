@@ -277,3 +277,14 @@ encryptions of the same padded proof produce different ephemeral public keys
 and ciphertexts, while both decrypt successfully. All seven encryption tests
 and strict Fusion Clippy pass. This is a bounded implementation review, not a
 new protocol audit or a claim that the still-open main-branch alerts were closed.
+
+## Source deletion preserves privacy (2026-09-19)
+
+Removing the last explicitly selected source no longer silently switches to
+Auto. The shared editor preserves protocol and scope boundaries, removes the
+source from explicit primary/fallback pools and preferred ordering, and leaves
+an empty permitted pool unavailable until the holder chooses another source.
+Twenty network-configuration tests pass, including encrypted-independent
+configuration serialization/reopen with public bootstrap sources present and
+no eligible public fallback. Strict runtime Clippy passes. This fixes the shared
+policy used by native adapters; it does not establish all-platform UI evidence.
