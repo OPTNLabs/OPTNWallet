@@ -22,6 +22,7 @@ path = "src/main.rs"
 [dependencies]
 optn-core = { path = "../optn-core", version = "=1.7.3" }
 optn-app = { path = "../optn-app", version = "=1.7.3" }
+optn-ui-text = { path = "../optn-ui-text", version = "=1.7.3" }
 optn-multisig-core = { path = "../optn-multisig-core", version = "=1.7.3" }
 # Reuses the versioned desktop network-overlay codec without pulling in Tauri.
 optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }

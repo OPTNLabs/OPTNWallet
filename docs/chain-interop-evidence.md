@@ -556,3 +556,9 @@ returns an unspent assertion or unknown, never an inferred spender. Exact BCH
 decimal parsing retains one-satoshi values; no binary floating-point conversion
 is used. Authenticated RPC credential entry in GUI/CLI remains an explicit
 interaction gap; internal credential setters do not establish that usability.
+
+The interactive wallet commands `assets` and `nfts`, or private stdio
+`{"view":"assets"}` / `{"view":"nfts"}`, render those shared projections through
+the existing framework-free `optn-ui-text` crate. A process test opens a public
+fixture, reaches both views, locks it and confirms further asset reads are
+refused. This tests command wiring and lock boundaries, not live token discovery.

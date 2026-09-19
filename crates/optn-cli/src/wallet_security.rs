@@ -33,6 +33,9 @@ fn password(prompt: &str) -> Result<SecretText> {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Input {
+    View {
+        view: WalletView,
+    },
     Network {
         network: NetworkCommand,
     },
@@ -48,6 +51,26 @@ enum Input {
     Chain {
         chain: ChainCommand,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WalletView {
+    Assets,
+    Nfts,
+}
+
+fn wallet_view_reply(state: &AppState, view: WalletView) -> Value {
+    if state.wallet.is_none() {
+        return json!({"ok":false,"error":"Open a wallet before viewing assets."});
+    }
+    let mut displayed = state.clone();
+    displayed.route = match view {
+        WalletView::Assets => optn_app::AppRoute::Coins,
+        WalletView::Nfts => optn_app::AppRoute::Nfts,
+    };
+    let screen = optn_ui_text::draw(&displayed);
+    json!({"ok":true,"title":screen.title,"lines":screen.lines})
 }
 
 #[derive(Deserialize)]
@@ -167,7 +190,7 @@ fn birthday_prompt(argument: &str) -> Result<optn_transport::security::WalletBir
     }
 }
 
-const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, network status, network policy <preset>, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
+const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, assets, nfts, network status, network policy <preset>, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -296,7 +319,9 @@ async fn execute(
     input: Input,
 ) -> std::result::Result<WalletSecurityStatus, TransportError> {
     match input {
-        Input::Airgap { .. } | Input::Network { .. } => Err(TransportError::Unsupported),
+        Input::Airgap { .. } | Input::Network { .. } | Input::View { .. } => {
+            Err(TransportError::Unsupported)
+        }
         Input::Chain { chain } => {
             if !matches!(chain, ChainCommand::History) {
                 let floor = match chain {
@@ -368,6 +393,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
         let mut input = io::stdin().lock();
         while let Some(line) = private_line(&mut input, 262_144)? {
             let output = match serde_json::from_str::<Input>(&line) {
+                Ok(Input::View { view }) => wallet_view_reply(&runtime.state(), view),
                 Ok(Input::Airgap { airgap }) => airgap_reply(&runtime, airgap).await,
                 Ok(Input::Network { network }) => network_reply(cli, &runtime, network).await,
                 Ok(input) => match execute(cli, &runtime, input).await {
@@ -411,6 +437,15 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                     continue;
                 }
                 "list" => Some(Request::Status),
+                "assets" | "nfts" => {
+                    let view = if command == "assets" {
+                        WalletView::Assets
+                    } else {
+                        WalletView::Nfts
+                    };
+                    println!("{}", wallet_view_reply(&runtime.state(), view));
+                    continue;
+                }
                 "birthday" => match birthday_prompt(argument) {
                     Ok(birthday) => Some(Request::SetBirthday {
                         epoch: status.epoch,
