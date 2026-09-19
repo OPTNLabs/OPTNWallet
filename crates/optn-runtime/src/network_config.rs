@@ -933,7 +933,7 @@ pub fn promote_legacy_policy(envelope: &mut NetworkConfigEnvelope) {
 }
 
 /// Marker for envelopes whose policy field means exactly what it says.
-pub const SHIPPED_CATALOG_VERSION: &str = "optn-shipped-v1";
+pub const SHIPPED_CATALOG_VERSION: &str = "optn-shipped-v2-ec-bb67161b";
 
 /// Apply a named policy to the overlay.
 ///
@@ -1477,14 +1477,25 @@ mod tests {
         let advanced = NetworkConfigEnvelope::current("advanced-auto", overlay);
         let (catalog, policy) =
             resolve_shipped_chain_selection(Network::Chipnet, Some(&advanced)).unwrap();
-        assert_eq!(build_selection_plan(&catalog, &policy).primary.len(), 2);
+        assert_eq!(
+            build_selection_plan(&catalog, &policy).primary.len(),
+            crate::bootstrap::shipped_source_catalog(Network::Chipnet)
+                .iter()
+                .count()
+                + 1
+        );
 
         let reset =
             NetworkConfigEnvelope::current(LEGACY_SERVER_CATALOG_VERSION, Default::default());
         let (catalog, policy) =
             resolve_shipped_chain_selection(Network::Chipnet, Some(&reset)).unwrap();
         let defaults = build_selection_plan(&catalog, &policy);
-        assert_eq!(defaults.primary.len(), 1);
+        assert_eq!(
+            defaults.primary.len(),
+            crate::bootstrap::shipped_source_catalog(Network::Chipnet)
+                .iter()
+                .count()
+        );
         assert!(catalog.get(&defaults.primary[0]).unwrap().is_public());
     }
 
@@ -1526,12 +1537,14 @@ mod tests {
         use crate::chain::build_selection_plan;
         for network in [Network::Mainnet, Network::Chipnet] {
             let (catalog, policy) = resolve_shipped_chain_selection(network, None).unwrap();
-            let default = catalog.iter().next().expect("reviewed network default");
+            let default = catalog
+                .iter()
+                .find(|source| source.endpoints[0].host == network.default_host())
+                .expect("reviewed network default");
             assert_eq!(default.endpoints[0].host, network.default_host());
-            assert_eq!(
-                build_selection_plan(&catalog, &policy).primary,
-                vec![default.id.clone()]
-            );
+            let eligible = build_selection_plan(&catalog, &policy).primary;
+            assert_eq!(eligible.len(), catalog.iter().count());
+            assert!(eligible.contains(&default.id));
 
             let mut overlay = UserNetworkOverlay::default();
             overlay
@@ -1540,7 +1553,9 @@ mod tests {
             let envelope = NetworkConfigEnvelope::current("older-release", overlay);
             let (banned, policy) =
                 resolve_shipped_chain_selection(network, Some(&envelope)).unwrap();
-            assert!(build_selection_plan(&banned, &policy).primary.is_empty());
+            let remaining = build_selection_plan(&banned, &policy).primary;
+            assert_eq!(remaining.len(), eligible.len() - 1);
+            assert!(!remaining.contains(&default.id));
             assert_eq!(
                 banned.get(&default.id).unwrap().disposition,
                 SourceDisposition::Banned
