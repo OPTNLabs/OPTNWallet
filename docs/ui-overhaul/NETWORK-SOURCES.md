@@ -10,6 +10,9 @@ rejected the replacement Leptos shell shown during the September 19 navigation
 checks. Those checks establish behavior only, not visual acceptance. Preserve the
 old wallet's components and design when connecting shared Rust features, including
 Flipstarter; do not treat a renderer migration as authorization to redesign it.
+This applies to Leptos as well as the retained React adapter. The confirmed
+reference is the main-release UI (`v1.7.4`, commit `bfc7a1497c5ff0a6bae04dd1c19dc60c21918256`),
+not the replacement Leptos shell. New navigation belongs within that visual design.
 
 ## Terms
 
