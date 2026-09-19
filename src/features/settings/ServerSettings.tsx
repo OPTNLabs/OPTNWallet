@@ -256,6 +256,58 @@ export const ServerSettings: React.FC = () => {
     }
   };
 
+  const explorerSettings = (
+    <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
+      <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
+        {t('server.blockExplorer')}
+      </p>
+      <p className="text-xs wallet-muted">{t('server.explorerDescription')}</p>
+      <select
+        value={explorerId}
+        onChange={(e) => dispatch(setExplorerId(e.target.value))}
+        className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+      >
+        {getExplorerPresets().map((e) => (
+          <option key={e.id} value={e.id}>
+            {e.label}
+          </option>
+        ))}
+        <option value="custom">{t('server.custom')}</option>
+      </select>
+
+      {explorerId === 'custom' && (
+        <div className="flex flex-col gap-2">
+          <input
+            type="text"
+            value={customTx}
+            onChange={(e) => setCustomTx(e.target.value)}
+            placeholder={t('server.txUrlPlaceholder')}
+            className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+          />
+          <input
+            type="text"
+            value={customAddr}
+            onChange={(e) => setCustomAddr(e.target.value)}
+            placeholder={t('server.addressUrlPlaceholder')}
+            className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+          />
+          <p className="text-[10px] wallet-muted">
+            {t('server.placeholderHelp')}
+          </p>
+          <button
+            onClick={() =>
+              dispatch(setExplorerCustom({ tx: customTx, address: customAddr }))
+            }
+            disabled={!customTx.includes('{txid}')}
+            className="self-start rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
+          >
+            {t('server.saveCustom')}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex flex-col gap-4">
       {/*
@@ -264,7 +316,7 @@ export const ServerSettings: React.FC = () => {
         legacy settings shape can hold, which is a narrow view of this same
         catalog -- so this sits above them rather than replacing them.
       */}
-      {desktop && <ChainSourcesSettings />}
+      {desktop && <ChainSourcesSettings explorerSettings={explorerSettings} />}
 
       {/* Which single backend serves this wallet */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 flex items-center justify-between gap-3">
@@ -472,60 +524,7 @@ export const ServerSettings: React.FC = () => {
         {addError && <p className="text-[10px] text-red-400">{addError}</p>}
       </div>
 
-      {/* Block explorer */}
-      <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
-        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
-          {t('server.blockExplorer')}
-        </p>
-        <p className="text-xs wallet-muted">
-          {t('server.explorerDescription')}
-        </p>
-        <select
-          value={explorerId}
-          onChange={(e) => dispatch(setExplorerId(e.target.value))}
-          className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-        >
-          {getExplorerPresets().map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.label}
-            </option>
-          ))}
-          <option value="custom">{t('server.custom')}</option>
-        </select>
-
-        {explorerId === 'custom' && (
-          <div className="flex flex-col gap-2">
-            <input
-              type="text"
-              value={customTx}
-              onChange={(e) => setCustomTx(e.target.value)}
-              placeholder={t('server.txUrlPlaceholder')}
-              className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-            />
-            <input
-              type="text"
-              value={customAddr}
-              onChange={(e) => setCustomAddr(e.target.value)}
-              placeholder={t('server.addressUrlPlaceholder')}
-              className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-            />
-            <p className="text-[10px] wallet-muted">
-              {t('server.placeholderHelp')}
-            </p>
-            <button
-              onClick={() =>
-                dispatch(
-                  setExplorerCustom({ tx: customTx, address: customAddr })
-                )
-              }
-              disabled={!customTx.includes('{txid}')}
-              className="self-start rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
-            >
-              {t('server.saveCustom')}
-            </button>
-          </div>
-        )}
-      </div>
+      {!desktop && explorerSettings}
 
       {/* Transaction fee */}
       <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">

@@ -404,3 +404,14 @@ Automatic service discovery, arbitrary transport-policy editing, authenticated
 remote catalog updates and full packaged renderer parity are not established by
 this batch. Setup explicitly labels manual configuration. Previously linked
 APK/macOS artifacts predate this navigation change.
+
+The retained React settings now use the existing release UI components for
+separate directories, details, routing, transport and explorer views. The explorer
+view reuses the original controls. Advanced selections carry the viewed network
+explicitly to the existing Rust command. A component interaction test covers
+read-only browsing, advertised/verified protocol filtering, bootstrap removal
+absence, ZMQ separation, preference removal and exact selection submission.
+Bridge/hint tests (7), component test (1), full TypeScript check and targeted lint
+pass. These are adapter tests, not packaged React wallet end-to-end evidence.
+The user rejected the replacement Leptos visual shell; interaction checks above
+do not satisfy visual parity with the pinned main-release design.

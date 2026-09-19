@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useDispatch } from 'react-redux';
 import { setChainPolicy as rememberChainPolicy } from '../../state/slices/preferencesSlice';
 import SectionCard from '../../components/ui/SectionCard';
@@ -13,8 +19,12 @@ import {
   trustSocksProxy,
   removeChainSource,
   SELECTABLE_CHAIN_POLICIES,
+  setChainSelection,
   setChainPolicy,
   setChainSourceDisposition,
+  type ChainSelection,
+  type ChainSelectionProtocol,
+  type ChainSourceScope,
   type ChainSource,
   type ChainSourcesView,
 } from '../../platform/desktop/chainSourcesBridge';
@@ -29,6 +39,160 @@ import {
 } from '../../platform/desktop/engineWalletBridge';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { refusedForWantOfTor } from './chainSourceStatus';
+
+type SourcePage =
+  | 'overview'
+  | 'public'
+  | 'own'
+  | 'custom'
+  | 'details'
+  | 'routing'
+  | 'privacy'
+  | 'sync'
+  | 'explorer';
+type DirectoryPage = Extract<SourcePage, 'public' | 'own' | 'custom'>;
+
+const DIRECTORY_CONFIG: Record<
+  DirectoryPage,
+  { title: string; description: string; origin: ChainSource['origin'] }
+> = {
+  public: {
+    title: 'Public source directory',
+    description:
+      'Browse the maintained public sources for this network. Opening this directory does not contact them.',
+    origin: 'bootstrap',
+  },
+  own: {
+    title: 'My infrastructure',
+    description:
+      "Sources added here are marked as infrastructure you control and follow the wallet's current routing choices.",
+    origin: 'own-infrastructure',
+  },
+  custom: {
+    title: 'My custom sources',
+    description:
+      "User-added sources stay in the custom directory and follow the wallet's current routing choices.",
+    origin: 'user',
+  },
+};
+
+const SERVICE_FILTERS = [
+  { value: '', label: 'All services' },
+  { value: 'electrum', label: 'Electrum / Fulcrum' },
+  { value: 'p2p', label: 'BCH P2P' },
+  { value: 'bip37', label: 'BIP37' },
+  { value: 'neutrino', label: 'Compact filters' },
+  { value: 'node-rpc', label: 'Node RPC' },
+  { value: 'node-zmq', label: 'Notifications' },
+];
+
+const ROUTING_PROTOCOLS: {
+  value: ChainSelectionProtocol;
+  label: string;
+}[] = [
+  { value: 'FulcrumElectrum', label: 'Electrum / Fulcrum' },
+  { value: 'Bip37', label: 'BIP37' },
+  { value: 'Neutrino', label: 'Compact filters' },
+  { value: 'BchnRpc', label: 'Node RPC' },
+  { value: 'BchnZmq', label: 'Node notifications' },
+];
+
+function isDirectoryPage(page: SourcePage): page is DirectoryPage {
+  return page === 'public' || page === 'own' || page === 'custom';
+}
+
+function pageTitle(page: SourcePage): string {
+  if (isDirectoryPage(page)) return DIRECTORY_CONFIG[page].title;
+  return {
+    overview: 'Network sources',
+    details: 'Source details',
+    routing: 'Routing',
+    privacy: 'Privacy and transport',
+    sync: 'Shared engine sync',
+    explorer: 'Explorer',
+  }[page];
+}
+
+function endpointText(endpoint: ChainSource['endpoints'][number]): string {
+  return `${endpoint.kind} ${endpoint.host}${
+    endpoint.port ? `:${endpoint.port}` : ''
+  }`;
+}
+
+function serviceBadgeText(kind: string): string {
+  if (kind.includes('electrum')) return 'Electrum';
+  if (kind === 'p2p') return 'BIP37 / P2P';
+  if (kind === 'node-rpc') return 'RPC';
+  if (kind === 'node-zmq') return 'ZMQ';
+  return kind;
+}
+
+function protocolBadgeText(protocol: string): string {
+  if (protocol.toLowerCase().includes('electrum')) return 'Electrum';
+  if (protocol.toLowerCase().includes('bip37')) return 'BIP37';
+  if (protocol.toLowerCase().includes('neutrino')) return 'Compact filters';
+  if (protocol.toLowerCase().includes('rpc')) return 'RPC';
+  if (protocol.toLowerCase().includes('zmq')) return 'ZMQ';
+  return protocol;
+}
+
+function sourceBadges(source: ChainSource): string[] {
+  const badges = [
+    ...source.endpoints.map((endpoint) => serviceBadgeText(endpoint.kind)),
+    ...(source.protocol_statuses ?? []).map((status) =>
+      protocolBadgeText(status.protocol)
+    ),
+    ...(source.capability_details ?? []).map((capability) => capability.name),
+  ];
+  return [...new Set(badges)].slice(0, 6);
+}
+
+function originText(source: ChainSource): string {
+  if (source.origin === 'bootstrap') return 'Maintained public catalog';
+  if (source.origin === 'own-infrastructure') return 'My infrastructure';
+  return 'User-added source';
+}
+
+function confidenceText(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function scopeKey(
+  scope: ChainSourceScope
+): 'all' | 'public' | 'own' | 'selected' {
+  if (scope === 'AllEnabled') return 'all';
+  if (scope === 'PublicEnabled') return 'public';
+  if (scope === 'MyInfrastructure') return 'own';
+  return 'selected';
+}
+
+function scopeFromKey(
+  key: string,
+  previous: ChainSourceScope
+): ChainSourceScope {
+  if (key === 'public') return 'PublicEnabled';
+  if (key === 'own') return 'MyInfrastructure';
+  if (key === 'selected') {
+    return typeof previous === 'object' && 'Selected' in previous
+      ? { Selected: [...previous.Selected] }
+      : { Selected: [] };
+  }
+  return 'AllEnabled';
+}
+
+function selectedSourceIds(scope: ChainSourceScope): string[] | null {
+  return typeof scope === 'object' && 'Selected' in scope
+    ? scope.Selected
+    : null;
+}
+
+function toggleSource(scope: ChainSourceScope, id: string, checked: boolean) {
+  const ids = selectedSourceIds(scope);
+  if (!ids) return scope;
+  const next = ids.filter((sourceId) => sourceId !== id);
+  if (checked) next.push(id);
+  return { Selected: next };
+}
 
 /**
  * Every chain source for the active network, as the Rust runtime sees them.
@@ -48,21 +212,35 @@ function statusLine(source: ChainSource): { text: string; tone: string } {
   }
   if (source.live_protocols.length > 0) {
     return {
-      text: `Connected · ${source.live_protocols.join(', ')}`,
+      text: 'Wallet route available',
       tone: 'text-[var(--wallet-accent)]',
     };
   }
   if (source.failures.length > 0) {
-    return { text: source.failures[0].error, tone: 'text-amber-400' };
+    return {
+      text: `Route unavailable · ${source.failures[0].error}`,
+      tone: 'text-amber-400',
+    };
   }
   if (source.role) {
-    return { text: 'Selected · not connected', tone: 'text-amber-400' };
+    return { text: 'Selected route unavailable', tone: 'text-amber-400' };
   }
-  return { text: 'Not selected by the current policy', tone: 'wallet-muted' };
+  return { text: 'No wallet route in current selection', tone: 'wallet-muted' };
 }
 
-export function ChainSourcesSettings() {
+type ChainSourcesSettingsProps = {
+  explorerSettings?: ReactNode;
+};
+
+export function ChainSourcesSettings({
+  explorerSettings,
+}: ChainSourcesSettingsProps) {
   const [view, setView] = useState<ChainSourcesView | null>(null);
+  const [page, setPage] = useState<SourcePage>('overview');
+  const [directoryPage, setDirectoryPage] = useState<DirectoryPage>('public');
+  const [selectedSourceId, setSelectedSourceId] = useState('');
+  const [search, setSearch] = useState('');
+  const [serviceFilter, setServiceFilter] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
@@ -74,6 +252,9 @@ export function ChainSourcesSettings() {
   const [syncing, setSyncing] = useState(false);
   const [torStarting, setTorStarting] = useState(false);
   const [torProgress, setTorProgress] = useState<number | null>(null);
+  const [selection, setSelection] = useState<ChainSelection | null>(null);
+  const [selectionDirty, setSelectionDirty] = useState(false);
+  const selectionNetwork = useRef<string | null>(null);
 
   const dispatch = useDispatch();
 
@@ -96,11 +277,22 @@ export function ChainSourcesSettings() {
 
   useEffect(() => {
     void refresh();
-    // The runtime rebuilds routes when the saved policy changes, so a probe
-    // result can arrive a moment after the edit that caused it.
+    // Read the Rust view after edits so route status stays truthful without
+    // making the renderer probe sources.
     const timer = setInterval(() => void refresh(), 4000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    if (!view) return;
+    if (selectionNetwork.current !== view.network) {
+      selectionNetwork.current = view.network;
+      setSelection(view.selection ?? null);
+      setSelectionDirty(false);
+      return;
+    }
+    if (!selectionDirty) setSelection(view.selection ?? null);
+  }, [view, selectionDirty]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -115,7 +307,75 @@ export function ChainSourcesSettings() {
     }
   };
 
+  const navigate = (next: SourcePage) => {
+    if (next !== 'routing') setSelectionDirty(false);
+    setPage(next);
+  };
+
+  const openDirectory = (next: DirectoryPage) => {
+    setDirectoryPage(next);
+    setShowAdd(false);
+    navigate(next);
+  };
+
+  const openDetails = (source: ChainSource) => {
+    if (isDirectoryPage(page)) setDirectoryPage(page);
+    setSelectedSourceId(source.id);
+    setShowAdd(false);
+    navigate('details');
+  };
+
+  const openAdd = () => {
+    setOwnInfrastructure(page === 'own');
+    setShowAdd(true);
+  };
+
+  const selectedSource = view?.sources.find(
+    (source) => source.id === selectedSourceId
+  );
+
+  const directorySources = isDirectoryPage(page)
+    ? (view?.sources ?? []).filter((source) => {
+        const config = DIRECTORY_CONFIG[page];
+        const query = search.trim().toLowerCase();
+        return (
+          source.origin === config.origin &&
+          (query.length === 0 ||
+            source.label.toLowerCase().includes(query) ||
+            source.endpoints.some((endpoint) =>
+              endpoint.host.toLowerCase().includes(query)
+            )) &&
+          (serviceFilter.length === 0 ||
+            source.endpoints.some((endpoint) =>
+              endpoint.kind.includes(serviceFilter)
+            ) ||
+            (source.protocol_statuses ?? []).some(
+              (status) =>
+                status.protocol === serviceFilter &&
+                (status.status === 'advertised' || status.status === 'verified')
+            ))
+        );
+      })
+    : [];
+
+  const updateSelection = (
+    update: (current: ChainSelection) => ChainSelection
+  ) => {
+    setSelection((current) => (current ? update(current) : current));
+    setSelectionDirty(true);
+  };
+
+  const saveSelection = () => {
+    if (!selection || !view) return;
+    const network = view.network;
+    void run(async () => {
+      await setChainSelection(selection, network);
+      setSelectionDirty(false);
+    });
+  };
+
   const submitSource = () => {
+    if (!view) return;
     const entry = host.trim();
     if (!entry) {
       setError('Enter a host or IP address.');
@@ -127,6 +387,7 @@ export function ChainSourcesSettings() {
       setError('That port is not valid.');
       return;
     }
+    const network = view.network;
     void run(async () => {
       await addChainSource({
         label: label.trim() || hostPart,
@@ -134,6 +395,7 @@ export function ChainSourcesSettings() {
         host: hostPart,
         port,
         infrastructureGroup: ownInfrastructure ? 'mine' : null,
+        network,
       });
       setHost('');
       setLabel('');
@@ -154,9 +416,20 @@ export function ChainSourcesSettings() {
 
   return (
     <SectionCard className="p-4 space-y-4">
-      <div>
+      <div className="space-y-2">
+        {page !== 'overview' && (
+          <button
+            type="button"
+            className="wallet-btn-secondary px-2.5 py-1 text-xs"
+            onClick={() =>
+              navigate(page === 'details' ? directoryPage : 'overview')
+            }
+          >
+            Back
+          </button>
+        )}
         <p className="text-sm font-semibold wallet-text-strong">
-          Chain sources
+          {pageTitle(page)}
         </p>
         <p className="mt-1 text-xs wallet-muted">
           {view.network} · {view.wallet_routes} route
@@ -167,347 +440,956 @@ export function ChainSourcesSettings() {
         </p>
       </div>
 
-      {view.tor.status === 'unverified' && view.tor.socks_port !== null && (
-        <div className="rounded-lg border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-3 py-2 text-xs text-[var(--wallet-warning-text)]">
-          <p>
-            A SOCKS proxy is listening on port {view.tor.socks_port}, but this
-            wallet cannot tell whether it is Tor — every SOCKS proxy answers the
-            same way, so a corporate proxy or an SSH tunnel looks identical.
-            Until you confirm it, public sources stay refused rather than
-            sending traffic through a proxy that may not be anonymising it.
+      {page === 'overview' && (
+        <>
+          <p className="text-xs wallet-muted">
+            Choose a source directory, review a source, or adjust how the wallet
+            routes chain access.
           </p>
-          <div className="mt-2 flex flex-wrap gap-2">
+          <nav aria-label="Network source settings" className="space-y-2">
+            {(['public', 'own', 'custom'] as DirectoryPage[]).map((target) => {
+              const config = DIRECTORY_CONFIG[target];
+              const count = view.sources.filter(
+                (source) => source.origin === config.origin
+              ).length;
+              return (
+                <button
+                  key={target}
+                  type="button"
+                  data-testid={`chain-sources-${target}`}
+                  className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+                  onClick={() => openDirectory(target)}
+                >
+                  <span>
+                    <span className="block text-sm font-semibold wallet-text-strong">
+                      {config.title}
+                    </span>
+                    <span className="block text-[11px] wallet-muted">
+                      {count} known source{count === 1 ? '' : 's'}
+                    </span>
+                  </span>
+                  <span className="text-xs wallet-muted">Open</span>
+                </button>
+              );
+            })}
             <button
               type="button"
-              data-testid="trust-socks-proxy"
-              className="wallet-btn-secondary px-3 py-1.5 text-xs"
-              onClick={() => {
-                const port = view.tor.socks_port;
-                if (port === null) return;
-                void trustSocksProxy(port, true)
-                  .then(() => rebuildChainRoutes())
-                  .then(() => refresh())
-                  .catch((failure) =>
-                    setError(
-                      failure instanceof Error
-                        ? failure.message
-                        : String(failure)
-                    )
-                  );
-              }}
+              className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+              onClick={() => navigate('routing')}
             >
-              Yes, {view.tor.socks_port} is my Tor
+              <span>
+                <span className="block text-sm font-semibold wallet-text-strong">
+                  Routing
+                </span>
+                <span className="block text-[11px] wallet-muted">
+                  {CHAIN_POLICY_LABELS[view.policy]} ·{' '}
+                  {view.protocols.length > 0
+                    ? view.protocols.join(', ')
+                    : 'no protocols selected'}
+                </span>
+              </span>
+              <span className="text-xs wallet-muted">Configure</span>
             </button>
-          </div>
-        </div>
+            <button
+              type="button"
+              className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+              onClick={() => navigate('privacy')}
+            >
+              <span>
+                <span className="block text-sm font-semibold wallet-text-strong">
+                  Privacy and transport
+                </span>
+                <span className="block text-[11px] wallet-muted">
+                  Rust reports Tor as {view.tor.status.replace('_', ' ')}
+                </span>
+              </span>
+              <span className="text-xs wallet-muted">Open</span>
+            </button>
+            <button
+              type="button"
+              className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+              onClick={() => navigate('sync')}
+            >
+              <span>
+                <span className="block text-sm font-semibold wallet-text-strong">
+                  Shared engine sync
+                </span>
+                <span className="block text-[11px] wallet-muted">
+                  Read the shared wallet refresh state
+                </span>
+              </span>
+              <span className="text-xs wallet-muted">Open</span>
+            </button>
+            <button
+              type="button"
+              className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+              onClick={() => navigate('explorer')}
+            >
+              <span>
+                <span className="block text-sm font-semibold wallet-text-strong">
+                  Explorer
+                </span>
+                <span className="block text-[11px] wallet-muted">
+                  Choose the explorer used by existing wallet links
+                </span>
+              </span>
+              <span className="text-xs wallet-muted">Open</span>
+            </button>
+          </nav>
+        </>
       )}
 
-      {view.tor.trusted_ports.length > 0 && (
-        <p className="wallet-muted text-xs">
-          Trusted proxy ports: {view.tor.trusted_ports.join(', ')}.{' '}
-          <button
-            type="button"
-            data-testid="untrust-socks-proxies"
-            className="underline"
-            onClick={() => {
-              void Promise.all(
-                view.tor.trusted_ports.map((port) =>
-                  trustSocksProxy(port, false)
-                )
-              )
-                .then(() => rebuildChainRoutes())
-                .then(() => refresh())
-                .catch((failure) =>
-                  setError(
-                    failure instanceof Error ? failure.message : String(failure)
-                  )
-                );
-            }}
-          >
-            Withdraw
-          </button>
-        </p>
-      )}
-
-      {refusedForWantOfTor(view.sources) && (
-        <div className="rounded-lg border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-3 py-2 text-xs text-[var(--wallet-warning-text)]">
-          <p>
-            Public sources are reached through Tor, and no verified proxy is
-            running. A source you mark as your own is dialled directly instead.
+      {page === 'privacy' && (
+        <>
+          <p className="text-xs wallet-muted">
+            Public sources use the host&apos;s verified Tor route.
+            Infrastructure explicitly marked as yours may use the direct route
+            allowed by the Rust policy; this screen does not change that policy.
           </p>
-          <button
-            type="button"
-            disabled={torStarting}
-            data-testid="start-tor-for-chain"
-            className="wallet-btn-secondary mt-2 px-3 py-1.5 text-xs"
-            onClick={() => {
-              setTorStarting(true);
-              setTorProgress(0);
-              // Bootstrap can take a minute on a slow or filtered network, so
-              // report progress rather than leaving a dead button. The routes
-              // rebuild on their own once the proxy verifies.
-              const poll = setInterval(() => {
-                void integratedTorStatus()
-                  .then((status) => setTorProgress(status.bootstrap_percent))
-                  .catch(() => undefined);
-              }, 1500);
-              void startIntegratedTor()
-                // The proxy exists now; the stack still holds routes built
-                // when it did not, so ask for a rebuild before reading back.
-                .then(() => rebuildChainRoutes())
-                .then(() => refresh())
-                .catch((failure) =>
-                  setError(
-                    failure instanceof Error ? failure.message : String(failure)
-                  )
-                )
-                .finally(() => {
-                  clearInterval(poll);
-                  setTorStarting(false);
-                  setTorProgress(null);
-                });
-            }}
-          >
-            {torStarting
-              ? `Starting Tor… ${torProgress ?? 0}%`
-              : 'Start Tor for chain routes'}
-          </button>
-        </div>
-      )}
-
-      {view.configuration_error && (
-        <p className="rounded-lg border border-[var(--wallet-danger-border)] bg-[var(--wallet-danger-bg)] px-3 py-2 text-xs text-[var(--wallet-danger-text)]">
-          {view.configuration_error}
-        </p>
-      )}
-
-      <div>
-        <label
-          className="block text-xs font-semibold wallet-text-strong"
-          htmlFor="chain-policy"
-        >
-          Connection policy
-        </label>
-        <select
-          id="chain-policy"
-          className="wallet-input mt-1.5 w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
-          value={view.policy}
-          disabled={busy}
-          onChange={(event) => {
-            const next = event.target.value;
-            // "Custom" describes a saved policy this list cannot name. Offering
-            // it as a choice would overwrite that policy with a guess.
-            if (next === 'custom') return;
-            void run(() =>
-              setChainPolicy(next as Exclude<typeof view.policy, 'custom'>)
-            );
-          }}
-        >
-          {view.policy === 'custom' && (
-            <option value="custom">{CHAIN_POLICY_LABELS.custom}</option>
+          {view.tor.status === 'unverified' && view.tor.socks_port !== null && (
+            <div className="rounded-lg border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-3 py-2 text-xs text-[var(--wallet-warning-text)]">
+              <p>
+                A SOCKS proxy is listening on port {view.tor.socks_port}, but
+                this wallet cannot tell whether it is Tor — every SOCKS proxy
+                answers the same way, so a corporate proxy or an SSH tunnel
+                looks identical. Until you confirm it, public sources stay
+                refused rather than sending traffic through a proxy that may not
+                be anonymising it.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-testid="trust-socks-proxy"
+                  className="wallet-btn-secondary px-3 py-1.5 text-xs"
+                  onClick={() => {
+                    const port = view.tor.socks_port;
+                    if (port === null) return;
+                    void trustSocksProxy(port, true, view.network)
+                      .then(() => rebuildChainRoutes())
+                      .then(() => refresh())
+                      .catch((failure) =>
+                        setError(
+                          failure instanceof Error
+                            ? failure.message
+                            : String(failure)
+                        )
+                      );
+                  }}
+                >
+                  Yes, {view.tor.socks_port} is my Tor
+                </button>
+              </div>
+            </div>
           )}
-          {SELECTABLE_CHAIN_POLICIES.map((policy) => (
-            <option key={policy} value={policy}>
-              {CHAIN_POLICY_LABELS[policy]}
-            </option>
-          ))}
-        </select>
-        <p className="mt-1 text-[11px] wallet-muted">
-          {CHAIN_POLICY_DESCRIPTIONS[view.policy]}
-          {view.protocols.length > 0 ? ` · ${view.protocols.join(', ')}` : ''}
-        </p>
-      </div>
 
-      {engineSync && (
-        <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-semibold wallet-text-strong">
-              Shared engine sync
-            </p>
-            <button
-              type="button"
-              disabled={syncing || engineSync.refreshing}
-              data-testid="engine-refresh-wallet"
-              className="wallet-btn-secondary px-2.5 py-1 text-xs"
-              onClick={() => {
-                setSyncing(true);
-                setError('');
-                void refreshEngineWallet()
-                  .then(() => refresh())
-                  .catch((failure) =>
-                    setError(
-                      failure instanceof Error
-                        ? failure.message
-                        : String(failure)
+          {view.tor.trusted_ports.length > 0 && (
+            <p className="wallet-muted text-xs">
+              Trusted proxy ports: {view.tor.trusted_ports.join(', ')}.{' '}
+              <button
+                type="button"
+                data-testid="untrust-socks-proxies"
+                className="underline"
+                onClick={() => {
+                  void Promise.all(
+                    view.tor.trusted_ports.map((port) =>
+                      trustSocksProxy(port, false, view.network)
                     )
                   )
-                  .finally(() => setSyncing(false));
+                    .then(() => rebuildChainRoutes())
+                    .then(() => refresh())
+                    .catch((failure) =>
+                      setError(
+                        failure instanceof Error
+                          ? failure.message
+                          : String(failure)
+                      )
+                    );
+                }}
+              >
+                Withdraw
+              </button>
+            </p>
+          )}
+
+          {refusedForWantOfTor(view.sources) && (
+            <div className="rounded-lg border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-3 py-2 text-xs text-[var(--wallet-warning-text)]">
+              <p>
+                Public sources are reached through Tor, and no verified proxy is
+                running. A source you mark as your own is dialled directly
+                instead.
+              </p>
+              <button
+                type="button"
+                disabled={torStarting}
+                data-testid="start-tor-for-chain"
+                className="wallet-btn-secondary mt-2 px-3 py-1.5 text-xs"
+                onClick={() => {
+                  setTorStarting(true);
+                  setTorProgress(0);
+                  // Bootstrap can take a minute on a slow or filtered network, so
+                  // report progress rather than leaving a dead button. The routes
+                  // rebuild on their own once the proxy verifies.
+                  const poll = setInterval(() => {
+                    void integratedTorStatus()
+                      .then((status) =>
+                        setTorProgress(status.bootstrap_percent)
+                      )
+                      .catch(() => undefined);
+                  }, 1500);
+                  void startIntegratedTor()
+                    // The proxy exists now; the stack still holds routes built
+                    // when it did not, so ask for a rebuild before reading back.
+                    .then(() => rebuildChainRoutes())
+                    .then(() => refresh())
+                    .catch((failure) =>
+                      setError(
+                        failure instanceof Error
+                          ? failure.message
+                          : String(failure)
+                      )
+                    )
+                    .finally(() => {
+                      clearInterval(poll);
+                      setTorStarting(false);
+                      setTorProgress(null);
+                    });
+                }}
+              >
+                {torStarting
+                  ? `Starting Tor… ${torProgress ?? 0}%`
+                  : 'Start Tor for chain routes'}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {page === 'routing' && (
+        <>
+          {view.configuration_error && (
+            <p className="rounded-lg border border-[var(--wallet-danger-border)] bg-[var(--wallet-danger-bg)] px-3 py-2 text-xs text-[var(--wallet-danger-text)]">
+              {view.configuration_error}
+            </p>
+          )}
+
+          <div>
+            <label
+              className="block text-xs font-semibold wallet-text-strong"
+              htmlFor="chain-policy"
+            >
+              Connection policy
+            </label>
+            <select
+              id="chain-policy"
+              className="wallet-input mt-1.5 w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
+              value={view.policy}
+              disabled={busy}
+              onChange={(event) => {
+                const next = event.target.value;
+                // "Custom" describes a saved policy this list cannot name. Offering
+                // it as a choice would overwrite that policy with a guess.
+                if (next === 'custom') return;
+                void run(async () => {
+                  setSelectionDirty(false);
+                  await setChainPolicy(
+                    next as Exclude<typeof view.policy, 'custom'>,
+                    view.network
+                  );
+                });
               }}
             >
-              {syncing || engineSync.refreshing ? 'Syncing…' : 'Sync now'}
-            </button>
+              {view.policy === 'custom' && (
+                <option value="custom">{CHAIN_POLICY_LABELS.custom}</option>
+              )}
+              {SELECTABLE_CHAIN_POLICIES.map((policy) => (
+                <option key={policy} value={policy}>
+                  {CHAIN_POLICY_LABELS[policy]}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] wallet-muted">
+              {CHAIN_POLICY_DESCRIPTIONS[view.policy]}
+              {view.protocols.length > 0
+                ? ` · ${view.protocols.join(', ')}`
+                : ''}
+            </p>
           </div>
-          <p className="mt-1 text-[11px] wallet-muted">
-            {/*
+
+          {selection ? (
+            <section
+              aria-label="Advanced source selection"
+              className="space-y-3 rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3"
+            >
+              <div>
+                <p className="text-xs font-semibold wallet-text-strong">
+                  Selection and failover
+                </p>
+                <p className="mt-1 text-[11px] wallet-muted">
+                  Choose which source pools and services the wallet may use.
+                  Saving applies the complete selection.
+                </p>
+              </div>
+              <label className="block text-xs wallet-muted">
+                <span className="font-semibold wallet-text-strong">
+                  Primary source pool
+                </span>
+                <select
+                  className="wallet-input mt-1.5 w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
+                  disabled={busy}
+                  value={scopeKey(selection.primary_scope)}
+                  onChange={(event) =>
+                    updateSelection((current) => ({
+                      ...current,
+                      primary_scope: scopeFromKey(
+                        event.target.value,
+                        current.primary_scope
+                      ),
+                    }))
+                  }
+                >
+                  <option value="all">All enabled sources</option>
+                  <option value="public">Public sources</option>
+                  <option value="own">My infrastructure</option>
+                  <option value="selected">Selected sources below</option>
+                </select>
+              </label>
+              <label className="block text-xs wallet-muted">
+                <span className="font-semibold wallet-text-strong">
+                  Fallback source pool
+                </span>
+                <select
+                  className="wallet-input mt-1.5 w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
+                  disabled={busy}
+                  value={
+                    selection.fallback_scope
+                      ? scopeKey(selection.fallback_scope)
+                      : 'none'
+                  }
+                  onChange={(event) =>
+                    updateSelection((current) => ({
+                      ...current,
+                      fallback_scope:
+                        event.target.value === 'none'
+                          ? null
+                          : scopeFromKey(
+                              event.target.value,
+                              current.fallback_scope ?? 'AllEnabled'
+                            ),
+                    }))
+                  }
+                >
+                  <option value="none">No fallback</option>
+                  <option value="all">All enabled sources</option>
+                  <option value="public">Public sources</option>
+                  <option value="own">My infrastructure</option>
+                  <option value="selected">Selected sources below</option>
+                </select>
+              </label>
+              <fieldset disabled={busy} className="space-y-1">
+                <legend className="text-xs font-semibold wallet-text-strong">
+                  Allowed chain access
+                </legend>
+                {ROUTING_PROTOCOLS.filter(
+                  (protocol) => protocol.value !== 'BchnZmq'
+                ).map((protocol) => (
+                  <label
+                    key={protocol.value}
+                    className="flex items-center gap-2 text-xs wallet-muted"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selection.protocols.includes(protocol.value)}
+                      onChange={(event) =>
+                        updateSelection((current) => ({
+                          ...current,
+                          protocols: event.target.checked
+                            ? current.protocols.includes(protocol.value)
+                              ? current.protocols
+                              : [...current.protocols, protocol.value]
+                            : current.protocols.filter(
+                                (value) => value !== protocol.value
+                              ),
+                        }))
+                      }
+                    />
+                    {protocol.label}
+                  </label>
+                ))}
+              </fieldset>
+              <fieldset disabled={busy} className="space-y-1">
+                <legend className="text-xs font-semibold wallet-text-strong">
+                  Event sources
+                </legend>
+                <label className="flex items-center gap-2 text-xs wallet-muted">
+                  <input
+                    type="checkbox"
+                    checked={selection.protocols.includes('BchnZmq')}
+                    onChange={(event) =>
+                      updateSelection((current) => ({
+                        ...current,
+                        protocols: event.target.checked
+                          ? current.protocols.includes('BchnZmq')
+                            ? current.protocols
+                            : [...current.protocols, 'BchnZmq']
+                          : current.protocols.filter(
+                              (value) => value !== 'BchnZmq'
+                            ),
+                      }))
+                    }
+                  />
+                  Node notifications (ZMQ)
+                </label>
+                <p className="text-[11px] wallet-muted">
+                  Notifications may wake reconciliation; they are not a
+                  synchronization mode or verification proof.
+                </p>
+              </fieldset>
+              {view.sources.map((source) => {
+                const primarySelected = selectedSourceIds(
+                  selection.primary_scope
+                );
+                const fallbackSelected = selection.fallback_scope
+                  ? selectedSourceIds(selection.fallback_scope)
+                  : null;
+                const preference = selection.preferred.indexOf(source.id);
+                return (
+                  <div
+                    key={source.id}
+                    className="rounded-lg border border-[var(--wallet-border)] p-2.5"
+                  >
+                    <p className="text-xs font-semibold wallet-text-strong">
+                      {source.label}
+                    </p>
+                    {primarySelected && (
+                      <label className="mt-1 flex items-center gap-2 text-xs wallet-muted">
+                        <input
+                          type="checkbox"
+                          checked={primarySelected.includes(source.id)}
+                          onChange={(event) =>
+                            updateSelection((current) => ({
+                              ...current,
+                              primary_scope: toggleSource(
+                                current.primary_scope,
+                                source.id,
+                                event.target.checked
+                              ),
+                            }))
+                          }
+                        />
+                        Primary pool
+                      </label>
+                    )}
+                    {fallbackSelected && (
+                      <label className="mt-1 flex items-center gap-2 text-xs wallet-muted">
+                        <input
+                          type="checkbox"
+                          checked={fallbackSelected.includes(source.id)}
+                          onChange={(event) =>
+                            updateSelection((current) => ({
+                              ...current,
+                              fallback_scope: current.fallback_scope
+                                ? toggleSource(
+                                    current.fallback_scope,
+                                    source.id,
+                                    event.target.checked
+                                  )
+                                : null,
+                            }))
+                          }
+                        />
+                        Fallback pool
+                      </label>
+                    )}
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className="wallet-btn-secondary mt-2 px-2.5 py-1 text-xs"
+                      onClick={() =>
+                        updateSelection((current) => ({
+                          ...current,
+                          preferred: [
+                            source.id,
+                            ...current.preferred.filter(
+                              (sourceId) => sourceId !== source.id
+                            ),
+                          ],
+                        }))
+                      }
+                    >
+                      Prefer first
+                    </button>
+                    {preference >= 0 && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        className="wallet-btn-secondary ml-2 mt-2 px-2.5 py-1 text-xs"
+                        onClick={() =>
+                          updateSelection((current) => ({
+                            ...current,
+                            preferred: current.preferred.filter(
+                              (id) => id !== source.id
+                            ),
+                          }))
+                        }
+                      >
+                        Remove preference
+                      </button>
+                    )}
+                    {preference >= 0 && (
+                      <span className="ml-2 text-[11px] wallet-muted">
+                        Preference {preference + 1}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+              <button
+                type="button"
+                disabled={busy || !selectionDirty}
+                className="wallet-btn-primary w-full py-2 text-sm font-semibold"
+                onClick={saveSelection}
+              >
+                Save selection
+              </button>
+            </section>
+          ) : (
+            <p className="text-xs wallet-muted">
+              Advanced selection is unavailable in this host response.
+            </p>
+          )}
+        </>
+      )}
+
+      {page === 'sync' &&
+        (engineSync ? (
+          <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold wallet-text-strong">
+                Shared engine sync
+              </p>
+              <button
+                type="button"
+                disabled={syncing || engineSync.refreshing}
+                data-testid="engine-refresh-wallet"
+                className="wallet-btn-secondary px-2.5 py-1 text-xs"
+                onClick={() => {
+                  setSyncing(true);
+                  setError('');
+                  void refreshEngineWallet()
+                    .then(() => refresh())
+                    .catch((failure) =>
+                      setError(
+                        failure instanceof Error
+                          ? failure.message
+                          : String(failure)
+                      )
+                    )
+                    .finally(() => setSyncing(false));
+                }}
+              >
+                {syncing || engineSync.refreshing ? 'Syncing…' : 'Sync now'}
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] wallet-muted">
+              {/*
               Reported separately from the balance on Home, which still comes
               from this renderer's own Electrum path. Showing them as one number
               would hide a disagreement, and a disagreement is the thing worth
               seeing while the two are being converged.
             */}
-            {engineSync.confirmedSats === null
-              ? 'This account has not been synchronized by the shared engine yet.'
-              : `${(engineSync.confirmedSats / SATSINBITCOIN).toFixed(8)} BCH confirmed${
-                  engineSync.pendingSats
-                    ? ` · ${engineSync.pendingSats > 0 ? '+' : ''}${engineSync.pendingSats} sats pending`
-                    : ''
-                }`}
-            {engineSync.source ? ` · ${engineSync.source}` : ''}
-            {engineSync.tipHeight ? ` · tip ${engineSync.tipHeight}` : ''}
-          </p>
-          {engineSync.error && (
-            <p className="mt-1 text-[11px] text-amber-400">
-              {engineSync.error}
+              {engineSync.confirmedSats === null
+                ? 'This account has not been synchronized by the shared engine yet.'
+                : `${(engineSync.confirmedSats / SATSINBITCOIN).toFixed(8)} BCH confirmed${
+                    engineSync.pendingSats
+                      ? ` · ${engineSync.pendingSats > 0 ? '+' : ''}${engineSync.pendingSats} sats pending`
+                      : ''
+                  }`}
+              {engineSync.source ? ` · ${engineSync.source}` : ''}
+              {engineSync.tipHeight ? ` · tip ${engineSync.tipHeight}` : ''}
             </p>
-          )}
-        </div>
-      )}
+            {engineSync.error && (
+              <p className="mt-1 text-[11px] text-amber-400">
+                {engineSync.error}
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs wallet-muted">
+            Shared engine sync is unavailable right now.
+          </p>
+        ))}
 
-      <div className="space-y-2">
-        {view.sources.map((source) => {
-          const status = statusLine(source);
-          return (
-            <div
-              key={source.id}
-              data-testid={`chain-source-${source.id}`}
-              className="rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3"
+      {isDirectoryPage(page) && (
+        <>
+          <p className="text-xs wallet-muted">
+            {DIRECTORY_CONFIG[page].description}
+          </p>
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <input
+              type="search"
+              aria-label="Search sources"
+              className="wallet-input rounded-md px-3 py-2 text-sm wallet-text-strong"
+              placeholder="Search sources"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            <select
+              aria-label="Service filter"
+              className="wallet-input rounded-md px-3 py-2 text-sm wallet-text-strong"
+              value={serviceFilter}
+              onChange={(event) => setServiceFilter(event.target.value)}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold wallet-text-strong">
-                    {source.label}
-                    {source.role && (
-                      <span className="ml-2 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide wallet-muted">
-                        {source.role}
-                      </span>
-                    )}
-                    {source.origin === 'own-infrastructure' && (
-                      <span className="ml-1.5 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide wallet-muted">
-                        mine
-                      </span>
-                    )}
-                  </p>
-                  <p className="truncate font-mono text-[11px] wallet-muted">
-                    {source.endpoints
-                      .map(
-                        (endpoint) =>
-                          `${endpoint.kind} ${endpoint.host}${
-                            endpoint.port ? `:${endpoint.port}` : ''
-                          }`
-                      )
-                      .join(' · ')}
-                  </p>
-                  <p className={`mt-1 text-[11px] ${status.tone}`}>
-                    {status.text}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
+              {SERVICE_FILTERS.map((filter) => (
+                <option key={filter.value} value={filter.value}>
+                  {filter.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-2">
+            {directorySources.length === 0 ? (
+              <p className="text-xs wallet-muted">
+                No sources match this directory.
+              </p>
+            ) : (
+              directorySources.map((source) => {
+                const status = statusLine(source);
+                return (
+                  <div
+                    key={source.id}
+                    data-testid={`chain-source-${source.id}`}
+                    className="rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold wallet-text-strong">
+                          {source.label}
+                          {source.role && (
+                            <span className="ml-2 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide wallet-muted">
+                              {source.role}
+                            </span>
+                          )}
+                        </p>
+                        <p className="truncate text-[11px] wallet-muted">
+                          {originText(source)}
+                          {source.group ? ` · ${source.group}` : ''}
+                        </p>
+                        <p className="truncate font-mono text-[11px] wallet-muted">
+                          {[
+                            ...new Set(
+                              source.endpoints.map((endpoint) => endpoint.host)
+                            ),
+                          ].join(' · ')}
+                        </p>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {sourceBadges(source).map((badge) => (
+                            <span
+                              key={badge}
+                              className="rounded border border-[var(--wallet-border)] px-1.5 py-px text-[9px] wallet-muted"
+                            >
+                              {badge}
+                            </span>
+                          ))}
+                        </div>
+                        <p className={`mt-1 text-[11px] ${status.tone}`}>
+                          {status.text}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="wallet-btn-secondary shrink-0 px-2.5 py-1 text-xs"
+                        onClick={() => openDetails(source)}
+                      >
+                        View details
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+          {page !== 'public' &&
+            (showAdd ? (
+              <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] p-3">
+                <input
+                  className="wallet-input w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
+                  placeholder="host or ip[:port]"
+                  value={host}
+                  onChange={(event) => setHost(event.target.value)}
+                />
+                <input
+                  className="wallet-input w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
+                  placeholder="Name (optional)"
+                  value={label}
+                  onChange={(event) => setLabel(event.target.value)}
+                />
+                <select
+                  className="wallet-input w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
+                  value={kind}
+                  onChange={(event) => setKind(event.target.value)}
+                  aria-label="Source type"
+                >
+                  {ENDPOINT_KINDS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] wallet-muted">
+                  {page === 'own'
+                    ? 'This source will be added to My infrastructure.'
+                    : 'This source will be added to My custom sources.'}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="wallet-btn-secondary flex-1 py-2 text-sm"
+                    onClick={() => setShowAdd(false)}
+                  >
+                    Cancel
+                  </button>
                   <button
                     type="button"
                     disabled={busy}
-                    className="wallet-btn-secondary px-2.5 py-1 text-xs"
-                    onClick={() =>
-                      void run(() =>
-                        setChainSourceDisposition(
-                          source.id,
-                          source.disposition === 'enabled'
-                            ? 'disabled'
-                            : 'enabled'
-                        )
-                      )
-                    }
+                    className="wallet-btn-primary flex-1 py-2 text-sm font-semibold"
+                    onClick={submitSource}
                   >
-                    {source.disposition === 'enabled' ? 'Disable' : 'Enable'}
+                    Add source
                   </button>
-                  {source.can_remove && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      aria-label={`Remove ${source.label}`}
-                      className="px-1.5 py-1 text-xs text-red-400/70 hover:text-red-400"
-                      onClick={() =>
-                        void run(() => removeChainSource(source.id))
-                      }
-                    >
-                      🗑
-                    </button>
-                  )}
                 </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {showAdd ? (
-        <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] p-3">
-          <input
-            className="wallet-input w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
-            placeholder="host or ip[:port]"
-            value={host}
-            onChange={(event) => setHost(event.target.value)}
-          />
-          <input
-            className="wallet-input w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
-            placeholder="Name (optional)"
-            value={label}
-            onChange={(event) => setLabel(event.target.value)}
-          />
-          <select
-            className="wallet-input w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
-            value={kind}
-            onChange={(event) => setKind(event.target.value)}
-            aria-label="Source type"
-          >
-            {ENDPOINT_KINDS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
+            ) : (
+              <button
+                type="button"
+                className="wallet-btn-secondary w-full py-2 text-sm"
+                onClick={openAdd}
+              >
+                Add a source
+              </button>
             ))}
-          </select>
-          <label className="flex items-center gap-2 text-xs wallet-muted">
-            <input
-              type="checkbox"
-              checked={ownInfrastructure}
-              onChange={(event) => setOwnInfrastructure(event.target.checked)}
-            />
-            This is my own infrastructure
-          </label>
-          <div className="flex gap-2">
+        </>
+      )}
+
+      {page === 'details' &&
+        (selectedSource ? (
+          <div className="space-y-4">
+            <div>
+              <p className="text-base font-semibold wallet-text-strong">
+                {selectedSource.label}
+              </p>
+              <p className="text-xs wallet-muted">
+                {originText(selectedSource)}
+                {selectedSource.group ? ` · ${selectedSource.group}` : ''}
+                {selectedSource.role ? ` · ${selectedSource.role}` : ''}
+              </p>
+              <p className={`mt-1 text-xs ${statusLine(selectedSource).tone}`}>
+                {statusLine(selectedSource).text}
+              </p>
+            </div>
+
+            <section
+              aria-label="Source administration"
+              className="space-y-2 rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3"
+            >
+              <p className="text-xs font-semibold wallet-text-strong">
+                Administration
+              </p>
+              <label className="block text-xs wallet-muted">
+                <span className="font-semibold wallet-text-strong">
+                  Availability
+                </span>
+                <select
+                  className="wallet-input mt-1.5 w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
+                  value={selectedSource.disposition}
+                  disabled={busy}
+                  onChange={(event) =>
+                    void run(() =>
+                      setChainSourceDisposition(
+                        selectedSource.id,
+                        event.target.value as ChainSource['disposition'],
+                        view.network
+                      )
+                    )
+                  }
+                >
+                  <option value="enabled">Enabled</option>
+                  <option value="disabled">Disabled</option>
+                  <option value="banned">Banned</option>
+                </select>
+              </label>
+              {selectedSource.can_remove &&
+              selectedSource.origin !== 'bootstrap' ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  className="text-xs text-red-400/80 hover:text-red-400"
+                  onClick={() =>
+                    void run(() =>
+                      removeChainSource(selectedSource.id, view.network)
+                    )
+                  }
+                >
+                  Remove this user source
+                </button>
+              ) : (
+                <p className="text-[11px] wallet-muted">
+                  This maintained source can be disabled or banned, but it
+                  cannot be removed.
+                </p>
+              )}
+            </section>
+
+            <section aria-label="Configured endpoints" className="space-y-1">
+              <p className="text-xs font-semibold wallet-text-strong">
+                Configured endpoints
+              </p>
+              {selectedSource.endpoints.map((endpoint) => (
+                <p
+                  key={endpointText(endpoint)}
+                  className="font-mono text-xs wallet-muted"
+                >
+                  {endpointText(endpoint)}
+                </p>
+              ))}
+            </section>
+
+            <section
+              aria-label="Capabilities and evidence"
+              className="space-y-2"
+            >
+              <div>
+                <p className="text-xs font-semibold wallet-text-strong">
+                  Catalog capability details
+                </p>
+                <p className="text-[11px] wallet-muted">
+                  Catalog claims describe services listed for this source; they
+                  do not confirm a live connection.
+                </p>
+              </div>
+              {(selectedSource.capability_details ?? []).length === 0 ? (
+                <p className="text-xs wallet-muted">
+                  No catalog capability details recorded.
+                </p>
+              ) : (
+                (selectedSource.capability_details ?? []).map((capability) => (
+                  <p
+                    key={`${capability.name}:${capability.discovery}`}
+                    className="text-xs wallet-muted"
+                  >
+                    {capability.name} · {confidenceText(capability.confidence)}{' '}
+                    · {capability.discovery}
+                  </p>
+                ))
+              )}
+            </section>
+
+            <section aria-label="Recorded backend claims" className="space-y-2">
+              <div>
+                <p className="text-xs font-semibold wallet-text-strong">
+                  Recorded backend claims
+                </p>
+                <p className="text-[11px] wallet-muted">
+                  Recorded service claims are separate from the routes currently
+                  available to the wallet.
+                </p>
+              </div>
+              {(selectedSource.registered_capability_details ?? []).length ===
+              0 ? (
+                <p className="text-xs wallet-muted">
+                  No registered backend claims recorded.
+                </p>
+              ) : (
+                (selectedSource.registered_capability_details ?? []).map(
+                  (claim) => (
+                    <p
+                      key={`${claim.name}:${claim.protocol}:${claim.discovery}`}
+                      className="text-xs wallet-muted"
+                    >
+                      {claim.name} · {claim.protocol} ·{' '}
+                      {confidenceText(claim.confidence)} · {claim.discovery}
+                      {claim.endpoint
+                        ? ` · ${endpointText(claim.endpoint)}`
+                        : ''}
+                    </p>
+                  )
+                )
+              )}
+            </section>
+
+            <section aria-label="Protocol statuses" className="space-y-2">
+              <div>
+                <p className="text-xs font-semibold wallet-text-strong">
+                  Endpoint protocol status
+                </p>
+                <p className="text-[11px] wallet-muted">
+                  These statuses are recorded for the configured endpoints.
+                  Opening this page does not test them.
+                </p>
+              </div>
+              {(selectedSource.protocol_statuses ?? []).length === 0 ? (
+                <p className="text-xs wallet-muted">
+                  No endpoint protocol statuses recorded.
+                </p>
+              ) : (
+                (selectedSource.protocol_statuses ?? []).map((status) => (
+                  <p
+                    key={`${status.protocol}:${endpointText(status.endpoint)}`}
+                    className="text-xs wallet-muted"
+                  >
+                    {status.protocol} · {confidenceText(status.status)} ·{' '}
+                    {endpointText(status.endpoint)}
+                  </p>
+                ))
+              )}
+            </section>
+
+            {selectedSource.failures.length > 0 && (
+              <section aria-label="Route diagnostics" className="space-y-1">
+                <p className="text-xs font-semibold wallet-text-strong">
+                  Route diagnostics
+                </p>
+                {selectedSource.failures.map((failure) => (
+                  <p
+                    key={`${failure.protocol}:${endpointText(failure.endpoint)}`}
+                    className="text-xs text-amber-400"
+                  >
+                    {failure.protocol} · {failure.error}
+                  </p>
+                ))}
+              </section>
+            )}
+
             <button
               type="button"
-              className="wallet-btn-secondary flex-1 py-2 text-sm"
-              onClick={() => setShowAdd(false)}
+              className="wallet-btn-secondary w-full py-2 text-sm"
+              onClick={() => navigate('routing')}
             >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              className="wallet-btn-primary flex-1 py-2 text-sm font-semibold"
-              onClick={submitSource}
-            >
-              Add source
+              Configure routing
             </button>
           </div>
+        ) : (
+          <p className="text-xs wallet-muted">
+            This source is no longer present in the Rust catalog.
+          </p>
+        ))}
+
+      {page === 'explorer' && (
+        <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3">
+          <p className="text-xs font-semibold wallet-text-strong">
+            Explorer links follow the current network policy
+          </p>
+          <p className="text-xs wallet-muted">
+            Choose the explorer and custom link formats used by this wallet.
+          </p>
+          <p className="text-[11px] wallet-muted">
+            Current routing: {CHAIN_POLICY_LABELS[view.policy]}
+          </p>
+          {explorerSettings ?? (
+            <p className="text-xs wallet-muted">
+              Explorer settings are unavailable right now.
+            </p>
+          )}
         </div>
-      ) : (
-        <button
-          type="button"
-          className="wallet-btn-secondary w-full py-2 text-sm"
-          onClick={() => setShowAdd(true)}
-        >
-          Add a source
-        </button>
       )}
 
       {error && <p className="text-xs text-red-400">{error}</p>}
