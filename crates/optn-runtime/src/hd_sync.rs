@@ -277,6 +277,9 @@ mod tests {
         expected_floor: Mutex<Option<u32>>,
         entered: Notify,
         hold: bool,
+        headers: Mutex<Option<Vec<[u8; 80]>>>,
+        hold_headers: std::sync::atomic::AtomicBool,
+        header_entered: Notify,
     }
 
     impl ChainBackend for Backend {
@@ -297,9 +300,39 @@ mod tests {
         }
         fn supports(&self, operation: ChainOperation) -> bool {
             operation == ChainOperation::WalletRefresh
+                || (operation == ChainOperation::HeaderSync
+                    && self.headers.lock().unwrap().is_some())
         }
         fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
             Box::pin(async move {
+                if let ChainRequest::HeaderSync {
+                    start_height,
+                    count,
+                } = request
+                {
+                    self.header_entered.notify_one();
+                    if self.hold_headers.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::future::pending::<()>().await;
+                    }
+                    return Ok(BackendObservation {
+                        payload: ChainPayload::Headers {
+                            start_height: *start_height,
+                            headers: self
+                                .headers
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .unwrap()
+                                .iter()
+                                .skip(start_height.saturating_sub(1) as usize)
+                                .take(*count as usize)
+                                .copied()
+                                .collect(),
+                        },
+                        evidence: Evidence::ServerAssertion,
+                        chain_tip: None,
+                    });
+                }
                 let ChainRequest::WalletRefresh {
                     interests,
                     from_height,
@@ -354,6 +387,11 @@ mod tests {
             CapabilityConfidence::Verified,
             CapabilityDiscovery::ActiveProbe,
         );
+        caps.record(
+            Capability::HeaderStream,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
         let backend = Arc::new(Backend {
             id: id.clone(),
             endpoint: endpoint.clone(),
@@ -364,6 +402,9 @@ mod tests {
             expected_floor: Mutex::new(Some(0)),
             entered: Notify::new(),
             hold,
+            headers: Mutex::new(None),
+            hold_headers: std::sync::atomic::AtomicBool::new(false),
+            header_entered: Notify::new(),
         });
         let mut catalog = SourceCatalog::default();
         catalog
@@ -843,11 +884,13 @@ mod tests {
             .unwrap();
         let calls = backend.calls.lock().unwrap().len();
         let result = runtime
-            .sync_hd_wallet(&mut chain, &mut worker, xpub, LIMITS)
+            .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
             .await;
         assert!(matches!(
             result,
-            Err(crate::wallet_sync::WalletSyncError::InvalidScope(_))
+            Err(crate::wallet_sync::WalletSyncError::HistoryHeadersRequired(
+                _
+            ))
         ));
         assert_eq!(
             backend.calls.lock().unwrap().len(),
@@ -856,6 +899,68 @@ mod tests {
         );
         assert_eq!(runtime.state().coins.spendable_sats() + 77, before);
         assert!(!runtime.state().wallet_sync.utxos_fresh);
+
+        // The actual HD entry point acquires authenticated time anchors from
+        // this selected route before any wallet query, then resolves inside
+        // the actor. Synthetic low-difficulty headers are test-only.
+        let (verifier, headers) = crate::sync_worker::tests::header_fixture_to(20);
+        let view = crate::header_view::VerifiedHeaderView::with_anchor_interval(
+            Network::Chipnet,
+            verifier,
+            1,
+        );
+        *backend.headers.lock().unwrap() = Some(headers);
+        *backend.expected_floor.lock().unwrap() = Some(20);
+        worker = ProgressiveSyncWorker::new(Default::default())
+            .with_header_view(view.clone())
+            .unwrap();
+        assert_eq!(
+            runtime
+                .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+                .await
+                .unwrap(),
+            ReconciliationDecision::Accepted
+        );
+        assert_eq!(worker.header_view().unwrap().tip().unwrap().0, 20);
+        assert_eq!(runtime.state().coins.spendable_sats() + 77, before);
+        assert!(runtime.state().wallet_sync.utxos_fresh);
+        assert!(backend.floors.lock().unwrap()[calls..]
+            .iter()
+            .all(|floor| *floor == Some(20)));
+
+        // Revocation while waiting for headers must never issue a wallet
+        // query or obtain a lease for the replacement restore intent.
+        let wallet_calls = backend.calls.lock().unwrap().len();
+        backend
+            .hold_headers
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Consume the notification from the completed acquisition first.
+        backend.header_entered.notified().await;
+        let task_runtime = runtime.clone();
+        let syncing = tokio::spawn(async move {
+            let mut worker = ProgressiveSyncWorker::new(Default::default())
+                .with_header_view(view)
+                .unwrap();
+            task_runtime
+                .sync_hd_wallet(&mut chain, &mut worker, xpub, LIMITS)
+                .await
+        });
+        backend.header_entered.notified().await;
+        runtime
+            .wallet_security(Request::SetBirthday {
+                epoch: reopened.epoch,
+                birthday: WalletBirthdayInput::Unknown,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), syncing)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(WalletSyncError::Superseded)
+        ));
+        assert_eq!(backend.calls.lock().unwrap().len(), wallet_calls);
     }
 
     #[tokio::test]

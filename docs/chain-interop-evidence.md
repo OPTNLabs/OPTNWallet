@@ -464,3 +464,22 @@ rescan while offline, displayed the override without reopening the settings
 pane, and cleared it through the confirmation control. The cached 39,774 sats
 remained visible and stale. This is offline control/persistence evidence,
 not a successful network rescan.
+# 2026-09-19: imported-date header acquisition (runtime integration)
+
+`sync_hd_wallet_from_floor` now catches a typed unresolved-history-start result
+and performs the existing bounded verified-header pass on a permitted wallet
+route before asking the actor to resolve the saved date again. The original
+runtime generation travels with `BeginHd`; changing the wallet or restore intent
+during I/O cannot obtain a lease for the replacement context. Source revocation
+is checked before retry. No wallet query uses a guessed floor.
+
+The existing durable-birthday actor regression now starts with no time anchors,
+acquires synthetic proof-of-work/ASERT-valid headers on its selected provider,
+resolves block 20, verifies that every HD round uses that floor, and cancels a
+held header request after a birthday change without another wallet query.
+These synthetic parameters are test-only and are never installed by production.
+All 278 runtime tests pass; strict runtime Clippy, CLI check, native GUI
+library/test check and rustfmt pass. This is connected integration evidence,
+not a new live Chipnet or packaged-device run. An unavailable verifier, missing
+route, failed pass, or still-unresolved historical date remains fail-closed;
+one bounded pass does not claim exhaustive historical recovery.

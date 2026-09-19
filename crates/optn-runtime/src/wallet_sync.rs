@@ -24,6 +24,7 @@ pub enum WalletSyncError {
     Closed,
     NoWallet,
     InvalidScope(String),
+    HistoryHeadersRequired(crate::wallet_birthday::UndecidableReason),
     Superseded,
     InvalidSnapshot(String),
     HdDiscovery(String),
@@ -39,6 +40,8 @@ impl std::fmt::Display for WalletSyncError {
         match self {
             Self::Closed => f.write_str("application runtime is closed"),
             Self::NoWallet => f.write_str("open a wallet before synchronizing"),
+            Self::HistoryHeadersRequired(reason) => write!(f,
+                "Wallet history start needs authenticated headers ({reason:?}); choose Unknown for full history or an explicit rescan height."),
             Self::InvalidScope(reason)
             | Self::InvalidSnapshot(reason)
             | Self::Persistence(reason)
@@ -117,6 +120,7 @@ pub(super) enum WalletSyncRequest {
         String,
         HdSyncLimits,
         Option<crate::header_view::VerifiedHeaderView>,
+        u64,
         oneshot::Sender<Result<(WalletSyncLease, HdAccountScan), WalletSyncError>>,
     ),
     Begin(
@@ -252,17 +256,54 @@ impl AppRuntime {
         if let Some(height) = floor {
             self.request_wallet_rescan(height).await?;
         }
-        let (reply, received) = oneshot::channel();
-        self.action_tx
-            .send(RuntimeRequest::WalletSync(WalletSyncRequest::BeginHd(
-                account_xpub,
-                limits,
-                worker.header_view().cloned(),
-                reply,
-            )))
-            .await
-            .map_err(|_| WalletSyncError::Closed)?;
-        let (mut lease, mut scan) = received.await.map_err(|_| WalletSyncError::Closed)??;
+        let generation = self.revocation.load(std::sync::atomic::Ordering::SeqCst);
+        let mut begun = self
+            .begin_hd_scan(account_xpub.clone(), limits, worker, generation)
+            .await;
+        if matches!(begun, Err(WalletSyncError::HistoryHeadersRequired(_)))
+            && worker.header_view().is_some()
+        {
+            // Acquire only authenticated headers on a permitted wallet route;
+            // never query wallet history with a guessed floor. Each route gets
+            // one existing bounded header pass before the actor resolves again.
+            service.retry_offline_routes();
+            let mut state = self.subscribe_state();
+            for route in
+                service.routes_for_operation(crate::chain_service::ChainOperation::WalletRefresh)
+            {
+                if self.revocation.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                    return Err(WalletSyncError::Superseded);
+                }
+                let acquired = {
+                    let headers = worker.prime_headers_on_same_route(service, &route);
+                    tokio::pin!(headers);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            changed = state.changed() => {
+                                changed.map_err(|_| WalletSyncError::Closed)?;
+                                if self.revocation.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                                    return Err(WalletSyncError::Superseded);
+                                }
+                            }
+                            result = &mut headers => break result,
+                        }
+                    }
+                };
+                if service.revocation().is_revoked()
+                    || self.revocation.load(std::sync::atomic::Ordering::SeqCst) != generation
+                {
+                    return Err(WalletSyncError::Superseded);
+                }
+                if acquired.is_ok() {
+                    begun = self
+                        .begin_hd_scan(account_xpub.clone(), limits, worker, generation)
+                        .await;
+                    break;
+                }
+            }
+        }
+        let (mut lease, mut scan) = begun?;
         let floor = lease.floor;
         lease.source_lifetime = Some(service.revocation());
         worker.restore((*lease.baseline).clone());
@@ -327,6 +368,27 @@ impl AppRuntime {
                 }
             }
         }
+    }
+
+    async fn begin_hd_scan(
+        &self,
+        xpub: String,
+        limits: HdSyncLimits,
+        worker: &ProgressiveSyncWorker,
+        generation: u64,
+    ) -> Result<(WalletSyncLease, HdAccountScan), WalletSyncError> {
+        let (reply, received) = oneshot::channel();
+        self.action_tx
+            .send(RuntimeRequest::WalletSync(WalletSyncRequest::BeginHd(
+                xpub,
+                limits,
+                worker.header_view().cloned(),
+                generation,
+                reply,
+            )))
+            .await
+            .map_err(|_| WalletSyncError::Closed)?;
+        received.await.map_err(|_| WalletSyncError::Closed)?
     }
 
     /// Refresh an explicit public address-observation session. Seed, hardware,
@@ -738,8 +800,12 @@ impl WalletSyncSession {
                 }
                 let _ = reply.send(outcome);
             }
-            WalletSyncRequest::BeginHd(xpub, limits, view, reply) => {
-                let outcome = self.begin_hd(app, xpub, limits, view, guard.generation);
+            WalletSyncRequest::BeginHd(xpub, limits, view, generation, reply) => {
+                let outcome = if generation == guard.generation {
+                    self.begin_hd(app, xpub, limits, view, generation)
+                } else {
+                    Err(WalletSyncError::Superseded)
+                };
                 if outcome.is_ok() {
                     app.spend = None;
                     self.publish_app(app, app_tx);
@@ -980,15 +1046,24 @@ impl WalletSyncSession {
                 ScanFloor::FullHistory => (0, None, false),
                 ScanFloor::Complete { from_height } => {
                     let chosen = self.restore_state.manual_rescan.is_some()
-                        || !matches!(self.restore_state.birthday, crate::wallet_birthday::WalletBirthday::CreatedAt(_));
+                        || !matches!(
+                            self.restore_state.birthday,
+                            crate::wallet_birthday::WalletBirthday::CreatedAt(_)
+                        );
                     // A user-supplied origin remains a claim: keep the UI's
                     // warning that observations below this height are absent.
-                    (from_height, (chosen && from_height > 0).then_some(from_height), chosen)
-                },
-                ScanFloor::Incomplete { from_height, .. } => (from_height, (from_height > 0).then_some(from_height), true),
-                ScanFloor::Undecidable(reason) => return Err(WalletSyncError::InvalidScope(format!(
-                    "Wallet history start needs authenticated headers ({reason:?}); choose Unknown for full history or an explicit rescan height."
-                ))),
+                    (
+                        from_height,
+                        (chosen && from_height > 0).then_some(from_height),
+                        chosen,
+                    )
+                }
+                ScanFloor::Incomplete { from_height, .. } => {
+                    (from_height, (from_height > 0).then_some(from_height), true)
+                }
+                ScanFloor::Undecidable(reason) => {
+                    return Err(WalletSyncError::HistoryHeadersRequired(reason))
+                }
             };
         let scan = HdAccountScan::new(app.network, xpub, account, limits, required)
             .map_err(WalletSyncError::InvalidScope)?;
