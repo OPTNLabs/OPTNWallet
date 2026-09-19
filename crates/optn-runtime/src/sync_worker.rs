@@ -10,11 +10,19 @@ use crate::chain_service::{
     CapabilityRoute, ChainOperation, ChainPayload, ChainRequest, ChainService, ChainServiceError,
     ChainTip, ObservedTransaction, WalletInterest,
 };
-use crate::header_store::{HeaderStoreError, SharedHeaders};
-use crate::header_verifier::{ShvMmrError, ShvMmrHeaderVerifier};
+use crate::header_recovery::{
+    AcceptedCommitment, HistoricalReplay, ReplayBudget, ReplayStep,
+};
+use crate::header_store::{
+    BlockHeaderSource, HeaderStoreError, RetainedHeaders, SharedHeaders,
+};
+use crate::header_verifier::{shipped_header_verifier, ShvMmrError, ShvMmrHeaderVerifier};
 use crate::header_view::{HeaderViewError, VerifiedHeaderView};
 use crate::reconciliation::{evidence_strength, ReconciliationDecision, ReconciliationState};
+use crate::wallet_checkpoint::StoredHeaderProgress;
+use optn_core::header_hash::sha256d;
 use optn_core::network::Network;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,6 +359,8 @@ pub enum ProgressiveSyncError {
     InconsistentRefreshScope,
     HeaderVerification(ShvMmrError),
     HeaderView(HeaderViewError),
+    HeaderRecovery(String),
+    MissingAcceptedHeaderStore,
     /// Accepted headers did not join the dense store they were destined for.
     ///
     /// The view and the store are one accepted chain; if they disagree about
@@ -360,6 +370,17 @@ pub enum ProgressiveSyncError {
     Chain(ChainServiceError),
     UnexpectedPayload,
     Exhausted,
+}
+
+/// Restore the sealed header view against the checkpoint carried by the same
+/// authenticated wallet record. The blob supplies only public replay hints;
+/// the checkpoint remains the trust boundary.
+pub fn restore_header_progress(
+    network: Network,
+    progress: &StoredHeaderProgress,
+) -> Result<VerifiedHeaderView, ProgressiveSyncError> {
+    VerifiedHeaderView::restore(&progress.view, network, &progress.trusted)
+        .map_err(ProgressiveSyncError::HeaderView)
 }
 
 /// What a refresh is asking a provider for.
@@ -418,6 +439,11 @@ pub struct ProgressiveSyncWorker {
     accepted: Option<Arc<SharedHeaders>>,
 }
 
+/// A restored checkpoint is public progress, so a current chain may require a
+/// full historical replay before the dense scan store can be repopulated. Keep
+/// that work finite while covering the shipped Chipnet and mainnet heights.
+const MAX_HISTORICAL_REPLAY_HEADERS: u32 = 2_000_000;
+
 impl ProgressiveSyncWorker {
     pub fn new(config: ProgressiveSyncConfig) -> Self {
         Self {
@@ -469,6 +495,15 @@ impl ProgressiveSyncWorker {
         }
         self.header_view = Some(view);
         Ok(self)
+    }
+
+    /// Attach the durable header view a wallet sealed previously.
+    pub fn with_stored_header_progress(
+        self,
+        network: Network,
+        progress: &StoredHeaderProgress,
+    ) -> Result<Self, ProgressiveSyncError> {
+        self.with_header_view(restore_header_progress(network, progress)?)
     }
 
     pub fn header_view(&self) -> Option<&VerifiedHeaderView> {
@@ -653,6 +688,8 @@ impl ProgressiveSyncWorker {
         service: &mut ChainService,
         wallet_route: &CapabilityRoute,
     ) -> Result<(), ProgressiveSyncError> {
+        self.restore_historical_store_on_same_route(service, wallet_route)
+            .await?;
         // Work on a candidate so a failed route cannot poison another route's
         // trusted cursor. Publish only after the complete bounded header pass.
         let mut view = self
@@ -775,6 +812,299 @@ impl ProgressiveSyncWorker {
         self.header_view = Some(view);
         Ok(())
     }
+
+    /// Rebuild the dense accepted-header prefix when a sealed view was restored
+    /// into a fresh native store. P2P providers need those hashes for their
+    /// locators and block ranges; restoring only the MMR cursor leaves them
+    /// unable to scan the wallet's historical floor.
+    async fn restore_historical_store_on_same_route(
+        &self,
+        service: &mut ChainService,
+        wallet_route: &CapabilityRoute,
+    ) -> Result<(), ProgressiveSyncError> {
+        if !matches!(
+            wallet_route.protocol,
+            ProtocolFamily::Bip37 | ProtocolFamily::Neutrino
+        ) {
+            return Ok(());
+        }
+        let Some(view) = self.header_view.clone() else {
+            return Err(ProgressiveSyncError::MissingTrustedHeaderVerifier);
+        };
+        let target = view.checkpoint();
+        if target.height == 0 {
+            return Ok(());
+        }
+        let Some(store) = self.accepted.clone() else {
+            // Framework-neutral callers may carry only the verified view. A
+            // connected native P2P host must attach its provider-visible store
+            // to exercise historical recovery; without one there is no shared
+            // store this method could safely publish into.
+            return Ok(());
+        };
+        let target_hash = view
+            .tip()
+            .map(|(_, hash)| hash)
+            .ok_or_else(|| ProgressiveSyncError::HeaderRecovery("restored view has no tip".into()))?;
+        if store.range_inclusive(0, target.height).is_ok()
+            && store.hash_at(target.height) == Some(target_hash)
+        {
+            return Ok(());
+        }
+
+        let header_route = service
+            .routes_for_operation(ChainOperation::HeaderSync)
+            .into_iter()
+            .find(|candidate| {
+                candidate.source == wallet_route.source
+                    && candidate.protocol == wallet_route.protocol
+                    && candidate.endpoint == wallet_route.endpoint
+            })
+            .ok_or_else(|| ProgressiveSyncError::MissingHeaderRoute {
+                source: wallet_route.source.clone(),
+                protocol: wallet_route.protocol,
+            })?;
+        let anchors = view
+            .times()
+            .anchors()
+            .iter()
+            .filter(|anchor| anchor.height < target.height && anchor.is_authenticated())
+            .map(|anchor| (anchor.height, anchor.block_hash))
+            .collect::<BTreeMap<_, _>>();
+        let batch_size = self.config.header_batch_size.max(1);
+        let required_headers = target
+            .height
+            .checked_add(1)
+            .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
+        if required_headers > MAX_HISTORICAL_REPLAY_HEADERS {
+            return Err(ProgressiveSyncError::HeaderSafetyLimit);
+        }
+        let max_batches = target
+            .height
+            .saturating_add(batch_size.saturating_sub(1))
+            / batch_size;
+        let budget = ReplayBudget {
+            max_headers: required_headers,
+            max_batches: max_batches.saturating_add(1),
+        };
+        let mut replay = HistoricalReplay::begin(
+            view.network(),
+            AcceptedCommitment {
+                height: target.height,
+                commitment: target.commitment,
+            },
+            anchors,
+            budget,
+        )
+        .map_err(|error| ProgressiveSyncError::HeaderRecovery(format!("begin: {error:?}")))?;
+
+        // The replay starts at leaf zero, while getheaders starts after a
+        // locator. Genesis is shipped chain identity and is fed locally; every
+        // network batch then names the previous hash from this private store.
+        let genesis_verifier = shipped_header_verifier(view.network()).map_err(|error| {
+            ProgressiveSyncError::HeaderRecovery(format!("genesis verifier: {error:?}"))
+        })?;
+        let genesis = genesis_verifier
+            .tip_checkpoint_proof()
+            .map(|(header, _)| header.clone())
+            .ok_or_else(|| {
+                ProgressiveSyncError::HeaderRecovery("missing shipped genesis header".into())
+            })?;
+        let genesis_hash = sha256d(&genesis.0);
+        let snapshot = store.write(|retained| retained.clone());
+        if snapshot.hash_at(0).is_some_and(|hash| hash != genesis_hash) {
+            return Err(ProgressiveSyncError::HeaderRecovery(
+                "accepted store has a different network genesis".into(),
+            ));
+        }
+        let mut staged = snapshot.clone();
+        staged
+            .insert_verified(0, genesis.clone())
+            .map_err(ProgressiveSyncError::HeaderStore)?;
+        match replay.feed(std::slice::from_ref(&genesis)) {
+            ReplayStep::NeedHeaders { from_height: 1 } => {}
+            step => {
+                return Err(ProgressiveSyncError::HeaderRecovery(format!(
+                    "genesis replay did not advance: {step:?}"
+                )))
+            }
+        }
+
+        self
+            .replay_headers_into_store(
+                service,
+                &header_route,
+                &mut staged,
+                replay,
+                target.height,
+                max_batches,
+            )
+            .await?;
+        staged
+            .range_inclusive(0, target.height)
+            .map_err(ProgressiveSyncError::HeaderStore)?;
+        if staged.hash_at(target.height) != Some(target_hash) {
+            return Err(ProgressiveSyncError::HeaderRecovery(
+                "staged headers do not end at the restored tip".into(),
+            ));
+        }
+
+        // No accepted-store reader can observe a replay batch. Commit the
+        // complete authenticated candidate under one write lock, and refuse
+        // to overwrite a concurrent runtime update made while replay ran.
+        store.write(|retained| {
+            let unchanged = retained.generation() == snapshot.generation()
+                && retained.retained_span() == snapshot.retained_span()
+                && !snapshot.retained_span().is_some_and(|(start, end)| {
+                    retained.range_inclusive(start, end).ok()
+                        != snapshot.range_inclusive(start, end).ok()
+                });
+            if !unchanged {
+                return Err(ProgressiveSyncError::HeaderRecovery(
+                    "accepted store changed during historical replay".into(),
+                ));
+            }
+            *retained = staged;
+            Ok(())
+        })
+    }
+
+    async fn replay_headers_into_store(
+        &self,
+        service: &mut ChainService,
+        header_route: &CapabilityRoute,
+        store: &mut RetainedHeaders,
+        mut replay: HistoricalReplay,
+        target_height: u32,
+        max_batches: u32,
+    ) -> Result<(), ProgressiveSyncError> {
+        let batch_size = self.config.header_batch_size.max(1);
+        for _ in 0..max_batches {
+            let start = replay.next_height();
+            if start == 0 {
+                return Err(ProgressiveSyncError::HeaderSafetyLimit);
+            }
+            let locator = start
+                .checked_sub(1)
+                .and_then(|height| store.hash_at(height))
+                .ok_or_else(|| {
+                    ProgressiveSyncError::HeaderRecovery(format!(
+                        "staged store has no locator at {}",
+                        start.saturating_sub(1)
+                    ))
+                })?;
+            let observation = service
+                .execute_on_route(
+                    header_route,
+                    &ChainRequest::HeaderSyncFromLocator {
+                        start_height: start,
+                        count: batch_size,
+                        locator,
+                    },
+                )
+                .await
+                .map_err(ProgressiveSyncError::Chain)?;
+            let ChainPayload::Headers {
+                start_height,
+                headers,
+            } = observation.value
+            else {
+                return Err(ProgressiveSyncError::UnexpectedPayload);
+            };
+            if start_height != start || headers.len() > batch_size as usize {
+                return Err(ProgressiveSyncError::InvalidHeaderRange);
+            }
+            let batch = headers
+                .into_iter()
+                .map(BlockHeaderBytes)
+                .collect::<Vec<_>>();
+            let step = replay.feed(&batch);
+            let consumed = match &step {
+                ReplayStep::NeedHeaders { from_height } => from_height.saturating_sub(start),
+                ReplayStep::Authenticated { through_height, .. } => {
+                    through_height.saturating_sub(start).saturating_add(1)
+                }
+                ReplayStep::Incomplete(reason) => reason.next_height().saturating_sub(start),
+                ReplayStep::Diverged(_) => 0,
+            };
+            let consumed = usize::try_from(consumed)
+                .map_err(|_| ProgressiveSyncError::HeaderSafetyLimit)?;
+            if consumed > batch.len() {
+                return Err(ProgressiveSyncError::InvalidHeaderRange);
+            }
+            if consumed > 0 {
+                self.publish_recovered_headers(store, start, &batch, consumed)?;
+            }
+            match step {
+                ReplayStep::NeedHeaders { from_height } if from_height > start => {}
+                ReplayStep::Authenticated { .. } => {
+                    store
+                        .range_inclusive(0, target_height)
+                        .map_err(ProgressiveSyncError::HeaderStore)?;
+                    return Ok(());
+                }
+                ReplayStep::NeedHeaders { .. } => {
+                    return Err(ProgressiveSyncError::HeaderRecovery(
+                        "replay cursor did not advance".into(),
+                    ));
+                }
+                ReplayStep::Incomplete(reason) => {
+                    return Err(ProgressiveSyncError::HeaderRecovery(format!(
+                        "incomplete: {reason:?}"
+                    )));
+                }
+                ReplayStep::Diverged(reason) => {
+                    return Err(ProgressiveSyncError::HeaderRecovery(format!(
+                        "diverged: {reason:?}"
+                    )));
+                }
+            }
+        }
+        Err(ProgressiveSyncError::HeaderSafetyLimit)
+    }
+
+    fn publish_recovered_headers(
+        &self,
+        store: &mut RetainedHeaders,
+        start: u32,
+        batch: &[BlockHeaderBytes],
+        count: usize,
+    ) -> Result<(), ProgressiveSyncError> {
+        if start == 0 || store.hash_at(start - 1).is_none() {
+            return Err(ProgressiveSyncError::HeaderStore(HeaderStoreError::Linkage {
+                height: start,
+            }));
+        }
+        for (offset, header) in batch.iter().take(count).enumerate() {
+            let height = start
+                .checked_add(offset as u32)
+                .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
+            let hash = sha256d(&header.0);
+            if store.hash_at(height).is_some_and(|existing| existing != hash) {
+                return Err(ProgressiveSyncError::HeaderStore(HeaderStoreError::Linkage {
+                    height,
+                }));
+            }
+            if let Some(next_height) = height.checked_add(1) {
+                if let Some(next) = store.header_at(next_height) {
+                    if next.0[4..36] != hash {
+                        return Err(ProgressiveSyncError::HeaderStore(HeaderStoreError::Linkage {
+                            height: next_height,
+                        }));
+                    }
+                }
+            }
+        }
+        for (offset, header) in batch.iter().take(count).enumerate() {
+            let height = start
+                .checked_add(offset as u32)
+                .ok_or(ProgressiveSyncError::HeaderSafetyLimit)?;
+            store
+                .insert_verified(height, header.clone())
+                .map_err(ProgressiveSyncError::HeaderStore)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -788,8 +1118,19 @@ pub(crate) mod tests {
         ConnectionPolicy, Endpoint, EndpointKind, Evidence, ProviderHealth, SourceCatalog,
         SourceDisposition, SourceOrigin,
     };
-    use crate::chain_service::{BackendObservation, ChainBackend, ChainFuture};
+    use crate::chain_service::{
+        BackendObservation, ChainBackend, ChainBackendError, ChainFuture,
+    };
     use std::sync::Arc;
+
+    #[derive(Default)]
+    struct HeaderProbe {
+        requests: Vec<ChainRequest>,
+        spans: Vec<Option<(u32, u32)>>,
+        reject_published_during_replay: bool,
+    }
+
+    type HeaderProbeHandle = (Arc<SharedHeaders>, Arc<std::sync::Mutex<HeaderProbe>>);
 
     struct WalletBackend {
         id: SourceId,
@@ -801,6 +1142,7 @@ pub(crate) mod tests {
         wallet_evidence: Evidence,
         /// Every floor this backend was asked to scan from, in order.
         asked_from: Arc<std::sync::Mutex<Vec<Option<u32>>>>,
+        probe: Option<HeaderProbeHandle>,
     }
     impl ChainBackend for WalletBackend {
         fn source_id(&self) -> &SourceId {
@@ -826,9 +1168,34 @@ pub(crate) mod tests {
         }
         fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
             Box::pin(async move {
+                if matches!(
+                    request,
+                    ChainRequest::HeaderSync { .. }
+                        | ChainRequest::HeaderSyncFromLocator { .. }
+                ) {
+                    if let Some((store, probe)) = &self.probe {
+                        let span = store.retained_span();
+                        let mut probe = probe.lock().expect("header probe");
+                        if probe.reject_published_during_replay
+                            && matches!(request, ChainRequest::HeaderSyncFromLocator { .. })
+                            && span != Some((0, 0))
+                        {
+                            return Err(ChainBackendError::Rejected(
+                                "shared store was published before replay authentication".into(),
+                            ));
+                        }
+                        probe.requests.push(request.clone());
+                        probe.spans.push(span);
+                    }
+                }
                 if let ChainRequest::HeaderSync {
                     start_height,
                     count,
+                }
+                | ChainRequest::HeaderSyncFromLocator {
+                    start_height,
+                    count,
+                    ..
                 } = request
                 {
                     return Ok(BackendObservation {
@@ -920,6 +1287,58 @@ pub(crate) mod tests {
             header_height_offset,
             wallet_evidence,
             asked_from: Arc::new(std::sync::Mutex::new(Vec::new())),
+            probe: None,
+        }));
+        service
+    }
+
+    fn service_with_headers_probe(
+        protocol: ProtocolFamily,
+        headers: Vec<[u8; 80]>,
+        header_height_offset: u32,
+        wallet_evidence: Evidence,
+        probe: Option<HeaderProbeHandle>,
+    ) -> ChainService {
+        let id = SourceId::new("probe-server");
+        let endpoint = Endpoint {
+            kind: EndpointKind::BchP2p,
+            host: "probe-server".into(),
+            port: Some(50002),
+        };
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(ChainSource {
+                id: id.clone(),
+                label: "probe-server".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![endpoint.clone()],
+                capabilities: CapabilitySet::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            })
+            .unwrap();
+        let mut caps = CapabilitySet::default();
+        caps.record(
+            Capability::UtxoQuery,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
+        caps.record(
+            Capability::HeaderStream,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
+        let mut service = ChainService::new(catalog, ConnectionPolicy::auto());
+        service.register(Arc::new(WalletBackend {
+            id,
+            endpoint,
+            caps,
+            protocol,
+            headers,
+            header_height_offset,
+            wallet_evidence,
+            asked_from: Arc::new(std::sync::Mutex::new(Vec::new())),
+            probe,
         }));
         service
     }
@@ -968,6 +1387,7 @@ pub(crate) mod tests {
             header_height_offset: 0,
             wallet_evidence: Evidence::ServerAssertion,
             asked_from: asked_from.clone(),
+            probe: None,
         }));
         (service, asked_from)
     }
@@ -1031,6 +1451,48 @@ pub(crate) mod tests {
         .unwrap()
         .with_asert(params, anchor);
         (verifier, headers)
+    }
+
+    fn shipped_regtest_view_to(end: u32) -> (VerifiedHeaderView, Vec<[u8; 80]>, [u8; 32]) {
+        use optn_core::asert::AsertParams;
+        use optn_core::header_pow::verify_declared_pow;
+
+        let verifier = shipped_header_verifier(Network::Regtest).expect("regtest genesis");
+        let genesis = verifier.last_hash().expect("regtest genesis hash");
+        let genesis_time = verifier.last_time().expect("regtest genesis time");
+        let params = AsertParams::for_network(Network::Regtest);
+        let mut previous = genesis;
+        let mut headers = Vec::new();
+        for height in 1..=end {
+            let mut header = [0u8; 80];
+            header[0..4].copy_from_slice(&1u32.to_le_bytes());
+            header[4..36].copy_from_slice(&previous);
+            header[36..68].copy_from_slice(&[height as u8; 32]);
+            header[68..72]
+                .copy_from_slice(&genesis_time.saturating_add(height * 600).to_le_bytes());
+            header[72..76].copy_from_slice(&params.max_bits.to_le_bytes());
+            let mut found = false;
+            for nonce in 0u32..100_000 {
+                header[76..80].copy_from_slice(&nonce.to_le_bytes());
+                if let Ok(parsed) = verify_declared_pow(&header) {
+                    previous = parsed.hash;
+                    found = true;
+                    break;
+                }
+            }
+            assert!(found, "regtest fixture header must satisfy proof of work");
+            headers.push(header);
+        }
+        let mut view = VerifiedHeaderView::new(Network::Regtest, verifier);
+        view.extend(
+            &headers
+                .iter()
+                .copied()
+                .map(BlockHeaderBytes)
+                .collect::<Vec<_>>(),
+        )
+        .expect("regtest fixture extension");
+        (view, headers, genesis)
     }
 
     #[tokio::test]
@@ -1128,6 +1590,65 @@ pub(crate) mod tests {
             );
             assert!(worker.reconciliation().authoritative.is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn restored_p2p_replay_stages_locators_until_one_authenticated_commit() {
+        let (view, headers, genesis) = shipped_regtest_view_to(4);
+
+        let store = Arc::new(SharedHeaders::default());
+        store.write(|retained| retained.insert_hash_only(0, genesis));
+        let probe = Arc::new(std::sync::Mutex::new(HeaderProbe {
+            reject_published_during_replay: true,
+            ..Default::default()
+        }));
+        let mut service = service_with_headers_probe(
+            ProtocolFamily::Bip37,
+            headers.clone(),
+            0,
+            Evidence::ServerAssertion,
+            Some((store.clone(), probe.clone())),
+        );
+        let route = service
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .remove(0);
+        let mut worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig {
+            header_batch_size: 1,
+            ..Default::default()
+        })
+        .with_header_view(view)
+        .expect("restored view");
+        worker = worker.with_accepted_headers(store.clone());
+
+        worker
+            .restore_historical_store_on_same_route(&mut service, &route)
+            .await
+            .expect("authenticated replay commits the dense store");
+
+        let probe = probe.lock().expect("header probe");
+        assert_eq!(
+            probe.spans,
+            vec![Some((0, 0)); 4],
+            "a provider-side concurrent reader must see only genesis until proof completes"
+        );
+        let mut expected_locator = genesis;
+        for (index, request) in probe.requests.iter().enumerate() {
+            let ChainRequest::HeaderSyncFromLocator {
+                start_height,
+                locator,
+                ..
+            } = request
+            else {
+                panic!("historical replay used a non-staged header request")
+            };
+            assert_eq!(*start_height, index as u32 + 1);
+            assert_eq!(*locator, expected_locator);
+            expected_locator = crate::header_verifier::header_leaf(&BlockHeaderBytes(
+                headers[index],
+            ));
+        }
+        assert_eq!(store.retained_span(), Some((0, 4)));
+        assert_eq!(store.hash_at(4), Some(expected_locator));
     }
 
     #[tokio::test]

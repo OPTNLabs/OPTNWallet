@@ -1600,15 +1600,9 @@ async fn seed_header_progress(
     else {
         return Ok(worker);
     };
-    let view = optn_runtime::header_view::VerifiedHeaderView::restore(
-        &progress.view,
-        network,
-        &progress.trusted,
-    )
-    .map_err(|error| CliError::Usage(format!("stored header progress is unusable: {error:?}")))?;
     worker
-        .with_header_view(view)
-        .map_err(|error| CliError::Usage(format!("stored header view: {error:?}")))
+        .with_stored_header_progress(network, &progress)
+        .map_err(|error| CliError::Usage(format!("stored header progress is unusable: {error:?}")))
 }
 
 fn hd_sync_worker(

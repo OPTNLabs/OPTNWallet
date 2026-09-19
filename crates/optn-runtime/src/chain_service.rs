@@ -86,6 +86,16 @@ pub enum ChainRequest {
         start_height: u32,
         count: u32,
     },
+    /// Fetch headers after an explicitly supplied locator.
+    ///
+    /// Historical recovery uses a private staged store. The locator is typed
+    /// into the request so a provider can acquire the next batch without
+    /// observing or being given write access to the shared accepted store.
+    HeaderSyncFromLocator {
+        start_height: u32,
+        count: u32,
+        locator: Hash32,
+    },
     HistoricalHeaderProof {
         height: u32,
         checkpoint_height: u32,
@@ -99,7 +109,9 @@ impl ChainRequest {
             Self::WalletRefresh { .. } => ChainOperation::WalletRefresh,
             Self::TransactionLookup { .. } => ChainOperation::TransactionLookup,
             Self::Broadcast { .. } => ChainOperation::Broadcast,
-            Self::HeaderSync { .. } => ChainOperation::HeaderSync,
+            Self::HeaderSync { .. } | Self::HeaderSyncFromLocator { .. } => {
+                ChainOperation::HeaderSync
+            }
             Self::HistoricalHeaderProof { .. } => ChainOperation::HistoricalHeaderProof,
         }
     }

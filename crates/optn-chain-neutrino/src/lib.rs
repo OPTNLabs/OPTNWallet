@@ -286,17 +286,21 @@ impl NeutrinoBackend {
         &self,
         start_height: u32,
         count: u32,
+        requested_locator: Option<[u8; 32]>,
     ) -> Result<BackendObservation, ChainBackendError> {
         if start_height == 0 {
             return Err(ChainBackendError::Rejected(
                 "getheaders starts after a locator; request height 1 or later".into(),
             ));
         }
-        let locator = self.headers.hash_at(start_height - 1).ok_or_else(|| {
-            ChainBackendError::Rejected(
-                "no accepted header before the requested start; sync sequentially".into(),
-            )
-        })?;
+        let locator = match requested_locator {
+            Some(locator) => locator,
+            None => self.headers.hash_at(start_height - 1).ok_or_else(|| {
+                ChainBackendError::Rejected(
+                    "no accepted header before the requested start; sync sequentially".into(),
+                )
+            })?,
+        };
         let port = self
             .config
             .endpoint
@@ -607,7 +611,14 @@ impl ChainBackend for NeutrinoBackend {
                 ChainRequest::HeaderSync {
                     start_height,
                     count,
-                } => self.header_sync(*start_height, *count).await,
+                } => self.header_sync(*start_height, *count, None).await,
+                ChainRequest::HeaderSyncFromLocator {
+                    start_height,
+                    count,
+                    locator,
+                } => self
+                    .header_sync(*start_height, *count, Some(*locator))
+                    .await,
                 _ => Err(ChainBackendError::Unsupported),
             }
         })
