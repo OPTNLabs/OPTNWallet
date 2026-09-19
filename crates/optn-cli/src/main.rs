@@ -414,7 +414,8 @@ enum NetworkCommand {
     },
 }
 
-#[derive(Clone, Copy, clap::ValueEnum)]
+#[derive(Clone, Copy, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 enum ChainProtocol {
     Electrum,
     Bip37,
