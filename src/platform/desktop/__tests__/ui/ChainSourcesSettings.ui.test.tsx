@@ -100,6 +100,18 @@ it('browses without probes and sends explicit selection through the old UI', asy
     />
   );
   await screen.findByTestId('chain-sources-public');
+  fireEvent.click(screen.getByRole('button', { name: /Metadata & indexing/ }));
+  expect(
+    screen.getByRole('button', { name: /External BCMR indexer.*unavailable/ })
+  ).toBeDisabled();
+  expect(screen.getByText('IPFS gateways')).toBeInTheDocument();
+  expect(
+    mock.invoke.mock.calls.every(
+      ([command]) => command === 'optn_chain_sources'
+    )
+  ).toBe(true);
+  act(() => backRef.current?.());
+  expect(backRef.current).toBeNull();
   expect(
     within(
       screen.getByRole('navigation', { name: 'Network source settings' })

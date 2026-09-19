@@ -12,8 +12,9 @@ use std::collections::BTreeSet;
 /// Remove an entry only when its validated, policy-aware adapter is connected.
 pub fn unavailable_services() -> Vec<optn_transport::chain_sources::UnavailableSourceService> {
     [
-        ("bcmr-indexer", "External BCMR indexer"),
+        ("bcmr-indexer", "BCMR indexer (Paytaca-compatible)"),
         ("token-indexer", "Token indexer"),
+        ("chaingraph", "Chaingraph / graph queries"),
         ("metadata-proxy", "Metadata proxy / cache"),
     ]
     .into_iter()
