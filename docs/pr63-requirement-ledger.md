@@ -350,3 +350,18 @@ enables/removes a source across one-shot, private stdio and prompt interfaces,
 then proves a new process retains the empty selection without public fallback.
 The Windows GUI selection/delete/restart test also passes on `7984e8ae` after
 native route-revocation wiring; isolated settings were restored and the app stopped.
+
+## Android packaged source selection (2026-09-19)
+
+Built the Rust Leptos/Tauri ARM64 debug APK from `7984e8ae`, installed it on
+an isolated Android 36 emulator, and opened its landing page. Through the GUI,
+imported and encrypted a published public Chipnet watch-only account, added a
+disposable source, selected it with Electrum only and no fallback, and removed it.
+The exported policy retained an empty explicit primary scope. Force-stopping and
+relaunching the APK, then unlocking the wallet, preserved exactly that policy.
+Mobile deletion no longer fails on an unavailable desktop credential store.
+
+APK SHA-256: `a8f59b8a055024cc041c529ebbb5ff3247fd3f1275fd3794d44956ad35489974`.
+The signature verifies and the embedded ARM64 native library matches the compiled
+output byte-for-byte. This validates packaged launch, encrypted watch-only reopen
+and source-selection persistence, not SeedCash signing or all-platform parity.
