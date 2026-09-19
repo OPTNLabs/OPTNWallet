@@ -102,3 +102,19 @@ connections to explicitly owned infrastructure. This is not a claim that arbitra
 Direct/Tor/Proxy switching or authenticated remote catalog updates are complete.
 Read `docs/pr63-requirement-ledger.md` for scoped execution evidence and remaining
 migration work. An older APK does not acquire these UI changes from a source commit.
+
+
+### Retained wallet navigation correction (2026-09-19)
+
+In the desktop v1.7.4 settings skin, the existing Servers entry is now **Network**
+and opens the overview directly. The separate Mainnet/Chipnet chooser is labelled
+**Blockchain network**. Do not retain the old Auto/Manual, Connect, server pool,
+or privacy form alongside the Rust-backed destination.
+
+Network contains My Infrastructure, Public Sources, Custom Sources, Routing,
+Privacy & Transport, Explorer, Wallet sync, and Transaction fees. Each is a
+separate destination. The existing Settings Back button unwinds the actual local
+navigation history (Routing opened from Source details returns to that source,
+then its directory, then Network), before leaving Network. No additional wrapper
+page or competing Back button is needed. Non-desktop legacy controls remain until
+their shared-runtime adapter is available; this is not cross-platform parity proof.

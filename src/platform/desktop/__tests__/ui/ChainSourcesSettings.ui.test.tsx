@@ -2,6 +2,7 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -71,8 +72,11 @@ it('browses without probes and sends explicit selection through the old UI', asy
   mock.invoke.mockImplementation(async (command: string) =>
     command === 'optn_chain_sources' ? view : undefined
   );
+  const backRef = { current: null as (() => void) | null };
   render(
     <ChainSourcesSettings
+      backRef={backRef}
+      feeSettings={<button>Existing fee control</button>}
       explorerSettings={<button>Existing explorer control</button>}
     />
   );
@@ -117,9 +121,26 @@ it('browses without probes and sends explicit selection through the old UI', asy
       selection: view.selection,
     })
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+  expect(
+    screen.queryByRole('button', { name: 'Back' })
+  ).not.toBeInTheDocument();
+  act(() => backRef.current?.());
+  expect(
+    screen.getByRole('button', { name: 'Configure routing' })
+  ).toBeInTheDocument();
+  act(() => backRef.current?.());
+  expect(screen.getByTestId('chain-source-public')).toBeInTheDocument();
+  act(() => backRef.current?.());
+  expect(backRef.current).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: /Explorer/ }));
   expect(
     screen.getByRole('button', { name: 'Existing explorer control' })
   ).toBeInTheDocument();
+  act(() => backRef.current?.());
+  fireEvent.click(screen.getByRole('button', { name: 'Transaction fees' }));
+  expect(
+    screen.getByRole('button', { name: 'Existing fee control' })
+  ).toBeInTheDocument();
+  act(() => backRef.current?.());
+  expect(backRef.current).toBeNull();
 });

@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type MutableRefObject,
 } from 'react';
 import { useDispatch } from 'react-redux';
 import { setChainPolicy as rememberChainPolicy } from '../../state/slices/preferencesSlice';
@@ -49,6 +50,7 @@ type SourcePage =
   | 'routing'
   | 'privacy'
   | 'sync'
+  | 'fees'
   | 'explorer';
 type DirectoryPage = Extract<SourcePage, 'public' | 'own' | 'custom'>;
 
@@ -104,11 +106,12 @@ function isDirectoryPage(page: SourcePage): page is DirectoryPage {
 function pageTitle(page: SourcePage): string {
   if (isDirectoryPage(page)) return DIRECTORY_CONFIG[page].title;
   return {
-    overview: 'Network sources',
+    overview: 'Network',
     details: 'Source details',
     routing: 'Routing',
-    privacy: 'Privacy and transport',
-    sync: 'Shared engine sync',
+    privacy: 'Privacy & Transport',
+    sync: 'Wallet sync',
+    fees: 'Transaction fees',
     explorer: 'Explorer',
   }[page];
 }
@@ -230,14 +233,18 @@ function statusLine(source: ChainSource): { text: string; tone: string } {
 
 type ChainSourcesSettingsProps = {
   explorerSettings?: ReactNode;
+  feeSettings?: ReactNode;
+  backRef?: MutableRefObject<(() => void) | null>;
 };
 
 export function ChainSourcesSettings({
   explorerSettings,
+  feeSettings,
+  backRef,
 }: ChainSourcesSettingsProps) {
   const [view, setView] = useState<ChainSourcesView | null>(null);
   const [page, setPage] = useState<SourcePage>('overview');
-  const [directoryPage, setDirectoryPage] = useState<DirectoryPage>('public');
+  const [history, setHistory] = useState<SourcePage[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState('');
   const [search, setSearch] = useState('');
   const [serviceFilter, setServiceFilter] = useState('');
@@ -309,17 +316,37 @@ export function ChainSourcesSettings({
 
   const navigate = (next: SourcePage) => {
     if (next !== 'routing') setSelectionDirty(false);
+    if (next === page) return;
+    setHistory((previous) => [...previous, page]);
     setPage(next);
   };
 
+  const goBack = useCallback(() => {
+    if (showAdd) {
+      setShowAdd(false);
+      return;
+    }
+    const previous = history[history.length - 1];
+    if (!previous) return;
+    setPage(previous);
+    setHistory((pages) => pages.slice(0, -1));
+    setSelectionDirty(false);
+  }, [history, showAdd]);
+
+  useEffect(() => {
+    if (!backRef) return;
+    backRef.current = history.length || showAdd ? goBack : null;
+    return () => {
+      backRef.current = null;
+    };
+  }, [backRef, goBack, history.length, showAdd]);
+
   const openDirectory = (next: DirectoryPage) => {
-    setDirectoryPage(next);
     setShowAdd(false);
     navigate(next);
   };
 
   const openDetails = (source: ChainSource) => {
-    if (isDirectoryPage(page)) setDirectoryPage(page);
     setSelectedSourceId(source.id);
     setShowAdd(false);
     navigate('details');
@@ -417,13 +444,11 @@ export function ChainSourcesSettings({
   return (
     <SectionCard className="p-4 space-y-4">
       <div className="space-y-2">
-        {page !== 'overview' && (
+        {!backRef && (history.length > 0 || showAdd) && (
           <button
             type="button"
             className="wallet-btn-secondary px-2.5 py-1 text-xs"
-            onClick={() =>
-              navigate(page === 'details' ? directoryPage : 'overview')
-            }
+            onClick={goBack}
           >
             Back
           </button>
@@ -447,7 +472,7 @@ export function ChainSourcesSettings({
             routes chain access.
           </p>
           <nav aria-label="Network source settings" className="space-y-2">
-            {(['public', 'own', 'custom'] as DirectoryPage[]).map((target) => {
+            {(['own', 'public', 'custom'] as DirectoryPage[]).map((target) => {
               const config = DIRECTORY_CONFIG[target];
               const count = view.sources.filter(
                 (source) => source.origin === config.origin
@@ -497,10 +522,10 @@ export function ChainSourcesSettings({
             >
               <span>
                 <span className="block text-sm font-semibold wallet-text-strong">
-                  Privacy and transport
+                  Privacy &amp; Transport
                 </span>
                 <span className="block text-[11px] wallet-muted">
-                  Rust reports Tor as {view.tor.status.replace('_', ' ')}
+                  Tor: {view.tor.status.replace('_', ' ')}
                 </span>
               </span>
               <span className="text-xs wallet-muted">Open</span>
@@ -512,14 +537,26 @@ export function ChainSourcesSettings({
             >
               <span>
                 <span className="block text-sm font-semibold wallet-text-strong">
-                  Shared engine sync
+                  Wallet sync
                 </span>
                 <span className="block text-[11px] wallet-muted">
-                  Read the shared wallet refresh state
+                  Review wallet synchronization status
                 </span>
               </span>
               <span className="text-xs wallet-muted">Open</span>
             </button>
+            {feeSettings && (
+              <button
+                type="button"
+                className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+                onClick={() => navigate('fees')}
+              >
+                <span className="text-sm font-semibold wallet-text-strong">
+                  Transaction fees
+                </span>
+                <span aria-hidden="true">›</span>
+              </button>
+            )}
             <button
               type="button"
               className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
@@ -538,6 +575,8 @@ export function ChainSourcesSettings({
           </nav>
         </>
       )}
+
+      {page === 'fees' && feeSettings}
 
       {page === 'privacy' && (
         <>
@@ -965,7 +1004,7 @@ export function ChainSourcesSettings({
           <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3">
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs font-semibold wallet-text-strong">
-                Shared engine sync
+                Wallet sync
               </p>
               <button
                 type="button"
