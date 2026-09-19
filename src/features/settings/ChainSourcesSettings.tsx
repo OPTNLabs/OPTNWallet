@@ -50,6 +50,7 @@ type SourcePage =
   | 'routing'
   | 'privacy'
   | 'sync'
+  | 'birthday'
   | 'fusion'
   | 'fees'
   | 'explorer';
@@ -111,9 +112,10 @@ function pageTitle(page: SourcePage): string {
     details: 'Source details',
     routing: 'Routing',
     privacy: 'Privacy & Transport',
-    sync: 'Wallet sync',
+    sync: 'Diagnostics',
     fees: 'Transaction fees',
     fusion: 'CashFusion',
+    birthday: 'Wallet birthday',
     explorer: 'Explorer',
   }[page];
 }
@@ -237,6 +239,7 @@ type ChainSourcesSettingsProps = {
   explorerSettings?: ReactNode;
   feeSettings?: ReactNode;
   fusionSettings?: ReactNode;
+  birthdaySettings?: ReactNode;
   backRef?: MutableRefObject<(() => void) | null>;
 };
 
@@ -244,6 +247,7 @@ export function ChainSourcesSettings({
   explorerSettings,
   feeSettings,
   fusionSettings,
+  birthdaySettings,
   backRef,
 }: ChainSourcesSettingsProps) {
   const [view, setView] = useState<ChainSourcesView | null>(null);
@@ -475,7 +479,34 @@ export function ChainSourcesSettings({
             Choose a source directory, review a source, or adjust how the wallet
             routes chain access.
           </p>
+          <p role="status" className="text-xs wallet-muted">
+            {engineSync?.refreshing
+              ? 'Syncing wallet...'
+              : engineSync?.error
+                ? `Sync needs attention: ${engineSync.error}`
+                : engineSync?.confirmedSats !== null && engineSync
+                  ? 'Last synchronized balance available'
+                  : 'Waiting for wallet sync'}
+          </p>
           <nav aria-label="Network source settings" className="space-y-2">
+            <button
+              type="button"
+              className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+              onClick={() => navigate('routing')}
+            >
+              <span>
+                <span className="block text-sm font-semibold wallet-text-strong">
+                  Routing
+                </span>
+                <span className="block text-[11px] wallet-muted">
+                  {CHAIN_POLICY_LABELS[view.policy]} ·{' '}
+                  {view.protocols.length > 0
+                    ? view.protocols.join(', ')
+                    : 'no protocols selected'}
+                </span>
+              </span>
+              <span className="text-xs wallet-muted">Configure</span>
+            </button>
             {(['own', 'public', 'custom'] as DirectoryPage[]).map((target) => {
               const config = DIRECTORY_CONFIG[target];
               const count = view.sources.filter(
@@ -504,24 +535,6 @@ export function ChainSourcesSettings({
             <button
               type="button"
               className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
-              onClick={() => navigate('routing')}
-            >
-              <span>
-                <span className="block text-sm font-semibold wallet-text-strong">
-                  Routing
-                </span>
-                <span className="block text-[11px] wallet-muted">
-                  {CHAIN_POLICY_LABELS[view.policy]} ·{' '}
-                  {view.protocols.length > 0
-                    ? view.protocols.join(', ')
-                    : 'no protocols selected'}
-                </span>
-              </span>
-              <span className="text-xs wallet-muted">Configure</span>
-            </button>
-            <button
-              type="button"
-              className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
               onClick={() => navigate('privacy')}
             >
               <span>
@@ -541,14 +554,31 @@ export function ChainSourcesSettings({
             >
               <span>
                 <span className="block text-sm font-semibold wallet-text-strong">
-                  Wallet sync
+                  Diagnostics
                 </span>
                 <span className="block text-[11px] wallet-muted">
-                  Review wallet synchronization status
+                  Connection details and manual refresh
                 </span>
               </span>
               <span className="text-xs wallet-muted">Open</span>
             </button>
+            {birthdaySettings && (
+              <button
+                type="button"
+                className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+                onClick={() => navigate('birthday')}
+              >
+                <span>
+                  <span className="block text-sm font-semibold wallet-text-strong">
+                    Wallet birthday
+                  </span>
+                  <span className="block text-[11px] wallet-muted">
+                    Where wallet history begins
+                  </span>
+                </span>
+                <span aria-hidden="true">&#8250;</span>
+              </button>
+            )}
             {fusionSettings && (
               <button
                 type="button"
@@ -599,6 +629,7 @@ export function ChainSourcesSettings({
 
       {page === 'fees' && feeSettings}
       {page === 'fusion' && fusionSettings}
+      {page === 'birthday' && birthdaySettings}
 
       {page === 'privacy' && (
         <>

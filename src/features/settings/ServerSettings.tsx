@@ -35,6 +35,8 @@ import {
 import { Bip37NodeRow } from './Bip37NodeSettings';
 import { ChainSourcesSettings } from './ChainSourcesSettings';
 import { CashFusionSettings } from './CashFusionSettings';
+import { WalletBirthdaySettings } from './WalletBirthdaySettings';
+import { selectWalletId } from '../../state/slices/walletSlice';
 import {
   getBackend,
   setBackend,
@@ -72,6 +74,7 @@ export const ServerSettings: React.FC<{
   const { t } = useI18n();
   const desktop = isDesktopPlatform();
   const currentNetwork = useSelector(selectCurrentNetwork);
+  const walletId = useSelector(selectWalletId);
   const defaultServers = getElectrumServers(currentNetwork);
   const explorerId = useSelector(selectExplorerId);
   const explorerCustom = useSelector(selectExplorerCustom);
@@ -368,6 +371,9 @@ export const ServerSettings: React.FC<{
         explorerSettings={explorerSettings}
         feeSettings={feeSettings}
         fusionSettings={<CashFusionSettings variant="servers" />}
+        birthdaySettings={
+          <WalletBirthdaySettings key={walletId} walletId={walletId} />
+        }
         backRef={backRef}
       />
     );

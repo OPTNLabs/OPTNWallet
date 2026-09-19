@@ -55,6 +55,12 @@ vi.mock('../../../platform/desktop/networkSettingsBridge', () => ({
   persistDesktopBackend: vi.fn(),
 }));
 vi.mock('../Bip37NodeSettings', () => ({ Bip37NodeRow: () => null }));
+vi.mock('../../../state/slices/walletSlice', () => ({
+  selectWalletId: () => 1,
+}));
+vi.mock('../WalletBirthdaySettings', () => ({
+  WalletBirthdaySettings: () => <div>Birthday</div>,
+}));
 vi.mock('../CashFusionSettings', () => ({
   CashFusionSettings: ({ variant }: { variant: string }) => (
     <div>CashFusion {variant}</div>

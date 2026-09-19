@@ -76,12 +76,25 @@ it('browses without probes and sends explicit selection through the old UI', asy
   render(
     <ChainSourcesSettings
       backRef={backRef}
+      birthdaySettings={<button>Existing birthday control</button>}
       fusionSettings={<button>Automatic Fusion server selection</button>}
       feeSettings={<button>Existing fee control</button>}
       explorerSettings={<button>Existing explorer control</button>}
     />
   );
-  fireEvent.click(await screen.findByTestId('chain-sources-public'));
+  await screen.findByTestId('chain-sources-public');
+  expect(
+    within(
+      screen.getByRole('navigation', { name: 'Network source settings' })
+    ).getAllByRole('button')[0]
+  ).toHaveTextContent('Routing');
+  expect(
+    screen.queryByRole('button', { name: /^Wallet sync/ })
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole('button', { name: /Diagnostics/ })
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByTestId('chain-sources-public'));
   fireEvent.change(screen.getByLabelText('Service filter'), {
     target: { value: 'neutrino' },
   });
@@ -147,6 +160,12 @@ it('browses without probes and sends explicit selection through the old UI', asy
   fireEvent.click(screen.getByRole('button', { name: /CashFusion/ }));
   expect(
     screen.getByRole('button', { name: 'Automatic Fusion server selection' })
+  ).toBeInTheDocument();
+  act(() => backRef.current?.());
+  expect(backRef.current).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Wallet birthday/ }));
+  expect(
+    screen.getByRole('button', { name: 'Existing birthday control' })
   ).toBeInTheDocument();
   act(() => backRef.current?.());
   expect(backRef.current).toBeNull();
