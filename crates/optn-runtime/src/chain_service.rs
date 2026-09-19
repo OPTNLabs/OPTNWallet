@@ -212,6 +212,18 @@ pub struct CapabilityRoute {
     pub health: ProviderHealth,
 }
 
+/// A capability claim held by a registered backend. Unlike a route, this does
+/// not imply that the current policy permits use or that the backend is healthy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredCapabilityObservation {
+    pub source: SourceId,
+    pub protocol: ProtocolFamily,
+    pub endpoint: Option<Endpoint>,
+    pub capability: Capability,
+    pub confidence: CapabilityConfidence,
+    pub discovery: crate::chain::CapabilityDiscovery,
+}
+
 pub trait ChainBackend: Send + Sync {
     fn source_id(&self) -> &SourceId;
     fn protocol(&self) -> ProtocolFamily;
@@ -277,6 +289,25 @@ pub struct ProviderRegistry {
 impl ProviderRegistry {
     pub fn register(&mut self, provider: Arc<dyn ChainBackend>) {
         self.providers.push(provider);
+    }
+
+    fn registered_capability_observations(&self) -> Vec<RegisteredCapabilityObservation> {
+        self.providers
+            .iter()
+            .flat_map(|provider| {
+                provider
+                    .capabilities()
+                    .iter()
+                    .map(move |(capability, claim)| RegisteredCapabilityObservation {
+                        source: provider.source_id().clone(),
+                        protocol: provider.protocol(),
+                        endpoint: provider.endpoint().cloned(),
+                        capability,
+                        confidence: claim.confidence,
+                        discovery: claim.discovery.clone(),
+                    })
+            })
+            .collect()
     }
 
     fn provider_routes<'a>(
@@ -454,6 +485,15 @@ impl ChainService {
     }
     pub fn register(&mut self, provider: Arc<dyn ChainBackend>) {
         self.registry.register(provider);
+    }
+    /// Snapshot registered backend claims without dialing, policy filtering, or
+    /// health filtering. A revoked stack exposes no observations.
+    pub fn registered_capability_observations(&self) -> Vec<RegisteredCapabilityObservation> {
+        if self.revocation.is_revoked() {
+            Vec::new()
+        } else {
+            self.registry.registered_capability_observations()
+        }
     }
     /// Install the host-owned bounded registry byte fetcher for this selected
     /// chain stack. Hash and authchain decisions stay with the runtime.
@@ -805,6 +845,11 @@ mod tests {
     fn routed_service() -> (ChainService, Arc<CountingBackend>, CapabilityRoute) {
         let mut capabilities = CapabilitySet::default();
         capabilities.record(
+            Capability::ElectrumProtocol,
+            CapabilityConfidence::Advertised,
+            CapabilityDiscovery::ElectrumServerFeatures,
+        );
+        capabilities.record(
             Capability::HeaderStream,
             CapabilityConfidence::Verified,
             CapabilityDiscovery::ActiveProbe,
@@ -854,6 +899,22 @@ mod tests {
             .routes_for_operation(ChainOperation::HeaderSync)
             .remove(0);
         (service, backend, route)
+    }
+
+    #[test]
+    fn registered_capabilities_keep_confidence_and_clear_after_revocation() {
+        let (service, _, _) = routed_service();
+        let observations = service.registered_capability_observations();
+        assert!(observations.iter().any(|observation| {
+            observation.capability == Capability::ElectrumProtocol
+                && observation.confidence == CapabilityConfidence::Advertised
+        }));
+        assert!(observations.iter().any(|observation| {
+            observation.capability == Capability::HeaderStream
+                && observation.confidence == CapabilityConfidence::Verified
+        }));
+        service.revocation().revoke();
+        assert!(service.registered_capability_observations().is_empty());
     }
 
     const HEADER_REQUEST: ChainRequest = ChainRequest::HeaderSync {

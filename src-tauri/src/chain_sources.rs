@@ -16,10 +16,11 @@ use crate::chain_runtime::NativeChainRuntime;
 use crate::network_config::NetworkSettingsStore;
 use optn_core::network::Network;
 use optn_runtime::chain::{
-    build_selection_plan, ChainSource, ConnectionPolicy, Endpoint, EndpointKind, ProtocolFamily,
-    SourceCatalog, SourceDisposition, SourceId, SourceOrigin, SourceScope,
+    build_selection_plan, Capability, CapabilityConfidence, CapabilityDiscovery, ChainSource,
+    ConnectionPolicy, Endpoint, EndpointKind, ProtocolFamily, SourceCatalog, SourceDisposition,
+    SourceId, SourceOrigin, SourceScope,
 };
-use optn_runtime::chain_service::ChainOperation;
+use optn_runtime::chain_service::{ChainOperation, RegisteredCapabilityObservation};
 use optn_runtime::network_config::{
     add_user_source, remove_user_source, set_policy_preset, set_source_disposition,
     ChainPolicyPreset,
@@ -113,10 +114,67 @@ fn parse_network(value: &str) -> Result<Network, String> {
         .map_err(|_| format!("unknown network '{value}'"))
 }
 
+const fn protocol_capability(protocol: ProtocolFamily) -> Capability {
+    match protocol {
+        ProtocolFamily::Electrum => Capability::ElectrumProtocol,
+        ProtocolFamily::Bip37 => Capability::Bip37BloomFiltering,
+        ProtocolFamily::Neutrino => Capability::CompactFilters,
+        ProtocolFamily::BchnRpc => Capability::RpcQueries,
+        ProtocolFamily::BchnZmq => Capability::ZmqEvents,
+    }
+}
+
+fn protocol_status(
+    source: &ChainSource,
+    endpoint: &Endpoint,
+    protocol: ProtocolFamily,
+    registered: &[RegisteredCapabilityObservation],
+) -> SourceProtocolStatus {
+    if let Some(observation) = registered.iter().find(|observation| {
+        observation.source == source.id
+            && observation.protocol == protocol
+            && observation.endpoint.as_ref() == Some(endpoint)
+            && observation.capability == protocol_capability(protocol)
+    }) {
+        capability_status(observation.confidence)
+    } else if source.capabilities.protocol_supported(protocol) {
+        // Catalog claims are source-level metadata, never endpoint proof.
+        // A wallet-refresh route can be eligible on Advertised confidence, so
+        // it likewise cannot promote this endpoint to Verified.
+        SourceProtocolStatus::Advertised
+    } else {
+        SourceProtocolStatus::Unknown
+    }
+}
+
+const fn capability_status(confidence: CapabilityConfidence) -> SourceProtocolStatus {
+    match confidence {
+        CapabilityConfidence::Unknown => SourceProtocolStatus::Unknown,
+        CapabilityConfidence::Advertised => SourceProtocolStatus::Advertised,
+        CapabilityConfidence::Verified => SourceProtocolStatus::Verified,
+        CapabilityConfidence::Rejected => SourceProtocolStatus::Rejected,
+    }
+}
+
+fn capability_discovery_label(discovery: &CapabilityDiscovery) -> String {
+    match discovery {
+        CapabilityDiscovery::P2pServiceBit { bit, name } => {
+            format!("p2p-service-bit:{name}:{bit}")
+        }
+        CapabilityDiscovery::ElectrumServerVersion => "electrum-server-version".into(),
+        CapabilityDiscovery::ElectrumServerFeatures => "electrum-server-features".into(),
+        CapabilityDiscovery::ElectrumPeerDiscovery => "electrum-peer-discovery".into(),
+        CapabilityDiscovery::ExplicitConfiguration => "explicit-configuration".into(),
+        CapabilityDiscovery::BootstrapMetadata => "bootstrap-metadata".into(),
+        CapabilityDiscovery::ActiveProbe => "active-probe".into(),
+    }
+}
+
 fn source_views(
     catalog: &SourceCatalog,
     policy: &ConnectionPolicy,
-    live: &[(SourceId, ProtocolFamily)],
+    live: &[(SourceId, ProtocolFamily, Option<Endpoint>)],
+    registered: &[RegisteredCapabilityObservation],
     failures: &[optn_chain_native::NativeChainProbeFailure],
 ) -> Vec<ChainSourceView> {
     let plan = build_selection_plan(catalog, policy);
@@ -148,8 +206,8 @@ fn source_views(
                 },
                 live_protocols: live
                     .iter()
-                    .filter(|(id, _)| id == &source.id)
-                    .map(|(_, protocol)| protocol_label(*protocol).to_owned())
+                    .filter(|(id, _, _)| id == &source.id)
+                    .map(|(_, protocol, _)| protocol_label(*protocol).to_owned())
                     .collect(),
                 failures: failures
                     .iter()
@@ -171,7 +229,53 @@ fn source_views(
                 capabilities: source
                     .capabilities
                     .iter()
-                    .map(|capability| format!("{capability:?}"))
+                    .map(|(capability, _)| capability.label().to_owned())
+                    .collect(),
+                capability_details: source
+                    .capabilities
+                    .iter()
+                    .map(|(capability, claim)| SourceCapabilityView {
+                        name: capability.label().to_owned(),
+                        confidence: capability_status(claim.confidence),
+                        discovery: capability_discovery_label(&claim.discovery),
+                    })
+                    .collect(),
+                registered_capability_details: registered
+                    .iter()
+                    .filter(|observation| observation.source == source.id)
+                    .map(|observation| SourceRouteCapabilityView {
+                        endpoint: observation.endpoint.as_ref().map(endpoint_view),
+                        protocol: protocol_label(observation.protocol).to_owned(),
+                        name: observation.capability.label().to_owned(),
+                        confidence: capability_status(observation.confidence),
+                        discovery: capability_discovery_label(&observation.discovery),
+                    })
+                    .collect(),
+                protocol_statuses: source
+                    .endpoints
+                    .iter()
+                    .flat_map(|endpoint| {
+                        let source_for_status = &source;
+                        [
+                            ProtocolFamily::Electrum,
+                            ProtocolFamily::Bip37,
+                            ProtocolFamily::Neutrino,
+                            ProtocolFamily::BchnRpc,
+                            ProtocolFamily::BchnZmq,
+                        ]
+                        .into_iter()
+                        .filter(move |protocol| endpoint.kind.can_probe_protocol(*protocol))
+                        .map(move |protocol| SourceProtocolView {
+                            endpoint: endpoint_view(endpoint),
+                            protocol: protocol_label(protocol).to_owned(),
+                            status: protocol_status(
+                                source_for_status,
+                                endpoint,
+                                protocol,
+                                registered,
+                            ),
+                        })
+                    })
                     .collect(),
             }
         })
@@ -226,16 +330,17 @@ pub async fn optn_chain_sources(
         .unwrap_or_default();
 
     let observed_network = runtime.state().network;
-    let live = native
+    let (live, registered) = native
         .with_service(|service| {
             let service = service.try_lock().ok()?;
-            Some(
+            Some((
                 service
                     .routes_for_operation(ChainOperation::WalletRefresh)
                     .into_iter()
-                    .map(|route| (route.source, route.protocol))
+                    .map(|route| (route.source, route.protocol, route.endpoint))
                     .collect::<Vec<_>>(),
-            )
+                service.registered_capability_observations(),
+            ))
         })
         .await
         .flatten()
@@ -246,10 +351,10 @@ pub async fn optn_chain_sources(
     if runtime.state().network != observed_network {
         return Err("Network changed while reading chain sources; retry.".into());
     }
-    let (live, failures) = if network == observed_network {
-        (live, native.failures().await)
+    let (live, registered, failures) = if network == observed_network {
+        (live, registered, native.failures().await)
     } else {
-        (Vec::new(), Vec::new())
+        (Vec::new(), Vec::new(), Vec::new())
     };
     let view = ChainSourcesView {
         network: network.to_string(),
@@ -270,7 +375,7 @@ pub async fn optn_chain_sources(
         .map(|protocol| protocol_label(protocol).to_owned())
         .collect(),
         scope: scope_label(&policy.primary_scope).to_owned(),
-        sources: source_views(&catalog, &policy, &live, &failures),
+        sources: source_views(&catalog, &policy, &live, &registered, &failures),
         configuration_error: native.configuration_error().await,
         wallet_routes: live.len(),
         // Height 0 is the shipped genesis anchor, not a header this host
@@ -680,10 +785,161 @@ mod tests {
                 priority: 0,
             })
             .unwrap();
-        let views = source_views(&catalog, &ConnectionPolicy::auto(), &[], &[]);
+        let views = source_views(&catalog, &ConnectionPolicy::auto(), &[], &[], &[]);
         assert_eq!(views.len(), 1);
         assert_eq!(views[0].role.as_deref(), Some("primary"));
         assert!(views[0].live_protocols.is_empty());
         assert!(views[0].can_remove);
+    }
+
+    #[test]
+    fn endpoint_protocol_statuses_keep_catalog_claims_and_runtime_evidence_distinct() {
+        use optn_runtime::chain::{Capability, CapabilityConfidence, CapabilityDiscovery};
+
+        let mut catalog = SourceCatalog::default();
+        let id = SourceId::new("host:node.example");
+        let peer = Endpoint {
+            kind: EndpointKind::BchP2p,
+            host: "node.example".into(),
+            port: Some(8333),
+        };
+        let electrum = Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: "node.example".into(),
+            port: Some(50002),
+        };
+        let rpc = Endpoint {
+            kind: EndpointKind::BchnRpc,
+            host: "node.example".into(),
+            port: Some(8332),
+        };
+        let mut capabilities = optn_runtime::chain::CapabilitySet::default();
+        capabilities.record(
+            Capability::Bip37BloomFiltering,
+            CapabilityConfidence::Advertised,
+            CapabilityDiscovery::BootstrapMetadata,
+        );
+        capabilities.record(
+            Capability::ElectrumProtocol,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
+        capabilities.record(
+            Capability::RpcQueries,
+            CapabilityConfidence::Rejected,
+            CapabilityDiscovery::ActiveProbe,
+        );
+        catalog
+            .insert(ChainSource {
+                id: id.clone(),
+                label: "Node".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![peer.clone(), electrum.clone(), rpc.clone()],
+                capabilities,
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            })
+            .unwrap();
+        let failures = [optn_chain_native::NativeChainProbeFailure {
+            source: id.clone(),
+            protocol: ProtocolFamily::BchnRpc,
+            endpoint: rpc.clone(),
+            error: "authentication refused".into(),
+        }];
+        let views = source_views(
+            &catalog,
+            &ConnectionPolicy::auto(),
+            &[(id, ProtocolFamily::Electrum, Some(electrum))],
+            &[RegisteredCapabilityObservation {
+                source: SourceId::new("host:node.example"),
+                protocol: ProtocolFamily::Electrum,
+                endpoint: Some(Endpoint {
+                    kind: EndpointKind::ElectrumTls,
+                    host: "node.example".into(),
+                    port: Some(50002),
+                }),
+                capability: Capability::ElectrumProtocol,
+                confidence: CapabilityConfidence::Verified,
+                discovery: CapabilityDiscovery::ActiveProbe,
+            }],
+            &failures,
+        );
+        let statuses: std::collections::BTreeMap<_, _> = views[0]
+            .protocol_statuses
+            .iter()
+            .map(|status| {
+                (
+                    (status.endpoint.kind.as_str(), status.protocol.as_str()),
+                    status.status,
+                )
+            })
+            .collect();
+        assert_eq!(
+            statuses[&("p2p", "bip37")],
+            SourceProtocolStatus::Advertised
+        );
+        assert_eq!(
+            statuses[&("p2p", "neutrino")],
+            SourceProtocolStatus::Unknown
+        );
+        assert_eq!(
+            statuses[&("electrum-tls", "electrum")],
+            SourceProtocolStatus::Verified
+        );
+        assert_eq!(
+            statuses[&("node-rpc", "node-rpc")],
+            SourceProtocolStatus::Unknown,
+            "a native transport failure remains diagnostic rather than a capability verdict"
+        );
+        assert_eq!(
+            views[0]
+                .capability_details
+                .iter()
+                .find(|capability| capability.name == "Fulcrum/Electrum")
+                .unwrap()
+                .confidence,
+            SourceProtocolStatus::Verified
+        );
+        assert_eq!(
+            views[0]
+                .capability_details
+                .iter()
+                .find(|capability| capability.name == "Fulcrum/Electrum")
+                .unwrap()
+                .discovery,
+            "active-probe"
+        );
+        assert_eq!(
+            views[0]
+                .protocol_statuses
+                .iter()
+                .find(|status| status.protocol == "electrum")
+                .unwrap()
+                .status,
+            SourceProtocolStatus::Verified,
+            "only the registered endpoint claim promotes this route"
+        );
+        assert_eq!(
+            views[0].registered_capability_details[0].confidence,
+            SourceProtocolStatus::Verified
+        );
+        assert_eq!(
+            views[0]
+                .capability_details
+                .iter()
+                .find(|capability| capability.name == "BIP37")
+                .unwrap()
+                .confidence,
+            SourceProtocolStatus::Advertised
+        );
+        assert_eq!(
+            views[0]
+                .capability_details
+                .iter()
+                .find(|capability| capability.name == "RPC")
+                .unwrap()
+                .confidence,
+            SourceProtocolStatus::Rejected
+        );
     }
 }
