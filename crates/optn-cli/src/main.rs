@@ -399,6 +399,12 @@ enum NetworkCommand {
     Configure { file: std::path::PathBuf },
     /// Choose auto, privacy, own-infrastructure, electrum-only, bip37-only or neutrino-only.
     Policy { preset: String },
+    /// Add one source using an AddSourceRequest JSON file.
+    Add { file: std::path::PathBuf },
+    /// Enable, disable, or ban a source known to this network catalog.
+    Disposition { source: String, disposition: String },
+    /// Delete a user-added source and its machine-local RPC credential, if any.
+    Remove { source: String },
     /// Show sources, policy, and the primary/fallback selection order.
     Status,
     /// Select an existing shared source without a public fallback.
@@ -739,7 +745,12 @@ fn command_name(command: &Command) -> &'static str {
             action: NetworkCommand::Import { .. },
         } => "network import",
         Command::Network {
-            action: NetworkCommand::Configure { .. } | NetworkCommand::Policy { .. },
+            action:
+                NetworkCommand::Configure { .. }
+                | NetworkCommand::Policy { .. }
+                | NetworkCommand::Add { .. }
+                | NetworkCommand::Disposition { .. }
+                | NetworkCommand::Remove { .. },
         } => "network configure",
         Command::Ping => "ping",
         Command::Network {
@@ -1653,6 +1664,9 @@ fn authorize_command(cli: &Cli) -> Result<()> {
             action: NetworkCommand::Configure { .. }
                 | NetworkCommand::Import { .. }
                 | NetworkCommand::Policy { .. }
+                | NetworkCommand::Add { .. }
+                | NetworkCommand::Disposition { .. }
+                | NetworkCommand::Remove { .. }
         }
     ) && SERVING.load(std::sync::atomic::Ordering::SeqCst)
     {
@@ -1715,6 +1729,40 @@ async fn run(cli: &Cli) -> Result<Value> {
                 &selection,
             )
             .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::Add { file },
+        } => {
+            let bytes = read_network_configuration(file)?;
+            let request = serde_json::from_slice(&bytes)
+                .map_err(|_| CliError::Usage("Invalid AddSourceRequest JSON.".into()))?;
+            network_settings::add_source(cli.network, cli.network_config_dir.as_deref(), &request)
+                .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action:
+                NetworkCommand::Disposition {
+                    source,
+                    disposition,
+                },
+        } => {
+            network_settings::set_source_disposition(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                source,
+                disposition,
+            )
+            .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::Remove { source },
+        } => {
+            network_settings::remove_source(cli.network, cli.network_config_dir.as_deref(), source)
+                .await
+                .map_err(CliError::Usage)?;
             return shared_network_status(cli);
         }
         Command::Network {

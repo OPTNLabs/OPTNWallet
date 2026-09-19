@@ -971,6 +971,132 @@ fn source_selection_is_shared_durable_and_invalid_edits_preserve_the_file() {
 }
 
 #[test]
+fn source_mutations_keep_an_empty_exact_scope_after_a_cli_restart() {
+    let directory = test_directory();
+    let request = directory.path().join("source.json");
+    std::fs::write(
+        &request,
+        serde_json::to_vec(&json!({
+            "network":"chipnet",
+            "label":"Temporary P2P",
+            "kind":"p2p",
+            "host":"temporary-source.example",
+            "port":8333,
+            "infrastructure_group":null,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let source = "host:temporary-source.example";
+
+    let added = run_cli(
+        directory.path(),
+        &["network", "add", request.to_str().unwrap()],
+        "",
+    );
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    let selected = run_cli(
+        directory.path(),
+        &["network", "select", source, "--protocol", "bip37"],
+        "",
+    );
+    assert!(
+        selected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    let config = directory.path().join("network-config/network-chipnet.json");
+    let before_invalid = std::fs::read(&config).unwrap();
+    assert!(!run_cli(
+        directory.path(),
+        &["network", "disposition", source, "not-a-disposition"],
+        "",
+    )
+    .status
+    .success());
+    assert_eq!(std::fs::read(&config).unwrap(), before_invalid);
+    let selected_status: Value = serde_json::from_slice(&selected.stdout).unwrap();
+    let bootstrap = selected_status["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["origin"].as_str().unwrap().starts_with("Bootstrap"))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !run_cli(directory.path(), &["network", "remove", &bootstrap], "")
+            .status
+            .success()
+    );
+    assert_eq!(std::fs::read(&config).unwrap(), before_invalid);
+
+    // Private stdio uses the same mutation path and must reject no state
+    // between disable and re-enable. Both replies are public status only.
+    let disposition = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!(
+            "{{\"network\":{{\"op\":\"disposition\",\"source\":\"{source}\",\"disposition\":\"disabled\"}}}}\n{{\"network\":{{\"op\":\"disposition\",\"source\":\"{source}\",\"disposition\":\"enabled\"}}}}\n"
+        ),
+    );
+    assert!(
+        disposition.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disposition.stderr)
+    );
+    let replies = responses(&disposition);
+    assert!(replies.len() >= 2);
+    assert_eq!(replies[0]["ok"], true);
+    assert_eq!(
+        replies[0]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == source)
+            .unwrap()["disposition"],
+        "Disabled"
+    );
+    assert_eq!(replies[1]["ok"], true);
+
+    // The interactive wallet prompt reaches the same asynchronous remove path.
+    let removed = run_cli(
+        directory.path(),
+        &["wallet"],
+        &format!("network remove {source}\nquit\n"),
+    );
+    assert!(
+        removed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    assert_eq!(responses(&removed)[0]["ok"], true);
+
+    // A new process must retain the holder's explicitly empty scope; Auto
+    // would silently expand it back to the bootstrap catalog.
+    let reopened = run_cli(directory.path(), &["network", "status"], "");
+    assert!(
+        reopened.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reopened.stderr)
+    );
+    let status: Value = serde_json::from_slice(&reopened.stdout).unwrap();
+    assert_eq!(status["policy"]["primary_scope"], "Explicit({})");
+    assert_eq!(status["policy"]["fallback_scope"], Value::Null);
+    assert!(status["primary"].as_array().unwrap().is_empty());
+    assert!(status["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry["id"] != source));
+}
+
+#[test]
 fn wallet_prompt_and_private_stdio_share_source_settings() {
     let directory = test_directory();
     let selection = json!({

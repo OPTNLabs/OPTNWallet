@@ -333,3 +333,20 @@ requests instead of falling back to app-state defaults.
 Nineteen native chain-runtime tests pass, including a pending shared HD refresh,
 a held rebuild lock, successful and failing writer callbacks, and corrupt update
 policy refusal. Strict native Clippy and the unchanged architecture gate pass.
+
+## CLI source management parity (2026-09-19)
+
+CLI one-shot commands, wallet navigation and private stdio now expose source
+addition, availability changes and removal through the existing shared Rust
+network overlay. Removal clears applicable local RPC credentials first, rejects
+concurrent endpoint changes, and preserves an empty exact scope rather than Auto.
+Invalid dispositions, unknown sources, wrong-network requests and bootstrap
+removal are refused. The CLI README documents actual GUI and CLI navigation.
+
+Validation: 105 CLI binary tests and 19 wallet-process tests pass; one real-OS
+keyring test remains explicitly ignored in that suite (previously run separately).
+Strict all-target CLI Clippy passes. A process regression adds/selects/disables/
+enables/removes a source across one-shot, private stdio and prompt interfaces,
+then proves a new process retains the empty selection without public fallback.
+The Windows GUI selection/delete/restart test also passes on `7984e8ae` after
+native route-revocation wiring; isolated settings were restored and the app stopped.
