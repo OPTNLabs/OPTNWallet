@@ -1368,6 +1368,7 @@ dependencies = [
  "optn-platform-native",
  "optn-runtime",
  "optn-transport",
+ "optn-ui-text",
  "rand 0.8.8",
  "reqwest",
  "ripemd",
@@ -1453,6 +1454,14 @@ version = "1.7.3"
 dependencies = [
  "optn-app",
  "serde",
+]
+
+[[package]]
+name = "optn-ui-text"
+version = "1.7.3"
+dependencies = [
+ "optn-app",
+ "optn-transport",
 ]
 
 [[package]]

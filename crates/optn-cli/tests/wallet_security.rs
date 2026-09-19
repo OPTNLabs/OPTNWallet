@@ -114,6 +114,35 @@ fn stdio_console_keeps_every_reply_including_eof_on_one_json_line() {
 }
 
 #[test]
+fn wallet_asset_views_use_shared_renderer_and_refuse_locked_state() {
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 0);
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let lock = json!({"action":WireAction::from(AppAction::LockWallet)});
+    let output = run_cli(directory.path(), &["wallet", "--stdio"], &format!(
+        "{{\"view\":\"assets\"}}\n{open}\n{{\"view\":\"assets\"}}\n{{\"view\":\"nfts\"}}\n{lock}\n{{\"view\":\"assets\"}}\n"
+    ));
+    assert!(output.status.success());
+    let replies = responses(&output);
+    assert_eq!(replies[0]["ok"], false);
+    assert_eq!(replies[1]["ok"], true);
+    assert_eq!(replies[2]["title"], "Assets");
+    assert!(replies[3]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line
+            .as_str()
+            .is_some_and(|line| line.contains("no non-fungible tokens"))));
+    assert_eq!(replies[5]["ok"], false);
+    let prompt = run_cli(directory.path(), &["wallet"], "assets\nnfts\nquit\n");
+    assert!(prompt.status.success());
+    assert_eq!(responses(&prompt)[0]["ok"], false);
+    assert_eq!(responses(&prompt)[1]["ok"], false);
+}
+
+#[test]
 fn private_stdio_errors_do_not_echo_credentials_or_malformed_input() {
     let directory = test_directory();
     fixture(directory.path(), "public.optn", 0);
