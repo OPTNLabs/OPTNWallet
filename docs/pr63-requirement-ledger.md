@@ -284,7 +284,14 @@ Removing the last explicitly selected source no longer silently switches to
 Auto. The shared editor preserves protocol and scope boundaries, removes the
 source from explicit primary/fallback pools and preferred ordering, and leaves
 an empty permitted pool unavailable until the holder chooses another source.
-Twenty network-configuration tests pass, including encrypted-independent
+Twenty network-configuration tests pass, including
 configuration serialization/reopen with public bootstrap sources present and
 no eligible public fallback. Strict runtime Clippy passes. This fixes the shared
 policy used by native adapters; it does not establish all-platform UI evidence.
+
+Source removal now invalidates wallet freshness before editing on every native
+platform. Mobile skips desktop-keyring cleanup because it cannot save RPC
+credentials; previously that unsupported operation prevented even P2P/Electrum
+source deletion. Native source tests (3) and strict native Clippy pass. The local
+Android check stopped at a missing NDK clang executable, before application
+compilation; the Android CI build remains the cross-target verification gate.
