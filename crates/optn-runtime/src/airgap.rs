@@ -224,7 +224,7 @@ impl AppRuntimeDriver {
                 let event = self.wallet_sync.persist_annotation(
                     &mut candidate,
                     self.state.clone(),
-                    |app, sync| security.persist_checkpoint(app, sync, None),
+                    |app, sync, progress| security.persist_checkpoint(app, sync, progress),
                     |app| guard.allows(app, reply.is_closed()),
                 );
                 self.state = candidate;
@@ -532,7 +532,12 @@ mod tests {
             )))
             .await
             .unwrap();
-        let (lease, scan) = received.await.unwrap().unwrap();
+        let (mut lease, scan) = received.await.unwrap().unwrap();
+        let view = crate::header_view::VerifiedHeaderView::new(
+            Network::Chipnet,
+            crate::header_verifier::shipped_header_verifier(Network::Chipnet).unwrap(),
+        );
+        lease.capture_header_progress(Some(&view)).unwrap();
         let parent = fixture_parent(&state);
         let mut book = scan.address_book();
         book.last_used[0] = Some(0);
@@ -613,7 +618,30 @@ mod tests {
             "restored/unsynced coins cannot be exported"
         );
         sync_fixture(&runtime).await;
+        let saved_headers = checkpoints
+            .saved
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .0
+            .header_progress()
+            .cloned()
+            .unwrap();
         let first = transport.airgap(prepare()).await.unwrap();
+        assert_eq!(
+            checkpoints
+                .saved
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .0
+                .header_progress()
+                .unwrap()
+                .view,
+            saved_headers.view
+        );
         assert_eq!(
             runtime
                 .state()
@@ -767,6 +795,35 @@ mod tests {
             })
             .await
             .is_err());
+        assert_eq!(
+            runtime
+                .restored_header_progress()
+                .await
+                .unwrap()
+                .unwrap()
+                .view,
+            saved_headers.view
+        );
+        transport
+            .wallet_security(WalletSecurityRequest::NextReceive {
+                epoch: runtime.state().lock.unlock_epoch,
+                acknowledge_gap: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            checkpoints
+                .saved
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .0
+                .header_progress()
+                .unwrap()
+                .view,
+            saved_headers.view
+        );
         // Freshness alone cannot resurrect a request from the previous epoch.
         sync_fixture(&runtime).await;
         assert!(transport

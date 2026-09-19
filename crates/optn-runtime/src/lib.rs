@@ -486,6 +486,7 @@ impl AppRuntimeDriver {
                             request,
                             now_ms,
                             self.wallet_sync.reconciliation(),
+                            self.wallet_sync.header_progress(),
                         )
                     } else {
                         Err(TransportError::Unsupported)
@@ -634,7 +635,9 @@ impl AppRuntimeDriver {
                             event = Some(self.wallet_sync.persist_annotation(
                                 &mut self.state,
                                 previous,
-                                |app, sync| security.persist_checkpoint(app, sync, None),
+                                |app, sync, progress| {
+                                    security.persist_checkpoint(app, sync, progress)
+                                },
                                 |app| guard.allows(app, applied.is_closed()),
                             ));
                             if event == Some(AppEvent::CoinsChanged) {

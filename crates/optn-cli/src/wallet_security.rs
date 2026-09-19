@@ -99,13 +99,6 @@ async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime, floor: Option<u32>)
             if decision != optn_runtime::reconciliation::ReconciliationDecision::Accepted {
                 return Err(CliError::Network("Wallet refresh was incomplete; retained history remains stale.".into()));
             }
-            // Published before returning, so the next open resumes here. The
-            // runtime seals it with the wallet's own checkpoint; nothing is
-            // durable until that happens.
-            if let Some(view) = worker.header_view() {
-                runtime.publish_header_progress(view).await
-                    .map_err(|error| CliError::Network(format!("header progress: {error}")))?;
-            }
             Ok(())
         },
     ).await.unwrap_or_else(|_| Err(CliError::Network("Wallet refresh timed out; retained history remains stale.".into())));

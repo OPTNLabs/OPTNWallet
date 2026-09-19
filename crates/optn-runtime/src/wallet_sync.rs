@@ -69,21 +69,35 @@ pub(super) struct WalletSyncLease {
     baseline: Box<WalletReconciliation>,
     cancelled: watch::Receiver<()>,
     source_lifetime: Option<crate::chain_service::ChainRevocation>,
+    header_progress: Option<crate::wallet_checkpoint::StoredHeaderProgress>,
     // Closing this sender also covers caller timeouts and aborted tasks. The
     // driver observes it directly, so cleanup cannot be lost to a full queue.
     _completion: oneshot::Sender<()>,
 }
 
+impl WalletSyncLease {
+    pub(super) fn capture_header_progress(
+        &mut self,
+        view: Option<&crate::header_view::VerifiedHeaderView>,
+    ) -> Result<(), WalletSyncError> {
+        if let Some(view) = view {
+            if view.network() != self.network {
+                return Err(WalletSyncError::InvalidSnapshot(
+                    "header progress belongs to another network".into(),
+                ));
+            }
+            self.header_progress = Some(crate::wallet_checkpoint::StoredHeaderProgress {
+                view: view
+                    .encode()
+                    .map_err(|error| WalletSyncError::InvalidSnapshot(format!("{error:?}")))?,
+                trusted: view.checkpoint(),
+            });
+        }
+        Ok(())
+    }
+}
+
 pub(super) enum WalletSyncRequest {
-    /// Verified header progress from a completed pass, for the next save.
-    ///
-    /// The view lives on the worker the host drives, so the host hands it in
-    /// rather than the runtime reaching for it. Held until a checkpoint is
-    /// sealed, which is the only thing that can authenticate it.
-    PublishHeaderProgress(
-        Box<crate::wallet_checkpoint::StoredHeaderProgress>,
-        oneshot::Sender<()>,
-    ),
     /// The header progress a restored checkpoint brought back, if any.
     RestoredHeaderProgress(oneshot::Sender<Option<crate::wallet_checkpoint::StoredHeaderProgress>>),
     Checkpoint(oneshot::Sender<Result<WalletCheckpoint, WalletSyncError>>),
@@ -165,33 +179,6 @@ impl AppRuntime {
         self.action_tx
             .send(RuntimeRequest::WalletSync(
                 WalletSyncRequest::RestoredHeaderProgress(reply),
-            ))
-            .await
-            .map_err(|_| WalletSyncError::Closed)?;
-        received.await.map_err(|_| WalletSyncError::Closed)
-    }
-
-    /// Hand verified header progress to the runtime for its next save.
-    ///
-    /// Called by whoever drives the sync worker, because that is where the
-    /// view is: the runtime does not reach into the host for it, and nothing
-    /// is written until a checkpoint is sealed. Encoding here rather than at
-    /// save time means a view that cannot be encoded is refused while the
-    /// caller still has somewhere to report it.
-    pub async fn publish_header_progress(
-        &self,
-        view: &crate::header_view::VerifiedHeaderView,
-    ) -> Result<(), WalletSyncError> {
-        let progress = crate::wallet_checkpoint::StoredHeaderProgress {
-            view: view
-                .encode()
-                .map_err(|error| WalletSyncError::InvalidSnapshot(format!("{error:?}")))?,
-            trusted: view.checkpoint(),
-        };
-        let (reply, received) = oneshot::channel();
-        self.action_tx
-            .send(RuntimeRequest::WalletSync(
-                WalletSyncRequest::PublishHeaderProgress(Box::new(progress), reply),
             ))
             .await
             .map_err(|_| WalletSyncError::Closed)?;
@@ -292,6 +279,7 @@ impl AppRuntime {
                     if let Err(reason) = &completion {
                         worker.reconciliation_mut().record_failure(reason.clone());
                     }
+                    lease.capture_header_progress(worker.header_view())?;
                     let decision = self
                         .finish_wallet_sync(lease, worker.reconciliation().clone())
                         .await?;
@@ -332,6 +320,7 @@ impl AppRuntime {
             _ = lease.cancelled.changed() => return Err(WalletSyncError::Superseded),
             result = worker.refresh(service, lease.interests.clone(), from_height) => result,
         };
+        lease.capture_header_progress(worker.header_view())?;
         let decision = self
             .finish_wallet_sync(lease, worker.reconciliation().clone())
             .await?;
@@ -493,6 +482,7 @@ impl WalletSyncSession {
                 self.abandoned = None;
                 self.state = WalletReconciliation::default();
                 self.registry_fetches.clear();
+                self.header_progress = None;
                 self.publish_status();
             }
             AppEvent::ServersChanged | AppEvent::WalletRebuilt => {
@@ -546,6 +536,12 @@ impl WalletSyncSession {
     fn publish_app(&self, app: &mut AppState, app_tx: &watch::Sender<AppState>) {
         self.project_status(app);
         crate::publish_state(app, app_tx);
+    }
+
+    pub(super) fn header_progress(
+        &self,
+    ) -> Option<&crate::wallet_checkpoint::StoredHeaderProgress> {
+        self.header_progress.as_ref()
     }
 
     pub(super) fn reconciliation(&self) -> &WalletReconciliation {
@@ -604,10 +600,14 @@ impl WalletSyncSession {
         persist: impl FnOnce(
             &AppState,
             &WalletReconciliation,
+            Option<&crate::wallet_checkpoint::StoredHeaderProgress>,
         ) -> Result<(), optn_transport::TransportError>,
         may_publish: impl Fn(&AppState) -> bool,
     ) -> AppEvent {
-        if !may_publish(app) || persist(app, &self.state).is_err() || !may_publish(app) {
+        if !may_publish(app)
+            || persist(app, &self.state, self.header_progress.as_ref()).is_err()
+            || !may_publish(app)
+        {
             *app = previous;
             app.spend = None;
             app.notice = Some("Wallet annotation could not be saved or publication was cancelled. Reopen the wallet before continuing.".into());
@@ -629,10 +629,6 @@ impl WalletSyncSession {
         guard: crate::PublicationGuard<'_>,
     ) {
         match request {
-            WalletSyncRequest::PublishHeaderProgress(progress, reply) => {
-                self.header_progress = Some(*progress);
-                let _ = reply.send(());
-            }
             WalletSyncRequest::RestoredHeaderProgress(reply) => {
                 let _ = reply.send(self.header_progress.clone());
             }
@@ -708,7 +704,10 @@ impl WalletSyncSession {
                 // Cloned before `finish` borrows the session, and passed to
                 // the save so a restart resumes the accumulator where this
                 // pass left it instead of at genesis.
-                let progress = self.header_progress.clone();
+                let progress = lease
+                    .header_progress
+                    .clone()
+                    .or_else(|| self.header_progress.clone());
                 let outcome = self.finish(
                     app,
                     lease,
@@ -722,6 +721,7 @@ impl WalletSyncSession {
                     |app| guard.allows(app, reply.is_closed()),
                 );
                 if outcome == Ok(ReconciliationDecision::Accepted) {
+                    self.header_progress = progress;
                     if let Some(security) = security {
                         security.checkpoint_published();
                     }
@@ -790,6 +790,7 @@ impl WalletSyncSession {
             baseline: Box::new(self.state.clone()),
             cancelled,
             source_lifetime: None,
+            header_progress: None,
             _completion: completion,
         };
         self.active = Some(id);
@@ -1318,7 +1319,7 @@ mod tests {
             let event = session.persist_annotation(
                 &mut app,
                 previous.clone(),
-                |app, _| {
+                |app, _, _| {
                     assert_eq!(
                         app.coins.get(outpoint).unwrap().freeze(),
                         Some(FreezeReason::User)
@@ -1344,16 +1345,8 @@ mod tests {
         }
     }
 
-    /// The host can hand verified header progress to the runtime.
-    ///
-    /// The new plumbing: the view lives on the worker the host drives, the
-    /// seal happens inside the runtime, and neither could see the other's
-    /// half before this. What the runtime then does with it -- sealing it
-    /// into the checkpoint and restoring from it -- is pinned in
-    /// `wallet_checkpoint`'s own tests, which can build an HD session this
-    /// address-observation fixture deliberately does not have.
     #[tokio::test]
-    async fn the_host_can_publish_verified_header_progress() {
+    async fn header_progress_is_bound_to_an_accepted_sync_and_cleared_on_lock() {
         use crate::header_verifier::shipped_header_verifier;
         use crate::header_view::VerifiedHeaderView;
 
@@ -1361,14 +1354,34 @@ mod tests {
         let verifier = shipped_header_verifier(Network::Chipnet).expect("anchor");
         let view = VerifiedHeaderView::new(Network::Chipnet, verifier);
 
-        runtime
-            .publish_header_progress(&view)
-            .await
-            .expect("the runtime accepts published progress");
-
-        // Encoded at the boundary, so a view that cannot be encoded is
-        // refused while the caller still has somewhere to report it.
-        assert!(view.encode().is_ok());
+        let mut old = runtime.begin_wallet_sync(vec![address()]).await.unwrap();
+        old.capture_header_progress(Some(&view)).unwrap();
+        let mut current = runtime.begin_wallet_sync(vec![address()]).await.unwrap();
+        assert_eq!(
+            runtime
+                .finish_wallet_sync(old, candidate(Evidence::ServerAssertion))
+                .await,
+            Err(WalletSyncError::Superseded)
+        );
+        assert!(runtime.restored_header_progress().await.unwrap().is_none());
+        let foreign = VerifiedHeaderView::new(
+            Network::Regtest,
+            shipped_header_verifier(Network::Regtest).unwrap(),
+        );
+        assert!(current.capture_header_progress(Some(&foreign)).is_err());
+        current.capture_header_progress(Some(&view)).unwrap();
+        assert_eq!(
+            runtime
+                .finish_wallet_sync(current, candidate(Evidence::ServerAssertion))
+                .await
+                .unwrap(),
+            ReconciliationDecision::Accepted
+        );
+        let saved = runtime.restored_header_progress().await.unwrap().unwrap();
+        assert_eq!(saved.trusted, view.checkpoint());
+        assert_eq!(saved.view, view.encode().unwrap());
+        runtime.dispatch(AppAction::LockWallet).await.unwrap();
+        assert!(runtime.restored_header_progress().await.unwrap().is_none());
     }
 
     #[tokio::test]
