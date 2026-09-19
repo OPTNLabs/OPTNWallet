@@ -75,6 +75,8 @@ pub(super) struct WalletSyncLease {
     cancelled: watch::Receiver<()>,
     source_lifetime: Option<crate::chain_service::ChainRevocation>,
     header_progress: Option<crate::wallet_checkpoint::StoredHeaderProgress>,
+    identities:
+        Option<std::collections::BTreeMap<[u8; 32], crate::token_metadata::OwnedCategoryIdentity>>,
     // Closing this sender also covers caller timeouts and aborted tasks. The
     // driver observes it directly, so cleanup cannot be lost to a full queue.
     _completion: oneshot::Sender<()>,
@@ -347,6 +349,27 @@ impl AppRuntime {
                             .expect("accepted HD snapshot")
                             .value
                             .hd = Some(scan.address_book());
+                        let snapshot = &worker
+                            .reconciliation()
+                            .authoritative
+                            .as_ref()
+                            .expect("accepted HD snapshot")
+                            .value;
+                        let mut coins = Default::default();
+                        snapshot
+                            .reconcile_coins(lease.network, &lease.addresses, &mut coins)
+                            .map_err(|error| WalletSyncError::InvalidSnapshot(error.to_string()))?;
+                        let categories = coins
+                            .iter()
+                            .filter_map(|coin| coin.token().map(|token| token.category))
+                            .collect();
+                        lease.identities = Some(tokio::select! {
+                            biased;
+                            _ = lease.cancelled.changed() => return Err(WalletSyncError::Superseded),
+                            result = crate::token_metadata::resolve_selected_identities(
+                                service, categories, &snapshot.transactions,
+                            ) => result,
+                        });
                     }
                     if let Err(reason) = &completion {
                         worker.reconciliation_mut().record_failure(reason.clone());
@@ -642,6 +665,15 @@ impl WalletSyncSession {
             .authoritative
             .as_ref()
             .and_then(|snapshot| snapshot.chain_tip.map(|tip| tip.0));
+        if !view.utxos_fresh || !view.history_fresh {
+            for identity in app.token_identities.values_mut() {
+                identity.status = match identity.status {
+                    optn_app::IdentityStatus::Verified => optn_app::IdentityStatus::Stale,
+                    optn_app::IdentityStatus::Unpublished => optn_app::IdentityStatus::Unresolved,
+                    status => status,
+                };
+            }
+        }
     }
 
     fn publish_app(&self, app: &mut AppState, app_tx: &watch::Sender<AppState>) {
@@ -944,6 +976,7 @@ impl WalletSyncSession {
             cancelled,
             source_lifetime: None,
             header_progress: None,
+            identities: None,
             _completion: completion,
         };
         self.active = Some(id);
@@ -1202,10 +1235,12 @@ impl WalletSyncSession {
                 self.registry_fetches.clone(),
                 evidence,
             );
-            let observations = crate::token_metadata::collect_owned_token_identities(
-                crate::token_metadata::owned_token_categories(&candidate_app),
-                &collection,
-            );
+            let observations = lease.identities.unwrap_or_else(|| {
+                crate::token_metadata::collect_owned_token_identities(
+                    crate::token_metadata::owned_token_categories(&candidate_app),
+                    &collection,
+                )
+            });
             crate::token_metadata::apply_owned_token_identities(&mut candidate_app, &observations);
             candidate_app.wallet_sync = match snapshot.wallet_view() {
                 Ok(view) => view,
@@ -1255,13 +1290,33 @@ impl WalletSyncSession {
 mod tests {
     use super::*;
     use crate::{
-        chain::{Evidence, SourceId},
-        chain_service::ObservedTransaction,
+        chain::{
+            Capability, CapabilityConfidence, CapabilityDiscovery, CapabilitySet, ChainSource,
+            ConnectionPolicy, Endpoint, EndpointKind, Evidence, ProtocolFamily, ProviderHealth,
+            SourceCatalog, SourceDisposition, SourceId, SourceOrigin,
+        },
+        chain_service::{
+            BackendObservation, ChainBackend, ChainBackendError, ChainFuture, ChainOperation,
+            ChainPayload, ChainRequest, ChainService, ChainTip, ObservedTransaction,
+            OutpointSpentness,
+        },
         DirectTransport,
     };
-    use optn_app::AppAction;
-    use optn_core::{cashaddr::AddressKind, coins::FreezeReason};
+    use optn_app::{AppAction, IdentityStatus, OpenedWallet, WalletKind};
+    use optn_core::{
+        cashaddr::AddressKind,
+        coins::FreezeReason,
+        hd::{AccountPath, Wallet, BIP39_TEST_VECTOR_MNEMONIC},
+        watch_only::address_under_account,
+    };
     use optn_transport::AppTransport;
+    use std::{
+        collections::BTreeMap,
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc,
+        },
+    };
 
     fn address() -> String {
         Address::from_hash("bchtest", AddressKind::P2pkh, [1; 20]).encode()
@@ -1989,7 +2044,22 @@ mod tests {
         extra_nft: bool,
         body_for: impl Fn([u8; 32]) -> Vec<u8>,
     ) -> (WalletReconciliation, [u8; 32], Vec<u8>) {
-        let script = Address::decode(&address()).unwrap().script_pubkey();
+        identity_candidate_for_script(
+            Address::decode(&address()).unwrap().script_pubkey(),
+            include_authchain,
+            publishes,
+            extra_nft,
+            body_for,
+        )
+    }
+
+    fn identity_candidate_for_script(
+        script: Vec<u8>,
+        include_authchain: bool,
+        publishes: bool,
+        extra_nft: bool,
+        body_for: impl Fn([u8; 32]) -> Vec<u8>,
+    ) -> (WalletReconciliation, [u8; 32], Vec<u8>) {
         let genesis = genesis_raw();
         let category = optn_core::header_hash::sha256d(&genesis);
         let body = body_for(category);
@@ -2037,6 +2107,413 @@ mod tests {
             true,
         );
         (state, category, body)
+    }
+
+    struct IdentityBackend {
+        id: SourceId,
+        endpoint: Endpoint,
+        capabilities: CapabilitySet,
+        transactions: BTreeMap<[u8; 32], ObservedTransaction>,
+        spentness: OutpointSpentness,
+    }
+
+    impl ChainBackend for IdentityBackend {
+        fn source_id(&self) -> &SourceId {
+            &self.id
+        }
+
+        fn protocol(&self) -> ProtocolFamily {
+            ProtocolFamily::Electrum
+        }
+
+        fn endpoint(&self) -> Option<&Endpoint> {
+            Some(&self.endpoint)
+        }
+
+        fn capabilities(&self) -> &CapabilitySet {
+            &self.capabilities
+        }
+
+        fn health(&self) -> ProviderHealth {
+            ProviderHealth::Healthy
+        }
+
+        fn supports(&self, operation: ChainOperation) -> bool {
+            matches!(
+                operation,
+                ChainOperation::WalletRefresh
+                    | ChainOperation::TransactionLookup
+                    | ChainOperation::OutpointSpentness
+            )
+        }
+
+        fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
+            Box::pin(async move {
+                let response = match request {
+                    ChainRequest::WalletRefresh { .. } => BackendObservation {
+                        payload: ChainPayload::WalletRefresh {
+                            transactions: self.transactions.values().cloned().collect(),
+                            tip: Some(ChainTip {
+                                height: 100,
+                                hash: [7; 32],
+                            }),
+                        },
+                        evidence: Evidence::ServerAssertion,
+                        chain_tip: Some((100, [7; 32])),
+                    },
+                    ChainRequest::TransactionLookup { txid } => BackendObservation {
+                        payload: self
+                            .transactions
+                            .get(txid)
+                            .cloned()
+                            .map(ChainPayload::Transaction)
+                            .ok_or_else(|| {
+                                ChainBackendError::InvalidResponse(
+                                    "fixture transaction was not available".into(),
+                                )
+                            })?,
+                        evidence: Evidence::FullNodeValidated {
+                            source: self.id.clone(),
+                        },
+                        chain_tip: Some((100, [7; 32])),
+                    },
+                    ChainRequest::OutpointSpentness { .. } => BackendObservation {
+                        payload: ChainPayload::OutpointSpentness(self.spentness.clone()),
+                        evidence: Evidence::FullNodeValidated {
+                            source: self.id.clone(),
+                        },
+                        chain_tip: None,
+                    },
+                    _ => return Err(ChainBackendError::Unsupported),
+                };
+                Ok(response)
+            })
+        }
+    }
+
+    fn identity_service(
+        transactions: Vec<ObservedTransaction>,
+        spentness: OutpointSpentness,
+    ) -> ChainService {
+        let id = SourceId::new("identity-fixture");
+        let endpoint = Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "fixture".into(),
+            port: Some(50001),
+        };
+        let mut capabilities = CapabilitySet::default();
+        for capability in [
+            Capability::UtxoQuery,
+            Capability::TransactionQuery,
+            Capability::OutpointUnspentLookup,
+        ] {
+            capabilities.record(
+                capability,
+                CapabilityConfidence::Verified,
+                CapabilityDiscovery::ActiveProbe,
+            );
+        }
+        let backend = Arc::new(IdentityBackend {
+            id: id.clone(),
+            endpoint: endpoint.clone(),
+            capabilities,
+            transactions: transactions.into_iter().map(|tx| (tx.txid, tx)).collect(),
+            spentness,
+        });
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(ChainSource {
+                id: id.clone(),
+                label: "identity fixture".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![endpoint],
+                capabilities: Default::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            })
+            .unwrap();
+        let mut service = ChainService::new(
+            catalog,
+            ConnectionPolicy::exact(id, ProtocolFamily::Electrum),
+        );
+        service.register(backend);
+        service
+    }
+
+    struct FixtureRegistryFetcher {
+        body: Vec<u8>,
+        calls: Arc<AtomicUsize>,
+        entered: Option<Arc<tokio::sync::Notify>>,
+        hold: Option<Arc<tokio::sync::Notify>>,
+        cancelled: Option<Arc<AtomicBool>>,
+    }
+
+    struct FetchCancellationProbe(Arc<AtomicBool>);
+
+    impl Drop for FetchCancellationProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl crate::token_metadata::RegistryFetcher for FixtureRegistryFetcher {
+        fn fetch<'a>(
+            &'a self,
+            _: &'a str,
+            _: crate::token_metadata::FetchLimits,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = crate::token_metadata::FetchAttempt> + Send + 'a>,
+        > {
+            let body = self.body.clone();
+            let calls = self.calls.clone();
+            let entered = self.entered.clone();
+            let hold = self.hold.clone();
+            let cancelled = self.cancelled.clone();
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                if let Some(entered) = entered {
+                    entered.notify_one();
+                }
+                let _cancellation_probe = cancelled.map(FetchCancellationProbe);
+                if let Some(hold) = hold {
+                    hold.notified().await;
+                }
+                Ok(body)
+            })
+        }
+    }
+
+    fn identity_hd_runtime() -> (AppRuntime, String, Vec<u8>) {
+        let account = AccountPath::new(145, 1).unwrap();
+        let xpub = Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "")
+            .unwrap()
+            .account_xpub_at(account)
+            .unwrap();
+        let receive = address_under_account(Network::Chipnet, &xpub, 0, 0).unwrap();
+        let script = Address::decode(&receive.address).unwrap().script_pubkey();
+        let runtime = AppRuntime::spawn(AppState {
+            network: Network::Chipnet,
+            wallet: Some(OpenedWallet {
+                kind: WalletKind::WatchOnly,
+                name: "identity HD fixture".into(),
+                receive_address: receive.address,
+                master_fingerprint: None,
+                account_path: account.to_string(),
+                multisig_policy: None,
+                account_xpub: Some(xpub.clone()),
+            }),
+            ..Default::default()
+        });
+        (runtime, xpub, script)
+    }
+
+    #[tokio::test]
+    async fn hd_sync_publishes_identity_only_after_selected_unspent_and_permitted_fetch() {
+        let limits = HdSyncLimits {
+            gap_limit: 2,
+            addresses_per_branch: 6,
+        };
+        for (
+            name,
+            return_unspent,
+            install_fetcher,
+            return_matching_body,
+            bind_output,
+            expected,
+            fetch_calls,
+        ) in [
+            (
+                "accepted",
+                true,
+                true,
+                true,
+                true,
+                IdentityStatus::Verified,
+                1,
+            ),
+            (
+                "null",
+                false,
+                true,
+                true,
+                true,
+                IdentityStatus::Unresolved,
+                0,
+            ),
+            (
+                "hash mismatch",
+                true,
+                true,
+                false,
+                true,
+                IdentityStatus::Unresolved,
+                1,
+            ),
+            (
+                "no registry transport",
+                true,
+                false,
+                true,
+                true,
+                IdentityStatus::Unresolved,
+                0,
+            ),
+            (
+                "outpoint value mismatch",
+                true,
+                true,
+                true,
+                false,
+                IdentityStatus::Unresolved,
+                0,
+            ),
+        ] {
+            let (runtime, xpub, script) = identity_hd_runtime();
+            let (candidate, _category, body) =
+                identity_candidate_for_script(script, true, true, false, |category| {
+                    registry_body("Bitcats", category)
+                });
+            let transactions = candidate
+                .authoritative
+                .as_ref()
+                .unwrap()
+                .value
+                .transactions
+                .clone();
+            let head = transactions.last().expect("authhead fixture");
+            let output = optn_core::tx::decode(&head.raw).unwrap().outputs.remove(0);
+            let spentness = if return_unspent {
+                OutpointSpentness::Unspent {
+                    txid: head.txid,
+                    vout: 0,
+                    value_sats: if bind_output {
+                        output.value
+                    } else {
+                        output.value.saturating_add(1)
+                    },
+                    script_pubkey: output.script_pubkey,
+                    best_block: [9; 32],
+                }
+            } else {
+                OutpointSpentness::Unknown {
+                    txid: head.txid,
+                    vout: 0,
+                }
+            };
+            let mut service = identity_service(transactions, spentness);
+            let calls = Arc::new(AtomicUsize::new(0));
+            if install_fetcher {
+                service.set_registry_fetcher(Arc::new(FixtureRegistryFetcher {
+                    body: if return_matching_body {
+                        body
+                    } else {
+                        b"wrong publication body".to_vec()
+                    },
+                    calls: calls.clone(),
+                    entered: None,
+                    hold: None,
+                    cancelled: None,
+                }));
+            }
+            let result = runtime
+                .sync_hd_wallet(
+                    &mut service,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    xpub,
+                    limits,
+                )
+                .await;
+            assert_eq!(result, Ok(ReconciliationDecision::Accepted), "{name}");
+            let identity = optn_app::assets_view_model(&runtime.state()).categories[0]
+                .identity
+                .clone()
+                .expect("the token remains visible");
+            assert_eq!(identity.status, expected, "{name}");
+            assert_eq!(calls.load(Ordering::SeqCst), fetch_calls, "{name}");
+            if expected == IdentityStatus::Verified {
+                assert_eq!(identity.name, "Bitcats");
+                runtime
+                    .invalidate_wallet_sync("fixture source changed".into())
+                    .await
+                    .unwrap();
+                let stale = optn_app::assets_view_model(&runtime.state()).categories[0]
+                    .identity
+                    .clone()
+                    .expect("published identity remains visible with a caveat");
+                assert_eq!(stale.status, IdentityStatus::Stale);
+                assert_eq!(stale.name, "Bitcats");
+            } else {
+                assert_ne!(identity.name, "Bitcats");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn hd_sync_cancels_a_pending_registry_fetch_when_its_source_is_revoked() {
+        let (runtime, xpub, script) = identity_hd_runtime();
+        let (candidate, _category, body) =
+            identity_candidate_for_script(script, true, true, false, |category| {
+                registry_body("Bitcats", category)
+            });
+        let transactions = candidate
+            .authoritative
+            .as_ref()
+            .unwrap()
+            .value
+            .transactions
+            .clone();
+        let (head_txid, output) = {
+            let head = transactions.last().expect("authhead fixture");
+            (
+                head.txid,
+                optn_core::tx::decode(&head.raw).unwrap().outputs.remove(0),
+            )
+        };
+        let mut service = identity_service(
+            transactions,
+            OutpointSpentness::Unspent {
+                txid: head_txid,
+                vout: 0,
+                value_sats: output.value,
+                script_pubkey: output.script_pubkey,
+                best_block: [9; 32],
+            },
+        );
+        let source_lifetime = service.revocation();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let hold = Arc::new(tokio::sync::Notify::new());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        service.set_registry_fetcher(Arc::new(FixtureRegistryFetcher {
+            body,
+            calls: calls.clone(),
+            entered: Some(entered.clone()),
+            hold: Some(hold),
+            cancelled: Some(cancelled.clone()),
+        }));
+
+        let running = runtime.clone();
+        let task = tokio::spawn(async move {
+            running
+                .sync_hd_wallet(
+                    &mut service,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    xpub,
+                    HdSyncLimits {
+                        gap_limit: 2,
+                        addresses_per_branch: 6,
+                    },
+                )
+                .await
+        });
+        entered.notified().await;
+        source_lifetime.revoke();
+
+        assert_eq!(task.await.unwrap(), Err(WalletSyncError::Superseded));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(runtime.state().coins.is_empty());
+        assert!(runtime.state().token_identities.is_empty());
     }
 
     fn finish_collected(

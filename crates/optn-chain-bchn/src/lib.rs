@@ -14,7 +14,7 @@ use optn_runtime::chain::{
 };
 use optn_runtime::chain_service::{
     BackendObservation, ChainBackend, ChainBackendError, ChainFuture, ChainOperation, ChainPayload,
-    ChainRequest, ObservedTransaction,
+    ChainRequest, ObservedTransaction, OutpointSpentness,
 };
 use reqwest::{Client, Url};
 use serde_json::{json, Value};
@@ -122,13 +122,44 @@ impl BchnRpcBackend {
                 CapabilityDiscovery::ExplicitConfiguration,
             );
         }
+        // A node added through either interface has no shell-only txindex
+        // override. Discover its actual index instead of leaving historical
+        // lookup unreachable. Older nodes may not implement getindexinfo.
+        let index_probed = if backend.config.txindex {
+            false
+        } else {
+            backend
+                .rpc("getindexinfo", json!(["txindex"]))
+                .await
+                .is_ok_and(|value| {
+                    value.get("txindex").is_some_and(|index| {
+                        index.get("synced").and_then(Value::as_bool) == Some(true)
+                            && index
+                                .get("best_block_height")
+                                .and_then(Value::as_u64)
+                                .is_some_and(|height| height >= u64::from(backend.info.blocks))
+                    })
+                })
+        };
+        backend.config.txindex |= index_probed;
         if backend.config.txindex {
             backend.capabilities.record(
                 Capability::TransactionQuery,
                 CapabilityConfidence::Advertised,
-                CapabilityDiscovery::ExplicitConfiguration,
+                if index_probed {
+                    CapabilityDiscovery::ActiveProbe
+                } else {
+                    CapabilityDiscovery::ExplicitConfiguration
+                },
             );
         }
+        // `gettxout` reads the UTXO set and does not need txindex. A null
+        // response is still only `Unknown`, never proof that an output spent.
+        backend.capabilities.record(
+            Capability::OutpointUnspentLookup,
+            CapabilityConfidence::Advertised,
+            CapabilityDiscovery::ExplicitConfiguration,
+        );
         Ok(backend)
     }
 
@@ -202,6 +233,25 @@ impl BchnRpcBackend {
                 source: self.config.source_id.clone(),
             },
             chain_tip: Some((self.info.blocks, self.info.best_block_hash)),
+        })
+    }
+
+    async fn outpoint_spentness(
+        &self,
+        txid: [u8; 32],
+        vout: u32,
+    ) -> Result<BackendObservation, ChainBackendError> {
+        let result = self
+            .rpc("gettxout", json!([display_hash(txid), vout, true]))
+            .await?;
+        Ok(BackendObservation {
+            payload: ChainPayload::OutpointSpentness(parse_gettxout_result(txid, vout, &result)?),
+            evidence: Evidence::FullNodeValidated {
+                source: self.config.source_id.clone(),
+            },
+            // `gettxout.bestblock` has no height. Do not mislabel the tip
+            // captured during connect as this response's current chain tip.
+            chain_tip: None,
         })
     }
 
@@ -338,6 +388,7 @@ impl ChainBackend for BchnRpcBackend {
     fn supports(&self, operation: ChainOperation) -> bool {
         match operation {
             ChainOperation::TransactionLookup => self.config.txindex,
+            ChainOperation::OutpointSpentness => true,
             ChainOperation::Broadcast | ChainOperation::HeaderSync => true,
             ChainOperation::WalletRefresh | ChainOperation::HistoricalHeaderProof => false,
         }
@@ -348,6 +399,9 @@ impl ChainBackend for BchnRpcBackend {
             match request {
                 ChainRequest::CashcodeBlockRange { .. } => Err(ChainBackendError::Unsupported),
                 ChainRequest::TransactionLookup { txid } => self.transaction_lookup(*txid).await,
+                ChainRequest::OutpointSpentness { txid, vout } => {
+                    self.outpoint_spentness(*txid, *vout).await
+                }
                 ChainRequest::Broadcast { raw_tx, txid } => self.broadcast(raw_tx, *txid).await,
                 ChainRequest::HeaderSync {
                     start_height,
@@ -430,11 +484,113 @@ fn map_reqwest(error: reqwest::Error) -> ChainBackendError {
     }
 }
 
+/// Parse the fixed `gettxout` fields that establish an unspent assertion.
+/// BCHN does not echo the requested outpoint, so this adapter binds the typed
+/// result to its request and `ChainService` verifies that binding.
+fn parse_gettxout_result(
+    txid: [u8; 32],
+    vout: u32,
+    value: &Value,
+) -> Result<OutpointSpentness, ChainBackendError> {
+    if value.is_null() {
+        return Ok(OutpointSpentness::Unknown { txid, vout });
+    }
+    let object = value.as_object().ok_or_else(|| {
+        ChainBackendError::InvalidResponse("gettxout result is neither null nor an object".into())
+    })?;
+    let best_block = object
+        .get("bestblock")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ChainBackendError::InvalidResponse("gettxout bestblock is missing".into())
+        })?;
+    let best_block = decode_display_hash(best_block)?;
+    object
+        .get("confirmations")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            ChainBackendError::InvalidResponse("gettxout confirmations are missing".into())
+        })?;
+    let value_sats =
+        parse_bch_value_sats(object.get("value").ok_or_else(|| {
+            ChainBackendError::InvalidResponse("gettxout value is missing".into())
+        })?)?;
+    let script = object
+        .get("scriptPubKey")
+        .and_then(Value::as_object)
+        .and_then(|script| script.get("hex"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ChainBackendError::InvalidResponse("gettxout scriptPubKey hex is missing".into())
+        })?;
+    let script_pubkey = hex::decode(script).map_err(|_| {
+        ChainBackendError::InvalidResponse("gettxout scriptPubKey hex is invalid".into())
+    })?;
+    if !object.get("coinbase").is_some_and(Value::is_boolean) {
+        return Err(ChainBackendError::InvalidResponse(
+            "gettxout coinbase is missing or not boolean".into(),
+        ));
+    }
+    Ok(OutpointSpentness::Unspent {
+        txid,
+        vout,
+        value_sats,
+        script_pubkey,
+        best_block,
+    })
+}
+
+/// Parse BCHN's JSON amount without accepting a binary float approximation.
+///
+/// BCHN supplies a JSON number, but its lexical form is still security
+/// relevant: a negative amount, scientific notation, or more than eight
+/// decimal places cannot identify an exact number of satoshis.
+fn parse_bch_value_sats(value: &Value) -> Result<u64, ChainBackendError> {
+    const SATS_PER_BCH: u64 = 100_000_000;
+    const BCH_DECIMALS: usize = 8;
+
+    let raw = value
+        .as_number()
+        .map(serde_json::Number::as_str)
+        .ok_or_else(|| {
+            ChainBackendError::InvalidResponse("gettxout value is not a JSON number".into())
+        })?;
+    let (whole, fraction) = raw.split_once('.').unwrap_or((raw, ""));
+    if whole.is_empty()
+        || fraction.len() > BCH_DECIMALS
+        || fraction.contains('.')
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(ChainBackendError::InvalidResponse(
+            "gettxout value is not an exact non-negative BCH decimal".into(),
+        ));
+    }
+    let whole_sats = whole
+        .parse::<u64>()
+        .map_err(|_| ChainBackendError::InvalidResponse("gettxout value is too large".into()))?
+        .checked_mul(SATS_PER_BCH)
+        .ok_or_else(|| ChainBackendError::InvalidResponse("gettxout value is too large".into()))?;
+    let mut fraction_sats = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse::<u64>().map_err(|_| {
+            ChainBackendError::InvalidResponse("gettxout fraction is invalid".into())
+        })?
+    };
+    for _ in fraction.len()..BCH_DECIMALS {
+        fraction_sats *= 10;
+    }
+    whole_sats
+        .checked_add(fraction_sats)
+        .ok_or_else(|| ChainBackendError::InvalidResponse("gettxout value is too large".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
     use std::sync::mpsc;
     use std::thread;
 
@@ -475,6 +631,208 @@ mod tests {
             socket.write_all(&wire).unwrap();
         });
         format!("http://{address}/")
+    }
+
+    fn read_json_request(socket: &mut TcpStream) -> Value {
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 1024];
+        let header_end = loop {
+            let count = socket.read(&mut chunk).unwrap();
+            assert_ne!(count, 0, "HTTP request ended before headers");
+            bytes.extend_from_slice(&chunk[..count]);
+            if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break end + 4;
+            }
+        };
+        let header = std::str::from_utf8(&bytes[..header_end]).unwrap();
+        let content_length = header
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then_some(value.trim())
+            })
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        while bytes.len() < header_end + content_length {
+            let count = socket.read(&mut chunk).unwrap();
+            assert_ne!(count, 0, "HTTP request ended before body");
+            bytes.extend_from_slice(&chunk[..count]);
+        }
+        serde_json::from_slice(&bytes[header_end..header_end + content_length]).unwrap()
+    }
+
+    fn rpc_server(results: Vec<Value>) -> (Endpoint, mpsc::Receiver<Value>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (requests_tx, requests_rx) = mpsc::channel();
+        thread::spawn(move || {
+            for result in results {
+                let (mut socket, _) = listener.accept().unwrap();
+                let request = read_json_request(&mut socket);
+                requests_tx.send(request).unwrap();
+                let body = serde_json::to_vec(&json!({
+                    "result": result,
+                    "error": null,
+                    "id": "optn",
+                }))
+                .unwrap();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                socket.write_all(&body).unwrap();
+            }
+        });
+        (
+            Endpoint {
+                kind: EndpointKind::BchnRpc,
+                host: "127.0.0.1".into(),
+                port: Some(address.port()),
+            },
+            requests_rx,
+        )
+    }
+
+    fn blockchain_info_result() -> Value {
+        json!({
+            "chain": "chipnet",
+            "blocks": 100,
+            "bestblockhash": display_hash([9; 32]),
+        })
+    }
+
+    fn unspent_gettxout_result() -> Value {
+        json!({
+            "bestblock": display_hash([9; 32]),
+            "confirmations": 1,
+            "value": 0.00001,
+            "scriptPubKey": {"hex": "51"},
+            "coinbase": false,
+        })
+    }
+
+    #[tokio::test]
+    async fn gettxout_unspent_response_is_bound_to_the_requested_outpoint() {
+        let (endpoint, requests) = rpc_server(vec![
+            blockchain_info_result(),
+            json!({"txindex":{"synced":true,"best_block_height":100}}),
+            unspent_gettxout_result(),
+        ]);
+        let source = SourceId::new("owned-bchn");
+        let backend =
+            BchnRpcBackend::connect(BchnRpcConfig::new(source.clone(), endpoint, RpcAuth::None))
+                .await
+                .unwrap();
+        let txid = [7; 32];
+        let observation = backend
+            .execute(&ChainRequest::OutpointSpentness { txid, vout: 4 })
+            .await
+            .unwrap();
+        assert_eq!(
+            observation.payload,
+            ChainPayload::OutpointSpentness(OutpointSpentness::Unspent {
+                txid,
+                vout: 4,
+                value_sats: 1_000,
+                script_pubkey: vec![0x51],
+                best_block: [9; 32],
+            })
+        );
+        assert_eq!(observation.chain_tip, None);
+        let startup = requests.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(startup["method"], "getblockchaininfo");
+        let index = requests.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(index["method"], "getindexinfo");
+        assert_eq!(index["params"], json!(["txindex"]));
+        assert!(backend.supports(ChainOperation::TransactionLookup));
+        let lookup = requests.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(lookup["method"], "gettxout");
+        assert_eq!(lookup["params"], json!([display_hash(txid), 4, true]));
+        assert!(backend
+            .capabilities()
+            .is_usable(Capability::OutpointUnspentLookup));
+    }
+
+    #[tokio::test]
+    async fn unavailable_or_unsynced_index_does_not_advertise_historical_lookup() {
+        for index in [
+            json!({}),
+            json!({"txindex":{"synced":false,"best_block_height":100}}),
+            json!({"txindex":{"synced":true,"best_block_height":99}}),
+            json!({"txindex":{"synced":"true","best_block_height":100}}),
+        ] {
+            let (endpoint, _requests) = rpc_server(vec![blockchain_info_result(), index]);
+            let backend = BchnRpcBackend::connect(BchnRpcConfig::new(
+                SourceId::new("local-node"),
+                endpoint,
+                RpcAuth::None,
+            ))
+            .await
+            .unwrap();
+            assert!(!backend.supports(ChainOperation::TransactionLookup));
+            assert!(backend.supports(ChainOperation::OutpointSpentness));
+        }
+    }
+
+    #[test]
+    fn gettxout_null_is_unknown_not_spent() {
+        assert_eq!(
+            parse_gettxout_result([2; 32], 3, &Value::Null),
+            Ok(OutpointSpentness::Unknown {
+                txid: [2; 32],
+                vout: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn gettxout_accepts_an_empty_consensus_script() {
+        let mut result = unspent_gettxout_result();
+        result["scriptPubKey"]["hex"] = Value::String(String::new());
+        assert!(matches!(
+            parse_gettxout_result([2; 32], 3, &result),
+            Ok(OutpointSpentness::Unspent {
+                script_pubkey,
+                ..
+            }) if script_pubkey.is_empty()
+        ));
+    }
+
+    #[test]
+    fn malformed_gettxout_object_is_rejected() {
+        assert!(matches!(
+            parse_gettxout_result([2; 32], 3, &json!({"bestblock": display_hash([9; 32])})),
+            Err(ChainBackendError::InvalidResponse(_))
+        ));
+    }
+
+    #[test]
+    fn gettxout_rejects_non_integral_or_negative_satoshi_values() {
+        let valid = unspent_gettxout_result();
+        for invalid_value in [
+            serde_json::from_str("-0.00001").unwrap(),
+            serde_json::from_str("0.000000001").unwrap(),
+        ] {
+            let mut malformed = valid.clone();
+            malformed["value"] = invalid_value;
+            assert!(matches!(
+                parse_gettxout_result([2; 32], 3, &malformed),
+                Err(ChainBackendError::InvalidResponse(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn gettxout_amount_preserves_one_satoshi_exactly() {
+        let one_sat = serde_json::from_str("0.00000001").unwrap();
+        assert_eq!(parse_bch_value_sats(&one_sat), Ok(1));
     }
 
     #[tokio::test]
