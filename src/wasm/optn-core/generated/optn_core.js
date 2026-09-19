@@ -1,6 +1,21 @@
 /* @ts-self-types="./optn_core.d.ts" */
 
 /**
+ * Shared Rust ceiling for the legacy untrusted iframe bridge.
+ * @param {string} module
+ * @param {string} method
+ * @returns {boolean}
+ */
+export function addonLegacyGuestCallAllowed(module, method) {
+    const ptr0 = passStringToWasm0(module, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(method, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.addonLegacyGuestCallAllowed(ptr0, len0, ptr1, len1);
+    return ret !== 0;
+}
+
+/**
  * @param {Uint8Array} public_key
  * @returns {Uint8Array}
  */

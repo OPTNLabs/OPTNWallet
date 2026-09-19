@@ -22,6 +22,12 @@ use zeroize::Zeroize;
 use crate::network::Network;
 use crate::rpa;
 
+/// Shared Rust ceiling for the legacy untrusted iframe bridge.
+#[wasm_bindgen(js_name = addonLegacyGuestCallAllowed)]
+pub fn addon_legacy_guest_call_allowed(module: &str, method: &str) -> bool {
+    crate::addon::legacy_guest_call_allowed(module, method)
+}
+
 /// Deferred to `Network`'s own parser rather than a second list here.
 ///
 /// Two lists drift: this one knew mainnet and chipnet only, so the wallet's

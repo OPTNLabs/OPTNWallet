@@ -59,13 +59,65 @@ describe('dispatchAddonSdkCall', () => {
     const sdk = createAddonSDK(manifest, { walletId: 7, network: 'mainnet' });
     await expect(
       dispatchAddonSdkCall(sdk, 'wallet', 'definitelyNotARealMethod', [])
-    ).rejects.toThrow(/unknown SDK method/i);
+    ).rejects.toThrow(/unknown SDK/i);
   });
 
   it('rejects an unknown SDK module', async () => {
     const sdk = createAddonSDK(manifest, { walletId: 7, network: 'mainnet' });
     await expect(
       dispatchAddonSdkCall(sdk, 'definitelyNotARealModule', 'x', [])
-    ).rejects.toThrow(/unknown SDK module/i);
+    ).rejects.toThrow(/unknown SDK/i);
+  });
+
+  it('refuses privileged and inherited calls before a fully granted SDK is invoked', async () => {
+    const entered = vi.fn();
+    // Even a host SDK that grants everything cannot promote the iframe guest.
+    const sdk = {
+      tx: { addOutput: entered, build: entered, broadcast: entered },
+      signing: { signMessage: entered, signatureTemplateForAddress: entered },
+      utxos: { refreshAndStore: entered, listForAddress: entered },
+      http: { fetchJson: entered },
+      chain: { getLatestBlock: entered, queryUnspentByLockingBytecode: entered },
+      bcmr: { getTokenMetadata: entered, getTokenMetadataState: entered },
+      tokenIndex: { listTokenHolders: entered },
+      meta: { getInfo: entered, getAuditTrail: entered },
+      logging: { info: entered, warn: entered, error: entered },
+      ui: { confirmSensitiveAction: entered },
+      wallet: { constructor: entered, toString: entered },
+    } as unknown as Parameters<typeof dispatchAddonSdkCall>[0];
+    for (const [module, methods] of Object.entries(sdk)) {
+      for (const method of Object.keys(methods)) {
+        await expect(dispatchAddonSdkCall(sdk, module, method, []))
+          .rejects.toThrow(/untrusted addon guest/);
+      }
+    }
+    expect(entered).not.toHaveBeenCalled();
+  });
+
+  it('does not elevate a guest claiming internal trust with a permissive host context', async () => {
+    const capabilities = [
+      'wallet:context:read', 'tx:build', 'tx:broadcast',
+      'signing:message_sign', 'signing:signature_template', 'utxo:address:refresh',
+    ] as const;
+    const sdk = createAddonSDK({
+      ...manifest,
+      trustTier: 'internal',
+      permissions: [{ kind: 'capabilities', capabilities: [...capabilities] }],
+    }, {
+      walletId: 7,
+      network: 'chipnet',
+      allowedCapabilities: new Set(capabilities),
+      authorizeCapability: () => undefined,
+    });
+    expect(await dispatchAddonSdkCall(sdk, 'wallet', 'getContext', []))
+      .toEqual({ walletId: 7, network: 'chipnet' });
+    for (const [module, method] of [
+      ['tx', 'build'], ['tx', 'broadcast'],
+      ['signing', 'signMessage'], ['signing', 'signatureTemplateForAddress'],
+      ['utxos', 'refreshAndStore'],
+    ]) {
+      await expect(dispatchAddonSdkCall(sdk, module, method, []))
+        .rejects.toThrow(/untrusted addon guest/);
+    }
   });
 });

@@ -133,6 +133,42 @@ still integration work; model/transport tests do not prove paid rounds run.
 
 ---
 
+## #83 — architecture coordination
+
+#83 is the coordination contract, not the closed #84 dependency update. Its
+acceptance is not implied by #75's provider tests or a renderer build. The
+following is a current-code reconciliation, not an approval or security sign-off.
+
+| Requirement | Status | Entry point / evidence | Gap |
+| --- | --- | --- | --- |
+| Layer/dependency and authority map | **PARTIAL** | `RUSTIFICATION.md` separates runtime calls from actual Cargo dependencies; runtime owns wallet sessions, providers return observations, platform ports supply capabilities | Current transport contracts are a runtime dependency; do not claim the issue's target graph is the literal manifest graph. Maintainer approval remains separate |
+| Durable state ownership | **PARTIAL** | `optn-runtime/src/wallet_security.rs`, `wallet_checkpoint.rs`, `wallet_sync.rs`; encrypted restart evidence above | Legacy Redux/SQL services remain a second authority until migrated; reservations/outbox lifecycle must converge |
+| Versioned trusted transport and separate guest protocol | **PARTIAL** | `optn-transport::WIRE_PROTOCOL_VERSION` and unknown-version rejection; Rust `addon::legacy_guest_call_allowed` gates the real iframe bridge via generated WASM | The legacy guest message format is not the required versioned runtime guest/session protocol |
+| Intent → proposal → approval → sign/export → broadcast → reconcile | **PARTIAL** | `spend`, `airgap` and `tx_broadcast` runtime modules | One connected durable lifecycle across Send/PSBT/hardware/Fusion/add-ons remains #79/#8 work |
+| Providers cannot directly publish wallet state | **PROVEN** (contract/component) | `ChainBackend` returns typed observations; runtime reconciliation and guarded sync finish own publication | Legacy paths listed under #75 still need migration |
+| Host-owned package identity, grants, sessions, updates/rollback | **PARTIAL** | Existing core add-on policy primitives and legacy installer/SDK | No complete Rust host package/session authority. A manifest trust claim is not verified identity; #82 owns implementation |
+| Migration map and child scopes | **PROVEN** (documentation) | Map below; linked #71/#75/#79/#82/#8 scopes | This records remaining ownership work, not completed migration |
+| Spend-capable guest boundary review | **PARTIAL** | Rust guest ceiling rejects raw tx/signature templates/message signing, writes, and direct network methods before SDK dispatch, regardless of manifest/grant; native and actual WASM bridge regressions | Full host/proposal/session security review is outstanding. Third-party spending stays unavailable until that boundary exists |
+
+### Migration map
+
+| Existing path | Required destination / compatibility rule | Canonical scope |
+| --- | --- | --- |
+| `src/state/slices/{wallet,utxo,transaction,network}Slice.ts` and React lifecycle | Projections of runtime snapshots/events; preserve React, remove authoritative state decisions only as callers migrate | [#71](https://github.com/OPTNLabs/OPTNWallet/issues/71), [#75](https://github.com/OPTNLabs/OPTNWallet/issues/75) |
+| `ElectrumService`, `UTXOService`, metadata/indexer clients and Fusion peer queries | Typed provider operations under the same source/privacy policy; runtime verifies observations and persists accepted state | [#75](https://github.com/OPTNLabs/OPTNWallet/issues/75) |
+| `TransactionManager`, `TransactionService`, signing/PSBT/hardware adapters | Shared intent/proposal, exact-effect approval, reservations, outbox and uncertain-broadcast reconciliation | [#79](https://github.com/OPTNLabs/OPTNWallet/issues/79), [#8](https://github.com/OPTNLabs/OPTNWallet/issues/8) |
+| `AddonsSDK`, `AddonPolicyEngine`, iframe bridge and desktop installer | Narrow versioned guest requests; host-authenticated identity/digest, grants, context-bound sessions, quotas and package lifecycle. Never export the trusted UI transport | [#82](https://github.com/OPTNLabs/OPTNWallet/issues/82), [#83](https://github.com/OPTNLabs/OPTNWallet/issues/83) |
+| Tauri/CLI/browser platform glue | Execute storage/network/hardware ports; policy and wallet authority stay in Rust runtime. Browser restrictions cannot be lifted by renderer choice | [#71](https://github.com/OPTNLabs/OPTNWallet/issues/71), [#75](https://github.com/OPTNLabs/OPTNWallet/issues/75) |
+
+The current iframe compatibility ceiling exposes only SDK-authorized public
+wallet context/address reads and cached wallet UTXO reads. It denies even a guest
+claiming `internal` trust with host-supplied spend grants. Legacy registry/network,
+logging, audit, confirmation and metadata-discovery methods are not guest
+authority. Built-in reviewed UI clients retain their separate SDK path. This is
+a containment fix, not a completed add-on runtime or source-policy migration.
+
+---
+
 ## What is genuinely blocked here
 
 | Blocker | Needs |
