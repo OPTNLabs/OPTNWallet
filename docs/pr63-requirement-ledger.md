@@ -375,3 +375,31 @@ proxy, using **Retry connections**, then **Refresh wallet** accepted tip 324160
 with the same balance/history. No signing or broadcast was performed. This is
 packaged Android BCH selection/sync/restart/resume evidence; token metadata,
 SeedCash signing and other platform workflows retain their separate gaps.
+
+## Network navigation and evidence (2026-09-19)
+
+Rust source views now separate catalog capability claims, registered backend
+claims and endpoint protocol status. Confidence and provenance are projected
+without executing a provider; a counting-backend regression proves zero calls
+and revocation clears registered observations. Route eligibility is not promoted
+to verified capability evidence. Same-host service additions refuse conflicting
+ownership/group declarations rather than silently changing direct-dial permissions.
+
+Leptos provides separate overview, public/own/custom source directories, source
+details, routing, privacy/transport, explorer, backup and two-stage manual service
+setup views. ZMQ is an event-source choice. Capability details work by keyboard
+and tap. Public cards have no removal action. Narrow desktop windows collapse
+the sidebar to bottom navigation without changing platform capabilities.
+
+Actual isolated Windows GUI checks passed directory search, public ban/navigation,
+absence of public removal, user source add/remove, distinct routing/privacy/
+explorer controls, ZMQ separation, restored settings and a 390px viewport without
+horizontal overflow. Native strict Clippy, WASM strict Clippy, stylesheet checks,
+source projection tests and the unchanged architecture gate pass. The final
+BIP37/compact-filter directory filter additions are compile-checked separately.
+See `docs/ui-overhaul/NETWORK-SOURCES.md` for the product contract.
+
+Automatic service discovery, arbitrary transport-policy editing, authenticated
+remote catalog updates and full packaged renderer parity are not established by
+this batch. Setup explicitly labels manual configuration. Previously linked
+APK/macOS artifacts predate this navigation change.

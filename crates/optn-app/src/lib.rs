@@ -2423,7 +2423,7 @@ impl SettingsRowId {
             Self::AppLock => "App lock",
             Self::RebuildWallet => "Rebuild Wallet",
             Self::RescanFromHeight => "Rescan from block height",
-            Self::Servers => "Servers",
+            Self::Servers => "Network sources",
             Self::Device => "Hardware device",
             Self::CashFusion => "CashFusion",
         }
@@ -2443,7 +2443,7 @@ impl SettingsRowId {
             Self::RescanFromHeight => {
                 "Read the chain again from a block you choose. Anything earlier stays unscanned"
             }
-            Self::Servers => "Electrum · Block explorer · Transaction fees",
+            Self::Servers => "Sources · Routing · Privacy · Explorer",
             Self::Device => "Connected signer, its label, and how it is reached",
             Self::CashFusion => "Privacy mixing on desktop",
         }
