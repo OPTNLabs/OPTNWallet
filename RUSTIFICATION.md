@@ -58,8 +58,13 @@ The architecture has four independently replaceable boundaries:
 React remains supported during migration; do not delete it as a consequence of
 adding a Rust renderer. Leptos is the current Rust UI. Dioxus has a headless
 renderer proof in `crates/optn-ui-dioxus`, not a complete packaged wallet.
-Slint is an undecided future option, not an implemented or selected replacement.
-Preserve these choices without adding speculative framework dependencies.
+Slint has an approved, bounded native Network Sources pilot in
+`crates/optn-ui-slint`. It uses native rendering without CSS or a WebView and is
+excluded from the shipping workspace matrix. It is not the selected replacement
+wallet. Its host calls the concrete `optn-transport-native` settings adapter;
+that adapter reuses runtime validation and native atomic configuration storage.
+Tauri consumes the same source projection. No UI dependency enters the shared
+core/runtime or CLI. Preserve every existing renderer and platform gate.
 
 Here, a renderer "plugin" means a reviewed interface adapter using the shared
 application/transport contracts. It does not mean loading arbitrary executable

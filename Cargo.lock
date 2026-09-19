@@ -2277,6 +2277,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "optn-transport-native"
+version = "1.7.3"
+dependencies = [
+ "optn-app",
+ "optn-chain-native",
+ "optn-runtime",
+ "optn-transport",
+ "serde_json",
+]
+
+[[package]]
 name = "optn-transport-tauri"
 version = "1.7.3"
 dependencies = [

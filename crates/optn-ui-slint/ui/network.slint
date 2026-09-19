@@ -1,0 +1,178 @@
+import { Button, CheckBox, ComboBox, LineEdit, ScrollView, Palette } from "std-widgets.slint";
+export struct SourceRow { id: string, label: string, summary: string, origin: int, primary: bool, fallback: bool }
+export component NetworkWindow inherits Window {
+    title: "OPTN · Native Network Sources pilot";
+    preferred-width: 1100px; preferred-height: 760px;
+    min-width: 360px; min-height: 480px;
+    background: #101f17;
+    default-font-family: "Segoe UI"; default-font-size: 16px;
+    private property <bool> wide: true;
+    changed width => { root.wide = root.width > 850px && root.height > 650px; }
+    changed height => { root.wide = root.width > 850px && root.height > 650px; }
+    init => { Palette.color-scheme = ColorScheme.dark; root.wide = root.width > 850px && root.height > 650px; }
+    in-out property <int> page: 0;
+    in property <string> network;
+    in property <string> status;
+    in property <string> routing;
+    in property <string> selection-summary;
+    in property <string> preference-summary;
+    in-out property <int> preset-index;
+    in property <[SourceRow]> sources;
+    in property <string> detail-title;
+    in property <string> detail-text;
+    in property <bool> removable;
+    in property <bool> preferred;
+    in-out property <int> primary-scope: 0;
+    in-out property <int> fallback-scope: 0;
+    in-out property <bool> electrum: true;
+    in-out property <bool> bip37: true;
+    in-out property <bool> filters: true;
+    in-out property <bool> rpc: true;
+    in-out property <bool> notifications: true;
+    in-out property <string> source-name;
+    in-out property <string> source-host;
+    in-out property <string> source-port: "50002";
+    in-out property <int> service: 0;
+    in-out property <bool> own: true;
+    callback navigate(int);
+    callback open-source(string);
+    callback disposition(string);
+    callback remove-source();
+    callback prefer-source();
+    callback pin-source();
+    callback preset(string);
+    callback select-source(string, bool, bool);
+    callback save-routing();
+    callback add-source();
+    Rectangle { width: 100%; height: 100%;
+    VerticalLayout {
+        min-width: 0px; min-height: 0px; padding: 16px; spacing: 16px;
+        HorizontalLayout {
+            Image { source: @image-url("../../../public/assets/images/OPTNWelcome1.png"); width: 150px; height: 60px; image-fit: contain; }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: root.network; color: #8edca7; }
+        }
+        Text { text: "Network"; color: #f1fff7; font-size: 30px; font-weight: 700; }
+        Text { text: root.status; color: #a9bfb1; wrap: word-wrap; }
+        HorizontalLayout {
+            min-width: 0px; spacing: 20px; vertical-stretch: 1;
+        Rectangle {
+            horizontal-stretch: 1;
+            background: #1e3026; border-color: #416c42; border-width: 1px; border-radius: 24px;
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: 20px; spacing: 16px;
+                if root.page != 0 : Button { text: "‹ Network overview"; clicked => { root.navigate(0); } }
+                content-scroll := ScrollView {
+                    vertical-stretch: 1;
+                    content-width: self.visible-width;
+                    horizontal-scrollbar-policy: always-off;
+                    VerticalLayout { alignment: start;
+                        width: content-scroll.visible-width;
+                        min-width: 0px;
+                        spacing: 14px;
+                        if root.page == 0 : VerticalLayout { alignment: start;
+                            spacing: 16px;
+                            Text { text: "Your connections"; color: #f1fff7; font-size: 22px; font-weight: 600; }
+                            Text { text: "Routing · " + root.routing; color: #b6c9bd; wrap: word-wrap; }
+                            Button { text: "My infrastructure  ›"; clicked => { root.navigate(2); } }
+                            Button { text: "Public sources  ›"; clicked => { root.navigate(1); } }
+                            Button { text: "Custom sources  ›"; clicked => { root.navigate(3); } }
+                            Button { text: "Routing & preferences  ›"; clicked => { root.navigate(5); } }
+                            Button { text: "Add infrastructure or source  ›"; clicked => { root.navigate(6); } }
+                            Text { text: "Catalog only — opening this pilot does not contact sources. Privacy, Explorer and wallet actions remain in the existing wallet."; color: #a9bfb1; wrap: word-wrap; }
+                        }
+                        if root.page >= 1 && root.page <= 3 : VerticalLayout { alignment: start;
+                            spacing: 12px;
+                            Text { text: root.page == 1 ? "Public sources" : root.page == 2 ? "My infrastructure" : "Custom sources"; color: #f1fff7; font-size: 22px; }
+                            for source in root.sources : VerticalLayout { alignment: start;
+                                if source.origin == root.page : VerticalLayout { alignment: start;
+                                    spacing: 6px;
+                                    Button { text: source.label + "  ›"; clicked => { root.open-source(source.id); } }
+                                    Text { width: content-scroll.visible-width; text: source.summary; color: #a9bfb1; wrap: word-wrap; }
+                                }
+                            }
+                        }
+                        if root.page == 4 : VerticalLayout { alignment: start;
+                            spacing: 12px;
+                            Text { text: root.detail-title; color: #f1fff7; font-size: 22px; wrap: word-wrap; }
+                            Text { width: content-scroll.visible-width; text: root.detail-text; color: #b6c9bd; wrap: word-wrap; }
+                            Button { text: "Enable / explicitly unban"; clicked => { root.disposition("enabled"); } }
+                            Button { text: "Disable"; clicked => { root.disposition("disabled"); } }
+                            Button { text: "Ban"; clicked => { root.disposition("banned"); } }
+                            Button { text: "Use only this source (no fallback)"; clicked => { root.pin-source(); } }
+                            Button { text: root.preferred ? "Remove preference" : "Prefer first"; clicked => { root.prefer-source(); } }
+                            if root.removable : Button { text: "Remove user source"; clicked => { root.remove-source(); } }
+                        }
+                        if root.page == 5 : VerticalLayout { alignment: start;
+                            spacing: 12px;
+                            Text { text: "Routing"; color: #f1fff7; font-size: 22px; }
+                            Text { width: content-scroll.visible-width; text: "Choose a preset, or save the custom boundaries below. Preferences never override capabilities or bans."; color: #b6c9bd; wrap: word-wrap; }
+                            ComboBox {
+                                model: ["Automatic", "Only my infrastructure", "Custom"];
+                                current-index <=> root.preset-index;
+                                selected(value) => {
+                                    if self.current-index == 0 { root.preset("auto"); }
+                                    if self.current-index == 1 { root.preset("own_infrastructure"); }
+                                }
+                            }
+                            Text { text: "Preferred order · " + root.preference-summary; color: #b6c9bd; wrap: word-wrap; }
+                            Text { text: "Primary sources"; color: #f1fff7; }
+                            ComboBox { model: ["All enabled", "Public enabled", "My infrastructure", "Selected sources"]; current-index <=> root.primary-scope; }
+                            Text { text: "Fallback boundary"; color: #f1fff7; }
+                            ComboBox { model: ["No fallback", "All enabled", "Public enabled", "My infrastructure", "Selected sources"]; current-index <=> root.fallback-scope; }
+                            Text { text: "Allowed chain access"; color: #f1fff7; }
+                            CheckBox { text: "Fulcrum / Electrum"; checked <=> root.electrum; }
+                            CheckBox { text: "BCH P2P · BIP37"; checked <=> root.bip37; }
+                            CheckBox { text: "BCH P2P · compact filters"; checked <=> root.filters; }
+                            CheckBox { text: "Node RPC"; checked <=> root.rpc; }
+                            Text { text: "Event sources (not wallet sync)"; color: #f1fff7; }
+                            CheckBox { text: "Node notifications · ZMQ"; checked <=> root.notifications; }
+                            if root.primary-scope == 3 || root.fallback-scope == 4 : VerticalLayout { alignment: start;
+                                for source in root.sources : VerticalLayout { alignment: start;
+                                    Text { text: source.label; color: #f1fff7; wrap: word-wrap; }
+                                    if root.primary-scope == 3 : CheckBox { text: "Primary pool"; checked: source.primary; toggled => { root.select-source(source.id, false, self.checked); } }
+                                    if root.fallback-scope == 4 : CheckBox { text: "Fallback pool"; checked: source.fallback; toggled => { root.select-source(source.id, true, self.checked); } }
+                                }
+                            }
+                            Button { text: "Save custom routing"; clicked => { root.save-routing(); } }
+                        }
+                        if root.page == 6 : VerticalLayout { alignment: start;
+                            spacing: 12px;
+                            Text { text: "Add a source"; color: #f1fff7; font-size: 22px; }
+                            LineEdit { placeholder-text: "Name"; text <=> root.source-name; }
+                            LineEdit { placeholder-text: "Host or IP address"; text <=> root.source-host; }
+                            CheckBox { text: "I own / control this infrastructure"; checked <=> root.own; }
+                            Button { text: "Continue to service configuration"; clicked => { root.navigate(7); } }
+                        }
+                        if root.page == 7 : VerticalLayout { alignment: start;
+                            spacing: 12px;
+                            Text { text: "Configure service"; color: #f1fff7; font-size: 22px; }
+                            Text { text: root.source-name + " · " + root.source-host; color: #b6c9bd; wrap: word-wrap; }
+                            ComboBox { model: ["Fulcrum / Electrum TLS", "BCH P2P", "Node RPC", "Notifications · ZMQ"]; current-index <=> root.service; }
+                            LineEdit { placeholder-text: "Port (required)"; text <=> root.source-port; }
+                            Text { width: content-scroll.visible-width; text: "Manually configured, not detected or verified. To add another service to this host, keep the same ownership. RPC credentials are configured in the existing wallet."; color: #a9bfb1; wrap: word-wrap; }
+                            Button { text: "Save source"; clicked => { root.add-source(); } }
+                            Button { text: "‹ Name and host"; clicked => { root.navigate(6); } }
+                        }
+                    }
+                }
+            }
+        }
+        if root.wide : Rectangle {
+            width: 270px; background: #18291e; border-radius: 24px;
+            VerticalLayout {
+                alignment: start; padding: 24px; spacing: 20px;
+                Text { text: "Your routing"; color: #f1fff7; font-size: 22px; font-weight: 600; }
+                Text { text: root.routing; color: #8edca7; wrap: word-wrap; }
+                Text { text: "Wallet actions use eligible sources within your saved boundaries."; color: #b6c9bd; wrap: word-wrap; }
+                Text { text: root.selection-summary; color: #b6c9bd; wrap: word-wrap; }
+                Text { text: "Preferred order\n" + root.preference-summary; color: #b6c9bd; wrap: word-wrap; }
+                Button { text: "Routing & preferences"; clicked => { root.navigate(5); } }
+                Text { text: "No servers contacted\nNo wallet keys loaded"; color: #8edca7; wrap: word-wrap; }
+            }
+        }
+        }
+    }
+}
+}

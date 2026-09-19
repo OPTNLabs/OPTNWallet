@@ -20,6 +20,7 @@ members = [
   "crates/optn-platform-apple",
   "crates/optn-runtime",
   "crates/optn-transport",
+  "crates/optn-transport-native",
   "crates/optn-transport-tauri",
   "crates/optn-ui",
   "crates/optn-ui-text",
@@ -29,6 +30,7 @@ exclude = [
   "crates/optn-cli",
   "crates/optn-ui-egui",
   "crates/optn-ui-dioxus",
+  "crates/optn-ui-slint",
   "crates/optn-core",
   "src-tauri",
 ]
@@ -46,6 +48,7 @@ default-members = [
   "crates/optn-platform-apple",
   "crates/optn-runtime",
   "crates/optn-transport",
+  "crates/optn-transport-native",
   "crates/optn-transport-tauri",
   "crates/optn-ui",
   "crates/optn-ui-text",
