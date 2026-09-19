@@ -15,6 +15,35 @@ a rule; nothing in it proves interoperability.
 | Production-network rule | Mainnet/chipnet constants and difficulty rules, tested separately and never against regtest fixtures |
 | Packaged app / device | Behaviour of a shipped artifact on a real target |
 
+## Live shared wallet workflow — 2026-09-19
+
+The opt-in `chipnet_wallet_runtime` test passed in 76.28 seconds against live
+Chipnet at height 324131 through an isolated, runner-owned Tor process on
+localhost port 19050. The test used the published BIP39 public HD fixture and
+observed two transactions and one output; no signing or broadcast was attempted.
+
+It exercised runtime HD sync, encrypted watch-only storage and restart, resumed
+sync, `DirectTransport` state parity, retained stale observations after an outage,
+lock clearing, the actual CLI `rescan --from-height 1`, and the saved-wallet CLI
+stdio open/sync/history sequence. Partial-height scans report incomplete coverage.
+This is Electrum **ServerAssertion** evidence, not an SHV/MMR or packaged GUI run.
+
+The first run exposed a removed `--from-height` option. The repair restored its
+runtime/persistence forwarding and partial-coverage reporting. All native CLI
+chain operations now forward saved proxy confirmations through
+`network_settings::build_stack`, including the persistent wallet console.
+
+Repeat with a Tor process you own (the port is explicit authorization in the test
+harness, never inferred from a listener):
+
+```powershell
+$env:OPTN_CHIPNET_TEST_TOR_PORT = '<owned Tor SOCKS port>'
+cargo test --locked --manifest-path crates/optn-cli/Cargo.toml --test chipnet_wallet_runtime -- --ignored --nocapture
+```
+
+The same changes passed all 14 CLI wallet process tests and strict CLI Clippy.
+Local run logs remain outside Git under `artifacts/issue75-live-20260919`.
+
 ## Environment
 
 ### Corrected Android server-override behavior — 2026-09-12

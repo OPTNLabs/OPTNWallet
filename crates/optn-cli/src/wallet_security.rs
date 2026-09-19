@@ -163,12 +163,7 @@ async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime, floor: Option<u32>)
                 runtime.request_wallet_rescan(height).await
                     .map_err(|error| CliError::Network(error.to_string()))?;
             }
-            let stack = optn_chain_native::build_native_chain_stack(
-                selection.catalog,
-                selection.policy,
-                &cli.network.to_string(),
-                &optn_chain_native::NativeChainSecrets::default(),
-            ).await;
+            let stack = crate::network_settings::build_stack(cli.network, cli.network_config_dir.as_deref(), selection).await;
             let worker = worker.with_accepted_headers(stack.headers.clone());
             // Resume the accumulator this wallet last had sealed. Without it
             // every refresh re-verifies the chain from genesis, which on a

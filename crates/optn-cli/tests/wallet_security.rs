@@ -683,7 +683,9 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
                         histories += 1;
                         json!([])
                     }
-                    "blockchain.headers.subscribe" => Value::Null,
+                    "blockchain.headers.subscribe" => {
+                        json!({"height":0,"hex":optn_runtime::header_verifier::CHIPNET_GENESIS_HEADER_HEX})
+                    }
                     "blockchain.block.headers" => json!({"count": 0, "hex": "", "max": 2016}),
                     method => panic!("unexpected loopback request: {method}"),
                 };
@@ -704,6 +706,8 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
             "public.optn",
             "--password-stdin",
             "rescan",
+            "--from-height",
+            "0",
             "--gap",
             "1",
             "--max-addresses",
@@ -726,6 +730,7 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
     let value = &responses(&output)[0];
     assert_eq!(value["account_path"], "m/44'/1'/1'");
     assert_eq!(value["complete"], true);
+    assert_eq!(value["wallet_sync"]["scan_coverage"]["from_height"], 0);
     assert_eq!(value["scanned_addresses"], 4);
     let account = optn_core::hd::AccountPath::new(1, 1).unwrap();
     let key =

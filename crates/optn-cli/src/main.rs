@@ -33,7 +33,6 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 use bip39::{Language, Mnemonic};
-use optn_chain_native::{build_native_chain_stack, NativeChainSecrets};
 use optn_multisig_core::{inspect_p2sh20, Network as MultisigNetwork};
 use optn_runtime::chain::{build_selection_plan, EndpointKind, ProtocolFamily};
 use optn_runtime::chain_service::{ChainOperation, ChainPayload, ChainRequest};
@@ -255,6 +254,9 @@ enum Command {
     /// retain the same checkpoint as the GUI; restored data remains stale
     /// until a complete live refresh succeeds.
     Rescan {
+        /// Inclusive rescan floor; zero requests full history. Persists for saved wallets.
+        #[arg(long)]
+        from_height: Option<u32>,
         /// Consecutive unused addresses required on each HD branch.
         #[arg(long, default_value_t = 20)]
         gap: u32,
@@ -933,11 +935,10 @@ async fn fetch_headers_window(
         });
         if p2p {
             let start_height = start.unwrap_or(1).max(1);
-            let stack = build_native_chain_stack(
-                selection.catalog,
-                selection.policy,
-                &cli.network.to_string(),
-                &NativeChainSecrets::default(),
+            let stack = crate::network_settings::build_stack(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                selection,
             )
             .await;
             let observation = stack
@@ -1117,11 +1118,10 @@ async fn ping_selected_chain(cli: &Cli) -> Result<Value> {
         }));
     };
 
-    let stack = build_native_chain_stack(
-        selection.catalog,
-        selection.policy,
-        &cli.network.to_string(),
-        &NativeChainSecrets::default(),
+    let stack = crate::network_settings::build_stack(
+        cli.network,
+        cli.network_config_dir.as_deref(),
+        selection,
     )
     .await;
     let routes = stack
@@ -1215,11 +1215,10 @@ async fn transaction_selected_chain(cli: &Cli, txid: &str, verbose: bool) -> Res
     tokio::time::timeout(
         std::time::Duration::from_secs(timeout_seconds(cli)),
         async {
-            let stack = build_native_chain_stack(
-                selection.catalog,
-                selection.policy,
-                &cli.network.to_string(),
-                &NativeChainSecrets::default(),
+            let stack = crate::network_settings::build_stack(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                selection,
             )
             .await;
             let observation = stack
@@ -1266,11 +1265,10 @@ async fn broadcast_selected_chain(cli: &Cli, raw: &str) -> Result<Value> {
     let budget = std::time::Duration::from_secs(timeout_seconds(cli));
     let stack = tokio::time::timeout(
         budget,
-        build_native_chain_stack(
-            selection.catalog,
-            selection.policy,
-            &cli.network.to_string(),
-            &NativeChainSecrets::default(),
+        crate::network_settings::build_stack(
+            cli.network,
+            cli.network_config_dir.as_deref(),
+            selection,
         ),
     )
     .await;
@@ -1330,12 +1328,7 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
     };
     tokio::time::timeout(std::time::Duration::from_secs(timeout_seconds(cli)), async {
         let mut worker = hd_sync_worker(cli.network, &selection.policy)?;
-        let stack = build_native_chain_stack(
-            selection.catalog,
-            selection.policy,
-            &cli.network.to_string(),
-            &NativeChainSecrets::default(),
-        )
+        let stack = crate::network_settings::build_stack(cli.network, cli.network_config_dir.as_deref(), selection)
         .await;
         let script = parsed.script_pubkey();
         // A one-address observation session, not the user's stored HD wallet.
@@ -1410,6 +1403,7 @@ async fn rescan_shared_wallet(
     all: bool,
     account_path: Option<&str>,
     xpub: Option<&str>,
+    from_height: Option<u32>,
 ) -> Result<Value> {
     use optn_runtime::chain::{
         ChainSource, ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceDisposition,
@@ -1503,10 +1497,14 @@ async fn rescan_shared_wallet(
                 multisig_policy: None, account_xpub: Some(xpub.clone()),
             }), ..Default::default()
         }));
-        let mut worker = hd_sync_worker(cli.network, &selection.policy)?;
-        let stack = build_native_chain_stack(selection.catalog, selection.policy, &cli.network.to_string(), &NativeChainSecrets::default()).await;
-        runtime.sync_hd_wallet(&mut *stack.service.lock().await, &mut worker, xpub,
-            optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap })
+        if let Some(height) = from_height {
+            runtime.request_wallet_rescan(height).await.map_err(|error| CliError::Usage(error.to_string()))?;
+        }
+        let worker = hd_sync_worker(cli.network, &selection.policy)?;
+        let stack = crate::network_settings::build_stack(cli.network, cli.network_config_dir.as_deref(), selection).await;
+        let mut worker = seed_header_progress(&runtime, cli.network, worker.with_accepted_headers(stack.headers.clone())).await?;
+        runtime.sync_hd_wallet_from_floor(&mut *stack.service.lock().await, &mut worker, xpub,
+            optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap }, from_height)
             .await.map_err(|error| CliError::Network(format!("HD rescan incomplete: {error}")))?;
         let status = runtime.subscribe_wallet_sync().borrow().clone();
         if !status.sync.history_fresh || !status.sync.utxos_fresh {
@@ -1537,7 +1535,7 @@ async fn rescan_shared_wallet(
         let total = state.wallet_sync.total_sats().ok_or_else(|| CliError::Protocol("HD total balance overflow".into()))?;
         let (header_verifier, mmr, header_height, header_commitment, header_evidence) =
             header_verifier_report(&worker);
-        Ok(json!({"ok":true, "hd":true, "complete":true, "network":cli.network.to_string(),
+        Ok(json!({"ok":true, "hd":true, "complete":!state.wallet_sync.scan_coverage.is_some_and(|coverage| coverage.skipped_below.is_some()), "network":cli.network.to_string(),
             "account_path":account.to_string(), "gap":gap, "max_addresses":cap,
             "selection":"shared-native-policy", "source":snapshot.source.as_str(),
             "evidence":format!("{:?}",snapshot.evidence),
@@ -2286,6 +2284,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             }))
         }
         Command::Rescan {
+            from_height,
             gap,
             all,
             max_addresses,
@@ -2299,6 +2298,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 *all,
                 account_path.as_deref(),
                 xpub.as_deref(),
+                *from_height,
             )
             .await
         }
@@ -2308,6 +2308,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 *gap,
                 optn_core::discovery::ADDRESS_CAP.max(*gap),
                 false,
+                None,
                 None,
                 None,
             )
@@ -2827,11 +2828,10 @@ async fn run(cli: &Cli) -> Result<Value> {
                 let budget = std::time::Duration::from_secs(timeout_seconds(cli));
                 let stack = tokio::time::timeout(
                     budget,
-                    build_native_chain_stack(
-                        selection.catalog,
-                        selection.policy,
-                        &cli.network.to_string(),
-                        &NativeChainSecrets::default(),
+                    crate::network_settings::build_stack(
+                        cli.network,
+                        cli.network_config_dir.as_deref(),
+                        selection,
                     ),
                 )
                 .await
@@ -2915,11 +2915,10 @@ async fn run(cli: &Cli) -> Result<Value> {
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(timeout_seconds(cli)),
                     async {
-                        let stack = build_native_chain_stack(
-                            selection.catalog,
-                            selection.policy,
-                            &cli.network.to_string(),
-                            &NativeChainSecrets::default(),
+                        let stack = crate::network_settings::build_stack(
+                            cli.network,
+                            cli.network_config_dir.as_deref(),
+                            selection,
                         )
                         .await;
                         let mut worker = worker.with_accepted_headers(stack.headers.clone());
@@ -3470,11 +3469,10 @@ async fn rpa_pay_selected(
     let budget = std::time::Duration::from_secs(cli.timeout.unwrap_or(600));
     let stack = tokio::time::timeout(
         budget,
-        build_native_chain_stack(
-            selection.catalog,
-            selection.policy,
-            &cli.network.to_string(),
-            &NativeChainSecrets::default(),
+        crate::network_settings::build_stack(
+            cli.network,
+            cli.network_config_dir.as_deref(),
+            selection,
         ),
     )
     .await

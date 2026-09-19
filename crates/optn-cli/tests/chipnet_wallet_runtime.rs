@@ -326,6 +326,12 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
             .unwrap()
     };
     {
+        assert!(
+            output.status.success(),
+            "CLI rescan exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).replace(&xpub, "[public account]")
+        );
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("CLI JSON");
         assert!(output.status.success(), "CLI read failed: {value}");
         assert_eq!(value["selection"], "shared-native-policy");

@@ -17,6 +17,26 @@ use optn_runtime::network_config::{
 
 const APP_CONFIG_IDENTIFIER: &str = "com.optilabs.wallet";
 
+/// All native CLI operations honor the same persisted proxy confirmations.
+pub async fn build_stack(
+    network: Network,
+    directory: Option<&Path>,
+    selection: SharedChainSelection,
+) -> optn_chain_native::NativeChainStack {
+    let trusted = trusted_socks_ports(network, directory);
+    optn_chain_native::build_native_chain_stack_via(
+        selection.catalog,
+        selection.policy,
+        &network.to_string(),
+        &optn_chain_native::NativeChainSecrets::default(),
+        optn_chain_native::TorProxyTrust {
+            managed: &[],
+            trusted: &trusted,
+        },
+    )
+    .await
+}
+
 pub fn export_sources(network: Network, directory: Option<&Path>) -> Result<String, String> {
     let directory =
         config_directory(directory).ok_or("network configuration directory is unavailable")?;
