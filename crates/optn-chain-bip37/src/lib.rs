@@ -1724,9 +1724,9 @@ mod tests {
         let mut backend = backend_at(port, false);
         backend.headers = store.clone();
         tokio::time::timeout(Duration::from_secs(3), async {
-            backend.header_sync(1, 1).await.unwrap();
+            backend.header_sync(1, 1, None).await.unwrap();
             store.write(|headers| headers.insert_hash_only(1, hash));
-            backend.header_sync(2, 1).await.unwrap();
+            backend.header_sync(2, 1, None).await.unwrap();
             peer.await.unwrap();
         })
         .await
