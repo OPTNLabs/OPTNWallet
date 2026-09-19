@@ -240,6 +240,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn changing_appearance_writes_nothing_but_appearance() {
+        // The other half of "theme/skin persist without touching keys". That a
+        // theme survives a restart is asserted above; this asserts what the
+        // save did *not* do. A presentation setting has no business writing
+        // near wallet material, and the failure it guards is silent -- nobody
+        // notices an extra file until it is a corrupt one.
+        use crate::appearance::tests::TestDirectory;
+        use crate::network_config::NetworkSettingsStore;
+        use optn_app::{AppAction, AppState, ThemeMode, UiSkin};
+
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let network_settings = NetworkSettingsStore::new(directory.0.clone());
+        let runtime = optn_runtime::AppRuntime::spawn(AppState::default());
+
+        // Something that looks like wallet material, to prove it is untouched
+        // rather than merely absent.
+        let wallet = directory.0.join("wallet.optn");
+        std::fs::write(&wallet, b"ciphertext").unwrap();
+        let before = std::fs::read(&wallet).unwrap();
+
+        for action in [
+            AppAction::SetSkin(UiSkin::Cyberpunk),
+            AppAction::SetTheme(ThemeMode::Light),
+            AppAction::ToggleTheme,
+        ] {
+            dispatch_action(&runtime, &store, &network_settings, action)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            std::fs::read(&wallet).unwrap(),
+            before,
+            "an appearance change rewrote wallet material"
+        );
+
+        let mut written: Vec<String> = std::fs::read_dir(&directory.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        written.sort();
+        assert_eq!(
+            written,
+            vec!["appearance.json".to_string(), "wallet.optn".to_string()],
+            "an appearance change created files beyond its own"
+        );
+    }
+
+    #[tokio::test]
     async fn network_settings_are_saved_before_the_runtime_publishes_them() {
         use crate::appearance::tests::TestDirectory;
         use crate::network_config::NetworkSettingsStore;
