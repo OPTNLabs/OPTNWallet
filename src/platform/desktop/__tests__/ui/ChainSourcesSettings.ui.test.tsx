@@ -169,4 +169,93 @@ it('browses without probes and sends explicit selection through the old UI', asy
   ).toBeInTheDocument();
   act(() => backRef.current?.());
   expect(backRef.current).toBeNull();
+  fireEvent.click(screen.getByTestId('chain-sources-own'));
+  fireEvent.click(screen.getByRole('button', { name: 'Add infrastructure' }));
+  fireEvent.change(screen.getByLabelText('Name'), {
+    target: { value: 'Home node' },
+  });
+  fireEvent.change(screen.getByLabelText('Host or IP address'), {
+    target: { value: 'node.home' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  for (const [label, port] of [
+    ['BCH peer (BIP37 / Neutrino)', '48333'],
+    ['Node RPC', '48332'],
+    ['Node ZMQ', '28332'],
+  ]) {
+    fireEvent.click(screen.getByRole('checkbox', { name: label }));
+    fireEvent.change(screen.getByLabelText(`${label} port`), {
+      target: { value: port },
+    });
+  }
+  mock.invoke.mockImplementation(
+    async (
+      command: string,
+      args?: { request: { services: { kind: string; port: number }[] } }
+    ) => {
+      if (command === 'optn_chain_add_source') {
+        view.sources.push({
+          ...view.sources[0],
+          id: 'host:node.home',
+          label: 'Home node',
+          origin: 'own-infrastructure',
+          group: 'mine',
+          can_remove: true,
+          endpoints: [
+            { kind: 'p2p', host: 'node.home', port: 48333 },
+            ...(args?.request.services ?? []).map((service) => ({
+              ...service,
+              host: 'node.home',
+            })),
+          ],
+        });
+      }
+      return command === 'optn_chain_sources' ? view : undefined;
+    }
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
+  await waitFor(() =>
+    expect(mock.invoke).toHaveBeenCalledWith('optn_chain_add_source', {
+      request: {
+        label: 'Home node',
+        host: 'node.home',
+        kind: 'p2p',
+        port: 48333,
+        network: 'chipnet',
+        infrastructure_group: 'mine',
+        services: [
+          { kind: 'node-rpc', port: 48332 },
+          { kind: 'node-zmq', port: 28332 },
+        ],
+      },
+    })
+  );
+  const card = await screen.findByTestId('chain-source-host:node.home');
+  fireEvent.click(within(card).getByRole('button', { name: 'View details' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Add services' }));
+  expect(screen.getByRole('checkbox', { name: 'Node RPC' })).toBeDisabled();
+  expect(screen.queryByLabelText('Host or IP address')).not.toBeInTheDocument();
+  fireEvent.click(
+    screen.getByRole('checkbox', { name: 'Electrum / Fulcrum (TLS)' })
+  );
+  fireEvent.change(screen.getByLabelText('Electrum / Fulcrum (TLS) port'), {
+    target: { value: '50002' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Save services' }));
+  await waitFor(() =>
+    expect(mock.invoke).toHaveBeenLastCalledWith('optn_chain_sources', {
+      network: null,
+    })
+  );
+  expect(mock.invoke).toHaveBeenCalledWith('optn_chain_add_source', {
+    request: {
+      label: 'Home node',
+      host: 'node.home',
+      kind: 'electrum-tls',
+      port: 50002,
+      services: [],
+      network: 'chipnet',
+      infrastructure_group: 'mine',
+    },
+  });
 });

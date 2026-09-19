@@ -139,3 +139,13 @@ pipeline; live peer discovery; the guided host-first infrastructure probe flow;
 independent configurable transport policy across all retained wallet paths; full
 legacy wallet/runtime synchronization convergence; and packaged platform parity.
 Do not mark those requirements complete based on catalog or component tests.
+
+
+### Logical-source service setup
+
+Retained desktop onboarding asks for name and host once, then offers separately
+configured P2P, Fulcrum, RPC and ZMQ services with explicit ports. Save submits one
+atomic Rust overlay edit for the same host. Source details can append missing
+services without repeating identity or changing ownership. Existing services are
+shown as configured, never implicitly verified. Ports are not guessed from the
+host; automatic service detection and RPC credential setup remain separate work.

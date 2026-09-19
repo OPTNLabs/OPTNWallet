@@ -94,6 +94,7 @@ describe('chain sources bridge', () => {
         host: '10.0.0.2',
         port: 8333,
         infrastructure_group: 'mine',
+        services: [],
         network: null,
       },
     });
@@ -110,6 +111,7 @@ describe('chain sources bridge', () => {
         host: 'a.example',
         port: null,
         infrastructure_group: null,
+        services: [],
         network: null,
       },
     });

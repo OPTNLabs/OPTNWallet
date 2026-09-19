@@ -342,6 +342,7 @@ fn connect(ui: &NetworkWindow, settings: SourceSettings) -> Result<Rc<RefCell<Ho
             h.edit(
                 &ui,
                 ChainSourceEdit::Add(AddSourceRequest {
+                    services: Vec::new(),
                     network: Some(network),
                     label: ui.get_source_name().to_string(),
                     host: ui.get_source_host().to_string(),

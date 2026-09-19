@@ -14,33 +14,18 @@
 
 use crate::chain_runtime::NativeChainRuntime;
 use crate::network_config::NetworkSettingsStore;
-use optn_transport_native::{protocol_label, scope_label, source_views};
 use optn_core::network::Network;
 use optn_runtime::chain::{
-    ConnectionPolicy, Endpoint, EndpointKind, ProtocolFamily, SourceCatalog, SourceDisposition,
-    SourceId,
+    ConnectionPolicy, ProtocolFamily, SourceCatalog, SourceDisposition, SourceId,
 };
 use optn_runtime::chain_service::ChainOperation;
 use optn_runtime::network_config::{
-    add_user_source, remove_user_source, set_policy_preset, set_source_disposition,
-    ChainPolicyPreset,
+    remove_user_source, set_policy_preset, set_source_disposition, ChainPolicyPreset,
 };
+use optn_transport_native::{protocol_label, scope_label, source_views};
 use std::sync::Arc;
 
 pub use optn_transport::chain_sources::*;
-
-fn parse_endpoint_kind(value: &str) -> Result<EndpointKind, String> {
-    Ok(match value {
-        "p2p" => EndpointKind::BchP2p,
-        "electrum-tls" => EndpointKind::ElectrumTls,
-        "electrum-tcp" => EndpointKind::ElectrumTcp,
-        "node-rpc" => EndpointKind::BchnRpc,
-        "node-zmq" => EndpointKind::BchnZmq,
-        "explorer-https" => EndpointKind::ExplorerHttps,
-        "explorer-http" => EndpointKind::ExplorerHttp,
-        other => return Err(format!("unknown endpoint kind '{other}'")),
-    })
-}
 
 fn parse_disposition(value: &str) -> Result<SourceDisposition, String> {
     Ok(match value {
@@ -52,7 +37,9 @@ fn parse_disposition(value: &str) -> Result<SourceDisposition, String> {
 }
 
 fn parse_network(value: &str) -> Result<Network, String> {
-    value.parse().map_err(|_| format!("unknown network '{value}'"))
+    value
+        .parse()
+        .map_err(|_| format!("unknown network '{value}'"))
 }
 /// Every source for a network, with the policy and what the live stack made of it.
 #[tauri::command]
@@ -426,16 +413,8 @@ pub async fn optn_chain_add_source(
     request: AddSourceRequest,
 ) -> Result<(), String> {
     let network = network_or_current(&runtime, request.network.clone())?;
-    let kind = parse_endpoint_kind(&request.kind)?;
-    let endpoint = Endpoint {
-        kind,
-        host: request.host.clone(),
-        port: request.port,
-    };
-    let label = request.label.clone();
-    let group = request.infrastructure_group.clone();
     edit_overlay(&native, &network_settings, network, move |overlay| {
-        add_user_source(overlay, &label, endpoint, group.as_deref()).map(|_| ())
+        optn_transport_native::add_source(network, overlay, request)
     })
     .await
 }
@@ -501,29 +480,11 @@ pub async fn optn_chain_rpc_credentials(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use optn_transport_native::{disposition_label, endpoint_kind_label};
     use optn_runtime::{
-        chain::{ChainSource, SourceOrigin},
+        chain::{ChainSource, Endpoint, EndpointKind, SourceOrigin},
         chain_service::RegisteredCapabilityObservation,
     };
-
-    #[test]
-    fn endpoint_kind_labels_round_trip() {
-        // The label is what the UI sends back when adding a source, so a label
-        // this module cannot parse would make its own list unusable.
-        for kind in [
-            EndpointKind::BchP2p,
-            EndpointKind::ElectrumTls,
-            EndpointKind::ElectrumTcp,
-            EndpointKind::BchnRpc,
-            EndpointKind::BchnZmq,
-            EndpointKind::ExplorerHttp,
-            EndpointKind::ExplorerHttps,
-        ] {
-            assert_eq!(parse_endpoint_kind(endpoint_kind_label(kind)), Ok(kind));
-        }
-        assert!(parse_endpoint_kind("smoke-signals").is_err());
-    }
+    use optn_transport_native::disposition_label;
 
     #[test]
     fn dispositions_round_trip_and_reject_anything_else() {

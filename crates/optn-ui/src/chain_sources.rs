@@ -328,6 +328,7 @@ pub fn ChainSourcesSection(transport: UiTransport, state: RwSignal<AppState>) ->
                     let port = match port.get_untracked().parse::<u16>() { Ok(value) if value > 0 => value, _ => {error.set(Some("Enter a port between 1 and 65535.".into())); return;} };
                     let group = group.get_untracked();
                     action.dispatch((network.get_untracked(), Some(ChainSourceEdit::Add(AddSourceRequest {
+                    services: Vec::new(),
                         network:Some(network.get_untracked()), label:label.get_untracked(), host:host.get_untracked(), port:Some(port), kind:kind.get_untracked(), infrastructure_group:(!group.trim().is_empty()).then_some(group),
                     }))));
                 }>

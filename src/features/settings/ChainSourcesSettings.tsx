@@ -13,7 +13,6 @@ import {
   addChainSource,
   CHAIN_POLICY_DESCRIPTIONS,
   CHAIN_POLICY_LABELS,
-  DEFAULT_PORTS,
   ENDPOINT_KINDS,
   readChainSources,
   rebuildChainRoutes,
@@ -261,7 +260,11 @@ export function ChainSourcesSettings({
   const [showAdd, setShowAdd] = useState(false);
   const [host, setHost] = useState('');
   const [label, setLabel] = useState('');
-  const [kind, setKind] = useState(ENDPOINT_KINDS[0].value);
+  const [serviceStep, setServiceStep] = useState(false);
+  const [services, setServices] = useState<Record<string, string>>({});
+  const [extendingSource, setExtendingSource] = useState<ChainSource | null>(
+    null
+  );
   const [ownInfrastructure, setOwnInfrastructure] = useState(false);
   const [engineSync, setEngineSync] = useState<EngineWalletSync | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -331,6 +334,10 @@ export function ChainSourcesSettings({
 
   const goBack = useCallback(() => {
     if (showAdd) {
+      if (serviceStep && !extendingSource) {
+        setServiceStep(false);
+        return;
+      }
       setShowAdd(false);
       return;
     }
@@ -339,7 +346,7 @@ export function ChainSourcesSettings({
     setPage(previous);
     setHistory((pages) => pages.slice(0, -1));
     setSelectionDirty(false);
-  }, [history, showAdd]);
+  }, [history, showAdd, serviceStep, extendingSource]);
 
   useEffect(() => {
     if (!backRef) return;
@@ -362,6 +369,11 @@ export function ChainSourcesSettings({
 
   const openAdd = () => {
     setOwnInfrastructure(page === 'own');
+    setHost('');
+    setLabel('');
+    setServices({});
+    setServiceStep(false);
+    setExtendingSource(null);
     setShowAdd(true);
   };
 
@@ -416,20 +428,32 @@ export function ChainSourcesSettings({
       setError('Enter a host or IP address.');
       return;
     }
-    const [hostPart, portPart] = entry.split(':');
-    const port = portPart ? Number(portPart) : DEFAULT_PORTS[kind];
-    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-      setError('That port is not valid.');
+    const selected = Object.entries(services).map(([kind, value]) => ({
+      kind,
+      port: /^\d+$/.test(value) ? Number(value) : NaN,
+    }));
+    if (
+      selected.length === 0 ||
+      selected.some(
+        ({ port }) => !Number.isInteger(port) || port < 1 || port > 65535
+      )
+    ) {
+      setError(
+        'Select at least one service and enter its configured port (1–65535).'
+      );
       return;
     }
+    const [first, ...additional] = selected;
     const network = view.network;
     void run(async () => {
       await addChainSource({
-        label: label.trim() || hostPart,
-        kind,
-        host: hostPart,
-        port,
-        infrastructureGroup: ownInfrastructure ? 'mine' : null,
+        label: label.trim() || entry,
+        kind: first.kind,
+        host: entry,
+        port: first.port,
+        services: additional,
+        infrastructureGroup:
+          extendingSource?.group ?? (ownInfrastructure ? 'mine' : null),
         network,
       });
       setHost('');
@@ -438,6 +462,130 @@ export function ChainSourcesSettings({
       setShowAdd(false);
     });
   };
+
+  const serviceForm = (
+    <section
+      aria-label="Configure source services"
+      className="space-y-3 rounded-xl border border-[var(--wallet-border)] p-3"
+    >
+      {!serviceStep ? (
+        <>
+          <label className="block text-sm wallet-text-strong">
+            Name
+            <input
+              className="wallet-input w-full rounded-md px-3 py-2"
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder="Home node"
+            />
+          </label>
+          <label className="block text-sm wallet-text-strong">
+            Host or IP address
+            <input
+              className="wallet-input w-full rounded-md px-3 py-2"
+              value={host}
+              onChange={(event) => setHost(event.target.value)}
+              placeholder="node.home"
+            />
+          </label>
+          <p className="text-xs wallet-muted">
+            Add this source once, then configure the services it exposes. Enter
+            ports in the next step.
+          </p>
+          <button
+            type="button"
+            className="wallet-btn-primary px-3 py-2"
+            disabled={!host.trim() || busy}
+            onClick={() => {
+              setServiceStep(true);
+              setError('');
+            }}
+          >
+            Continue
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="font-semibold wallet-text-strong">{label || host}</p>
+          <p className="text-xs wallet-muted">
+            {host} — one source, multiple services. Select only services you
+            have configured. These settings do not prove availability or
+            capabilities.
+          </p>
+          {ENDPOINT_KINDS.map((service) => {
+            const configured =
+              extendingSource?.endpoints.filter(
+                (endpoint) => endpoint.kind === service.value
+              ) ?? [];
+            return (
+              <div key={service.value} className="space-y-1">
+                <label className="flex items-center gap-2 text-sm wallet-text-strong">
+                  <input
+                    type="checkbox"
+                    disabled={busy || configured.length > 0}
+                    checked={configured.length > 0 || service.value in services}
+                    onChange={(event) =>
+                      setServices((previous) => {
+                        const next = { ...previous };
+                        if (event.target.checked) next[service.value] = '';
+                        else delete next[service.value];
+                        return next;
+                      })
+                    }
+                  />
+                  {service.label}
+                </label>
+                {configured.length > 0 && (
+                  <p className="text-xs wallet-muted">
+                    Already configured:{' '}
+                    {configured.map((endpoint) => endpoint.port).join(', ')}
+                  </p>
+                )}
+                {service.value in services && (
+                  <label className="block text-xs wallet-muted">
+                    {service.label} port
+                    <input
+                      className="wallet-input w-full rounded-md px-3 py-2"
+                      inputMode="numeric"
+                      value={services[service.value]}
+                      disabled={busy}
+                      onChange={(event) =>
+                        setServices((previous) => ({
+                          ...previous,
+                          [service.value]: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                )}
+              </div>
+            );
+          })}
+          <p className="text-xs wallet-muted">
+            P2P support is verified separately. RPC may require authentication.
+            ZMQ provides notifications, not wallet synchronization. Fulcrum is a
+            separate service and is never assumed.
+          </p>
+          <button
+            type="button"
+            className="wallet-btn-primary px-3 py-2"
+            disabled={busy || Object.keys(services).length === 0}
+            onClick={submitSource}
+          >
+            {extendingSource ? 'Save services' : 'Save source'}
+          </button>
+        </>
+      )}
+      <button
+        type="button"
+        disabled={busy}
+        className="wallet-btn-secondary px-3 py-2"
+        onClick={() => setShowAdd(false)}
+      >
+        Cancel
+      </button>
+    </section>
+  );
 
   if (!view) {
     return (
@@ -1202,61 +1350,14 @@ export function ChainSourcesSettings({
           </div>
           {page !== 'public' &&
             (showAdd ? (
-              <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] p-3">
-                <input
-                  className="wallet-input w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
-                  placeholder="host or ip[:port]"
-                  value={host}
-                  onChange={(event) => setHost(event.target.value)}
-                />
-                <input
-                  className="wallet-input w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
-                  placeholder="Name (optional)"
-                  value={label}
-                  onChange={(event) => setLabel(event.target.value)}
-                />
-                <select
-                  className="wallet-input w-full rounded-md px-3 py-2 text-sm wallet-text-strong"
-                  value={kind}
-                  onChange={(event) => setKind(event.target.value)}
-                  aria-label="Source type"
-                >
-                  {ENDPOINT_KINDS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[11px] wallet-muted">
-                  {page === 'own'
-                    ? 'This source will be added to My infrastructure.'
-                    : 'This source will be added to My custom sources.'}
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className="wallet-btn-secondary flex-1 py-2 text-sm"
-                    onClick={() => setShowAdd(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    className="wallet-btn-primary flex-1 py-2 text-sm font-semibold"
-                    onClick={submitSource}
-                  >
-                    Add source
-                  </button>
-                </div>
-              </div>
+              serviceForm
             ) : (
               <button
                 type="button"
                 className="wallet-btn-secondary w-full py-2 text-sm"
                 onClick={openAdd}
               >
-                Add a source
+                {page === 'own' ? 'Add infrastructure' : 'Add a source'}
               </button>
             ))}
         </>
@@ -1330,6 +1431,30 @@ export function ChainSourcesSettings({
                 </p>
               )}
             </section>
+
+            {selectedSource.can_remove &&
+              selectedSource.origin !== 'bootstrap' &&
+              (showAdd ? (
+                serviceForm
+              ) : (
+                <button
+                  type="button"
+                  className="wallet-btn-secondary px-3 py-2"
+                  onClick={() => {
+                    setExtendingSource(selectedSource);
+                    setHost(selectedSource.endpoints[0]?.host ?? '');
+                    setLabel(selectedSource.label);
+                    setOwnInfrastructure(
+                      selectedSource.origin === 'own-infrastructure'
+                    );
+                    setServices({});
+                    setServiceStep(true);
+                    setShowAdd(true);
+                  }}
+                >
+                  Add services
+                </button>
+              ))}
 
             <section aria-label="Configured endpoints" className="space-y-1">
               <p className="text-xs font-semibold wallet-text-strong">
