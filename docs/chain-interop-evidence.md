@@ -417,3 +417,11 @@ Recorded so the gap is not mistaken for a pass.
   has not been exercised against these nodes.
 - **Reorg and restart.** The header store and the replay module have unit
   coverage for both, but neither has been driven against a live node here.
+
+## 2026-09-19: native Leptos GUI live Chipnet and offline reopen
+
+An isolated Windows Tauri/Leptos debug executable (identifier `com.optilabs.wallet.issue75test`, SHA-256 `0d9b2ca31d5291ec0b29f158276713152ed2a1bab134169adfd17ffdbb5d6b8e`) imported the public BIP39 fixture as a watch-only HD account at `m/44'/1'/0'`. Through visible GUI controls, a runner-owned Tor SOCKS port 19050 was explicitly confirmed, the Electrum policy selected, and Refresh wallet invoked. At height 324136 the GUI displayed 39,774 sats, one output, and two history entries (received 50,000 sats and sent 10,226 sats). The UI explicitly labelled the evidence Server assertion.
+
+The runner stopped that Tor process and restarted the same executable. Opening the encrypted watch-only wallet displayed the same 39,774 sats, receive address and both history entries, labelled `Saved balance · refresh needed`, with the network offline. This verifies the actual packaged Windows UI and native encrypted restart path; it does not establish SHV/MMR proof, live P2P resume, transaction signing/broadcast, Android/macOS packaging or all-renderer parity. Public screenshots and logs remain outside Git under `artifacts/issue75-live-20260919`.
+
+An attempted refresh while Tor was stopped refused the unavailable route and retained the same stale balance/history. After restarting the owned Tor process, Retry connections and Refresh wallet returned the same account to `Up to date`. This proves saved-state recovery and a subsequent live refresh, not a suffix-only network download: ordinary HD refresh currently rechecks account history from its configured scan floor.
