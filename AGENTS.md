@@ -13,9 +13,11 @@ For architecture changes, read `RUSTIFICATION.md` and the affected entries in
 `docs/rustification/closed-pr-design-invariants.md` and its relevant lineage in
 `rustification/closed-pr-history.toml`. For UI work, use the canonical project
 skill `.claude/skills/ui-ux-product/SKILL.md` and `docs/ui-overhaul/` references.
-For #71/#75 continuation, reconcile `docs/pr63-requirement-ledger.md` with the
+For #71/#75/#83 continuation, reconcile `docs/pr63-requirement-ledger.md` with the
 current issue requirements, PR head, code and evidence; historical handoffs are
-context, not proof of completion. #84 coordinates the Vitest dependency migration.
+context, not proof of completion. #83 owns cross-cutting authority boundaries and
+dependency coordination; #71 owns product UI and #75 owns providers/sync/privacy.
+#84 is the separate Vitest dependency migration, not the architecture issue.
 
 For renderer changes, follow `RUSTIFICATION.md#renderer-contract-preserve-choice-share-behavior`.
 Retain React; Dioxus is currently a headless proof, and Slint remains undecided.

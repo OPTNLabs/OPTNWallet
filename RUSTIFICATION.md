@@ -8,6 +8,7 @@ OPTN currently uses:
 - **Tauri 2.x** as the current desktop/mobile shell
 - **optn-core** for reusable BCH/protocol logic
 - **optn-app** for framework-neutral application state and actions
+- **optn-runtime** for authoritative wallet sessions, durable state and reconciliation
 - **optn-chain-native** for Tauri-free native chain adapter composition shared by desktop and CLI
 - **optn-transport** for renderer-to-application communication contracts
 - **optn-platform** for OS capability contracts and provider metadata
@@ -18,17 +19,32 @@ choices, not architectural dependencies.
 
 ## Stable center
 
-```
-optn-core
-    ↑
-optn-app
-    ↑
-optn-transport ← renderer transport implementations
-    ↑
-renderer
+Runtime communication and ownership (arrows are calls, not Cargo dependencies):
 
-optn-platform ← capability providers
+```text
+GUI / CLI → trusted transport adapter → optn-runtime
+                                        ├─ optn-app: actions and projections
+                                        ├─ optn-core: pure wallet primitives
+                                        ├─ provider contracts: observations and evidence
+                                        └─ platform ports: storage, sockets and hardware
 ```
+
+Only the runtime owns authoritative wallet/session state. Providers return
+observations; platform adapters execute capabilities; neither publishes wallet
+state directly. `optn-app` is the application model, not another wallet backend.
+
+Current Cargo direction is distinct: `optn-app` depends on `optn-core`,
+`optn-transport` depends on `optn-app`, and `optn-runtime` consumes those crates
+and `optn-platform`. Transport contracts currently sit below the runtime;
+concrete transport adapters sit above it. Do not introduce a reverse dependency
+or claim the target layer diagram is already the literal Cargo graph.
+
+[#83](https://github.com/OPTNLabs/OPTNWallet/issues/83) coordinates these authority
+boundaries. #71 owns product UI, #75 owns providers/sync/privacy, #79 owns the
+transaction approval lifecycle, and #82 owns the add-on host/package lifecycle.
+Trusted UI transport is not an untrusted add-on API: guests must not receive
+unrestricted `AppAction`, raw signing templates, key material or broadcast
+authority. A manifest's claimed trust tier cannot grant host privileges.
 
 The architecture has four independently replaceable boundaries:
 
