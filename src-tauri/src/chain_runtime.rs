@@ -341,6 +341,28 @@ impl NativeChainRuntime {
         }
     }
 
+    /// Retire old routes before any settings write, including imports and proxy
+    /// trust changes. A renderer's later rebuild request is not authorization.
+    pub(crate) async fn persist_network_edit(
+        &self,
+        edit: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Result<(), String> {
+        const REASON: &str = "Source settings changed; sync the wallet again.";
+        if !self.invalidate_current_wallet_sync(REASON).await {
+            return Err("Wallet runtime unavailable.".into());
+        }
+        let _settings = self.network_settings.write_lock.lock().await;
+        let _rebuild = self.rebuild_lock.lock().await;
+        // A build may have been underway while we waited. Revoke again under
+        // its publication lock so nothing from the old policy survives the write.
+        if !self.invalidate_current_wallet_sync(REASON).await {
+            return Err("Wallet runtime unavailable.".into());
+        }
+        tokio::task::spawn_blocking(edit)
+            .await
+            .map_err(|_| "Network settings writer stopped".to_owned())?
+    }
+
     pub async fn rpc_credentials(
         &self,
         network: Network,
@@ -476,7 +498,9 @@ impl NativeChainRuntime {
             Ok(Some(selection)) => selection,
             // No persisted policy yet: use the same app-state bridge the stack
             // does, so this is never more permissive than the chain layer.
-            _ => catalog_and_policy_from_app_state(&self.owner.state()),
+            Ok(None) => catalog_and_policy_from_app_state(&self.owner.state()),
+            // An unreadable policy is not permission to use public defaults.
+            Err(_) => return (false, optn_core::tor::TorStatus::Absent),
         };
         let managed = crate::fusion::tor_manager::owned_socks_port();
         let trusted = self.trusted_socks_ports(network).await;
@@ -1449,6 +1473,59 @@ mod tests {
         let _ = std::fs::remove_file(&network_config);
         let _ = std::fs::remove_file(network_config.with_extension("lock"));
         std::fs::remove_dir(settings_directory).expect("remove test settings directory");
+    }
+
+    #[tokio::test]
+    async fn unreadable_network_policy_never_authorizes_public_update_requests() {
+        let directory = test_directory("update-policy-corrupt");
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("network-mainnet.json");
+        std::fs::write(&path, "invalid configuration").unwrap();
+        let runtime = AppRuntime::spawn(AppState::default());
+        let native = NativeChainRuntime::new(runtime, NetworkSettingsStore::new(directory.clone()));
+        assert_eq!(
+            native.tor_status_for_update_check().await,
+            (false, optn_core::tor::TorStatus::Absent)
+        );
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn network_edit_revokes_before_waiting_and_keeps_failed_writes_stale() {
+        for fail_write in [false, true] {
+            let refresh = pending_hd_refresh().await;
+            let guard = refresh.native.rebuild_lock.lock().await;
+            let wrote = Arc::new(AtomicUsize::new(0));
+            let wrote_inside = wrote.clone();
+            let native = refresh.native.clone();
+            let task = tokio::spawn(async move {
+                native
+                    .persist_network_edit(move || {
+                        wrote_inside.fetch_add(1, Ordering::SeqCst);
+                        if fail_write {
+                            Err("fixture disk refusal".into())
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .await
+            });
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while !refresh.task.is_finished() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("settings edit revokes active sync before waiting for rebuild");
+            assert_eq!(wrote.load(Ordering::SeqCst), 0);
+            assert_eq!(refresh.calls.load(Ordering::SeqCst), 1);
+            assert!(!refresh.runtime.state().wallet_sync.utxos_fresh);
+            drop(guard);
+            assert_eq!(task.await.unwrap().is_err(), fail_write);
+            assert_eq!(wrote.load(Ordering::SeqCst), 1);
+            assert_cancelled(refresh, "Source settings changed; sync the wallet again.").await;
+        }
     }
 
     #[tokio::test]

@@ -319,3 +319,17 @@ restart and export checks: the deleted single-source pool stays explicitly empty
 with no public fallback. Original isolated test settings were restored and the
 owned test process stopped. Build: base `28e02ea0` plus the checkpoint diff;
 SHA-256 `0dfc85545176a4301a8ecdda85b96e697dd80af1c0131033286e7cb1a9f3fef7`.
+
+## Native source edits revoke before persistence (2026-09-19)
+
+Every native source/policy/selection/proxy-trust edit and portable import now
+revokes published routes and active wallet sync before waiting for the serialized
+settings write. It rechecks revocation under the rebuild lock, preventing an old
+probe from republishing between cancellation and persistence. Failed writes keep
+freshness invalidated. Safety no longer depends on a renderer sending the second
+rebuild command. Corrupt persisted network policy also refuses public update
+requests instead of falling back to app-state defaults.
+
+Nineteen native chain-runtime tests pass, including a pending shared HD refresh,
+a held rebuild lock, successful and failing writer callbacks, and corrupt update
+policy refusal. Strict native Clippy and the unchanged architecture gate pass.

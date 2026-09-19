@@ -356,10 +356,10 @@ fn network_or_current(
     }
 }
 
-/// Edit the durable overlay. The runtime's selection watcher rebuilds routes
-/// from the file, so a write here retires the old routes rather than leaving a
-/// connection open that the new policy would not have allowed.
+/// Revoke old routes before editing the durable overlay. The existing watcher
+/// and explicit rebuild command then construct routes from the saved policy.
 async fn edit_overlay(
+    native: &NativeChainRuntime,
     network_settings: &NetworkSettingsStore,
     network: Network,
     edit: impl FnOnce(&mut optn_runtime::network_config::UserNetworkOverlay) -> Result<(), String>
@@ -367,13 +367,14 @@ async fn edit_overlay(
         + 'static,
 ) -> Result<(), String> {
     let settings = network_settings.clone();
-    tokio::task::spawn_blocking(move || settings.update_overlay(network, edit))
+    native
+        .persist_network_edit(move || settings.update_overlay(network, edit))
         .await
-        .map_err(|_| "network settings writer stopped".to_string())?
 }
 
 #[tauri::command]
 pub async fn optn_chain_set_policy(
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
     network_settings: tauri::State<'_, NetworkSettingsStore>,
     network: Option<String>,
@@ -382,7 +383,7 @@ pub async fn optn_chain_set_policy(
     let network = network_or_current(&runtime, network)?;
     let preset: ChainPolicyPreset = serde_json::from_value(serde_json::Value::String(policy))
         .map_err(|_| "unknown connection policy".to_string())?;
-    edit_overlay(&network_settings, network, move |overlay| {
+    edit_overlay(&native, &network_settings, network, move |overlay| {
         set_policy_preset(overlay, preset)
     })
     .await
@@ -390,13 +391,14 @@ pub async fn optn_chain_set_policy(
 
 #[tauri::command]
 pub async fn optn_chain_set_selection(
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
     network_settings: tauri::State<'_, NetworkSettingsStore>,
     network: Option<String>,
     selection: optn_transport::chain_sources::WireConnectionPolicy,
 ) -> Result<(), String> {
     let network = network_or_current(&runtime, network)?;
-    edit_overlay(&network_settings, network, move |overlay| {
+    edit_overlay(&native, &network_settings, network, move |overlay| {
         let envelope = optn_runtime::network_config::NetworkConfigEnvelope::current(
             optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
             overlay.clone(),
@@ -424,16 +426,16 @@ pub async fn optn_chain_export_configuration(
 
 #[tauri::command]
 pub async fn optn_chain_import_configuration(
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
     network_settings: tauri::State<'_, NetworkSettingsStore>,
     network: String,
     configuration: String,
 ) -> Result<(), String> {
     let network = parse_network(&network)?;
     let settings = (*network_settings).clone();
-    let _guard = network_settings.write_lock.lock().await;
-    tokio::task::spawn_blocking(move || settings.import_portable(network, &configuration))
+    native
+        .persist_network_edit(move || settings.import_portable(network, &configuration))
         .await
-        .map_err(|_| "Network settings writer stopped".to_owned())?
 }
 
 /// The proxy situation, in the shape every renderer reads.
@@ -499,6 +501,7 @@ pub async fn optn_tor_readiness(
 /// there is no port number that makes trusting a remote one correct.
 #[tauri::command]
 pub async fn optn_chain_trust_socks_proxy(
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
     network_settings: tauri::State<'_, NetworkSettingsStore>,
     network: Option<String>,
@@ -509,7 +512,7 @@ pub async fn optn_chain_trust_socks_proxy(
     if port == 0 {
         return Err("0 is not a port".into());
     }
-    edit_overlay(&network_settings, network, move |overlay| {
+    edit_overlay(&native, &network_settings, network, move |overlay| {
         overlay.trusted_socks_ports.retain(|entry| *entry != port);
         if trusted {
             overlay.trusted_socks_ports.push(port);
@@ -522,6 +525,7 @@ pub async fn optn_chain_trust_socks_proxy(
 
 #[tauri::command]
 pub async fn optn_chain_set_source_disposition(
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
     network_settings: tauri::State<'_, NetworkSettingsStore>,
     network: Option<String>,
@@ -531,7 +535,7 @@ pub async fn optn_chain_set_source_disposition(
     let network = network_or_current(&runtime, network)?;
     let disposition = parse_disposition(&disposition)?;
     let id = SourceId::new(source);
-    edit_overlay(&network_settings, network, move |overlay| {
+    edit_overlay(&native, &network_settings, network, move |overlay| {
         set_source_disposition(overlay, &id, disposition)
     })
     .await
@@ -539,6 +543,7 @@ pub async fn optn_chain_set_source_disposition(
 
 #[tauri::command]
 pub async fn optn_chain_add_source(
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
     network_settings: tauri::State<'_, NetworkSettingsStore>,
     request: AddSourceRequest,
@@ -552,7 +557,7 @@ pub async fn optn_chain_add_source(
     };
     let label = request.label.clone();
     let group = request.infrastructure_group.clone();
-    edit_overlay(&network_settings, network, move |overlay| {
+    edit_overlay(&native, &network_settings, network, move |overlay| {
         add_user_source(overlay, &label, endpoint, group.as_deref()).map(|_| ())
     })
     .await
@@ -596,7 +601,7 @@ pub async fn optn_chain_remove_source(
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let _ = &native;
     let id = SourceId::new(source);
-    edit_overlay(&network_settings, network, move |overlay| {
+    edit_overlay(&native, &network_settings, network, move |overlay| {
         remove_user_source(overlay, &id)
     })
     .await
