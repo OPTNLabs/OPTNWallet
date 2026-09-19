@@ -143,6 +143,17 @@ pub enum UnresolvedReason {
 /// One attempt's result, as a transport reports it.
 pub type FetchAttempt = Result<Vec<u8>, FetchError>;
 
+/// Platform-owned byte transport; publication/evidence acceptance stays here.
+/// Native hosts execute the selected privacy route, while a restricted host
+/// may omit this port entirely. No wallet material crosses it.
+pub trait RegistryFetcher: Send + Sync {
+    fn fetch<'a>(
+        &'a self,
+        uri: &'a str,
+        limits: FetchLimits,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = FetchAttempt> + Send + 'a>>;
+}
+
 /// Resolve a publication into metadata, given whatever the transport returned.
 ///
 /// Deliberately takes the results rather than a transport: the ordering,
@@ -320,6 +331,9 @@ impl IdentityCollection {
         let transactions = transactions
             .iter()
             .filter_map(|observed| {
+                if optn_core::header_hash::sha256d(&observed.raw) != observed.txid {
+                    return None;
+                }
                 let decoded = optn_core::tx::decode(&observed.raw).ok()?;
                 Some(ChainTransaction {
                     txid: observed.txid,
@@ -343,6 +357,176 @@ impl IdentityCollection {
             evidence,
         }
     }
+}
+
+/// Resolve owned identities through the selected capability routes. Wallet
+/// history may nominate a successor, but the same node must supply its bytes
+/// and explicitly establish the terminal output's unspent status.
+pub(crate) async fn resolve_selected_identities(
+    service: &mut crate::chain_service::ChainService,
+    categories: BTreeSet<[u8; 32]>,
+    transactions: &[ObservedTransaction],
+) -> BTreeMap<[u8; 32], OwnedCategoryIdentity> {
+    use crate::chain_service::{ChainOperation, ChainPayload, ChainRequest, OutpointSpentness};
+    let mut identities = BTreeMap::new();
+    let collection =
+        IdentityCollection::from_observed(transactions, vec![], Evidence::ServerAssertion);
+    let fetcher = service.registry_fetcher();
+    let source_lifetime = service.revocation();
+    let mut bytes_left = FetchLimits::default().max_bytes;
+    // Bound optional metadata work for a refresh. Unfinished categories remain
+    // unresolved without withholding the wallet's accepted coins or history.
+    let work = async {
+        for category in categories.into_iter().take(32) {
+            let mut identity = OwnedCategoryIdentity::Unresolved;
+            for route in service.routes_for_operation(ChainOperation::OutpointSpentness) {
+                let Some(transaction_route) =
+                    service.matching_route_for_operation(&route, ChainOperation::TransactionLookup)
+                else {
+                    continue;
+                };
+                let mut walk = AuthchainResolution::begin(
+                    category,
+                    AuthchainBudget {
+                        max_hops: 64,
+                        ..Default::default()
+                    },
+                );
+                let mut step = walk.next_step();
+                while let AuthchainStep::Query { txid } = step {
+                    let Ok(observed) = service
+                        .execute_on_route(
+                            &transaction_route,
+                            &ChainRequest::TransactionLookup { txid },
+                        )
+                        .await
+                    else {
+                        break;
+                    };
+                    if !matches!(&observed.evidence, Evidence::FullNodeValidated { source } if source == &route.source)
+                    {
+                        break;
+                    }
+                    let ChainPayload::Transaction(transaction) = observed.value else {
+                        break;
+                    };
+                    let Ok(decoded) = optn_core::tx::decode(&transaction.raw) else {
+                        break;
+                    };
+                    let current = IdentityCollection::from_observed(
+                        &[transaction],
+                        vec![],
+                        observed.evidence,
+                    );
+                    let Some(current) = current.transactions.first() else {
+                        break;
+                    };
+                    walk.inspect(current);
+                    if matches!(
+                        optn_core::bcmr::identity_output_state(
+                            current.outputs.first().map(Vec::as_slice)
+                        ),
+                        optn_core::bcmr::IdentityOutputState::Burned
+                    ) {
+                        identity = OwnedCategoryIdentity::Unpublished;
+                        break;
+                    }
+                    let mut successors = collection
+                        .transactions
+                        .iter()
+                        .filter(|candidate| candidate.inputs.contains(&(txid, 0)));
+                    if let Some(successor) = successors.next() {
+                        if successors.next().is_some() {
+                            break;
+                        }
+                        step = walk.accept(authchain::IdentityStatus::SpentBy(successor.clone()));
+                        continue;
+                    }
+                    let Ok(unspent) = service
+                        .execute_on_route(
+                            &route,
+                            &ChainRequest::OutpointSpentness { txid, vout: 0 },
+                        )
+                        .await
+                    else {
+                        break;
+                    };
+                    if !matches!(&unspent.evidence, Evidence::FullNodeValidated { source } if source == &route.source)
+                    {
+                        break;
+                    }
+                    let ChainPayload::OutpointSpentness(OutpointSpentness::Unspent {
+                        value_sats,
+                        script_pubkey,
+                        ..
+                    }) = unspent.value
+                    else {
+                        break;
+                    };
+                    if !decoded.outputs.first().is_some_and(|output| {
+                        output.value == value_sats && output.script_pubkey == script_pubkey
+                    }) {
+                        break;
+                    }
+                    step = walk.accept(authchain::IdentityStatus::Unspent {
+                        evidence: unspent.evidence,
+                    });
+                }
+                if let AuthchainStep::Resolved(head) = step {
+                    let mut resolved = IdentityCollection {
+                        transactions: vec![],
+                        fetch_attempts: vec![],
+                        evidence: head.evidence.clone(),
+                    };
+                    if let (Some(publication), Some(fetcher)) = (
+                        publication_in(head.outputs.iter().map(Vec::as_slice)),
+                        fetcher.as_ref(),
+                    ) {
+                        for uri in publication.uris.iter().take(3) {
+                            if bytes_left == 0 {
+                                break;
+                            }
+                            let attempt = fetcher
+                                .fetch(
+                                    uri,
+                                    FetchLimits {
+                                        max_bytes: bytes_left,
+                                        ..Default::default()
+                                    },
+                                )
+                                .await
+                                .and_then(|bytes| {
+                                    if bytes.len() > bytes_left {
+                                        Err(FetchError::TooLarge { limit: bytes_left })
+                                    } else {
+                                        Ok(bytes)
+                                    }
+                                });
+                            let matches = attempt
+                                .as_ref()
+                                .is_ok_and(|bytes| publication.matches(bytes));
+                            if let Ok(bytes) = &attempt {
+                                bytes_left = bytes_left.saturating_sub(bytes.len());
+                            }
+                            resolved.fetch_attempts.push((uri.clone(), attempt));
+                            if matches {
+                                break;
+                            }
+                        }
+                    }
+                    identity = identity_from_step(AuthchainStep::Resolved(head), &resolved);
+                    break;
+                }
+            }
+            identities.insert(category, identity);
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = source_lifetime.cancelled() => {},
+        _ = tokio::time::timeout(FetchLimits::default().deadline, work) => {},
+    }
+    identities
 }
 
 /// Walk every owned category through the BCMR authchain plans.
@@ -423,7 +607,12 @@ fn identity_from_step(
     collection: &IdentityCollection,
 ) -> OwnedCategoryIdentity {
     match step {
-        AuthchainStep::Resolved(head) => identity_from_outputs(&head.outputs, collection),
+        AuthchainStep::Resolved(head)
+            if matches!(head.evidence, Evidence::FullNodeValidated { .. }) =>
+        {
+            identity_from_outputs(&head.outputs, collection)
+        }
+        AuthchainStep::Resolved(_) => OwnedCategoryIdentity::Unresolved,
         AuthchainStep::Burned { .. } => OwnedCategoryIdentity::Unpublished,
         AuthchainStep::Query { .. }
         | AuthchainStep::Incomplete { .. }
@@ -522,6 +711,70 @@ impl IdentityMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authhead_evidence_is_not_discarded_when_projecting_identity() {
+        let collection = IdentityCollection {
+            transactions: vec![],
+            fetch_attempts: vec![],
+            evidence: Evidence::ServerAssertion,
+        };
+        for evidence in [
+            Evidence::ServerAssertion,
+            Evidence::FullNodeValidated {
+                source: "node".into(),
+            },
+        ] {
+            let trusted = matches!(evidence, Evidence::FullNodeValidated { .. });
+            let result = identity_from_step(
+                AuthchainStep::Resolved(authchain::ResolvedAuthhead {
+                    authhead: [1; 32],
+                    hops: 0,
+                    block_height: None,
+                    outputs: vec![p2pkh()],
+                    evidence,
+                }),
+                &collection,
+            );
+            assert_eq!(
+                result,
+                if trusted {
+                    OwnedCategoryIdentity::Unpublished
+                } else {
+                    OwnedCategoryIdentity::Unresolved
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn identity_history_rejects_transaction_bytes_with_another_id() {
+        let raw = vec![2, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let txid = optn_core::header_hash::sha256d(&raw);
+        let mut transaction = ObservedTransaction {
+            txid,
+            raw,
+            block_height: None,
+        };
+        assert_eq!(
+            IdentityCollection::from_observed(
+                &[transaction.clone()],
+                vec![],
+                Evidence::ServerAssertion
+            )
+            .transactions
+            .len(),
+            1
+        );
+        transaction.txid[0] ^= 1;
+        assert!(IdentityCollection::from_observed(
+            &[transaction],
+            vec![],
+            Evidence::ServerAssertion
+        )
+        .transactions
+        .is_empty());
+    }
 
     fn publication(contents: &[u8], uris: &[&str]) -> RegistryPublication {
         RegistryPublication::committing_to(
@@ -879,7 +1132,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_runtime_publishes_verified_identity_and_a_renderer_cannot() {
+    async fn the_runtime_keeps_identity_stale_without_fresh_sync_and_a_renderer_cannot_publish() {
         let body = registry_body("Bitcats", ALPHA);
         let publication = publication(&body, &["example.com"]);
         let state = wallet_with(vec![coin(
@@ -912,7 +1165,7 @@ mod tests {
                 .identity
                 .as_ref()
                 .map(|identity| identity.status),
-            Some(IdentityStatus::Verified)
+            Some(IdentityStatus::Stale)
         );
     }
 

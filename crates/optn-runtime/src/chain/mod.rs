@@ -99,6 +99,10 @@ pub enum Capability {
     CashTokenData,
     /// Generic reverse lookup: which transaction spends this exact outpoint.
     OutpointSpenderLookup,
+    /// Point lookup which can assert that an exact outpoint is currently in
+    /// the selected source's UTXO view. An absent result is deliberately not
+    /// a proof that an output was spent.
+    OutpointUnspentLookup,
     TokenCategoryUtxos,
     TokenCategorySupply,
     TokenCategoryHolders,
@@ -140,6 +144,7 @@ impl Capability {
             Self::RpaIndex => "RPA index",
             Self::CashTokenData => "CashToken wallet data",
             Self::OutpointSpenderLookup => "Outpoint spender lookup",
+            Self::OutpointUnspentLookup => "Outpoint unspent lookup",
             Self::TokenCategoryUtxos => "Token category UTXOs",
             Self::TokenCategorySupply => "Token category supply",
             Self::TokenCategoryHolders => "Token category holders",

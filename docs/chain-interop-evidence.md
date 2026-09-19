@@ -525,3 +525,34 @@ Trunk/native builds and the architecture boundary check passed. Reproduction:
 open a disposable wallet, Settings > Servers, type a source-name draft, wait
 over two snapshot periods, then save a policy and restart/reopen the wallet.
 The draft must remain while on the screen; the saved policy must survive restart.
+
+## Selected-source metadata integration (2026-09-19)
+
+HD refresh now resolves held categories through operation-aware source selection
+before the existing persistence/publication guard. Transaction bytes must hash
+to the requested ID. A selected fully validating node must explicitly report the
+terminal outpoint unspent, with matching value and script. Unknown spentness,
+missing capabilities and server assertions cannot become verified identities.
+Known successors are re-read from the same provider; unknown successors still
+require a separate spender-discovery capability.
+
+The native shared stack installs bounded HTTPS registry retrieval only with
+verified Tor and a public-permitting source scope. Own-infrastructure and exact
+restricted policies do not acquire external registry authority. Policy changes
+retire the fetcher. Runtime hash checks precede identity parsing; refresh work
+is bounded to 20 seconds, 32 categories, 64 hops per walk, three URIs per
+publication and a 2 MiB successful-response byte budget.
+
+`hd_sync_publishes_identity_only_after_selected_unspent_and_permitted_fetch`
+exercises actual shared HD sync and Assets projection using synthetic providers:
+accepted identity, null spentness, wrong output value, wrong registry hash, no
+fetch transport and stale downgrade after invalidation. This is connected runtime
+evidence, not a live node, GUI token display or metadata-restart-cache test.
+
+The BCHN adapter probes [`getindexinfo`](https://bitcoin-cash-node-e5454e.gitlab.io/doc/json-rpc/getindexinfo/)
+for a synchronized transaction index so a default-configured node can expose
+historical lookup. [`gettxout`](https://docs.bitcoincashnode.org/doc/json-rpc/gettxout/)
+returns an unspent assertion or unknown, never an inferred spender. Exact BCH
+decimal parsing retains one-satoshi values; no binary floating-point conversion
+is used. Authenticated RPC credential entry in GUI/CLI remains an explicit
+interaction gap; internal credential setters do not establish that usability.

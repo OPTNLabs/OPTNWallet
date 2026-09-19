@@ -7,7 +7,7 @@
 //! disguising it as an HTTP failure.
 
 use optn_core::bcmr::RegistryPublication;
-use optn_runtime::token_metadata::{FetchAttempt, FetchError, FetchLimits};
+use optn_runtime::token_metadata::{FetchAttempt, FetchError, FetchLimits, RegistryFetcher};
 use rand_core::{OsRng, RngCore};
 use reqwest::{redirect, Client, Proxy, Url};
 use std::future::Future;
@@ -21,6 +21,16 @@ const TOR_PROXY_HOST: &str = "127.0.0.1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifiedRegistryTor {
     pub socks_port: u16,
+}
+
+impl RegistryFetcher for VerifiedRegistryTor {
+    fn fetch<'a>(
+        &'a self,
+        uri: &'a str,
+        limits: FetchLimits,
+    ) -> std::pin::Pin<Box<dyn Future<Output = FetchAttempt> + Send + 'a>> {
+        Box::pin(fetch_publication_uri(uri, *self, limits))
+    }
 }
 
 /// Resolve a publication URI and retrieve its bounded bytes over the supplied

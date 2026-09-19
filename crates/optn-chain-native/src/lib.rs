@@ -29,7 +29,7 @@ use optn_core::endpoint::is_loopback_host;
 use optn_core::tor::{route as tor_route, Route as TorRoute, TorStatus};
 use optn_runtime::chain::{
     build_selection_plan, ChainEventSource, ChainSource, ConnectionPolicy, Endpoint, EndpointKind,
-    ProtocolFamily, SourceCatalog, SourceId,
+    ProtocolFamily, SourceCatalog, SourceId, SourceScope,
 };
 use optn_runtime::chain_service::ChainService;
 use optn_runtime::events::ChainEventStream;
@@ -150,6 +150,17 @@ fn selected_source_ids(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> BT
         .chain(selection.fallback.iter())
         .cloned()
         .collect()
+}
+
+/// A public BCMR registry is outside a holder's selected node infrastructure.
+/// It is therefore available only under a policy scope that deliberately
+/// permits public sources. A verified Tor listener supplies transport privacy,
+/// never permission to contact an arbitrary external registry.
+fn policy_allows_public_registry(policy: &ConnectionPolicy) -> bool {
+    let allows_public =
+        |scope: &SourceScope| matches!(scope, SourceScope::AllEnabled | SourceScope::PublicEnabled);
+    allows_public(&policy.primary_scope)
+        || policy.fallback_scope.as_ref().is_some_and(allows_public)
 }
 
 fn endpoint_can_use_native_tor(endpoint: &Endpoint, policy: &ConnectionPolicy) -> bool {
@@ -500,6 +511,12 @@ async fn build_native_chain_stack_with_tor_status(
     let selected = selected_source_ids(&catalog, &policy);
     let sources = catalog.iter().cloned().collect::<Vec<_>>();
     let mut service = ChainService::new(catalog, policy.clone());
+    if let TorStatus::Verified { socks_port } = tor_status {
+        if policy_allows_public_registry(&policy) {
+            service
+                .set_registry_fetcher(Arc::new(registry_fetch::VerifiedRegistryTor { socks_port }));
+        }
+    }
     let mut event_sources: Vec<Arc<dyn NativeChainEventSource>> = Vec::new();
     let mut failures = Vec::new();
 
@@ -675,6 +692,72 @@ fn failure(
 mod tests {
     use super::*;
     use optn_runtime::chain::ProtocolSet;
+
+    #[tokio::test]
+    async fn registry_fetcher_requires_verified_tor_and_a_public_source_scope() {
+        async fn installed(policy: ConnectionPolicy, tor_status: TorStatus) -> bool {
+            let stack = build_native_chain_stack_with_tor_status(
+                SourceCatalog::default(),
+                policy,
+                "chipnet",
+                &NativeChainSecrets::default(),
+                tor_status,
+                None,
+            )
+            .await;
+            let installed = stack.service.lock().await.registry_fetcher().is_some();
+            installed
+        }
+
+        assert!(
+            installed(
+                ConnectionPolicy::auto(),
+                TorStatus::Verified { socks_port: 9050 },
+            )
+            .await
+        );
+        assert!(policy_allows_public_registry(&ConnectionPolicy {
+            protocols: ProtocolSet::wallet_sync(),
+            primary_scope: SourceScope::UserInfrastructure,
+            fallback_scope: Some(SourceScope::PublicEnabled),
+            preferred: Vec::new(),
+        }));
+        assert!(
+            !installed(
+                ConnectionPolicy::own_infrastructure(),
+                TorStatus::Verified { socks_port: 9050 },
+            )
+            .await
+        );
+        assert!(
+            !installed(
+                ConnectionPolicy::exact(SourceId::new("holder-node"), ProtocolFamily::Electrum),
+                TorStatus::Verified { socks_port: 9050 },
+            )
+            .await
+        );
+        assert!(
+            !installed(ConnectionPolicy::auto(), TorStatus::Absent).await,
+            "public scope without verified proxy must not gain a registry transport"
+        );
+
+        let stack = build_native_chain_stack_with_tor_status(
+            SourceCatalog::default(),
+            ConnectionPolicy::auto(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Verified { socks_port: 9050 },
+            None,
+        )
+        .await;
+        let mut service = stack.service.lock().await;
+        assert!(service.registry_fetcher().is_some());
+        service.set_policy(ConnectionPolicy::own_infrastructure());
+        assert!(
+            service.registry_fetcher().is_none(),
+            "a fetcher authorized by the previous public policy cannot survive an own-only selection"
+        );
+    }
 
     /// A public endpoint someone pasted in: a third party, needing Tor.
     fn pasted_source() -> ChainSource {

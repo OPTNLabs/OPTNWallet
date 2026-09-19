@@ -598,6 +598,7 @@ impl ChainBackend for NeutrinoBackend {
             ChainOperation::HeaderSync => true,
             ChainOperation::TransactionLookup
             | ChainOperation::Broadcast
+            | ChainOperation::OutpointSpentness
             | ChainOperation::HistoricalHeaderProof => false,
         }
     }
