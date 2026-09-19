@@ -168,7 +168,10 @@ and WASM UI Clippy, architecture gate, and a Leptos Trunk WASM build passed.
 These are component/process/build checks, not a live GUI or packaged-device claim.
 
 Legacy BIP37 commands no longer accept renderer-selected SOCKS routing and check
-network selection before and after route resolution. They still need full shared
-source-planner enforcement: verified Tor alone does not prove that a destination
-is selected by the holder's source policy. The React migration, full live wallet
-workflow, remaining provider integration and platform evidence remain open.
+network selection before and after route resolution. Probe, headers, scan and
+broadcast now also require a BIP37-permitted endpoint in the shared planner's
+primary/fallback selection, rejecting disabled, banned and unselected sources
+before proxy probing. Native tests: 93 passed, four live mainnet tests ignored;
+strict native Clippy passed. This closes that command-entry policy gap, not live
+P2P/GUI verification. The React migration, full live wallet workflow, remaining
+provider integration and platform evidence remain open.
