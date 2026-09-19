@@ -221,10 +221,14 @@ impl AppRuntimeDriver {
                     .ok_or_else(|| failure("Reopen the wallet before another send."))?;
                 candidate.hd_addresses = Some(prepared.allocation);
                 let security = self.security.as_mut().ok_or(TransportError::Unsupported)?;
+                let restore_state = self.wallet_sync.restore_state().clone();
                 let event = self.wallet_sync.persist_annotation(
                     &mut candidate,
                     self.state.clone(),
-                    |app, sync, progress| security.persist_checkpoint(app, sync, progress),
+                    &restore_state,
+                    |app, sync, restore_state, progress| {
+                        security.persist_checkpoint(app, sync, restore_state, progress)
+                    },
                     |app| guard.allows(app, reply.is_closed()),
                 );
                 self.state = candidate;
@@ -528,6 +532,7 @@ mod tests {
             .send(RuntimeRequest::WalletSync(WalletSyncRequest::BeginHd(
                 xpub,
                 HdSyncLimits::default(),
+                None,
                 reply,
             )))
             .await
@@ -538,6 +543,7 @@ mod tests {
             crate::header_verifier::shipped_header_verifier(Network::Chipnet).unwrap(),
         );
         lease.capture_header_progress(Some(&view)).unwrap();
+        let (height, hash) = view.tip().unwrap();
         let parent = fixture_parent(&state);
         let mut book = scan.address_book();
         book.last_used[0] = Some(0);
@@ -551,11 +557,11 @@ mod tests {
                     raw: parent,
                     block_height: None,
                 }],
-                tip: None,
+                tip: Some(crate::chain_service::ChainTip { height, hash }),
             },
             SourceId::new("offline-fixture"),
             Evidence::ServerAssertion,
-            None,
+            Some((height, hash)),
             true,
         );
         let (reply, received) = oneshot::channel();

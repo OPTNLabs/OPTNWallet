@@ -1,6 +1,7 @@
 //! Provider work runs outside the reducer; publication runs inside it. A result
 //! is usable only by its issuing runtime, wallet/network session, and request.
 
+use crate::wallet_birthday::{JustifiedLowerBound, ScanFloor, WalletRestoreState};
 use crate::wallet_checkpoint::WalletCheckpoint;
 use crate::{
     chain_service::{ChainService, WalletInterest},
@@ -64,6 +65,7 @@ pub(super) struct WalletSyncLease {
     generation: u64,
     network: Network,
     floor: Option<u32>,
+    coverage: Option<optn_app::ScanCoverageView>,
     addresses: Vec<String>,
     interests: Vec<WalletInterest>,
     baseline: Box<WalletReconciliation>,
@@ -100,6 +102,12 @@ impl WalletSyncLease {
 pub(super) enum WalletSyncRequest {
     /// The header progress a restored checkpoint brought back, if any.
     RestoredHeaderProgress(oneshot::Sender<Option<crate::wallet_checkpoint::StoredHeaderProgress>>),
+    ScanFloor {
+        view: crate::header_view::VerifiedHeaderView,
+        lookback: u32,
+        justified_lower_bound: Option<JustifiedLowerBound>,
+        reply: oneshot::Sender<Result<ScanFloor, WalletSyncError>>,
+    },
     Checkpoint(oneshot::Sender<Result<WalletCheckpoint, WalletSyncError>>),
     Restore(
         Box<WalletCheckpoint>,
@@ -108,6 +116,7 @@ pub(super) enum WalletSyncRequest {
     BeginHd(
         String,
         HdSyncLimits,
+        Option<crate::header_view::VerifiedHeaderView>,
         oneshot::Sender<Result<(WalletSyncLease, HdAccountScan), WalletSyncError>>,
     ),
     Begin(
@@ -185,6 +194,28 @@ impl AppRuntime {
         received.await.map_err(|_| WalletSyncError::Closed)
     }
 
+    /// Resolve the persisted wallet birthday against a caller-supplied
+    /// authenticated header view. The view is cloned into the actor request;
+    /// no renderer value can become a trusted anchor or a scan floor.
+    pub async fn wallet_scan_floor(
+        &self,
+        view: &crate::header_view::VerifiedHeaderView,
+        lookback: u32,
+        justified_lower_bound: Option<JustifiedLowerBound>,
+    ) -> Result<ScanFloor, WalletSyncError> {
+        let (reply, received) = oneshot::channel();
+        self.action_tx
+            .send(RuntimeRequest::WalletSync(WalletSyncRequest::ScanFloor {
+                view: view.clone(),
+                lookback,
+                justified_lower_bound,
+                reply,
+            }))
+            .await
+            .map_err(|_| WalletSyncError::Closed)?;
+        received.await.map_err(|_| WalletSyncError::Closed)?
+    }
+
     /// Synchronize the selected HD account from public material only, covering
     /// receive/change/DeFi until each branch reaches its history-based gap.
     /// No partial round publishes coins; session invalidation applies to the
@@ -207,10 +238,9 @@ impl AppRuntime {
     /// does not merge onto a baseline: each round is a complete answer that
     /// happens to start there.
     ///
-    /// Supplying it is what makes P2P discovery possible at all. BIP37 and
-    /// Neutrino both refuse a refresh with no floor rather than reading the
-    /// chain from genesis, so an HD account that passes `None` can only ever be
-    /// served by Electrum or RPC.
+    /// `None` uses the durable birthday and any outstanding manual rescan.
+    /// Unknown provenance resolves to an explicit genesis floor, including
+    /// for P2P providers; unresolved dates never become a guessed recent floor.
     pub async fn sync_hd_wallet_from_floor(
         &self,
         service: &mut ChainService,
@@ -227,6 +257,7 @@ impl AppRuntime {
             .send(RuntimeRequest::WalletSync(WalletSyncRequest::BeginHd(
                 account_xpub,
                 limits,
+                worker.header_view().cloned(),
                 reply,
             )))
             .await
@@ -397,6 +428,9 @@ pub(super) struct WalletSyncSession {
     registry_fetches: Vec<(String, crate::token_metadata::FetchAttempt)>,
     /// The most recent verified header progress, awaiting a seal.
     header_progress: Option<crate::wallet_checkpoint::StoredHeaderProgress>,
+    /// Private durable wallet-origin state. The app view only carries
+    /// projections; this remains inside the runtime/checkpoint path.
+    restore_state: WalletRestoreState,
 }
 
 impl WalletSyncSession {
@@ -415,6 +449,19 @@ impl WalletSyncSession {
 
     pub(super) fn rescan_requested(&mut self) {
         self.invalidate("wallet rescan requested; retained observations need refresh".into());
+    }
+
+    pub(super) fn restore_state(&self) -> &WalletRestoreState {
+        &self.restore_state
+    }
+
+    pub(super) fn install_restore_state(&mut self, restore_state: WalletRestoreState) {
+        self.restore_state = restore_state;
+    }
+
+    pub(super) fn birthday_changed(&mut self, restore_state: WalletRestoreState) {
+        self.restore_state = restore_state;
+        self.invalidate("wallet birthday changed; retained observations need refresh".into());
     }
 
     pub(super) fn coins_are_fresh(&self) -> bool {
@@ -461,6 +508,7 @@ impl WalletSyncSession {
                 state_tx,
                 registry_fetches: Vec::new(),
                 header_progress: None,
+                restore_state: WalletRestoreState::default(),
             },
             state_rx,
         )
@@ -483,6 +531,7 @@ impl WalletSyncSession {
                 self.state = WalletReconciliation::default();
                 self.registry_fetches.clear();
                 self.header_progress = None;
+                self.restore_state = WalletRestoreState::default();
                 self.publish_status();
             }
             AppEvent::ServersChanged | AppEvent::WalletRebuilt => {
@@ -564,6 +613,7 @@ impl WalletSyncSession {
         // pass never publishes, the seal that follows should preserve what
         // was already durable rather than drop back to nothing.
         self.header_progress = checkpoint.header_progress().cloned();
+        self.restore_state = checkpoint.restore_state().clone();
         app.wallet_sync = checkpoint
             .state
             .authoritative
@@ -597,15 +647,23 @@ impl WalletSyncSession {
         &mut self,
         app: &mut AppState,
         previous: AppState,
+        restore_state: &WalletRestoreState,
         persist: impl FnOnce(
             &AppState,
             &WalletReconciliation,
+            &WalletRestoreState,
             Option<&crate::wallet_checkpoint::StoredHeaderProgress>,
         ) -> Result<(), optn_transport::TransportError>,
         may_publish: impl Fn(&AppState) -> bool,
     ) -> AppEvent {
         if !may_publish(app)
-            || persist(app, &self.state, self.header_progress.as_ref()).is_err()
+            || persist(
+                app,
+                &self.state,
+                restore_state,
+                self.header_progress.as_ref(),
+            )
+            .is_err()
             || !may_publish(app)
         {
             *app = previous;
@@ -632,8 +690,25 @@ impl WalletSyncSession {
             WalletSyncRequest::RestoredHeaderProgress(reply) => {
                 let _ = reply.send(self.header_progress.clone());
             }
+            WalletSyncRequest::ScanFloor {
+                view,
+                lookback,
+                justified_lower_bound,
+                reply,
+            } => {
+                let result = if app.wallet.is_none() {
+                    Err(WalletSyncError::NoWallet)
+                } else {
+                    Ok(self.restore_state.scan_floor(
+                        &view,
+                        lookback,
+                        justified_lower_bound.as_ref(),
+                    ))
+                };
+                let _ = reply.send(result);
+            }
             WalletSyncRequest::Checkpoint(reply) => {
-                let captured = WalletCheckpoint::capture(app, &self.state)
+                let captured = WalletCheckpoint::capture(app, &self.state, &self.restore_state)
                     .map_err(WalletSyncError::InvalidSnapshot)
                     .and_then(|checkpoint| match self.header_progress.as_ref() {
                         None => Ok(checkpoint),
@@ -663,8 +738,8 @@ impl WalletSyncSession {
                 }
                 let _ = reply.send(outcome);
             }
-            WalletSyncRequest::BeginHd(xpub, limits, reply) => {
-                let outcome = self.begin_hd(app, xpub, limits, guard.generation);
+            WalletSyncRequest::BeginHd(xpub, limits, view, reply) => {
+                let outcome = self.begin_hd(app, xpub, limits, view, guard.generation);
                 if outcome.is_ok() {
                     app.spend = None;
                     self.publish_app(app, app_tx);
@@ -712,10 +787,13 @@ impl WalletSyncSession {
                     app,
                     lease,
                     *result,
-                    |app, state| match security.as_deref_mut() {
-                        Some(security) => {
-                            security.persist_checkpoint(app, state, progress.as_ref())
-                        }
+                    |app, state, restore_state| match security.as_deref_mut() {
+                        Some(security) => security.persist_checkpoint(
+                            app,
+                            state,
+                            restore_state,
+                            progress.as_ref(),
+                        ),
                         None => Ok(()),
                     },
                     |app| guard.allows(app, reply.is_closed()),
@@ -781,6 +859,15 @@ impl WalletSyncSession {
                     .scan_coverage
                     .map(|coverage| coverage.from_height)
             }),
+            coverage: app
+                .wallet_sync
+                .rescan_requested
+                .map(|height| optn_app::ScanCoverageView {
+                    from_height: height,
+                    skipped_below: (height > 0).then_some(height),
+                    chosen_by_holder: true,
+                })
+                .or(app.wallet_sync.scan_coverage),
             addresses: watched.values().cloned().collect(),
             interests: watched
                 .keys()
@@ -808,6 +895,7 @@ impl WalletSyncSession {
         app: &AppState,
         xpub: String,
         limits: HdSyncLimits,
+        view: Option<crate::header_view::VerifiedHeaderView>,
         generation: u64,
     ) -> Result<(WalletSyncLease, HdAccountScan), WalletSyncError> {
         let wallet = app.wallet.as_ref().ok_or(WalletSyncError::NoWallet)?;
@@ -870,9 +958,47 @@ impl WalletSyncSession {
                 required.insert(script.clone());
             }
         }
+        // Resolve under the same actor turn that issues the lease. Reading a
+        // birthday first and issuing a lease later could cross a wallet switch.
+        // An empty view supplies no date/creation evidence; explicit heights
+        // and Unknown still have well-defined conservative behavior.
+        let view = view.unwrap_or_else(|| {
+            crate::header_view::VerifiedHeaderView::new(
+                app.network,
+                crate::header_verifier::ShvMmrHeaderVerifier::empty(
+                    crate::chain::CheckpointProvenance::SelfDerived,
+                ),
+            )
+        });
+        if view.network() != app.network {
+            return Err(WalletSyncError::InvalidScope(
+                "header view belongs to another network".into(),
+            ));
+        }
+        let (from_height, skipped_below, chosen_by_holder) =
+            match self.restore_state.scan_floor(&view, 0, None) {
+                ScanFloor::FullHistory => (0, None, false),
+                ScanFloor::Complete { from_height } => {
+                    let chosen = self.restore_state.manual_rescan.is_some()
+                        || !matches!(self.restore_state.birthday, crate::wallet_birthday::WalletBirthday::CreatedAt(_));
+                    // A user-supplied origin remains a claim: keep the UI's
+                    // warning that observations below this height are absent.
+                    (from_height, (chosen && from_height > 0).then_some(from_height), chosen)
+                },
+                ScanFloor::Incomplete { from_height, .. } => (from_height, (from_height > 0).then_some(from_height), true),
+                ScanFloor::Undecidable(reason) => return Err(WalletSyncError::InvalidScope(format!(
+                    "Wallet history start needs authenticated headers ({reason:?}); choose Unknown for full history or an explicit rescan height."
+                ))),
+            };
         let scan = HdAccountScan::new(app.network, xpub, account, limits, required)
             .map_err(WalletSyncError::InvalidScope)?;
-        let lease = self.begin(app, scan.addresses(), generation)?;
+        let mut lease = self.begin(app, scan.addresses(), generation)?;
+        lease.floor = Some(from_height);
+        lease.coverage = Some(optn_app::ScanCoverageView {
+            from_height,
+            skipped_below,
+            chosen_by_holder,
+        });
         Ok((lease, scan))
     }
 
@@ -884,6 +1010,7 @@ impl WalletSyncSession {
         persist: impl FnOnce(
             &AppState,
             &WalletReconciliation,
+            &WalletRestoreState,
         ) -> Result<(), optn_transport::TransportError>,
         may_publish: impl Fn(&AppState) -> bool,
     ) -> Result<ReconciliationDecision, WalletSyncError> {
@@ -962,6 +1089,12 @@ impl WalletSyncSession {
             true,
         );
         if decision == ReconciliationDecision::Accepted {
+            let mut next_restore_state = self.restore_state.clone();
+            if let Some((height, _)) = candidate.chain_tip {
+                // A complete accepted rescan can end below the previous tip
+                // after a reorg. Persist its actual coverage, not a stale max.
+                next_restore_state.scanned_through = Some(height);
+            }
             let mut candidate_app = app.clone();
             let snapshot = &next
                 .authoritative
@@ -1008,17 +1141,12 @@ impl WalletSyncSession {
                     return Err(WalletSyncError::InvalidSnapshot(reason));
                 }
             };
-            candidate_app.wallet_sync.scan_coverage =
-                lease.floor.map(|height| optn_app::ScanCoverageView {
-                    from_height: height,
-                    skipped_below: (height > 0).then_some(height),
-                    chosen_by_holder: true,
-                });
+            candidate_app.wallet_sync.scan_coverage = lease.coverage;
             if !may_publish(app) {
                 self.invalidate("wallet refresh cancelled before persistence".into());
                 return Err(WalletSyncError::Superseded);
             }
-            if let Err(error) = persist(&candidate_app, &next) {
+            if let Err(error) = persist(&candidate_app, &next, &next_restore_state) {
                 let reason = match error {
                     optn_transport::TransportError::Other(reason) => reason,
                     _ => "wallet state could not be saved".into(),
@@ -1040,6 +1168,7 @@ impl WalletSyncSession {
             app.token_identities = candidate_app.token_identities;
             // A prepared spend may refer to outputs removed by this refresh.
             app.spend = None;
+            self.restore_state = next_restore_state;
         }
         self.state = next;
         self.publish_status();
@@ -1192,7 +1321,7 @@ mod tests {
                 &mut app,
                 lease,
                 candidate(Evidence::ServerAssertion),
-                |_, _| panic!("cancelled work must not write"),
+                |_, _, _| panic!("cancelled work must not write"),
                 |app| guard.allows(app, reply.is_closed()),
             ),
             Err(WalletSyncError::Superseded)
@@ -1224,7 +1353,7 @@ mod tests {
             &mut app,
             lease,
             candidate(Evidence::ServerAssertion),
-            |candidate, _| {
+            |candidate, _, _| {
                 assert_eq!(candidate.coins.len(), 1);
                 committed_revision.set(1);
                 drop(received);
@@ -1263,7 +1392,7 @@ mod tests {
             &mut app,
             lease,
             candidate(Evidence::ServerAssertion),
-            |_, _| {
+            |_, _, _| {
                 now.set(900_001);
                 Ok(())
             },
@@ -1295,7 +1424,7 @@ mod tests {
                     &mut app,
                     lease,
                     candidate(Evidence::ServerAssertion),
-                    |_, _| Ok(()),
+                    |_, _, _| Ok(()),
                     |_| true,
                 )
                 .unwrap();
@@ -1319,7 +1448,8 @@ mod tests {
             let event = session.persist_annotation(
                 &mut app,
                 previous.clone(),
-                |app, _, _| {
+                &session.restore_state().clone(),
+                |app, _, _, _| {
                     assert_eq!(
                         app.coins.get(outpoint).unwrap().freeze(),
                         Some(FreezeReason::User)
@@ -1852,7 +1982,7 @@ mod tests {
         )]);
         let lease = session.begin(&app, vec![address()], 0).unwrap();
         assert_eq!(
-            session.finish(&mut app, lease, candidate, |_, _| Ok(()), |_| true),
+            session.finish(&mut app, lease, candidate, |_, _, _| Ok(()), |_| true),
             Ok(ReconciliationDecision::Accepted)
         );
         app
@@ -1873,7 +2003,7 @@ mod tests {
         )]);
         let lease = session.begin(&app, vec![address()], 0).unwrap();
         assert_eq!(
-            session.finish(&mut app, lease, candidate, |_, _| Ok(()), |_| true),
+            session.finish(&mut app, lease, candidate, |_, _, _| Ok(()), |_| true),
             Ok(ReconciliationDecision::Accepted)
         );
         let assets = optn_app::assets_view_model(&app);

@@ -231,6 +231,54 @@ fn issued_receive_addresses_survive_cli_restart_and_wrong_epochs_do_not_allocate
 }
 
 #[test]
+fn birthday_hints_survive_real_cli_restart_and_reject_stale_epoch() {
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 0);
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let mut expected = json!({"kind":"unknown"});
+    for (input, saved) in [
+        (
+            json!({"kind":"height","height":0}),
+            json!({"kind":"imported_at_height","height":0}),
+        ),
+        (
+            json!({"kind":"time","requested_time":172800}),
+            json!({"kind":"imported_at_time","requested_time":172800}),
+        ),
+        (json!({"kind":"unknown"}), json!({"kind":"unknown"})),
+    ] {
+        let stale = json!({"request":{"command":"set_birthday","epoch":0,"birthday":input}});
+        let update = json!({"request":{"command":"set_birthday","epoch":1,"birthday":input}});
+        let status = json!({"request":{"command":"status"}});
+        let output = run_cli(
+            directory.path(),
+            &["wallet", "--stdio"],
+            &format!("{open}\n{stale}\n{status}\n{update}\n"),
+        );
+        assert!(output.status.success());
+        let replies = responses(&output);
+        assert_eq!(replies[0]["security"]["restore_birthday"], expected);
+        assert_eq!(replies[1]["ok"], false);
+        assert_eq!(replies[2]["security"]["restore_birthday"], expected);
+        assert_eq!(replies[3]["ok"], true, "{:?}", replies[3]);
+        assert_eq!(replies[3]["security"]["restore_birthday"], saved);
+        assert_eq!(replies[3]["wallet_sync"]["utxos_fresh"], false);
+        expected = saved;
+    }
+    let output = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n"),
+    );
+    assert!(output.status.success());
+    assert_eq!(
+        responses(&output)[0]["security"]["restore_birthday"],
+        expected
+    );
+}
+
+#[test]
 fn managed_watch_only_import_survives_stdio_restart_without_exposing_xpub() {
     let directory = test_directory();
     let xpub = optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "")

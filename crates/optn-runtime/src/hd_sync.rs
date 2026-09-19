@@ -310,7 +310,7 @@ mod tests {
                 assert_eq!(
                     *from_height,
                     *self.expected_floor.lock().unwrap(),
-                    "every discovery round must retain the expected floor (none by default)"
+                    "every discovery round must retain the expected floor (genesis by default)"
                 );
                 self.calls.lock().unwrap().push(interests.len());
                 self.floors.lock().unwrap().push(*from_height);
@@ -361,7 +361,7 @@ mod tests {
             transactions,
             calls: Mutex::new(vec![]),
             floors: Mutex::new(vec![]),
-            expected_floor: Mutex::new(None),
+            expected_floor: Mutex::new(Some(0)),
             entered: Notify::new(),
             hold,
         });
@@ -701,6 +701,134 @@ mod tests {
             AppRuntime::new_with_security(AppState::default(), security).unwrap();
         tokio::spawn(driver.run());
         runtime
+    }
+
+    #[tokio::test]
+    async fn durable_birthday_drives_every_hd_round_and_cancels_old_work() {
+        use optn_app::SecretText;
+        use optn_transport::{WalletBirthdayInput, WalletSecurityRequest as Request};
+        let storage = crate::wallet_security::tests::Storage::default();
+        let checkpoints = Checkpoints::default();
+        let runtime = private_runtime(storage.clone(), checkpoints.clone());
+        let opened = runtime
+            .wallet_security(Request::Create {
+                name: "Public birthday sync fixture".into(),
+                mnemonic: SecretText::new(BIP39_TEST_VECTOR_MNEMONIC.into()),
+                bip39_passphrase: SecretText::default(),
+                password: SecretText::default(),
+                confirmation: SecretText::default(),
+                network: "chipnet".into(),
+                account_path: "m/44'/1'/8'".into(),
+            })
+            .await
+            .unwrap();
+        let handle = opened.active.unwrap();
+        let xpub = runtime.state().wallet.unwrap().account_xpub.unwrap();
+        let mut transactions = history(&xpub);
+        let mut earlier = transaction(None, vec![(77, script(&xpub, 0, 0))]);
+        earlier.block_height = Some(1);
+        transactions.push(earlier);
+        let (mut chain, backend) = service(transactions.clone(), false);
+        let mut worker = ProgressiveSyncWorker::new(Default::default());
+        runtime
+            .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+            .await
+            .unwrap();
+        let before = runtime.state().coins.spendable_sats();
+        assert!(runtime.state().wallet_sync.utxos_fresh);
+        assert!(backend
+            .floors
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|floor| *floor == Some(0)));
+
+        let (mut held, held_backend) = service(transactions.clone(), true);
+        let other = runtime.clone();
+        let public = xpub.clone();
+        let pending = tokio::spawn(async move {
+            other
+                .sync_hd_wallet(
+                    &mut held,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    public,
+                    LIMITS,
+                )
+                .await
+        });
+        held_backend.entered.notified().await;
+        let generation = runtime.revocation.load(std::sync::atomic::Ordering::SeqCst);
+        runtime
+            .wallet_security(Request::SetBirthday {
+                epoch: opened.epoch,
+                birthday: WalletBirthdayInput::Height { height: 2 },
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.revocation.load(std::sync::atomic::Ordering::SeqCst),
+            generation + 1
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), pending)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(runtime.state().coins.spendable_sats(), before);
+        assert!(!runtime.state().wallet_sync.utxos_fresh);
+
+        // Reopen before the positive refresh: the floor must come from the seal.
+        drop(runtime);
+        let runtime = private_runtime(storage, checkpoints);
+        let reopened = runtime
+            .wallet_security(Request::Open {
+                handle,
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins.spendable_sats(), before);
+        let (mut chain, backend) = service(transactions, false);
+        *backend.expected_floor.lock().unwrap() = Some(2);
+        runtime
+            .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins.spendable_sats() + 77, before);
+        assert!(runtime.state().wallet_sync.utxos_fresh);
+        assert!(backend
+            .floors
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|floor| *floor == Some(2)));
+
+        runtime
+            .wallet_security(Request::SetBirthday {
+                epoch: reopened.epoch,
+                birthday: WalletBirthdayInput::Time {
+                    requested_time: 172800,
+                },
+            })
+            .await
+            .unwrap();
+        let calls = backend.calls.lock().unwrap().len();
+        let result = runtime
+            .sync_hd_wallet(&mut chain, &mut worker, xpub, LIMITS)
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::wallet_sync::WalletSyncError::InvalidScope(_))
+        ));
+        assert_eq!(
+            backend.calls.lock().unwrap().len(),
+            calls,
+            "unresolved date must not query a guessed floor"
+        );
+        assert_eq!(runtime.state().coins.spendable_sats() + 77, before);
+        assert!(!runtime.state().wallet_sync.utxos_fresh);
     }
 
     #[tokio::test]

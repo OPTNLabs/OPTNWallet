@@ -425,3 +425,32 @@ An isolated Windows Tauri/Leptos debug executable (identifier `com.optilabs.wall
 The runner stopped that Tor process and restarted the same executable. Opening the encrypted watch-only wallet displayed the same 39,774 sats, receive address and both history entries, labelled `Saved balance · refresh needed`, with the network offline. This verifies the actual packaged Windows UI and native encrypted restart path; it does not establish SHV/MMR proof, live P2P resume, transaction signing/broadcast, Android/macOS packaging or all-renderer parity. Public screenshots and logs remain outside Git under `artifacts/issue75-live-20260919`.
 
 An attempted refresh while Tor was stopped refused the unavailable route and retained the same stale balance/history. After restarting the owned Tor process, Retry connections and Refresh wallet returned the same account to `Up to date`. This proves saved-state recovery and a subsequent live refresh, not a suffix-only network download: ordinary HD refresh currently rechecks account history from its configured scan floor.
+
+## 2026-09-19: durable restore settings through GUI and CLI
+
+The shared Rust `SetBirthday` request now seals imported height/date/unknown
+provenance with wallet restart state before acknowledging success. HD sync
+resolves that state inside the same actor turn that issues its sync lease.
+The connected runtime regression cancels an in-flight scan after a changed
+hint, reopens the encrypted wallet, and observes the saved floor in every HD
+provider round. An unresolved date makes no provider request with a guessed
+floor. Legacy manual floors survive migration separately from birthdays.
+
+The real CLI process suite passed all 15 tests, including height/date/unknown
+updates across process restarts and stale-epoch rejection. The runtime suite
+passed 278 tests, including storage failure, imported-hint correction, legacy
+migration and the connected HD sequence. These are local deterministic tests.
+
+An isolated Windows Tauri/Leptos debug executable (SHA-256
+`417e5aed41aa518985a3f9d80cffb9057b12bfacd0c39e60e021abf358f16a78`,
+base `29b3434f` plus the restore-settings worktree changes) used visible settings
+controls to save height zero, restart, save 2020-01-01 UTC, and restart again.
+Both choices reappeared, with the existing 39,774-sat cached balance retained
+and labelled stale. The test reset the hint to Unknown and stopped its own
+process. Evidence is outside Git in `artifacts/issue75-live-20260919`.
+
+This GUI run was offline: it does not prove live date-based P2P recovery,
+automatic header acquisition, signing, broadcast or other packaged platforms.
+Trusted fresh-wallet creation anchors are not inferred from caller-supplied
+mnemonics. An outstanding manual rescan still takes precedence; its explicit
+clear control remains pending.
