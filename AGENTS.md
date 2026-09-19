@@ -17,6 +17,11 @@ For #71/#75 continuation, reconcile `docs/pr63-requirement-ledger.md` with the
 current issue requirements, PR head, code and evidence; historical handoffs are
 context, not proof of completion. #84 coordinates the Vitest dependency migration.
 
+For renderer changes, follow `RUSTIFICATION.md#renderer-contract-preserve-choice-share-behavior`.
+Retain React; Dioxus is currently a headless proof, and Slint remains undecided.
+Renderer choice must not introduce a separate wallet/runtime or erase another UI.
+Shared behavior does not establish screen or packaged-platform parity.
+
 Framework boundary rules are architectural invariants:
 
 - `optn-core`, `optn-app`, `optn-runtime`, `optn-transport`, and `optn-platform` must not depend on Leptos,
