@@ -252,6 +252,13 @@ pub async fn connect_stream(
     use_ssl: bool,
     transport: Transport<'_>,
 ) -> Result<FusionStream, String> {
+    // Every caller, including Electrum failover and server-supplied covert
+    // endpoints, must pass this check before DNS resolution or a TCP dial.
+    if matches!(transport, Transport::Direct) && !is_local_server(host) {
+        return Err(
+            "Remote CashFusion connections require Tor; direct fallback is forbidden".into(),
+        );
+    }
     let tcp = match transport {
         Transport::Direct => {
             tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
@@ -322,6 +329,25 @@ fn fastrand_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn every_remote_fusion_dial_refuses_direct_before_dns_or_tcp() {
+        for host in [
+            "fusion.example.invalid",
+            "192.0.2.1",
+            "localhost.remote.invalid",
+        ] {
+            let result = connect_stream(host, 50001, false, Transport::Direct).await;
+            assert!(
+                matches!(result, Err(ref error) if error.contains("direct fallback is forbidden"))
+            );
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(connect_stream("127.0.0.1", port, false, Transport::Direct)
+            .await
+            .is_ok());
+    }
 
     #[test]
     fn frame_header_matches_reference_format() {
