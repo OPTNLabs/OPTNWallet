@@ -37,12 +37,12 @@ pub mod header_verifier;
 pub mod header_view;
 /// Versioned user-network overlay and bootstrap-refresh migration scaffolding.
 pub mod network_config;
-pub mod rpc_credentials;
 /// Evidence-aware wallet-state reconciliation. Partial/failed providers never
 /// erase a previously known-good snapshot.
 pub mod reconciliation;
 /// Native-only Cash Code discovery and public spending recipes.
 pub mod rpa_receive;
+pub mod rpc_credentials;
 pub mod source_selection;
 /// Progressive capability-route wallet synchronization.
 pub mod sync_worker;
