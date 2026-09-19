@@ -1859,7 +1859,7 @@ mod tests {
     }
 
     #[test]
-    fn wallet_sync_finish_publishes_matching_identity_on_assets_and_nfts() {
+    fn wallet_sync_finish_cannot_infer_authhead_from_wallet_history() {
         use optn_app::IdentityStatus;
 
         let (candidate, category, body) = identity_candidate(true, true, true, |category| {
@@ -1877,20 +1877,21 @@ mod tests {
             Ok(ReconciliationDecision::Accepted)
         );
         let assets = optn_app::assets_view_model(&app);
+        let category_name: String = category.iter().map(|byte| format!("{byte:02x}")).collect();
         let identity = assets.categories[0]
             .identity
             .as_ref()
             .expect("resolved identity");
-        assert_eq!(identity.name, "Bitcats");
-        assert_eq!(identity.status, IdentityStatus::Verified);
-        assert_eq!(identity.status.caveat(), None);
+        assert_eq!(identity.name, category_name);
+        assert_eq!(identity.status, IdentityStatus::Unresolved);
+        assert_eq!(identity.status.caveat(), Some("unverified"));
         let nfts = optn_app::nfts_view_model(&app);
         assert_eq!(
             nfts.nfts[0]
                 .identity
                 .as_ref()
                 .map(|item| item.name.as_str()),
-            Some("Bitcats")
+            Some(category_name.as_str())
         );
         app.reduce_intent(AppAction::SetTokenIdentity {
             category_hex: category.iter().map(|byte| format!("{byte:02x}")).collect(),
@@ -1906,7 +1907,7 @@ mod tests {
                 .identity
                 .as_ref()
                 .map(|item| item.name.as_str()),
-            Some("Bitcats")
+            Some(category_name.as_str())
         );
     }
 
@@ -1925,7 +1926,7 @@ mod tests {
     }
 
     #[test]
-    fn wallet_sync_finish_keeps_unpublished_and_unresolved_coins_visible() {
+    fn wallet_sync_finish_keeps_coins_visible_without_claiming_withdrawal() {
         use optn_app::IdentityStatus;
 
         let app = finish_collected(true, false, false, |body| Ok(body.to_vec()));
@@ -1933,8 +1934,8 @@ mod tests {
             .identity
             .clone()
             .expect("status");
-        assert_eq!(identity.status, IdentityStatus::Unpublished);
-        assert_eq!(identity.status.caveat(), Some("no registry published"));
+        assert_eq!(identity.status, IdentityStatus::Unresolved);
+        assert_eq!(identity.status.caveat(), Some("unverified"));
         assert_eq!(app.coins.len(), 1);
 
         let app = finish_collected(false, false, false, |body| Ok(body.to_vec()));
