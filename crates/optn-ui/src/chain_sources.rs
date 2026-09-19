@@ -246,7 +246,12 @@ fn toggle_source(scope: &mut WireSourceScope, id: String, checked: bool) {
 }
 
 #[component]
-fn RpcCredentials(transport: UiTransport, network: Memo<String>, state: RwSignal<AppState>, source: String) -> impl IntoView {
+fn RpcCredentials(
+    transport: UiTransport,
+    network: Memo<String>,
+    state: RwSignal<AppState>,
+    source: String,
+) -> impl IntoView {
     use optn_transport::chain_sources::RpcCredentialRequest;
     let source = StoredValue::new(source);
     let username = RwSignal::new(String::new());
