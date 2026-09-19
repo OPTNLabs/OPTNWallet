@@ -74,7 +74,11 @@ pub fn encrypt(
         }
     }
 
-    // AES256-CBC, iv=0, no padding (plaintext is already block-aligned).
+    // CashFusion's wire format fixes IV=0. Safety requires the fresh ephemeral
+    // ECDH key generated above for EVERY encryption; never cache/reuse that key.
+    // See Electron Cash electroncash_plugins/fusion/encrypt.py and the
+    // CashFusion security audit (2020-07-29), KS-SBCF-F-01. A random IV here
+    // would break interoperability because the wire format carries no IV.
     let iv = [0u8; 16];
     let ciphertext = Aes256CbcEnc::new(&key.into(), &iv.into())
         .encrypt_padded_vec_mut::<aes::cipher::block_padding::NoPadding>(&plaintext);
@@ -179,6 +183,18 @@ mod tests {
                 "MAC check failed — wrong key or tampered ciphertext"
             );
         }
+    }
+
+    #[test]
+    fn repeated_plaintext_uses_distinct_ephemeral_keys_and_ciphertexts() {
+        let recipient = random_nonce();
+        let pubkey = pubkey_compressed(recipient);
+        let first = encrypt(b"same proof", &pubkey, Some(80)).unwrap();
+        let second = encrypt(b"same proof", &pubkey, Some(80)).unwrap();
+        assert_ne!(&first[..33], &second[..33]);
+        assert_ne!(&first[33..first.len() - 16], &second[33..second.len() - 16]);
+        assert_eq!(decrypt(&first, recipient).unwrap(), b"same proof");
+        assert_eq!(decrypt(&second, recipient).unwrap(), b"same proof");
     }
 
     #[test]
