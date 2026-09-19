@@ -26,6 +26,10 @@ The v1.7.4 release remains the visual reference; pilot test windows do not prove
 visual parity. See `crates/optn-ui-slint/README.md` for its tested scope.
 Renderer choice must not introduce a separate wallet/runtime or erase another UI.
 Shared behavior does not establish screen or packaged-platform parity.
+The existing v1.7.4 UI is a product constraint, including its screens, components,
+navigation and interactions, not merely colors. The user likes the new Network
+selector as a destination entered from the old wallet's Settings/card navigation;
+this does not approve replacing the whole wallet UI with Leptos or Slint screens.
 
 Framework boundary rules are architectural invariants:
 

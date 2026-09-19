@@ -13,6 +13,11 @@ Flipstarter; do not treat a renderer migration as authorization to redesign it.
 This applies to Leptos as well as the retained React adapter. The confirmed
 reference is the main-release UI (`v1.7.4`, commit `bfc7a1497c5ff0a6bae04dd1c19dc60c21918256`),
 not the replacement Leptos shell. New navigation belongs within that visual design.
+This is a constraint on the complete interface, not just its palette. The native
+Network pilot was useful as a feature prototype; it is not permission to replace
+Home, Portfolio, Send/Receive or the wallet's navigation. In the retained desktop
+UI, Settings -> Wallet -> Servers -> Network sources opens the new directory and
+routing flow in place, with a return to the existing server settings.
 
 ## Terms
 
