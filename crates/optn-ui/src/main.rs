@@ -20,6 +20,7 @@ mod multisig;
 mod scan;
 #[cfg(target_arch = "wasm32")]
 mod settings;
+mod stylesheet;
 #[cfg(target_arch = "wasm32")]
 mod tools;
 

@@ -303,7 +303,7 @@ fn TorSection(transport: UiTransport) -> impl IntoView {
                                     )}
                                 </p>
                                 <button
-                                    class="button"
+                                    class="secondary"
                                     type="button"
                                     disabled=move || busy.get()
                                     on:click=move |_| {
@@ -331,7 +331,7 @@ fn TorSection(transport: UiTransport) -> impl IntoView {
                                 "Public sources are reached through Tor, and none is running.                                  A source you marked as your own is dialled directly instead."
                             </p>
                             <button
-                                class="button"
+                                class="secondary"
                                 type="button"
                                 disabled=move || busy.get()
                                 on:click=move |_| {

@@ -110,6 +110,14 @@ a {
   padding: 0.72rem 1.1rem;
   text-decoration: none;
   cursor: pointer;
+  /* 44px is the smallest comfortable touch target every mobile HIG states.
+     Declared rather than left to padding: 0.72rem plus a line box lands near
+     42px, and "nearly" is the kind of thing nobody revisits. Stated here so
+     stylesheet.rs can check it. */
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .chip,
@@ -762,6 +770,7 @@ h1 {
 .settings-row {
   display: grid;
   gap: 0.45rem;
+  min-height: 44px;
 }
 
 .tab-item.active {
