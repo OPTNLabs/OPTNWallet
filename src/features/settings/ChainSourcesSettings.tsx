@@ -50,6 +50,7 @@ type SourcePage =
   | 'routing'
   | 'privacy'
   | 'sync'
+  | 'fusion'
   | 'fees'
   | 'explorer';
 type DirectoryPage = Extract<SourcePage, 'public' | 'own' | 'custom'>;
@@ -112,6 +113,7 @@ function pageTitle(page: SourcePage): string {
     privacy: 'Privacy & Transport',
     sync: 'Wallet sync',
     fees: 'Transaction fees',
+    fusion: 'CashFusion',
     explorer: 'Explorer',
   }[page];
 }
@@ -234,12 +236,14 @@ function statusLine(source: ChainSource): { text: string; tone: string } {
 type ChainSourcesSettingsProps = {
   explorerSettings?: ReactNode;
   feeSettings?: ReactNode;
+  fusionSettings?: ReactNode;
   backRef?: MutableRefObject<(() => void) | null>;
 };
 
 export function ChainSourcesSettings({
   explorerSettings,
   feeSettings,
+  fusionSettings,
   backRef,
 }: ChainSourcesSettingsProps) {
   const [view, setView] = useState<ChainSourcesView | null>(null);
@@ -545,6 +549,23 @@ export function ChainSourcesSettings({
               </span>
               <span className="text-xs wallet-muted">Open</span>
             </button>
+            {fusionSettings && (
+              <button
+                type="button"
+                className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+                onClick={() => navigate('fusion')}
+              >
+                <span>
+                  <span className="block text-sm font-semibold wallet-text-strong">
+                    CashFusion
+                  </span>
+                  <span className="block text-[11px] wallet-muted">
+                    Automatic server selection and server pool
+                  </span>
+                </span>
+                <span aria-hidden="true">&#8250;</span>
+              </button>
+            )}
             {feeSettings && (
               <button
                 type="button"
@@ -577,6 +598,7 @@ export function ChainSourcesSettings({
       )}
 
       {page === 'fees' && feeSettings}
+      {page === 'fusion' && fusionSettings}
 
       {page === 'privacy' && (
         <>

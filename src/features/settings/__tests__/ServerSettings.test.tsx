@@ -1,11 +1,7 @@
 /** @vitest-environment jsdom */
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import {
-  cleanup,
-  render,
-  screen,
-} from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ServerSettings } from '../ServerSettings';
 
@@ -59,9 +55,23 @@ vi.mock('../../../platform/desktop/networkSettingsBridge', () => ({
   persistDesktopBackend: vi.fn(),
 }));
 vi.mock('../Bip37NodeSettings', () => ({ Bip37NodeRow: () => null }));
+vi.mock('../CashFusionSettings', () => ({
+  CashFusionSettings: ({ variant }: { variant: string }) => (
+    <div>CashFusion {variant}</div>
+  ),
+}));
 vi.mock('../ChainSourcesSettings', () => ({
-  ChainSourcesSettings: ({ feeSettings }: { feeSettings: React.ReactNode }) => (
-    <div>Sources destination{feeSettings}</div>
+  ChainSourcesSettings: ({
+    feeSettings,
+    fusionSettings,
+  }: {
+    feeSettings: React.ReactNode;
+    fusionSettings: React.ReactNode;
+  }) => (
+    <div>
+      Sources destination{feeSettings}
+      {fusionSettings}
+    </div>
   ),
 }));
 afterEach(cleanup);
@@ -74,6 +84,7 @@ it('uses one desktop routing destination, retaining fees and the mobile controls
   expect(screen.queryByText('server.connect')).not.toBeInTheDocument();
   expect(screen.getByText('server.transactionFee')).toBeInTheDocument();
   expect(mock.adapter).not.toHaveBeenCalled();
+  expect(screen.getByText('CashFusion servers')).toBeInTheDocument();
   expect(screen.getByText('Sources destination')).toBeInTheDocument();
   cleanup();
   mock.desktop = false;

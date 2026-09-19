@@ -76,6 +76,7 @@ it('browses without probes and sends explicit selection through the old UI', asy
   render(
     <ChainSourcesSettings
       backRef={backRef}
+      fusionSettings={<button>Automatic Fusion server selection</button>}
       feeSettings={<button>Existing fee control</button>}
       explorerSettings={<button>Existing explorer control</button>}
     />
@@ -140,6 +141,12 @@ it('browses without probes and sends explicit selection through the old UI', asy
   fireEvent.click(screen.getByRole('button', { name: 'Transaction fees' }));
   expect(
     screen.getByRole('button', { name: 'Existing fee control' })
+  ).toBeInTheDocument();
+  act(() => backRef.current?.());
+  expect(backRef.current).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /CashFusion/ }));
+  expect(
+    screen.getByRole('button', { name: 'Automatic Fusion server selection' })
   ).toBeInTheDocument();
   act(() => backRef.current?.());
   expect(backRef.current).toBeNull();
