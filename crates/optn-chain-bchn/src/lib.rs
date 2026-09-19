@@ -20,6 +20,11 @@ use reqwest::{Client, Url};
 use serde_json::{json, Value};
 use std::time::Duration;
 
+// BCHN RPC replies include transaction hex, so keep the same ceiling as the
+// native Electrum transport rather than relying on reqwest's unbounded JSON
+// convenience reader.
+const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RpcAuth {
     None,
@@ -85,10 +90,7 @@ impl BchnRpcBackend {
         let scheme = if config.https { "https" } else { "http" };
         let url = Url::parse(&format!("{scheme}://{host}:{port}/"))
             .map_err(|error| ChainBackendError::Rejected(error.to_string()))?;
-        let client = Client::builder()
-            .timeout(config.request_timeout)
-            .build()
-            .map_err(|error| ChainBackendError::Protocol(error.to_string()))?;
+        let client = rpc_client(config.request_timeout)?;
 
         let mut backend = Self {
             config,
@@ -156,7 +158,7 @@ impl BchnRpcBackend {
                 response.status()
             )));
         }
-        let value: Value = response.json().await.map_err(map_reqwest)?;
+        let value = read_rpc_value(response).await?;
         if let Some(error) = value.get("error") {
             if !error.is_null() {
                 return Err(ChainBackendError::Protocol(error.to_string()));
@@ -270,6 +272,48 @@ impl BchnRpcBackend {
     }
 }
 
+fn rpc_client(request_timeout: Duration) -> Result<Client, ChainBackendError> {
+    Client::builder()
+        .timeout(request_timeout)
+        // A configured BCHN endpoint is an exact selected infrastructure
+        // destination. Ambient proxy settings must not retarget it, and a
+        // redirect must not send RPC credentials or wallet queries elsewhere.
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| ChainBackendError::Protocol(error.to_string()))
+}
+
+async fn read_rpc_value(mut response: reqwest::Response) -> Result<Value, ChainBackendError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RPC_RESPONSE_BYTES as u64)
+    {
+        return Err(rpc_response_too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(map_reqwest)? {
+        append_rpc_chunk(&mut body, &chunk)?;
+    }
+    serde_json::from_slice(&body).map_err(|_| {
+        ChainBackendError::InvalidResponse("BCHN RPC response is not valid JSON".into())
+    })
+}
+
+fn append_rpc_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), ChainBackendError> {
+    if chunk.len() > MAX_RPC_RESPONSE_BYTES.saturating_sub(body.len()) {
+        return Err(rpc_response_too_large());
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+fn rpc_response_too_large() -> ChainBackendError {
+    ChainBackendError::InvalidResponse(format!(
+        "BCHN RPC response exceeds {MAX_RPC_RESPONSE_BYTES} byte limit"
+    ))
+}
+
 impl ChainBackend for BchnRpcBackend {
     fn source_id(&self) -> &SourceId {
         &self.config.source_id
@@ -309,9 +353,7 @@ impl ChainBackend for BchnRpcBackend {
                     start_height,
                     count,
                 } => self.header_sync(*start_height, *count).await,
-                ChainRequest::HeaderSyncFromLocator { .. } => {
-                    Err(ChainBackendError::Unsupported)
-                }
+                ChainRequest::HeaderSyncFromLocator { .. } => Err(ChainBackendError::Unsupported),
                 ChainRequest::WalletRefresh { .. } | ChainRequest::HistoricalHeaderProof { .. } => {
                     Err(ChainBackendError::Unsupported)
                 }
@@ -391,6 +433,10 @@ fn map_reqwest(error: reqwest::Error) -> ChainBackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
 
     #[test]
     fn blockchain_info_parses_display_hash_to_internal_order() {
@@ -415,5 +461,87 @@ mod tests {
         );
         assert!(!capabilities.is_usable(Capability::FastHistory));
         assert!(!capabilities.is_usable(Capability::RpaIndex));
+    }
+
+    fn response_server(headers: String, body: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request);
+            let mut wire = format!("HTTP/1.1 {headers}\r\nConnection: close\r\n\r\n").into_bytes();
+            wire.extend_from_slice(&body);
+            socket.write_all(&wire).unwrap();
+        });
+        format!("http://{address}/")
+    }
+
+    #[tokio::test]
+    async fn rpc_client_refuses_redirects_to_a_different_listener() {
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        target.set_nonblocking(true).unwrap();
+        let target_address = target.local_addr().unwrap();
+        let (observed_tx, observed_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_millis(250);
+            loop {
+                match target.accept() {
+                    Ok(_) => {
+                        observed_tx.send(true).unwrap();
+                        return;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            observed_tx.send(false).unwrap();
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("capture listener failed: {error}"),
+                }
+            }
+        });
+        let source = response_server(
+            format!("302 Found\r\nLocation: http://{target_address}/capture\r\nContent-Length: 0"),
+            Vec::new(),
+        );
+
+        let response = rpc_client(Duration::from_secs(1))
+            .unwrap()
+            .post(source)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+        assert!(!observed_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    }
+
+    #[tokio::test]
+    async fn rpc_response_body_is_refused_from_its_announced_size_before_json_decode() {
+        let source = response_server(
+            format!("200 OK\r\nContent-Length: {}", MAX_RPC_RESPONSE_BYTES + 1),
+            Vec::new(),
+        );
+        let response = rpc_client(Duration::from_secs(1))
+            .unwrap()
+            .post(source)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            read_rpc_value(response).await,
+            Err(rpc_response_too_large())
+        );
+    }
+
+    #[test]
+    fn rpc_response_body_cap_is_cumulative_without_content_length() {
+        let mut body = vec![0; MAX_RPC_RESPONSE_BYTES];
+        assert_eq!(
+            append_rpc_chunk(&mut body, &[0]),
+            Err(rpc_response_too_large())
+        );
+        assert_eq!(body.len(), MAX_RPC_RESPONSE_BYTES);
     }
 }
