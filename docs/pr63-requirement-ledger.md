@@ -175,3 +175,7 @@ before proxy probing. Native tests: 93 passed, four live mainnet tests ignored;
 strict native Clippy passed. This closes that command-entry policy gap, not live
 P2P/GUI verification. The React migration, full live wallet workflow, remaining
 provider integration and platform evidence remain open.
+
+### 2026-09-19: wallet history is not BCMR spentness evidence
+
+The shared identity collector no longer treats a missing spender in wallet-scoped history as an unspent authhead. Transaction inclusion, even from a validated node, cannot establish the absence of a later spend. Matching registry bytes therefore remain unresolved until explicit authchain spentness is supplied; owned tokens and NFTs stay visible. Checked through the collector and wallet-sync finish (20 metadata tests, 16 wallet-sync-related tests, strict runtime Clippy). Pure hash-verification positive tests remain. Native registry retrieval and a source-bound authchain execution path are still separate outstanding integration work.

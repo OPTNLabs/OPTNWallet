@@ -401,9 +401,12 @@ fn resolve_owned_category(
                             Some(successor) => {
                                 authchain::IdentityStatus::SpentBy((*successor).clone())
                             }
-                            None => authchain::IdentityStatus::Unspent {
-                                evidence: collection.evidence.clone(),
-                            },
+                            // Wallet transactions are not a complete spender index.
+                            // Even a proof of inclusion says nothing about a later
+                            // spend outside this wallet's scripts or scan range.
+                            None => authchain::IdentityStatus::Unknown(
+                                authchain::UnknownReason::IncompleteHistory,
+                            ),
                         };
                         walk.accept(status)
                     }
@@ -965,10 +968,10 @@ mod tests {
         apply_owned_token_identities(state, &observations);
     }
 
-    /// The live collector, not a pre-built identity, is what names a matching
-    /// registry on Assets and My NFTs.
+    /// Hash-matching bytes cannot establish that a wallet-local transaction
+    /// is still the authhead. Inclusion evidence cannot prove absence of a spend.
     #[test]
-    fn live_publisher_makes_matching_bytes_the_current_name() {
+    fn live_publisher_requires_spentness_evidence_even_for_matching_bytes() {
         let body = registry_body("Bitcats", ALPHA);
         let mut state = wallet_with(vec![
             coin(
@@ -978,26 +981,37 @@ mod tests {
             ),
             coin(2, 1_000, Some(nft(ALPHA, b"\x01"))),
         ]);
-        publish_collected(
-            &mut state,
-            &collection(&body, "example.com", Ok(body.clone()), true, true),
-        );
-        let assets = optn_app::assets_view_model(&state);
-        let identity = assets.categories[0]
-            .identity
-            .as_ref()
-            .expect("resolved identity");
-        assert_eq!(identity.name, "Bitcats");
-        assert_eq!(identity.status, IdentityStatus::Verified);
-        assert_eq!(identity.status.caveat(), None);
-        let nfts = optn_app::nfts_view_model(&state);
-        assert_eq!(
-            nfts.nfts[0]
+        for evidence in [
+            Evidence::ServerAssertion,
+            Evidence::MerkleTransactionIncluded {
+                txid: ALPHA,
+                block_hash: [1; 32],
+                height: 1,
+            },
+            Evidence::FullNodeValidated {
+                source: "fixture".into(),
+            },
+        ] {
+            let mut input = collection(&body, "example.com", Ok(body.clone()), true, true);
+            input.evidence = evidence;
+            publish_collected(&mut state, &input);
+            let assets = optn_app::assets_view_model(&state);
+            let identity = assets.categories[0]
                 .identity
                 .as_ref()
-                .map(|item| item.name.as_str()),
-            Some("Bitcats")
-        );
+                .expect("resolved identity");
+            assert_eq!(identity.name, category_hex(&ALPHA));
+            assert_eq!(identity.status, IdentityStatus::Unresolved);
+            assert_eq!(identity.status.caveat(), Some("unverified"));
+            let nfts = optn_app::nfts_view_model(&state);
+            assert_eq!(
+                nfts.nfts[0]
+                    .identity
+                    .as_ref()
+                    .map(|item| item.name.as_str()),
+                Some(category_hex(&ALPHA).as_str())
+            );
+        }
     }
 
     #[test]
@@ -1030,7 +1044,7 @@ mod tests {
     }
 
     #[test]
-    fn live_publisher_keeps_unpublished_and_unresolved_coins_with_a_caveat() {
+    fn live_publisher_does_not_infer_withdrawal_from_incomplete_history() {
         let body = registry_body("Bitcats", ALPHA);
         let mut unpublished = wallet_with(vec![coin(
             1,
@@ -1044,8 +1058,8 @@ mod tests {
         let assets = optn_app::assets_view_model(&unpublished);
         assert_eq!(assets.categories.len(), 1);
         let identity = assets.categories[0].identity.as_ref().expect("status");
-        assert_eq!(identity.status, IdentityStatus::Unpublished);
-        assert_eq!(identity.status.caveat(), Some("no registry published"));
+        assert_eq!(identity.status, IdentityStatus::Unresolved);
+        assert_eq!(identity.status.caveat(), Some("unverified"));
 
         let mut unresolved = wallet_with(vec![coin(
             2,
