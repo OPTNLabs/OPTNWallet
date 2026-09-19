@@ -262,7 +262,7 @@ fn SettingsRow(
 /// Nothing is probed here. `tor_status` reports what the chain stack
 /// concluded, so a screen cannot disagree with the routes.
 #[component]
-fn TorSection(transport: UiTransport) -> impl IntoView {
+pub(crate) fn TorSection(transport: UiTransport) -> impl IntoView {
     let status = RwSignal::new(None::<optn_transport::WireTorStatus>);
     let busy = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
@@ -557,45 +557,12 @@ fn selected_server_entry(state: &AppState, kind: ServerKind) -> String {
 fn NodeSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     view! {
         <crate::chain_sources::ChainSourcesSection transport=transport state=state />
-        <details><summary>"Legacy server overrides"</summary>
-        <p class="muted">
-            "Overrides apply only to the selected network. Leave a field blank to use its default."
-        </p>
-        <dl class="preview-grid">
-            <div>
-                <dt>"Default host"</dt>
-                <dd class="mono">{move || state.get().network.default_host()}</dd>
-            </div>
-            <div>
-                <dt>"Default port"</dt>
-                <dd class="mono">{move || state.get().network.default_port().to_string()}</dd>
-            </div>
-            <div class="preview-wide">
-                <dt>"Address prefix"</dt>
-                <dd class="mono">{move || format!("{}:", state.get().network.prefix())}</dd>
-            </div>
-        </dl>
-        <ServerField transport=transport state=state kind=ServerKind::Electrum />
-        <ServerField transport=transport state=state kind=ServerKind::Peer />
-        <ServerField transport=transport state=state kind=ServerKind::Explorer />
-        <button
-            class="secondary"
-            type="button"
-            data-testid="use-network-default-servers"
-            on:click=move |_| dispatch_action(
-                transport,
-                state,
-                AppAction::UseNetworkDefaultServers,
-            )
-        >
-            "Use network default"
-        </button>
-        </details>
+
     }
 }
 
 #[component]
-fn ServerField(
+pub(crate) fn ServerField(
     transport: UiTransport,
     state: RwSignal<AppState>,
     kind: ServerKind,

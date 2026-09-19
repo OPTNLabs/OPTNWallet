@@ -903,7 +903,7 @@ mod tests {
 
     #[test]
     fn registered_capabilities_keep_confidence_and_clear_after_revocation() {
-        let (service, _, _) = routed_service();
+        let (service, backend, _) = routed_service();
         let observations = service.registered_capability_observations();
         assert!(observations.iter().any(|observation| {
             observation.capability == Capability::ElectrumProtocol
@@ -915,6 +915,11 @@ mod tests {
         }));
         service.revocation().revoke();
         assert!(service.registered_capability_observations().is_empty());
+        assert_eq!(
+            backend.calls.load(Ordering::SeqCst),
+            0,
+            "reading evidence must not contact a provider"
+        );
     }
 
     const HEADER_REQUEST: ChainRequest = ChainRequest::HeaderSync {
