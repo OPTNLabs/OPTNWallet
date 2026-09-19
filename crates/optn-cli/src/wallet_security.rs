@@ -54,6 +54,9 @@ enum Input {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum NetworkCommand {
     Status {},
+    Policy {
+        preset: optn_runtime::network_config::ChainPolicyPreset,
+    },
     Select {
         source: String,
         protocol: crate::ChainProtocol,
@@ -69,6 +72,7 @@ async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkC
             NetworkCommand::Status {} => "network",
             NetworkCommand::Select { .. } => "network select",
             NetworkCommand::Configure { .. } => "network configure",
+            NetworkCommand::Policy { .. } => "network configure",
         };
         crate::skills::enforce(crate::skills::Policy::from_env()?, skill)?;
         if runtime.state().network != cli.network {
@@ -86,6 +90,12 @@ async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkC
         }
         match command {
             NetworkCommand::Status {} => {}
+            NetworkCommand::Policy { preset } => crate::network_settings::set_policy_preset(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                preset,
+            )
+            .map_err(CliError::Usage)?,
             NetworkCommand::Select { source, protocol } => crate::network_settings::select_source(
                 cli.network,
                 cli.network_config_dir.as_deref(),
@@ -122,11 +132,14 @@ fn network_prompt(argument: &str) -> Result<NetworkCommand> {
     match parts.as_slice() {
         [] => Ok(NetworkCommand::Status {}),
         [status] if status == "status" => Ok(NetworkCommand::Status {}),
+        [policy, preset] if policy == "policy" => Ok(NetworkCommand::Policy {
+            preset: crate::network_settings::parse_policy_preset(preset).map_err(CliError::Usage)?,
+        }),
         [select, source, flag, protocol] if select == "select" && flag == "--protocol" => {
             Ok(NetworkCommand::Select { source: source.clone(), protocol: crate::ChainProtocol::from_str(protocol, false)
                 .map_err(|_| CliError::Usage("Use electrum, bip37, neutrino, node-rpc or node-events.".into()))? })
         },
-        _ => Err(CliError::Usage("Use network status, network select <id> --protocol <protocol>, or network configure <JSON>.".into())),
+        _ => Err(CliError::Usage("Use network status, network policy <preset>, network select <id> --protocol <protocol>, or network configure <JSON>.".into())),
     }
 }
 
@@ -154,7 +167,7 @@ fn birthday_prompt(argument: &str) -> Result<optn_transport::security::WalletBir
     }
 }
 
-const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, network status, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
+const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, network status, network policy <preset>, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -802,7 +815,7 @@ mod tests {
             ..Default::default()
         });
         assert!(runtime.state().wallet_sync.utxos_fresh);
-        let command = network_prompt(r#"configure {"protocols":["Bip37"],"primary_scope":"MyInfrastructure","fallback_scope":null,"preferred":[]}"#).unwrap();
+        let command = network_prompt("policy own-infrastructure").unwrap();
         let reply = network_reply(&cli, &runtime, command).await;
         assert_eq!(reply["ok"], true);
         assert!(!runtime.state().wallet_sync.history_fresh);

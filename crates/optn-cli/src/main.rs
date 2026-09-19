@@ -397,6 +397,8 @@ enum NetworkCommand {
     Import { file: std::path::PathBuf },
     /// Apply a complete primary/fallback/protocol selection from a JSON file.
     Configure { file: std::path::PathBuf },
+    /// Choose auto, privacy, own-infrastructure, electrum-only, bip37-only or neutrino-only.
+    Policy { preset: String },
     /// Show sources, policy, and the primary/fallback selection order.
     Status,
     /// Select an existing shared source without a public fallback.
@@ -737,7 +739,7 @@ fn command_name(command: &Command) -> &'static str {
             action: NetworkCommand::Import { .. },
         } => "network import",
         Command::Network {
-            action: NetworkCommand::Configure { .. },
+            action: NetworkCommand::Configure { .. } | NetworkCommand::Policy { .. },
         } => "network configure",
         Command::Ping => "ping",
         Command::Network {
@@ -1648,7 +1650,9 @@ async fn run(cli: &Cli) -> Result<Value> {
     if matches!(
         cli.command,
         Command::Network {
-            action: NetworkCommand::Configure { .. } | NetworkCommand::Import { .. }
+            action: NetworkCommand::Configure { .. }
+                | NetworkCommand::Import { .. }
+                | NetworkCommand::Policy { .. }
         }
     ) && SERVING.load(std::sync::atomic::Ordering::SeqCst)
     {
@@ -1664,6 +1668,17 @@ async fn run(cli: &Cli) -> Result<Value> {
         Command::Network {
             action: NetworkCommand::Status,
         } => return shared_network_status(cli),
+        Command::Network {
+            action: NetworkCommand::Policy { preset },
+        } => {
+            network_settings::set_policy_preset(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                network_settings::parse_policy_preset(preset).map_err(CliError::Usage)?,
+            )
+            .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
         Command::Network {
             action: NetworkCommand::Export,
         } => {
