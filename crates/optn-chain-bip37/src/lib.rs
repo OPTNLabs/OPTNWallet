@@ -275,6 +275,7 @@ impl Bip37Backend {
         &self,
         start_height: u32,
         count: u32,
+        requested_locator: Option<[u8; 32]>,
     ) -> Result<BackendObservation, ChainBackendError> {
         if start_height == 0 {
             return Err(ChainBackendError::Rejected(
@@ -283,13 +284,16 @@ impl Bip37Backend {
         }
         // `getheaders` names its starting point by hash, so the block below
         // the requested height has to be one the runtime already accepted.
-        let locator = self.headers.hash_at(start_height - 1).ok_or_else(|| {
-            ChainBackendError::Rejected(format!(
-                "no accepted header at {}: sync forward from the retained range {:?}",
-                start_height - 1,
-                self.headers.retained_span()
-            ))
-        })?;
+        let locator = match requested_locator {
+            Some(locator) => locator,
+            None => self.headers.hash_at(start_height - 1).ok_or_else(|| {
+                ChainBackendError::Rejected(format!(
+                    "no accepted header at {}: sync forward from the retained range {:?}",
+                    start_height - 1,
+                    self.headers.retained_span()
+                ))
+            })?,
+        };
         let port = self
             .config
             .endpoint
@@ -782,7 +786,14 @@ impl ChainBackend for Bip37Backend {
                 ChainRequest::HeaderSync {
                     start_height,
                     count,
-                } => self.header_sync(*start_height, *count).await,
+                } => self.header_sync(*start_height, *count, None).await,
+                ChainRequest::HeaderSyncFromLocator {
+                    start_height,
+                    count,
+                    locator,
+                } => self
+                    .header_sync(*start_height, *count, Some(*locator))
+                    .await,
                 ChainRequest::HistoricalHeaderProof {
                     height,
                     checkpoint_height,

@@ -309,6 +309,9 @@ impl ChainBackend for BchnRpcBackend {
                     start_height,
                     count,
                 } => self.header_sync(*start_height, *count).await,
+                ChainRequest::HeaderSyncFromLocator { .. } => {
+                    Err(ChainBackendError::Unsupported)
+                }
                 ChainRequest::WalletRefresh { .. } | ChainRequest::HistoricalHeaderProof { .. } => {
                     Err(ChainBackendError::Unsupported)
                 }

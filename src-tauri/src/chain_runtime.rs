@@ -267,7 +267,28 @@ impl NativeChainRuntime {
                 view: VerifiedHeaderView::new(network, verifier),
             });
         }
-        let chain = guard.as_ref().expect("the accepted chain was just created");
+        let chain = guard.as_mut().expect("the accepted chain was just created");
+        // The native host may create its route stack before the user opens the
+        // wallet. If so, the first accepted view is only the shipped genesis;
+        // pick up the sealed view when the wallet is opened later, before a
+        // worker starts extending or recovering the dense store.
+        if chain.view.checkpoint().height == 0 {
+            if let Some(progress) = self
+                .owner
+                .restored_header_progress()
+                .await
+                .map_err(|error| format!("restored header progress: {error}"))?
+            {
+                let restored =
+                    optn_runtime::sync_worker::restore_header_progress(network, &progress)
+                        .map_err(|error| {
+                            format!("stored header progress is unusable: {error:?}")
+                        })?;
+                if restored.checkpoint().height > 0 {
+                    chain.view = restored;
+                }
+            }
+        }
         Ok((chain.headers.clone(), chain.view.clone()))
     }
 
