@@ -3,6 +3,14 @@
 This is the agreed #71 presentation of #75 networking and #83 authority boundaries.
 It does not replace `UserNetworkOverlay -> ConnectionPolicy -> SelectionPlan -> ChainService`.
 
+## Visual baseline
+
+The existing wallet UI remains the product visual baseline. The user explicitly
+rejected the replacement Leptos shell shown during the September 19 navigation
+checks. Those checks establish behavior only, not visual acceptance. Preserve the
+old wallet's components and design when connecting shared Rust features, including
+Flipstarter; do not treat a renderer migration as authorization to redesign it.
+
 ## Terms
 
 ```text
