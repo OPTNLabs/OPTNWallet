@@ -14,6 +14,7 @@
 //! padding and hoped to land above the line.
 
 /// The stylesheet, compiled in so the test reads exactly what Trunk ships.
+#[cfg(test)]
 const STYLE: &str = include_str!("../style.css");
 
 /// The smallest comfortable touch target, from every mobile HIG that states

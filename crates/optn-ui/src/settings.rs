@@ -283,7 +283,7 @@ fn TorSection(transport: UiTransport) -> impl IntoView {
             <div class="panel stack">
                 <p class="source-title">"Tor"</p>
                 {move || {
-                    let Some(value) = status.get() else { return view! { <></> }.into_any() };
+                    let Some(value) = status.get() else { return ().into_any() };
                     match value.state {
                         optn_transport::WireTorState::Verified => view! {
                             <p class="muted">
@@ -363,7 +363,7 @@ fn TorSection(transport: UiTransport) -> impl IntoView {
                             </button>
                         }
                         .into_any(),
-                        optn_transport::WireTorState::NotNeeded => view! { <></> }.into_any(),
+                        optn_transport::WireTorState::NotNeeded => ().into_any(),
                     }
                 }}
                 {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
