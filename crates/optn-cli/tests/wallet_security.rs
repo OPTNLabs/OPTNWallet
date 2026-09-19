@@ -789,3 +789,73 @@ fn stdio_airgap_routes_to_runtime_and_never_grants_broadcast() {
         assert_eq!(reply["error"], "Invalid wallet command.");
     }
 }
+
+#[test]
+fn source_selection_is_shared_durable_and_invalid_edits_preserve_the_file() {
+    let directory = test_directory();
+    let selection = directory.path().join("selection.json");
+    std::fs::write(
+        &selection,
+        serde_json::to_vec(&json!({
+            "protocols":["Bip37"], "primary_scope":"MyInfrastructure",
+            "fallback_scope":null, "preferred":[]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let args = ["network", "configure", selection.to_str().unwrap()];
+    let output = run_cli(directory.path(), &args, "");
+    assert!(
+        output.status.success(),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let config = directory.path().join("network-config/network-chipnet.json");
+    let before = std::fs::read(&config).unwrap();
+    let output = run_cli(directory.path(), &["network", "status"], "");
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["policy"]["primary_scope"], "UserInfrastructure");
+    assert_eq!(value["policy"]["fallback_scope"], Value::Null);
+    assert_eq!(value["policy"]["protocols"], json!(["Bip37"]));
+    std::fs::write(
+        &selection,
+        serde_json::to_vec(&json!({
+            "protocols":["Bip37"], "primary_scope":{"Selected":["missing-source"]},
+            "fallback_scope":null, "preferred":[]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(!run_cli(directory.path(), &args, "").status.success());
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+
+    let exported = run_cli(directory.path(), &["network", "export"], "");
+    assert!(exported.status.success());
+    let mut archive: Value = serde_json::from_slice(&exported.stdout).unwrap();
+    assert_eq!(archive["network"], "chipnet");
+    let portable = directory.path().join("portable.json");
+    std::fs::write(&portable, &exported.stdout).unwrap();
+    let restored = test_directory();
+    let import_args = ["network", "import", portable.to_str().unwrap()];
+    let imported = run_cli(restored.path(), &import_args, "");
+    assert!(
+        imported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&imported.stdout)
+    );
+    let status = run_cli(restored.path(), &["network", "status"], "");
+    assert!(status.status.success());
+    let restored_value: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(restored_value["policy"], value["policy"]);
+    let restored_config = restored.path().join("network-config/network-chipnet.json");
+    let accepted = std::fs::read(&restored_config).unwrap();
+    archive["network"] = json!("mainnet");
+    std::fs::write(&portable, serde_json::to_vec(&archive).unwrap()).unwrap();
+    assert!(!run_cli(restored.path(), &import_args, "").status.success());
+    assert_eq!(std::fs::read(&restored_config).unwrap(), accepted);
+    std::fs::write(&portable, b"{invalid").unwrap();
+    assert!(!run_cli(restored.path(), &import_args, "").status.success());
+    assert_eq!(std::fs::read(&restored_config).unwrap(), accepted);
+}

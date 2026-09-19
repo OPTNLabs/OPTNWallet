@@ -31,6 +31,7 @@ mod tests {
         let mut used = Vec::new();
         for source in [
             include_str!("settings.rs"),
+            include_str!("chain_sources.rs"),
             include_str!("tools.rs"),
             include_str!("onboarding.rs"),
             include_str!("airgap.rs"),

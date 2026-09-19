@@ -164,6 +164,26 @@ pub const SKILLS: &[Skill] = &[
         requires_confirmation: false,
     },
     Skill {
+        name: "network export",
+        capability: Capability::Read,
+        summary: "Export this network's non-secret portable source configuration.",
+        needs_wallet: false, needs_network: false, requires_confirmation: false,
+    },
+    Skill {
+        name: "network import",
+        capability: Capability::Configure,
+        summary: "Restore a network-bound portable source configuration atomically.",
+        needs_wallet: false, needs_network: false, requires_confirmation: false,
+    },
+    Skill {
+        name: "network configure",
+        capability: Capability::Configure,
+        summary: "Atomically persist a complete shared source selection from a local JSON file.",
+        needs_wallet: false,
+        needs_network: false,
+        requires_confirmation: false,
+    },
+    Skill {
         name: "network headers",
         capability: Capability::Read,
         summary: "Fetch live headers and verify predecessor link, declared PoW, and ASERT.",

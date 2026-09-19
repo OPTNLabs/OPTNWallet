@@ -11,6 +11,8 @@ use leptos::reactive::owner::LocalStorage;
 #[cfg(target_arch = "wasm32")]
 mod airgap;
 #[cfg(target_arch = "wasm32")]
+mod chain_sources;
+#[cfg(target_arch = "wasm32")]
 mod derivation;
 #[cfg(target_arch = "wasm32")]
 mod hardware;

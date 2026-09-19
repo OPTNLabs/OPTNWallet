@@ -516,6 +516,8 @@ fn selected_server_entry(state: &AppState, kind: ServerKind) -> String {
 #[component]
 fn NodeSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
     view! {
+        <crate::chain_sources::ChainSourcesSection transport=transport state=state />
+        <details><summary>"Legacy server overrides"</summary>
         <p class="muted">
             "Overrides apply only to the selected network. Leave a field blank to use its default."
         </p>
@@ -548,6 +550,7 @@ fn NodeSection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoVi
         >
             "Use network default"
         </button>
+        </details>
     }
 }
 

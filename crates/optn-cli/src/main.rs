@@ -389,6 +389,12 @@ enum Command {
 
 #[derive(Subcommand)]
 enum NetworkCommand {
+    /// Export a non-secret, network-bound backup as JSON on stdout.
+    Export,
+    /// Restore this network from a portable JSON backup.
+    Import { file: std::path::PathBuf },
+    /// Apply a complete primary/fallback/protocol selection from a JSON file.
+    Configure { file: std::path::PathBuf },
     /// Show sources, policy, and the primary/fallback selection order.
     Status,
     /// Select an existing shared source without a public fallback.
@@ -721,6 +727,15 @@ async fn main() {
 fn command_name(command: &Command) -> &'static str {
     match command {
         Command::Wallet { .. } => "wallet",
+        Command::Network {
+            action: NetworkCommand::Export,
+        } => "network export",
+        Command::Network {
+            action: NetworkCommand::Import { .. },
+        } => "network import",
+        Command::Network {
+            action: NetworkCommand::Configure { .. },
+        } => "network configure",
         Command::Ping => "ping",
         Command::Network {
             action: NetworkCommand::Select { .. },
@@ -821,6 +836,22 @@ fn append_network_config_dir(base: &mut Vec<String>, directory: Option<&Path>) -
     base.push("--network-config-dir".into());
     base.push(directory.into());
     Ok(())
+}
+
+fn read_network_configuration(path: &std::path::Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|_| CliError::Usage("Cannot open network configuration file.".into()))?
+        .take(128 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| CliError::Usage("Cannot read network configuration file.".into()))?;
+    if bytes.len() > 128 * 1024 {
+        return Err(CliError::Usage(
+            "Network configuration file is too large.".into(),
+        ));
+    }
+    Ok(bytes)
 }
 
 fn shared_network_status(cli: &Cli) -> Result<Value> {
@@ -1621,6 +1652,17 @@ async fn run(cli: &Cli) -> Result<Value> {
         ));
     }
 
+    if matches!(
+        cli.command,
+        Command::Network {
+            action: NetworkCommand::Configure { .. } | NetworkCommand::Import { .. }
+        }
+    ) && SERVING.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(CliError::Usage(
+            "Source configuration requires the local CLI.".into(),
+        ));
+    }
     if let Command::Wallet { .. } = &cli.command {
         unreachable!("wallet console is handled in main before run()");
     }
@@ -1629,6 +1671,39 @@ async fn run(cli: &Cli) -> Result<Value> {
         Command::Network {
             action: NetworkCommand::Status,
         } => return shared_network_status(cli),
+        Command::Network {
+            action: NetworkCommand::Export,
+        } => {
+            let json =
+                network_settings::export_sources(cli.network, cli.network_config_dir.as_deref())
+                    .map_err(CliError::Usage)?;
+            return serde_json::from_str(&json)
+                .map_err(|_| CliError::Internal("Invalid network configuration export.".into()));
+        }
+        Command::Network {
+            action: NetworkCommand::Import { file },
+        } => {
+            let bytes = read_network_configuration(file)?;
+            let json = std::str::from_utf8(&bytes)
+                .map_err(|_| CliError::Usage("Network configuration must be UTF-8.".into()))?;
+            network_settings::import_sources(cli.network, cli.network_config_dir.as_deref(), json)
+                .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::Configure { file },
+        } => {
+            let bytes = read_network_configuration(file)?;
+            let selection = serde_json::from_slice(&bytes)
+                .map_err(|_| CliError::Usage("Invalid source selection JSON.".into()))?;
+            network_settings::configure_sources(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                &selection,
+            )
+            .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
         Command::Network {
             action: NetworkCommand::Select { source, protocol },
         } => {
@@ -4374,6 +4449,19 @@ mod manifest_tests {
         .unwrap();
         let name = command_name(&cli.command);
         assert_eq!(name, "network select");
+        let configure =
+            Cli::try_parse_from(["optn", "network", "configure", "selection.json"]).unwrap();
+        assert_eq!(command_name(&configure.command), "network configure");
+        assert!(skills::enforce(
+            skills::Policy::parse("read").unwrap(),
+            command_name(&configure.command)
+        )
+        .is_err());
+        assert!(skills::enforce(
+            skills::Policy::parse("configure").unwrap(),
+            command_name(&configure.command)
+        )
+        .is_ok());
         assert!(skills::enforce(skills::Policy::parse("read").unwrap(), name).is_err());
         assert!(skills::enforce(skills::Policy::parse("configure").unwrap(), name).is_ok());
         assert!(skills::enforce(skills::Policy::parse("configure").unwrap(), "send").is_err());

@@ -75,6 +75,94 @@ mod wasm {
             })
         }
 
+        fn export_network_configuration<'a>(
+            &'a self,
+            network: String,
+        ) -> TransportFuture<'a, String> {
+            Box::pin(async move {
+                let args = command_args("network", &JsValue::from_str(&network))?;
+                invoke("optn_chain_export_configuration", args)
+                    .await?
+                    .as_string()
+                    .ok_or_else(|| {
+                        TransportError::InvalidData(
+                            "Invalid network configuration response.".into(),
+                        )
+                    })
+            })
+        }
+
+        fn chain_sources<'a>(
+            &'a self,
+            network: String,
+        ) -> TransportFuture<'a, optn_transport::chain_sources::ChainSourcesView> {
+            Box::pin(async move {
+                let args = command_args("network", &JsValue::from_str(&network))?;
+                let value = invoke("optn_chain_sources", args).await?;
+                serde_wasm_bindgen::from_value(value)
+                    .map_err(|error| TransportError::InvalidData(error.to_string()))
+            })
+        }
+
+        fn edit_chain_sources<'a>(
+            &'a self,
+            network: String,
+            edit: optn_transport::chain_sources::ChainSourceEdit,
+        ) -> TransportFuture<'a, ()> {
+            Box::pin(async move {
+                use optn_transport::chain_sources::ChainSourceEdit;
+                let args = command_args("network", &JsValue::from_str(&network))?;
+                let set = |key: &str, value: &str| {
+                    Reflect::set(&args, &JsValue::from_str(key), &JsValue::from_str(value))
+                        .map(|_| ())
+                        .map_err(js_error)
+                };
+                let command = match edit {
+                    ChainSourceEdit::Selection(selection) => {
+                        let value = serde_wasm_bindgen::to_value(&selection)
+                            .map_err(|error| TransportError::InvalidData(error.to_string()))?;
+                        Reflect::set(&args, &JsValue::from_str("selection"), &value)
+                            .map_err(js_error)?;
+                        "optn_chain_set_selection"
+                    }
+                    ChainSourceEdit::Policy(policy) => {
+                        set("policy", &policy)?;
+                        "optn_chain_set_policy"
+                    }
+                    ChainSourceEdit::Disposition {
+                        source,
+                        disposition,
+                    } => {
+                        set("source", &source)?;
+                        set("disposition", &disposition)?;
+                        "optn_chain_set_source_disposition"
+                    }
+                    ChainSourceEdit::Remove(source) => {
+                        set("source", &source)?;
+                        "optn_chain_remove_source"
+                    }
+                    ChainSourceEdit::Add(mut request) => {
+                        request.network = Some(network);
+                        let value = serde_wasm_bindgen::to_value(&request)
+                            .map_err(|error| TransportError::InvalidData(error.to_string()))?;
+                        Reflect::set(&args, &JsValue::from_str("request"), &value)
+                            .map_err(js_error)?;
+                        "optn_chain_add_source"
+                    }
+                    ChainSourceEdit::Retry => "optn_chain_rebuild",
+                    ChainSourceEdit::Import(configuration) => {
+                        set("configuration", &configuration)?;
+                        "optn_chain_import_configuration"
+                    }
+                };
+                invoke(command, args).await?;
+                if command != "optn_chain_rebuild" {
+                    invoke("optn_chain_rebuild", Object::new().into()).await?;
+                }
+                Ok(())
+            })
+        }
+
         fn airgap<'a>(
             &'a self,
             request: optn_transport::AirgapRequest,

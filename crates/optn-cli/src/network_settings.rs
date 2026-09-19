@@ -17,6 +17,50 @@ use optn_runtime::network_config::{
 
 const APP_CONFIG_IDENTIFIER: &str = "com.optilabs.wallet";
 
+pub fn export_sources(network: Network, directory: Option<&Path>) -> Result<String, String> {
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    NetworkConfigFile::new(directory.join(file_name(network))).export_portable(network)
+}
+
+pub fn import_sources(
+    network: Network,
+    directory: Option<&Path>,
+    json: &str,
+) -> Result<(), String> {
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    NetworkConfigFile::new(directory.join(file_name(network)))
+        .import_portable(network, json)
+        .map(|_| ())
+}
+
+/// Apply the same complete selection accepted by GUI adapters, atomically.
+pub fn configure_sources(
+    network: Network,
+    directory: Option<&Path>,
+    selection: &optn_transport::chain_sources::WireConnectionPolicy,
+) -> Result<(), String> {
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    NetworkConfigFile::new(directory.join(file_name(network)))
+        .update(|existing| {
+            let mut envelope = existing.unwrap_or_else(|| {
+                NetworkConfigEnvelope::current(
+                    optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
+                    Default::default(),
+                )
+            });
+            optn_runtime::network_config::promote_legacy_policy(&mut envelope);
+            let (catalog, _) = resolve_shipped_chain_selection(network, Some(&envelope))
+                .map_err(|error| format!("invalid network settings: {error:?}"))?;
+            envelope.overlay.connection_policy =
+                optn_runtime::source_selection::policy(&catalog, selection)?;
+            Ok(envelope)
+        })
+        .map(|_| ())
+}
+
 pub fn select_source(
     network: Network,
     directory: Option<&Path>,

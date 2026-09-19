@@ -151,3 +151,24 @@ These are future work and must not be read as release blockers.
 - **Ingesting the full §21.3 bootstrap feeds.** The shipped catalog is the
   product's own reviewed defaults today; broadening it is an ingest into the
   same structure, which already preserves per-project provenance.
+
+## Source settings integration evidence (2026-09-19)
+
+The Leptos/Tauri adapter now renders the typed source catalog and edits protocol
+filters, primary/fallback scopes, preferred order, dispositions and user sources.
+CLI `network configure` uses the same Rust selection validator. GUI backup/restore
+and CLI `network export` / `network import` use the shared network-bound portable
+codec and atomic native store. Imports cannot transfer machine-local SOCKS trust;
+wrong-network or malformed imports preserve the existing file.
+
+Evidence: runtime network-configuration tests (19), CLI wallet process tests (13,
+including configure/export/import/restart/refusal), native portable-file test,
+native source tests, BIP37 provenance/stale-network tests, strict runtime/CLI/native
+and WASM UI Clippy, architecture gate, and a Leptos Trunk WASM build passed.
+These are component/process/build checks, not a live GUI or packaged-device claim.
+
+Legacy BIP37 commands no longer accept renderer-selected SOCKS routing and check
+network selection before and after route resolution. They still need full shared
+source-planner enforcement: verified Tor alone does not prove that a destination
+is selected by the holder's source policy. The React migration, full live wallet
+workflow, remaining provider integration and platform evidence remain open.
