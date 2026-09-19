@@ -63,32 +63,51 @@ async fn verified_native_proxy_for_network(
     verified_native_proxy(destination_hosts, &trusted_ports).await
 }
 
-fn bip37_endpoint_is_declared_own(
+fn bip37_endpoint_matches(endpoint: &optn_runtime::chain::Endpoint, host: &str, port: u16) -> bool {
+    endpoint.kind == optn_runtime::chain::EndpointKind::BchP2p
+        && endpoint.port == Some(port)
+        && endpoint
+            .host
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case(host.trim().trim_end_matches('.'))
+}
+
+fn bip37_selected_endpoint_is_declared_own(
     catalog: &optn_runtime::chain::SourceCatalog,
+    policy: &optn_runtime::chain::ConnectionPolicy,
     host: &str,
     port: u16,
-) -> bool {
-    catalog.iter().any(|source| {
-        source.is_enabled()
-            && source.is_user_infrastructure()
-            && source.endpoints.iter().any(|endpoint| {
-                endpoint.kind == optn_runtime::chain::EndpointKind::BchP2p
-                    && endpoint.port == Some(port)
-                    && endpoint
-                        .host
-                        .trim_end_matches('.')
-                        .eq_ignore_ascii_case(host.trim().trim_end_matches('.'))
-            })
-    })
+) -> Result<bool, String> {
+    use optn_runtime::chain::{build_selection_plan, ProtocolFamily};
+
+    if !policy.protocols.contains(ProtocolFamily::Bip37) {
+        return Err("BIP37 is not allowed by the current source selection".into());
+    }
+
+    let plan = build_selection_plan(catalog, policy);
+    plan.primary
+        .iter()
+        .chain(plan.fallback.iter())
+        .filter_map(|id| catalog.get(id))
+        .find(|source| {
+            source
+                .endpoints
+                .iter()
+                .any(|endpoint| bip37_endpoint_matches(endpoint, host, port))
+        })
+        .map(|source| source.is_user_infrastructure())
+        .ok_or_else(|| "BIP37 endpoint is not enabled by the current source selection".into())
 }
 
 async fn bip37_transport_for_catalog(
     host: &str,
     port: u16,
     catalog: &optn_runtime::chain::SourceCatalog,
+    policy: &optn_runtime::chain::ConnectionPolicy,
     trusted_ports: &[u16],
 ) -> Result<fusion::Transport<'static>, String> {
-    if fusion::is_local_server(host) || bip37_endpoint_is_declared_own(catalog, host, port) {
+    let selected_is_own = bip37_selected_endpoint_is_declared_own(catalog, policy, host, port)?;
+    if fusion::is_local_server(host) || selected_is_own {
         return Ok(fusion::Transport::Direct);
     }
     let verified_proxy = verified_native_proxy(&[host], trusted_ports).await?;
@@ -125,9 +144,10 @@ async fn bip37_transport_for_active_network(
     })
     .await
     .map_err(|_| "network settings reader stopped".to_string())??;
-    let (catalog, _) = persisted
+    let (catalog, policy) = persisted
         .unwrap_or_else(|| crate::chain_runtime::catalog_and_policy_from_app_state(&state));
-    let transport = bip37_transport_for_catalog(host, port, &catalog, &trusted_ports).await?;
+    let transport =
+        bip37_transport_for_catalog(host, port, &catalog, &policy, &trusted_ports).await?;
     ensure_bip37_network_current(runtime.state().network, network)?;
     Ok(transport)
 }
@@ -1521,20 +1541,26 @@ mod tests {
         );
     }
 
-    fn declared_bip37_infrastructure(host: &str, port: u16) -> optn_runtime::chain::SourceCatalog {
+    fn bip37_source_catalog(
+        host: &str,
+        port: u16,
+        origin: optn_runtime::chain::SourceOrigin,
+    ) -> (
+        optn_runtime::chain::SourceCatalog,
+        optn_runtime::chain::SourceId,
+    ) {
         use optn_runtime::chain::{
             CapabilitySet, ChainSource, Endpoint, EndpointKind, SourceCatalog, SourceDisposition,
-            SourceId, SourceOrigin,
+            SourceId,
         };
 
         let mut catalog = SourceCatalog::default();
+        let id = SourceId::new("bip37-node");
         catalog
             .insert(ChainSource {
-                id: SourceId::new("home-bip37"),
-                label: "Home BCH node".into(),
-                origin: SourceOrigin::UserInfrastructure {
-                    group: "home".into(),
-                },
+                id: id.clone(),
+                label: "BCH node".into(),
+                origin,
                 endpoints: vec![Endpoint {
                     kind: EndpointKind::BchP2p,
                     host: host.into(),
@@ -1545,7 +1571,18 @@ mod tests {
                 priority: 0,
             })
             .unwrap();
-        catalog
+        (catalog, id)
+    }
+
+    fn declared_bip37_infrastructure(host: &str, port: u16) -> optn_runtime::chain::SourceCatalog {
+        bip37_source_catalog(
+            host,
+            port,
+            optn_runtime::chain::SourceOrigin::UserInfrastructure {
+                group: "home".into(),
+            },
+        )
+        .0
     }
 
     #[tokio::test]
@@ -1562,18 +1599,31 @@ mod tests {
                 }
             }
         });
-        let empty_catalog = optn_runtime::chain::SourceCatalog::default();
-
-        assert!(
-            bip37_transport_for_catalog("remote-bip37.example", 8333, &empty_catalog, &[],)
-                .await
-                .is_err()
+        let (remote_catalog, remote_id) = bip37_source_catalog(
+            "remote-bip37.example",
+            8333,
+            optn_runtime::chain::SourceOrigin::UserAdded,
         );
+        let remote_policy = optn_runtime::chain::ConnectionPolicy::exact(
+            remote_id,
+            optn_runtime::chain::ProtocolFamily::Bip37,
+        );
+
+        assert!(bip37_transport_for_catalog(
+            "remote-bip37.example",
+            8333,
+            &remote_catalog,
+            &remote_policy,
+            &[],
+        )
+        .await
+        .is_err());
         assert!(matches!(
             bip37_transport_for_catalog(
                 "remote-bip37.example",
                 8333,
-                &empty_catalog,
+                &remote_catalog,
+                &remote_policy,
                 &[proxy_port],
             )
             .await
@@ -1585,13 +1635,64 @@ mod tests {
         ));
 
         let own_catalog = declared_bip37_infrastructure("node.example.", 8333);
+        let own_policy = optn_runtime::chain::ConnectionPolicy::own_infrastructure();
         assert!(matches!(
-            bip37_transport_for_catalog("NODE.EXAMPLE", 8333, &own_catalog, &[])
+            bip37_transport_for_catalog("NODE.EXAMPLE", 8333, &own_catalog, &own_policy, &[])
                 .await
                 .unwrap(),
             fusion::Transport::Direct
         ));
         server.abort();
+    }
+
+    #[test]
+    fn bip37_transport_requires_an_enabled_selected_bip37_source() {
+        use optn_runtime::chain::{
+            ConnectionPolicy, ProtocolFamily, ProtocolSet, SourceDisposition, SourceScope,
+        };
+
+        let (mut catalog, id) = bip37_source_catalog(
+            "remote-bip37.example",
+            8333,
+            optn_runtime::chain::SourceOrigin::UserAdded,
+        );
+        let exact_bip37 = ConnectionPolicy::exact(id.clone(), ProtocolFamily::Bip37);
+
+        assert!(bip37_selected_endpoint_is_declared_own(
+            &catalog,
+            &ConnectionPolicy::own_infrastructure(),
+            "remote-bip37.example",
+            8333,
+        )
+        .unwrap_err()
+        .contains("not enabled"));
+
+        let electrum_only = ConnectionPolicy {
+            protocols: ProtocolSet::only(ProtocolFamily::Electrum),
+            primary_scope: SourceScope::Explicit(std::collections::BTreeSet::from([id.clone()])),
+            fallback_scope: None,
+            preferred: Vec::new(),
+        };
+        assert!(bip37_selected_endpoint_is_declared_own(
+            &catalog,
+            &electrum_only,
+            "remote-bip37.example",
+            8333,
+        )
+        .unwrap_err()
+        .contains("not allowed"));
+
+        for disposition in [SourceDisposition::Disabled, SourceDisposition::Banned] {
+            catalog.set_disposition(&id, disposition).unwrap();
+            assert!(bip37_selected_endpoint_is_declared_own(
+                &catalog,
+                &exact_bip37,
+                "remote-bip37.example",
+                8333,
+            )
+            .unwrap_err()
+            .contains("not enabled"));
+        }
     }
 
     #[test]
