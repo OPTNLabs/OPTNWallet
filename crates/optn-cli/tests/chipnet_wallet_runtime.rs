@@ -3,7 +3,7 @@
 //! Run: cargo test --manifest-path crates/optn-cli/Cargo.toml --test chipnet_wallet_runtime -- --ignored --nocapture
 
 use optn_app::{AppAction, AppState, SecretText, WalletKind};
-use optn_chain_native::{build_native_chain_stack, NativeChainSecrets};
+use optn_chain_native::{build_native_chain_stack_via, NativeChainSecrets, TorProxyTrust};
 use optn_core::{
     cashaddr::Address,
     hd::{AccountPath, Wallet, BIP39_TEST_VECTOR_MNEMONIC},
@@ -27,6 +27,14 @@ use std::time::Duration;
 #[tokio::test]
 #[ignore = "requires explicit Chipnet live-test authorization and a local Tor SOCKS proxy"]
 async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
+    // Explicitly supplied by the authorized test runner, never guessed from a
+    // conventional SOCKS port. Production provenance checks stay enabled.
+    let tor_port: u16 = std::env::var("OPTN_CHIPNET_TEST_TOR_PORT")
+        .expect("set OPTN_CHIPNET_TEST_TOR_PORT to the Tor process you own")
+        .parse()
+        .expect("Tor port must be a nonzero u16");
+    assert_ne!(tor_port, 0);
+    let trusted_ports = [tor_port];
     // Public account override, or a published BIP39 fixture. Never read user
     // wallet/seed files. The runtime and CLI receive only the public account.
     let account = std::env::var("OPTN_CHIPNET_TEST_ACCOUNT")
@@ -57,11 +65,15 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
         .unwrap();
     let stack = tokio::time::timeout(
         Duration::from_secs(60),
-        build_native_chain_stack(
+        build_native_chain_stack_via(
             catalog.clone(),
             ConnectionPolicy::exact(source.clone(), ProtocolFamily::Electrum),
             "chipnet",
             &NativeChainSecrets::default(),
+            TorProxyTrust {
+                managed: &[],
+                trusted: &trusted_ports,
+            },
         ),
     )
     .await
@@ -223,11 +235,15 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
     assert!(!before_refresh.fusion.session_armed);
     let restart_stack = tokio::time::timeout(
         Duration::from_secs(60),
-        build_native_chain_stack(
+        build_native_chain_stack_via(
             catalog.clone(),
             ConnectionPolicy::exact(source.clone(), ProtocolFamily::Electrum),
             "chipnet",
             &NativeChainSecrets::default(),
+            TorProxyTrust {
+                managed: &[],
+                trusted: &trusted_ports,
+            },
         ),
     )
     .await
@@ -271,6 +287,7 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
         .store_atomic(&NetworkConfigEnvelope::current(
             "live-test",
             UserNetworkOverlay {
+                trusted_socks_ports: trusted_ports.to_vec(),
                 user_sources: catalog.iter().cloned().collect(),
                 connection_policy: ConnectionPolicy::exact(
                     source.clone(),
