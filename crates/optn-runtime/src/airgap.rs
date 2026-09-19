@@ -533,6 +533,7 @@ mod tests {
                 xpub,
                 HdSyncLimits::default(),
                 None,
+                runtime.revocation.load(std::sync::atomic::Ordering::SeqCst),
                 reply,
             )))
             .await
