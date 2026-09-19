@@ -1291,6 +1291,7 @@ fn multisig_inspect(
 /// failures abort startup rather than continuing with an uninitialized policy.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
@@ -1300,13 +1301,15 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_keyring::init());
 
-    // Desktop only: mobile builds are updated by their stores. Registering the
-    // plugin does not by itself enable updates -- without a public key in the
-    // configuration it has no way to verify anything, and every call returns an
-    // error that `app_update` reports as "signature checking is not configured"
-    // rather than falling back to an unverified download.
+    // Unsigned previews must start without an installer. The updater plugin
+    // deserializes its config at startup, so registering it with no config
+    // aborts the whole wallet before the landing screen can render.
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    let builder = if app_update::has_update_key(context.config()) {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        builder
+    };
 
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
@@ -1501,7 +1504,7 @@ pub fn run() {
             // flash a stale menu before the frontend replaces it via setAsAppMenu().
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
 

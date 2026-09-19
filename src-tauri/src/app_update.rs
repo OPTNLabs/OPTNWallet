@@ -165,9 +165,19 @@ pub async fn optn_check_for_update(
 /// against. With no key the plugin errors, and that error is the correct
 /// answer: there is no such thing as an unverified install here, only no
 /// install.
+pub(crate) fn has_update_key(config: &tauri::Config) -> bool {
+    config
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|value| value.get("pubkey"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|key| !key.trim().is_empty() && key != "REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY")
+}
+
 fn signature_checking_configured(app: &tauri::AppHandle) -> bool {
     use tauri_plugin_updater::UpdaterExt;
-    app.updater_builder().build().is_ok()
+    has_update_key(app.config()) && app.updater_builder().build().is_ok()
 }
 
 /// Download and install the update, verifying its signature first.
@@ -178,10 +188,33 @@ fn signature_checking_configured(app: &tauri::AppHandle) -> bool {
 /// path stays for builds that have no key.
 /// Download and install, verifying the signature first.
 #[tauri::command]
-pub async fn optn_install_update(app: tauri::AppHandle) -> Result<String, String> {
+pub async fn optn_install_update(
+    app: tauri::AppHandle,
+    native: tauri::State<'_, std::sync::Arc<crate::chain_runtime::NativeChainRuntime>>,
+) -> Result<String, String> {
     use tauri_plugin_updater::UpdaterExt;
 
-    let updater = app.updater_builder().build().map_err(|error| {
+    if !has_update_key(app.config()) {
+        return Err(
+            "This build has no update verification key; installation is unavailable.".into(),
+        );
+    }
+    let (public_allowed, tor) = native.tor_status_for_update_check().await;
+    let builder = app.updater_builder();
+    let builder = match outbound_route(public_allowed, tor) {
+        TorRoute::Direct => builder.no_proxy(),
+        TorRoute::Through { socks_port } => builder.proxy(
+            format!("socks5h://127.0.0.1:{socks_port}")
+                .parse()
+                .map_err(|_| "Invalid verified update proxy.".to_string())?,
+        ),
+        _ => {
+            return Err(
+                "Update installation is unavailable under the current network policy.".into(),
+            )
+        }
+    };
+    let updater = builder.build().map_err(|error| {
         format!(
             "This build cannot verify updates ({error}). Install from              {RELEASES_PAGE} instead."
         )
@@ -207,6 +240,26 @@ pub async fn optn_install_update(app: tauri::AppHandle) -> Result<String, String
 mod tests {
     use super::*;
     use optn_core::tor::TorStatus;
+
+    #[test]
+    fn unsigned_previews_do_not_initialize_an_installer() {
+        let mut config = tauri::Config::default();
+        assert!(!has_update_key(&config));
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"pubkey":""}),
+            serde_json::json!({"pubkey":"REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY"}),
+        ] {
+            config.plugins.0.insert("updater".into(), value);
+            assert!(!has_update_key(&config));
+        }
+        config.plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({"pubkey":"configured-public-key"}),
+        );
+        assert!(has_update_key(&config)); // The plugin still verifies signatures before installing.
+    }
 
     #[test]
     fn the_running_version_is_a_tag_the_parser_accepts() {
