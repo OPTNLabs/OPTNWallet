@@ -34,6 +34,7 @@ import {
 } from '../../utils/servers/userNodes';
 import { Bip37NodeRow } from './Bip37NodeSettings';
 import { ChainSourcesSettings } from './ChainSourcesSettings';
+import { CashFusionSettings } from './CashFusionSettings';
 import {
   getBackend,
   setBackend,
@@ -366,6 +367,7 @@ export const ServerSettings: React.FC<{
       <ChainSourcesSettings
         explorerSettings={explorerSettings}
         feeSettings={feeSettings}
+        fusionSettings={<CashFusionSettings variant="servers" />}
         backRef={backRef}
       />
     );
