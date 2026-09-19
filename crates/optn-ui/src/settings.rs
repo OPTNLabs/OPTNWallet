@@ -207,6 +207,7 @@ fn SettingsRow(
                     </button>
                 }.into_any(),
                 SettingsRowId::RescanFromHeight => view! {
+                    <BirthdaySection transport=transport state=state />
                     <RescanSection transport=transport state=state />
                 }.into_any(),
                 SettingsRowId::Servers => view! {
@@ -836,6 +837,95 @@ fn DeviceSection(transport: UiTransport, state: RwSignal<AppState>) -> impl Into
                 </button>
             </Show>
         </div>
+    }
+}
+
+#[component]
+fn BirthdaySection(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoView {
+    use optn_transport::security::{WalletBirthdayInput, WalletBirthdayView};
+    use optn_transport::WalletSecurityRequest as Request;
+    let status = RwSignal::new(None::<optn_transport::WalletSecurityStatus>);
+    let busy = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+    let kind = RwSignal::new(String::from("unknown"));
+    let height = RwSignal::new(String::new());
+    let date = RwSignal::new(None::<u32>);
+    let confirming = RwSignal::new(false);
+    Effect::new(move |_| {
+        crate::security::submit(transport, state, Request::Status, status, error, busy);
+    });
+    let selection = move || match kind.get().as_str() {
+        "height" => height
+            .get()
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .map(|height| WalletBirthdayInput::Height { height }),
+        "time" => date
+            .get()
+            .map(|requested_time| WalletBirthdayInput::Time { requested_time }),
+        _ => Some(WalletBirthdayInput::Unknown),
+    };
+    view! {
+        <section class="stack" aria-label="Wallet history start">
+            <h3>"Wallet history start"</h3>
+            <p class="muted">{move || match status.get().and_then(|s| s.restore_birthday) {
+                Some(WalletBirthdayView::ImportedAtHeight { height }) => format!("Saved start: block {height}."),
+                Some(WalletBirthdayView::ImportedAtTime { requested_time }) => {
+                    let iso = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(f64::from(requested_time) * 1000.0))
+                        .to_iso_string().as_string().unwrap_or_default();
+                    format!("Saved start: {} (UTC).", iso.get(..10).unwrap_or("unknown date"))
+                },
+                Some(WalletBirthdayView::CreatedAt { height, .. }) => format!("Recorded creation: block {height}."),
+                Some(WalletBirthdayView::Unknown) => "Saved start: unknown; scan full history.".into(),
+                None => "Open a wallet to save its history start.".into(),
+            }}</p>
+            <label class="field">"Known wallet start"
+                <select prop:value=move || kind.get() on:change=move |event| {
+                    kind.set(event_target_value(&event)); date.set(None); confirming.set(false);
+                }>
+                    <option value="unknown">"Unknown — full history"</option>
+                    <option value="height">"Block height"</option>
+                    <option value="time">"Date (UTC)"</option>
+                </select>
+            </label>
+            <Show when=move || kind.get() == "height">
+                <label class="field">"Earliest block"
+                    <input type="text" inputmode="numeric" prop:value=move || height.get()
+                        on:input=move |event| { height.set(event_target_value(&event)); confirming.set(false); } />
+                </label>
+            </Show>
+            <Show when=move || kind.get() == "time">
+                <label class="field">"Earliest date (UTC)"
+                    <input type="date" on:input=move |event| {
+                        let seconds = event_target::<web_sys::HtmlInputElement>(&event).value_as_number() / 1000.0;
+                        date.set((seconds.is_finite() && seconds >= 0.0 && seconds <= f64::from(u32::MAX))
+                            .then_some(seconds as u32));
+                        confirming.set(false);
+                    } />
+                </label>
+            </Show>
+            <p class="muted">"Saved separately from a manual rescan, which takes precedence. Choose Unknown if you are unsure when this wallet first received funds."</p>
+            {move || error.get().map(|message| view! { <p class="warning" role="alert">{message}</p> })}
+            <Show when=move || confirming.get() fallback=move || view! {
+                <button class="secondary" type="button"
+                    disabled=move || busy.get() || selection().is_none() || status.get().and_then(|s| s.restore_birthday).is_none()
+                    on:click=move |_| confirming.set(true)>"Save history start"</button>
+            }>
+                <p class="warning">"A start later than your first payment can hide funds and history. Save this choice? Refresh the wallet afterward to apply it."</p>
+                <div class="row">
+                    <button class="primary" type="button" disabled=move || busy.get()
+                        on:click=move |_| {
+                            let (Some(birthday), Some(current)) = (selection(), status.get_untracked()) else { return };
+                            confirming.set(false);
+                            crate::security::submit(transport, state, Request::SetBirthday {
+                                epoch: current.epoch, birthday,
+                            }, status, error, busy);
+                        }>"Confirm history start"</button>
+                    <button class="secondary" type="button" on:click=move |_| confirming.set(false)>"Cancel"</button>
+                </div>
+            </Show>
+        </section>
     }
 }
 

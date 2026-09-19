@@ -130,7 +130,31 @@ fn network_prompt(argument: &str) -> Result<NetworkCommand> {
     }
 }
 
-const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>, history, network status, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
+fn birthday_prompt(argument: &str) -> Result<optn_transport::security::WalletBirthdayInput> {
+    use optn_transport::security::WalletBirthdayInput;
+    let parts = crate::console::split(argument)?;
+    match parts.as_slice() {
+        [kind] if kind == "unknown" => Ok(WalletBirthdayInput::Unknown),
+        [kind, value] if kind == "height" || kind == "time" => {
+            let value = value.parse::<u32>().map_err(|_| {
+                CliError::Usage("Birthday height or Unix time must be a nonnegative u32.".into())
+            })?;
+            Ok(if kind == "height" {
+                WalletBirthdayInput::Height { height: value }
+            } else {
+                WalletBirthdayInput::Time {
+                    requested_time: value,
+                }
+            })
+        }
+        _ => Err(CliError::Usage(
+            "Use birthday unknown, birthday height <block>, or birthday time <Unix seconds>."
+                .into(),
+        )),
+    }
+}
+
+const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>, birthday unknown|height <block>|time <Unix seconds>, history, network status, network select <id> --protocol <protocol>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -374,6 +398,16 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                     continue;
                 }
                 "list" => Some(Request::Status),
+                "birthday" => match birthday_prompt(argument) {
+                    Ok(birthday) => Some(Request::SetBirthday {
+                        epoch: status.epoch,
+                        birthday,
+                    }),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        continue;
+                    }
+                },
                 "airgap" => {
                     match serde_json::from_str::<optn_transport::AirgapRequest>(argument) {
                         Ok(request) => println!("{}", airgap_reply(&runtime, request).await),
@@ -718,6 +752,35 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn birthday_prompt_accepts_import_hints_but_not_creation_claims() {
+        use optn_transport::security::WalletBirthdayInput;
+        assert_eq!(
+            birthday_prompt("unknown").unwrap(),
+            WalletBirthdayInput::Unknown
+        );
+        assert_eq!(
+            birthday_prompt("height 0").unwrap(),
+            WalletBirthdayInput::Height { height: 0 }
+        );
+        assert_eq!(
+            birthday_prompt("time 172800").unwrap(),
+            WalletBirthdayInput::Time {
+                requested_time: 172800
+            }
+        );
+        for invalid in [
+            "height -1",
+            "height 4294967296",
+            "time",
+            "unknown extra",
+            "created_at 1",
+            "height 1 extra",
+        ] {
+            assert!(birthday_prompt(invalid).is_err(), "accepted {invalid}");
+        }
+    }
 
     #[tokio::test]
     async fn source_edit_invalidates_freshness_before_persisting() {

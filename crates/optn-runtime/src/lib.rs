@@ -451,6 +451,9 @@ impl AppRuntimeDriver {
                         continue;
                     }
                     let is_query = matches!(request, WalletSecurityRequest::Status);
+                    let changes_birthday =
+                        matches!(request, WalletSecurityRequest::SetBirthday { .. });
+                    let previous_restore_state = self.wallet_sync.restore_state().clone();
                     let opens_wallet = matches!(
                         request,
                         WalletSecurityRequest::Open { .. }
@@ -496,6 +499,14 @@ impl AppRuntimeDriver {
                     let revoked = generation != self.revocation.load(Ordering::SeqCst)
                         || (!is_query && reply.is_closed())
                         || (!opens_wallet && previous_lock.idle_should_lock(finished_ms));
+                    let birthday_restore_state = if !revoked && result.is_ok() && changes_birthday {
+                        self.security
+                            .as_ref()
+                            .and_then(|security| security.restore_state())
+                            .cloned()
+                    } else {
+                        None
+                    };
                     // Storage may already have committed a password change. Keep its state
                     // coherent even if an OS enrollment refresh subsequently returned an error.
                     self.state = candidate;
@@ -507,6 +518,13 @@ impl AppRuntimeDriver {
                                 .into(),
                         ))
                     } else {
+                        if let Some(restore_state) = birthday_restore_state {
+                            if restore_state != previous_restore_state {
+                                self.revocation.fetch_add(1, Ordering::SeqCst);
+                                self.state.spend = None;
+                                self.wallet_sync.birthday_changed(restore_state);
+                            }
+                        }
                         if result.is_ok()
                             && (opens_wallet
                                 || authenticates
@@ -613,7 +631,14 @@ impl AppRuntimeDriver {
                             | AppAction::RequestRescanFrom { .. }
                     )
                     .then(|| self.state.clone());
-                    let rescan_requested = matches!(action, AppAction::RequestRescanFrom { .. });
+                    let requested_rescan_height = match &action {
+                        AppAction::RequestRescanFrom { height } => Some(*height),
+                        _ => None,
+                    };
+                    let mut annotation_restore_state = self.wallet_sync.restore_state().clone();
+                    if let Some(height) = requested_rescan_height {
+                        annotation_restore_state.request_rescan_from(height);
+                    }
                     let annotation_generation = self.revocation.load(Ordering::SeqCst);
                     let mut event = if self.wallet_sync.requires_fresh_coins(&action, &self.state) {
                         self.state.spend = None;
@@ -636,8 +661,9 @@ impl AppRuntimeDriver {
                             event = Some(self.wallet_sync.persist_annotation(
                                 &mut self.state,
                                 previous,
-                                |app, sync, progress| {
-                                    security.persist_checkpoint(app, sync, progress)
+                                &annotation_restore_state,
+                                |app, sync, restore_state, progress| {
+                                    security.persist_checkpoint(app, sync, restore_state, progress)
                                 },
                                 |app| guard.allows(app, applied.is_closed()),
                             ));
@@ -646,7 +672,11 @@ impl AppRuntimeDriver {
                             }
                         }
                     }
-                    if rescan_requested && event == Some(AppEvent::CoinsChanged) {
+                    if event == Some(AppEvent::CoinsChanged) {
+                        self.wallet_sync
+                            .install_restore_state(annotation_restore_state);
+                    }
+                    if requested_rescan_height.is_some() && event == Some(AppEvent::CoinsChanged) {
                         self.state.spend = None;
                         self.wallet_sync.rescan_requested();
                     }
