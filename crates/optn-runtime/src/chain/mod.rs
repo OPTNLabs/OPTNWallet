@@ -287,6 +287,7 @@ pub enum EndpointKind {
     BchnZmq,
     ExplorerHttp,
     ExplorerHttps,
+    IpfsGatewayHttps,
 }
 
 impl EndpointKind {
@@ -296,7 +297,7 @@ impl EndpointKind {
             Self::ElectrumTls | Self::ElectrumTcp => Some(ProtocolFamily::Electrum),
             Self::BchnRpc => Some(ProtocolFamily::BchnRpc),
             Self::BchnZmq => Some(ProtocolFamily::BchnZmq),
-            Self::ExplorerHttp | Self::ExplorerHttps => None,
+            Self::ExplorerHttp | Self::ExplorerHttps | Self::IpfsGatewayHttps => None,
         }
     }
 
@@ -311,7 +312,7 @@ impl EndpointKind {
             Self::ElectrumTls | Self::ElectrumTcp => matches!(protocol, ProtocolFamily::Electrum),
             Self::BchnRpc => matches!(protocol, ProtocolFamily::BchnRpc),
             Self::BchnZmq => matches!(protocol, ProtocolFamily::BchnZmq),
-            Self::ExplorerHttp | Self::ExplorerHttps => false,
+            Self::ExplorerHttp | Self::ExplorerHttps | Self::IpfsGatewayHttps => false,
         }
     }
 }
@@ -601,10 +602,35 @@ pub struct SelectionPlan {
 }
 
 pub fn build_selection_plan(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> SelectionPlan {
+    build_source_plan(catalog, policy, |source| {
+        source.supports_any(&policy.protocols)
+    })
+}
+
+/// Metadata services obey source scope, bans and preference independently of
+/// chain protocol restrictions. Configuration is not verified capability evidence.
+pub fn build_endpoint_selection_plan(
+    catalog: &SourceCatalog,
+    policy: &ConnectionPolicy,
+    kind: EndpointKind,
+) -> SelectionPlan {
+    build_source_plan(catalog, policy, |source| {
+        source
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.kind == kind)
+    })
+}
+
+fn build_source_plan(
+    catalog: &SourceCatalog,
+    policy: &ConnectionPolicy,
+    eligible: impl Fn(&ChainSource) -> bool,
+) -> SelectionPlan {
     fn ranked(
         catalog: &SourceCatalog,
         scope: &SourceScope,
-        protocols: &ProtocolSet,
+        eligible: &impl Fn(&ChainSource) -> bool,
         preferred: &[SourceId],
         exclude: &BTreeSet<SourceId>,
     ) -> Vec<SourceId> {
@@ -612,7 +638,7 @@ pub fn build_selection_plan(catalog: &SourceCatalog, policy: &ConnectionPolicy) 
             .iter()
             .filter(|source| source.is_enabled())
             .filter(|source| scope.contains(source))
-            .filter(|source| source.supports_any(protocols))
+            .filter(|source| eligible(source))
             .filter(|source| !exclude.contains(&source.id))
             .collect::<Vec<_>>();
 
@@ -632,7 +658,7 @@ pub fn build_selection_plan(catalog: &SourceCatalog, policy: &ConnectionPolicy) 
     let primary = ranked(
         catalog,
         &policy.primary_scope,
-        &policy.protocols,
+        &eligible,
         &policy.preferred,
         &BTreeSet::new(),
     );
@@ -640,15 +666,7 @@ pub fn build_selection_plan(catalog: &SourceCatalog, policy: &ConnectionPolicy) 
     let fallback = policy
         .fallback_scope
         .as_ref()
-        .map(|scope| {
-            ranked(
-                catalog,
-                scope,
-                &policy.protocols,
-                &policy.preferred,
-                &primary_set,
-            )
-        })
+        .map(|scope| ranked(catalog, scope, &eligible, &policy.preferred, &primary_set))
         .unwrap_or_default();
 
     SelectionPlan { primary, fallback }

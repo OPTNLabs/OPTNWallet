@@ -201,6 +201,7 @@ const fn endpoint_kind_code(kind: EndpointKind) -> u8 {
         EndpointKind::BchnZmq => 4,
         EndpointKind::ExplorerHttp => 5,
         EndpointKind::ExplorerHttps => 6,
+        EndpointKind::IpfsGatewayHttps => 7,
     }
 }
 
@@ -213,6 +214,7 @@ const fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::BchnZmq => "zmq",
         EndpointKind::ExplorerHttp => "explorer-http",
         EndpointKind::ExplorerHttps => "explorer-https",
+        EndpointKind::IpfsGatewayHttps => "ipfs-gateway",
     }
 }
 
