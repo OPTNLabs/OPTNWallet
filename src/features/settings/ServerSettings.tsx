@@ -69,6 +69,7 @@ export const ServerSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { t } = useI18n();
   const desktop = isDesktopPlatform();
+  const [showSources, setShowSources] = useState(false);
   const currentNetwork = useSelector(selectCurrentNetwork);
   const defaultServers = getElectrumServers(currentNetwork);
   const explorerId = useSelector(selectExplorerId);
@@ -308,15 +309,40 @@ export const ServerSettings: React.FC = () => {
     </div>
   );
 
+  if (desktop && showSources) {
+    return (
+      <div className="flex flex-col gap-4">
+        <button
+          type="button"
+          className="wallet-btn-secondary self-start px-3 py-2 text-sm"
+          onClick={() => setShowSources(false)}
+        >
+          Back to server settings
+        </button>
+        <ChainSourcesSettings explorerSettings={explorerSettings} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
-      {/*
-        The multi-source model the Rust runtime actually enforces. The controls
-        below it still edit the single Electrum server and single peer the
-        legacy settings shape can hold, which is a narrow view of this same
-        catalog -- so this sits above them rather than replacing them.
-      */}
-      {desktop && <ChainSourcesSettings explorerSettings={explorerSettings} />}
+      {desktop && (
+        <button
+          type="button"
+          className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+          onClick={() => setShowSources(true)}
+        >
+          <span>
+            <span className="block text-sm font-semibold wallet-text-strong">
+              Network sources
+            </span>
+            <span className="block text-xs wallet-muted">
+              Automatic routing · My infrastructure · Source preferences
+            </span>
+          </span>
+          <span aria-hidden="true">›</span>
+        </button>
+      )}
 
       {/* Which single backend serves this wallet */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 flex items-center justify-between gap-3">
