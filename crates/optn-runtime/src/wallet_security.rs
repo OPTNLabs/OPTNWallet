@@ -471,7 +471,16 @@ impl WalletSecurity {
             candidate.hd_addresses = Some(previous.clone().unwrap_or_default());
             crate::wallet_checkpoint::observe_allocation(&mut candidate, &history)
                 .map_err(failure)?;
-            let restored = WalletCheckpoint::capture(&candidate, &history).map_err(failure)?;
+            let mut restored = WalletCheckpoint::capture(&candidate, &history).map_err(failure)?;
+            if let Some(progress) = binding
+                .restored
+                .as_ref()
+                .and_then(|saved| saved.header_progress())
+            {
+                restored = restored
+                    .with_stored_header_progress(progress.clone())
+                    .map_err(failure)?;
+            }
             if previous != candidate.hd_addresses {
                 // Even the first offline receive address must be durable before it
                 // appears. Old history-only checkpoints are upgraded atomically.
@@ -507,6 +516,7 @@ impl WalletSecurity {
         request: Request,
         now_ms: u64,
         history: &WalletReconciliation,
+        header_progress: Option<&crate::wallet_checkpoint::StoredHeaderProgress>,
     ) -> Result<WalletSecurityStatus, TransportError> {
         self.reconcile(state);
         if state.wallet.is_some() && state.lock.idle_should_lock(now_ms) {
@@ -534,7 +544,7 @@ impl WalletSecurity {
                     .map_err(crypto)?;
                 crate::wallet_checkpoint::update_receive_address(&mut candidate)
                     .map_err(failure)?;
-                self.persist_checkpoint(&candidate, history, None)?;
+                self.persist_checkpoint(&candidate, history, header_progress)?;
                 *state = candidate;
                 self.checkpoint_published();
             }
@@ -863,10 +873,14 @@ pub(crate) mod tests {
             account_path: "m/44'/1'/0'".into(),
         };
         storage.fail_next_entropy();
-        assert!(security.handle(&mut state, request(), 1, &history).is_err());
+        assert!(security
+            .handle(&mut state, request(), 1, &history, None)
+            .is_err());
         assert!(storage.list().unwrap().is_empty());
         assert!(state.wallet.is_none());
-        let status = security.handle(&mut state, request(), 2, &history).unwrap();
+        let status = security
+            .handle(&mut state, request(), 2, &history, None)
+            .unwrap();
         let handle = status.active.unwrap();
         let scopes = [
             AuthScope::Spend,
@@ -897,6 +911,7 @@ pub(crate) mod tests {
                 },
                 4,
                 &history,
+                None,
             )
             .unwrap();
         assert!(
@@ -913,11 +928,18 @@ pub(crate) mod tests {
                 },
                 5,
                 &history,
+                None,
             )
             .unwrap();
         state.reduce(AppAction::LockWallet);
         security
-            .handle(&mut state, Request::UnlockBiometric { handle }, 6, &history)
+            .handle(
+                &mut state,
+                Request::UnlockBiometric { handle },
+                6,
+                &history,
+                None,
+            )
             .unwrap();
         assert_eq!(state.wallet.as_ref().unwrap().kind, WalletKind::WatchOnly);
         assert_eq!(
@@ -965,14 +987,16 @@ pub(crate) mod tests {
         let closed = state.clone();
         storage.fail_next_entropy();
         assert_eq!(
-            security.handle(&mut state, create(), 1, &history),
+            security.handle(&mut state, create(), 1, &history, None),
             Err(platform(PlatformError::Unavailable))
         );
         assert_eq!(state, closed);
         assert!(storage.list().unwrap().is_empty());
         assert!(security.session.is_none());
 
-        let opened = security.handle(&mut state, create(), 2, &history).unwrap();
+        let opened = security
+            .handle(&mut state, create(), 2, &history, None)
+            .unwrap();
         let before = state.clone();
         let files = storage.0.lock().unwrap().clone();
         let handle = opened.active.as_ref().unwrap();
@@ -988,7 +1012,7 @@ pub(crate) mod tests {
         ] {
             storage.fail_next_entropy();
             assert_eq!(
-                security.handle(&mut state, request, 3, &history),
+                security.handle(&mut state, request, 3, &history, None),
                 Err(platform(PlatformError::Unavailable))
             );
             assert_eq!(state, before);
@@ -1022,6 +1046,7 @@ pub(crate) mod tests {
                 },
                 1,
                 &WalletReconciliation::default(),
+                None,
             )
             .unwrap();
         // Model an existing spend prompt when its chain observations go stale.

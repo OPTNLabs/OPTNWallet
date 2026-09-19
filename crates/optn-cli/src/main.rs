@@ -1332,16 +1332,6 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
             .map_err(|error| {
                 CliError::Network(format!("shared wallet refresh failed: {error:?}"))
             })?;
-        // Hand the verified accumulator back before reporting. A restart then
-        // resumes where this pass reached instead of walking the chain from
-        // genesis again, which on a long chain is the difference between a
-        // refresh that finishes and one that times out.
-        if let Some(view) = worker.header_view() {
-            runtime
-                .publish_header_progress(view)
-                .await
-                .map_err(|error| CliError::Network(format!("header progress: {error}")))?;
-        }
         let status = runtime.subscribe_wallet_sync().borrow().clone();
         if !status.sync.history_fresh || !status.sync.utxos_fresh {
             return Err(CliError::Network("wallet refresh did not publish a fresh snapshot".into()));
@@ -1486,16 +1476,6 @@ async fn rescan_shared_wallet(
         runtime.sync_hd_wallet(&mut *stack.service.lock().await, &mut worker, xpub,
             optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap })
             .await.map_err(|error| CliError::Network(format!("HD rescan incomplete: {error}")))?;
-        // Hand the verified accumulator back before reporting. A restart then
-        // resumes where this pass reached instead of walking the chain from
-        // genesis again, which on a long chain is the difference between a
-        // refresh that finishes and one that times out.
-        if let Some(view) = worker.header_view() {
-            runtime
-                .publish_header_progress(view)
-                .await
-                .map_err(|error| CliError::Network(format!("header progress: {error}")))?;
-        }
         let status = runtime.subscribe_wallet_sync().borrow().clone();
         if !status.sync.history_fresh || !status.sync.utxos_fresh {
             return Err(CliError::Network("HD rescan did not publish a complete account".into()));
