@@ -338,7 +338,6 @@ where
 #[serde(deny_unknown_fields)]
 struct TransactionGetResponse {
     #[serde(default)]
-    #[allow(dead_code)]
     jsonrpc: RpcMember<String>,
     id: u64,
     #[serde(default)]
@@ -349,10 +348,9 @@ struct TransactionGetResponse {
 
 /// Does this Electrum server know the transaction?
 ///
-/// `Ok(false)` means the server answered and does not have it. An unreachable or
-/// malfunctioning server is an `Err`, never `Ok(false)`: telling someone their
-/// fusion was not broadcast because a lookup failed is worse than saying
-/// nothing, and from the outside the two look identical.
+/// Success requires well-formed transaction bytes with the requested txid.
+/// RPC errors (including a server reporting absence) remain unavailable
+/// evidence, never proof that the transaction was not broadcast.
 ///
 /// The round engine only ever assembles and validates the transaction — the
 /// broadcast is somebody else's. Without this, a round that was assembled
@@ -399,18 +397,40 @@ pub async fn transaction_is_known(
 
         let parsed: TransactionGetResponse = serde_json::from_slice(&response)
             .map_err(|e| format!("invalid Electrum JSON-RPC response: {e}"))?;
-        if parsed.id != 1 {
-            return Err("Electrum response id did not match the request".into());
-        }
-        match (parsed.result, parsed.error) {
-            // "no such transaction" is an answer, not a failure.
-            (_, RpcMember::Present(_)) => Ok(false),
-            (RpcMember::Present(hex), _) if !hex.is_empty() => Ok(true),
-            _ => Err("Electrum returned neither a transaction nor an error".into()),
-        }
+        validate_transaction_response(parsed, txid)
     })
     .await
     .map_err(|_| "Electrum broadcast confirmation timed out".to_string())?
+}
+
+fn validate_transaction_response(
+    response: TransactionGetResponse,
+    txid: &str,
+) -> Result<bool, String> {
+    if response.id != 1 {
+        return Err("Electrum response id did not match the request".into());
+    }
+    if matches!(response.jsonrpc, RpcMember::Present(ref version) if version != "2.0") {
+        return Err("unsupported Electrum JSON-RPC version".into());
+    }
+    let raw = match (response.result, response.error) {
+        (RpcMember::Present(raw), RpcMember::Missing) => raw,
+        (RpcMember::Missing, RpcMember::Present(error)) => {
+            return Err(format!(
+                "Electrum RPC error {}: {}",
+                error.code, error.message
+            ));
+        }
+        _ => return Err("Electrum response must contain exactly one result or error".into()),
+    };
+    let raw = hex::decode(raw).map_err(|_| "Electrum returned invalid transaction hex")?;
+    optn_core::tx::decode(&raw).map_err(|_| "Electrum returned a malformed transaction")?;
+    let mut actual = optn_core::tx::double_sha256(&raw);
+    actual.reverse();
+    if !hex::encode(actual).eq_ignore_ascii_case(txid) {
+        return Err("Electrum transaction does not match the requested txid".into());
+    }
+    Ok(true)
 }
 
 fn electrum_scripthash(pubkey: &[u8]) -> Result<String, String> {
@@ -486,6 +506,87 @@ mod tests {
                 u8::from_str_radix(text, 16).unwrap()
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn transaction_observation_requires_exact_bytes_and_unambiguous_rpc() {
+        let raw = optn_core::tx::Transaction::new(
+            vec![],
+            vec![optn_core::tx::Output::new(1234, vec![0x6a])],
+        )
+        .sign(&[])
+        .unwrap();
+        let mut id = optn_core::tx::double_sha256(&raw);
+        id.reverse();
+        let txid = hex::encode(id);
+        let cases = [
+            (serde_json::json!({"id":1,"result":hex::encode(&raw)}), true),
+            (
+                serde_json::json!({"jsonrpc":"2.0","id":1,"result":hex::encode(&raw)}),
+                true,
+            ),
+            (serde_json::json!({"id":1,"result":"garbage"}), false),
+            (serde_json::json!({"id":1,"result":"00"}), false),
+            (serde_json::json!({"id":1,"result":""}), false),
+            (
+                serde_json::json!({"id":2,"result":hex::encode(&raw)}),
+                false,
+            ),
+            (
+                serde_json::json!({"jsonrpc":"1.0","id":1,"result":hex::encode(&raw)}),
+                false,
+            ),
+            (
+                serde_json::json!({"id":1,"result":hex::encode(&raw),"error":{"code":1,"message":"not found"}}),
+                false,
+            ),
+            (
+                serde_json::json!({"id":1,"error":{"code":-32603,"message":"internal error"}}),
+                false,
+            ),
+            (
+                serde_json::json!({"id":1,"error":{"code":1,"message":"not found"}}),
+                false,
+            ),
+            (
+                serde_json::json!({"id":1,"result":hex::encode({let mut other=raw.clone(); other[0]^=1; other})}),
+                false,
+            ),
+        ];
+        for (response, accepted) in cases {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let expected = txid.clone();
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(socket);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"], "blockchain.transaction.get");
+                assert_eq!(request["params"][0], expected);
+                reader
+                    .get_mut()
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            });
+            let result = transaction_is_known(
+                &ElectrumEndpoint {
+                    host: "127.0.0.1".into(),
+                    port,
+                    use_ssl: false,
+                },
+                Transport::Direct,
+                &txid,
+            )
+            .await;
+            assert_eq!(result == Ok(true), accepted, "{result:?}");
+            if !accepted {
+                assert!(result.is_err(), "unavailable evidence is not absence");
+            }
+            server.await.unwrap();
+        }
     }
 
     #[test]
