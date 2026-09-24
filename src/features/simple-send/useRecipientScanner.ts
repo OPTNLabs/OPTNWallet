@@ -15,6 +15,7 @@ type UseRecipientScannerParams = {
   setAmountBch: (value: string) => void;
   setAssetType: (value: AssetType) => void;
   currentNetwork: Network;
+  assetType: AssetType;
 };
 
 export function useRecipientScanner({
@@ -22,6 +23,7 @@ export function useRecipientScanner({
   setAmountBch,
   setAssetType,
   currentNetwork,
+  assetType,
 }: UseRecipientScannerParams) {
   const { t } = useI18n();
   const [scanBusy, setScanBusy] = useState(false);
@@ -43,7 +45,7 @@ export function useRecipientScanner({
       const parsed = parseBip21Uri(scanned, currentNetwork);
       if (parsed.isValidAddress) {
         setRecipient(parsed.normalizedAddress);
-        if (parsed.amountRaw) {
+        if (parsed.amountRaw && assetType === 'bch') {
           setAssetType('bch');
           setAmountBch(parsed.amountRaw);
           await Toast.show({ text: t('send.recipientAmountLoaded') });

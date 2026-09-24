@@ -197,6 +197,15 @@ export function ReviewCard({
     };
   }, [rawHexLen, selectedForTx]);
 
+  const tokenOutputSats = useMemo(() => {
+    const tokenOutput = review.finalOutputs.find(
+      (output) => !('opReturn' in output) && !!output.token
+    );
+    return tokenOutput && !('opReturn' in tokenOutput)
+      ? Number(tokenOutput.amount ?? 0)
+      : 0;
+  }, [review.finalOutputs]);
+
   if (!open) return null;
 
   const threshold = Math.max(0, maxX - 1);
@@ -312,6 +321,15 @@ export function ReviewCard({
                     {assetType === 'ft' && amountToken
                       ? ` · amount: ${amountToken}`
                       : ''}
+                  </span>
+                </div>
+              )}
+
+              {assetType !== 'bch' && tokenOutputSats > 0 && (
+                <div className="wallet-stat-row">
+                  <span className="font-medium">{t('send.attachedBch')}</span>
+                  <span className="wallet-text-strong">
+                    {(tokenOutputSats / 100_000_000).toFixed(8)} BCH
                   </span>
                 </div>
               )}

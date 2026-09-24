@@ -15,6 +15,10 @@ const {
   reconcileMock: vi.fn(),
 }));
 
+let trackerListener:
+  | ((record?: { state?: string }, previousState?: string) => void)
+  | undefined;
+
 vi.mock('../../services/OutboundTransactionTracker', () => ({
   default: {
     listActive: listActiveMock,
@@ -53,6 +57,11 @@ function WalletStateHarness({ walletId }: { walletId: number }) {
 describe('useOutboundTransactions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    trackerListener = undefined;
+    subscribeMock.mockImplementation((listener) => {
+      trackerListener = listener;
+      return () => undefined;
+    });
     listActiveMock.mockResolvedValue([]);
     reconcileMock.mockResolvedValue([]);
   });
@@ -81,6 +90,52 @@ describe('useOutboundTransactions', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles when a tracker event reports a broadcasted transaction', async () => {
+    runOutboundReconcileMock.mockResolvedValue(undefined);
+
+    render(<Harness />);
+
+    await waitFor(() => {
+      expect(trackerListener).toBeTypeOf('function');
+      expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
+    });
+
+    runOutboundReconcileMock.mockClear();
+    trackerListener?.({ state: 'broadcasting' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(runOutboundReconcileMock).not.toHaveBeenCalled();
+
+    trackerListener?.({ state: 'broadcasted' }, 'broadcasting');
+    await waitFor(() => {
+      expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('queues a broadcast reconciliation while an existing pass is in flight', async () => {
+    let finishFirst!: () => void;
+    const firstReconciliation = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    runOutboundReconcileMock
+      .mockReturnValueOnce(firstReconciliation)
+      .mockResolvedValue(undefined);
+
+    render(<Harness />);
+
+    await waitFor(() => {
+      expect(trackerListener).toBeTypeOf('function');
+      expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
+    });
+
+    trackerListener?.({ state: 'broadcasted' }, 'broadcasting');
+    expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
+
+    finishFirst();
+    await waitFor(() => {
+      expect(runOutboundReconcileMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('clears previous-wallet records before the next wallet load resolves', async () => {

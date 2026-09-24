@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { encodeCashAddress } from '@bitauth/libauth';
 
 import type { TransactionOutput, UTXO } from '../../../types/types';
-import { DUST } from '../../../utils/constants';
+import { DUST, TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 import { createSimpleSendPlanner } from '../planner';
 
 const { buildTransactionMock } = vi.hoisted(() => ({
   buildTransactionMock: vi.fn(),
 }));
+
+const RECIPIENT = encodeCashAddress({
+  payload: Uint8Array.from([0x11, ...new Uint8Array(19).fill(0x22)]),
+  prefix: 'bchtest',
+  type: 'p2pkh',
+}).address;
 
 vi.mock('../../../services/TransactionService', () => ({
   default: {
@@ -71,6 +78,39 @@ describe('simple-send planner', () => {
       feeSats: 220,
       totalSats: 9220,
       changeSats: 780,
+    });
+  });
+
+  it('uses the configured BCH value for a CashToken recipient output', () => {
+    const planner = createSimpleSendPlanner({
+      recipient: RECIPIENT,
+      selectedCategory: 'a'.repeat(64),
+      amountToken: '1',
+      tokenOutputSats: 2500,
+      tokenChangeAddress: 'bchtest:zchange',
+      selectedChangeAddress: 'bchtest:qchange',
+      dbUtxos: [],
+    });
+
+    expect(planner.makeTokenOutputForRecipientFT()).toMatchObject({
+      amount: 2500,
+      token: { amount: 1n },
+    });
+  });
+
+  it('keeps the protocol minimum when a smaller BCH value is provided', () => {
+    const planner = createSimpleSendPlanner({
+      recipient: RECIPIENT,
+      selectedCategory: 'a'.repeat(64),
+      amountToken: '1',
+      tokenOutputSats: 500,
+      tokenChangeAddress: 'bchtest:zchange',
+      selectedChangeAddress: 'bchtest:qchange',
+      dbUtxos: [],
+    });
+
+    expect(planner.makeTokenOutputForRecipientFT()).toMatchObject({
+      amount: TOKEN_OUTPUT_SATS,
     });
   });
 
