@@ -1,6 +1,55 @@
 /* tslint:disable */
 /* eslint-disable */
 
+/**
+ * Build the registry to publish. Takes and returns JSON; see
+ * `bcmr_author::AuthorRequest` and `bcmr_author::Authored` for the shapes.
+ */
+export function bcmrAuthorRegistry(request_json: string): string;
+
+/**
+ * The parse bytecode of the default type-and-serial layout.
+ */
+export function bcmrDefaultParseBytecode(): string;
+
+/**
+ * The IPFS CID (CIDv1, raw) of `content`, as IPFS assigns it with
+ * `cid-version=1` for a single-block file.
+ */
+export function bcmrIpfsCid(content: Uint8Array): string;
+
+/**
+ * Commitment hex of serial `serial` of type `type_byte` in the default
+ * parsable layout.
+ */
+export function bcmrParsableCommitment(type_byte: number, serial: number): string;
+
+/**
+ * Read a BCMR publication output back: `{"sha256": hex, "uris": [...]}`, or
+ * `undefined` when `locking_bytecode` is not one.
+ *
+ * The mint screen hands the builder text chunks and the builder encodes them,
+ * so this is how the wallet checks the bytes that will actually be signed
+ * commit to the registry it uploaded — with the same reader the wallet uses
+ * to resolve other tokens' metadata.
+ */
+export function bcmrReadPublication(locking_bytecode: Uint8Array): string | undefined;
+
+/**
+ * Commitment hex of NFT number `number` in a sequential collection.
+ */
+export function bcmrSequentialCommitment(number: number): string;
+
+/**
+ * Default `{"name": ..., "symbol": ...}` for a new token or collection.
+ */
+export function bcmrSuggestIdentity(category: string, has_nfts: boolean): string;
+
+/**
+ * Why `symbol` is not a valid ticker, or `undefined` when it is.
+ */
+export function bcmrSymbolError(symbol: string): string | undefined;
+
 export function connectP2pkhLock(public_key: Uint8Array): Uint8Array;
 
 export function connectPublicKey(private_key: Uint8Array): Uint8Array;
@@ -205,6 +254,14 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly bcmrAuthorRegistry: (a: number, b: number) => [number, number, number, number];
+    readonly bcmrDefaultParseBytecode: () => [number, number];
+    readonly bcmrIpfsCid: (a: number, b: number) => [number, number];
+    readonly bcmrParsableCommitment: (a: number, b: number) => [number, number];
+    readonly bcmrReadPublication: (a: number, b: number) => [number, number];
+    readonly bcmrSequentialCommitment: (a: number) => [number, number];
+    readonly bcmrSuggestIdentity: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly bcmrSymbolError: (a: number, b: number) => [number, number];
     readonly connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
     readonly connectPublicKey: (a: number, b: number) => [number, number, number, number];
     readonly connectSignInput: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
@@ -240,9 +297,9 @@ export interface InitOutput {
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_start: () => void;
 }
 
