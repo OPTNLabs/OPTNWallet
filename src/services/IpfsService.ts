@@ -27,6 +27,13 @@ type UploadOptions = {
   gatewayBase?: string;
   timeoutMs?: number;
   maxBytes?: number;
+  /**
+   * Ask for the CID a caller can compute from the content alone: CIDv1 with
+   * raw leaves, which for a single-block file is the raw SHA-256 CID. Only a
+   * Kubo API relay takes these settings; other relays use their own, so the
+   * caller must compare the CID that comes back.
+   */
+  rawCid?: boolean;
 };
 
 type HealthOptions = {
@@ -177,10 +184,11 @@ export async function uploadToIpfsRelay(
       : opts?.filename ?? 'upload.bin';
   formData.append('file', createMultipartFile(file, inferredName), inferredName);
 
+  const rawCid = opts?.rawCid === true;
   const relayBases = getUploadRelayBases(opts?.relayBase);
 
   return runWithFailover(
-    `ipfs-upload:${relayBases.join(',')}`,
+    `${rawCid ? 'ipfs-upload-raw' : 'ipfs-upload'}:${relayBases.join(',')}`,
     relayBases,
     async (relayBase) => {
       const doUpload = async (multipartFormData: FormData) => {
@@ -188,7 +196,10 @@ export async function uploadToIpfsRelay(
         const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
         try {
-          const { uploadUrl, responseParser } = buildUploadEndpoint(relayBase);
+          const { uploadUrl, responseParser } = buildUploadEndpoint(
+            relayBase,
+            rawCid
+          );
           const response = await fetch(uploadUrl, {
             method: 'POST',
             body: multipartFormData,
@@ -355,14 +366,19 @@ function getUploadRelayBases(explicitRelayBase?: string): string[] {
   );
 }
 
-function buildUploadEndpoint(relayBase: string): {
+function buildUploadEndpoint(
+  relayBase: string,
+  rawCid = false
+): {
   uploadUrl: string;
   responseParser: (response: Response) => Promise<unknown>;
 } {
   const base = trimTrailingSlash(relayBase);
   if (isKuboApiRelay(base)) {
     return {
-      uploadUrl: `${base}/api/v0/add?pin=true`,
+      uploadUrl: rawCid
+        ? `${base}/api/v0/add?pin=true&cid-version=1&raw-leaves=true`
+        : `${base}/api/v0/add?pin=true`,
       responseParser: async (response) => response.json(),
     };
   }
