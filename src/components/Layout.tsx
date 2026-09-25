@@ -22,6 +22,11 @@ const Layout = ({ viewerOnly = false }: LayoutProps) => {
   );
   const { outboundTransactions, reconciling, refresh, release } =
     useOutboundTransactions(walletId);
+  // Keep broadcasted records active for spend-lock safety and background
+  // reconciliation, but stop presenting them as network-pending UI.
+  const networkPendingOutboundTransactions = outboundTransactions.filter(
+    (record) => record.state !== 'broadcasted'
+  );
 
   useEffect(() => {
     document.documentElement.style.setProperty(
@@ -31,18 +36,18 @@ const Layout = ({ viewerOnly = false }: LayoutProps) => {
   }, [navBarHeight]);
 
   useEffect(() => {
-    if (outboundTransactions.length > 0) {
+    if (networkPendingOutboundTransactions.length > 0) {
       setIsPendingOutboundPanelOpen(true);
     }
-  }, [outboundTransactions.length]);
+  }, [networkPendingOutboundTransactions.length]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {!viewerOnly &&
-        outboundTransactions.length > 0 &&
+        networkPendingOutboundTransactions.length > 0 &&
         isPendingOutboundPanelOpen && (
           <PendingOutboundPanel
-            records={outboundTransactions}
+            records={networkPendingOutboundTransactions}
             refreshing={reconciling}
             onRefresh={() => {
               void refresh();
@@ -52,6 +57,7 @@ const Layout = ({ viewerOnly = false }: LayoutProps) => {
             }}
             onClose={() => setIsPendingOutboundPanelOpen(false)}
             compact
+            blocking={false}
           />
         )}
       <div

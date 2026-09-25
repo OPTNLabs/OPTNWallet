@@ -17,8 +17,11 @@ const useFetchWalletData = (
   setContractUTXOs: React.Dispatch<React.SetStateAction<UTXO[]>>,
   // setSelectedAddresses: React.Dispatch<React.SetStateAction<string[]>>,
   setChangeAddress: React.Dispatch<React.SetStateAction<string>>,
-  setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>
+  setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>,
+  options: { deferAfterPaint?: boolean } = {}
 ) => {
+  const deferAfterPaint = options.deferAfterPaint ?? false;
+
   useEffect(() => {
     if (walletId === null) return;
 
@@ -69,10 +72,21 @@ const useFetchWalletData = (
       }
     };
 
-    void fetchData();
+    let timer: number | null = null;
+    if (deferAfterPaint) {
+      // Let the route paint and its navigation interaction settle before the
+      // wallet-wide SQL/contract query runs. The active guard also cancels
+      // the work when the user leaves the screen before the delay expires.
+      timer = window.setTimeout(() => {
+        void fetchData();
+      }, 250);
+    } else {
+      void fetchData();
+    }
 
     return () => {
       isActive = false;
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, [
     walletId,
@@ -82,6 +96,7 @@ const useFetchWalletData = (
     setContractUTXOs,
     setErrorMessage,
     setUtxos,
+    deferAfterPaint,
   ]);
 };
 

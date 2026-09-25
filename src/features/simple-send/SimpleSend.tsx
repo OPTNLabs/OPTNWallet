@@ -19,12 +19,13 @@ import { selectWalletId } from '../../state/slices/walletSlice';
 import WalletScreen from '../../components/ui/WalletScreen';
 import { CoinControlSection } from '../../components/CoinControlSection';
 import { getReturnPath } from '../../utils/navigation';
-import { SATSINBITCOIN } from '../../utils/constants';
+import { SATSINBITCOIN, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import { useI18n } from '../../i18n/useI18n';
 
 type SimpleSendLocationState = {
   amountBch?: string;
   amountToken?: string;
+  tokenOutputBch?: string;
   assetType?: 'bch' | 'ft' | 'nft';
   quantumrootFlow?: 'approval-token' | 'receive-coin';
   recipient?: string;
@@ -72,6 +73,8 @@ export default function SimpleSend() {
     amountToken,
     setAmountToken,
     selectedTokenDecimals,
+    tokenOutputBch,
+    setTokenOutputBch,
     selectedNftCommitment,
     setSelectedNftCommitment,
 
@@ -164,6 +167,7 @@ export default function SimpleSend() {
     selectedCategory,
     amountToken,
     selectedTokenDecimals,
+    tokenOutputBch,
   });
 
   const { scanBusy, handleScanRecipient } = useRecipientScanner({
@@ -171,6 +175,7 @@ export default function SimpleSend() {
     setAmountBch,
     setAssetType,
     currentNetwork,
+    assetType,
   });
 
   const normalizeRecipientInput = () => {
@@ -178,7 +183,7 @@ export default function SimpleSend() {
     if (!parsed.isValidAddress) return;
 
     setRecipient(parsed.normalizedAddress);
-    if (parsed.amountRaw) {
+    if (parsed.amountRaw && assetType === 'bch') {
       setAssetType('bch');
       setAmountBch(parsed.amountRaw);
     }
@@ -254,6 +259,9 @@ export default function SimpleSend() {
     if (locationState.amountToken !== undefined) {
       setAmountToken(locationState.amountToken);
     }
+    if (locationState.tokenOutputBch !== undefined) {
+      setTokenOutputBch(locationState.tokenOutputBch);
+    }
     if (locationState.selectedNftCommitment !== undefined) {
       setSelectedNftCommitment(locationState.selectedNftCommitment);
     }
@@ -265,6 +273,7 @@ export default function SimpleSend() {
     setAmountToken,
     setAssetType,
     setRecipient,
+    setTokenOutputBch,
     setSelectedCategory,
     setSelectedNftCommitment,
   ]);
@@ -304,6 +313,22 @@ export default function SimpleSend() {
       >
         NFT
       </button>
+    </div>
+  );
+
+  const renderTokenBchValue = () => (
+    <div className="flex flex-col gap-1">
+      <Label>{t('send.tokenBchAmount')}</Label>
+      <input
+        value={tokenOutputBch}
+        onChange={(e) => setTokenOutputBch(e.target.value)}
+        inputMode="decimal"
+        placeholder={`${(TOKEN_OUTPUT_SATS / SATSINBITCOIN).toFixed(8)} BCH`}
+        className={inputClass}
+      />
+      <div className="text-[11px] wallet-muted">
+        {t('send.tokenBchMinimum', { sats: TOKEN_OUTPUT_SATS })}
+      </div>
     </div>
   );
 
@@ -537,6 +562,7 @@ export default function SimpleSend() {
                       {t('send.bcmrMetadata')}
                     </div>
                   </div>
+                  {renderTokenBchValue()}
                 </div>
               )}
 
@@ -583,6 +609,7 @@ export default function SimpleSend() {
                       </div>
                     </div>
                   )}
+                  {renderTokenBchValue()}
                 </div>
               )}
 

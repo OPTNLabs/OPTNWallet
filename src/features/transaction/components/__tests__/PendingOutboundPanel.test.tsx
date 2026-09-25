@@ -90,4 +90,36 @@ describe('PendingOutboundPanel', () => {
     expect(html).toContain('sm:flex-row');
     expect(html).toContain('min-w-0 flex-1');
   });
+
+  it('can render as a non-blocking status surface', () => {
+    const html = renderToStaticMarkup(
+      <I18nContext.Provider
+        value={{
+          locale: 'en',
+          setLocale: () => undefined,
+          t: (key) => translations.en[key],
+        }}
+      >
+        <PendingOutboundPanel
+          records={[
+            {
+              txid: 'b'.repeat(64),
+              rawTx: '',
+              walletId: 1,
+              source: 'test',
+              state: 'broadcasted',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              spentOutpoints: [],
+            },
+          ]}
+          blocking={false}
+        />
+      </I18nContext.Provider>
+    );
+
+    expect(html).toContain('wallet-popup-backdrop--non-blocking');
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain('aria-modal="true"');
+  });
 });

@@ -55,10 +55,16 @@ Reference wallets are behavioral and architectural oracles, not implementation-s
   duplicate execution, partial failure, and permission errors explicitly.
 - Do not read `.env`, `.env.*`, wallet files, keystores, signing credentials,
   recovery phrases, private keys, WalletConnect session data, or desktop
-  application-data directories.
+  application-data directories, except for the narrowly scoped local Chipnet
+  E2E exception below.
+- When a task explicitly authorizes local Chipnet E2E testing, the test harness
+  may read only `OPTN_MERCHANT_E2E_MNEMONIC` from the local environment. Never
+  open, print, log, copy, persist, or expose the mnemonic; keep derived wallet
+  state ephemeral and restrict the test to Chipnet data-fetch behavior.
 - Do not access production credentials. Do not expose, generate, log, or copy
   sensitive wallet material.
-- Do not sign or broadcast transactions. Do not run live-network tests.
+- Do not sign or broadcast transactions. Do not run live-network tests except
+  for the explicitly authorized local Chipnet E2E exception above.
 - Do not run release, publishing, deployment, installation, or production-
   signing commands.
 - Do not install dependencies or applications. Use the committed lockfile and

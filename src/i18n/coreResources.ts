@@ -510,6 +510,9 @@ export const coreTranslations = {
     'send.selectCategory': 'Select category…',
     'send.balance': 'Balance',
     'send.tokenAmount': 'Token amount',
+    'send.tokenBchAmount': 'Attached BCH value',
+    'send.tokenBchMinimum':
+      'Minimum {sats} sats for the token output; network fees are selected separately.',
     'send.decimals': '{count} decimals',
     'send.integer': 'integer',
     'send.bcmrMetadata':
@@ -537,6 +540,7 @@ export const coreTranslations = {
     'send.to': 'To',
     'send.amount': 'Amount',
     'send.asset': 'Asset',
+    'send.attachedBch': 'Attached BCH',
     'send.tokenChange': 'Token change',
     'send.fee': 'Fee',
     'send.totalBch': 'Total (BCH)',
@@ -1447,6 +1451,9 @@ export const coreTranslations = {
     'send.selectCategory': 'Selecciona una categoría…',
     'send.balance': 'Saldo',
     'send.tokenAmount': 'Importe del token',
+    'send.tokenBchAmount': 'Valor BCH adjunto',
+    'send.tokenBchMinimum':
+      'Mínimo de {sats} sats para el resultado del token; las comisiones de red se seleccionan por separado.',
     'send.decimals': '{count} decimales',
     'send.integer': 'entero',
     'send.bcmrMetadata':
@@ -1474,6 +1481,7 @@ export const coreTranslations = {
     'send.to': 'A',
     'send.amount': 'Importe',
     'send.asset': 'Activo',
+    'send.attachedBch': 'BCH adjunto',
     'send.tokenChange': 'Cambio de token',
     'send.fee': 'Comisión',
     'send.totalBch': 'Total (BCH)',
@@ -2333,6 +2341,9 @@ export const coreTranslations = {
     'send.selectCategory': '选择类别…',
     'send.balance': '余额',
     'send.tokenAmount': '代币金额',
+    'send.tokenBchAmount': '附加 BCH 金额',
+    'send.tokenBchMinimum':
+      '代币输出至少需要 {sats} sats；网络费用会单独选择。',
     'send.decimals': '{count} 位小数',
     'send.integer': '整数',
     'send.bcmrMetadata': '使用所选类别的 BCMR 元数据解析。',
@@ -2356,6 +2367,7 @@ export const coreTranslations = {
     'send.to': '收款人',
     'send.amount': '金额',
     'send.asset': '资产',
+    'send.attachedBch': '附加 BCH',
     'send.tokenChange': '代币找零',
     'send.fee': '费用',
     'send.totalBch': '总计（BCH）',

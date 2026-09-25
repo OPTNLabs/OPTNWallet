@@ -84,12 +84,19 @@ async function createMerchantProposal(): Promise<string> {
   const qrCard = $('[data-merchant-proposal-payload]');
   await qrCard.waitForDisplayed({ timeout: 150000 });
   const payload = await qrCard.getAttribute('data-merchant-proposal-payload');
-  expect(payload).toMatch(/^\{"application":/);
+  expect(payload).toMatch(/"application":\{/);
   return payload as string;
 }
 
 async function routeProposalThroughHome(payload: string): Promise<void> {
-  await $('a[href^="#/home/"]').click();
+  const navigated = await browser.execute(() => {
+    const homeNav = document.querySelector<HTMLAnchorElement>(
+      '#bottomNavBar a[href*="#/home/"]'
+    );
+    homeNav?.click();
+    return Boolean(homeNav);
+  });
+  expect(navigated).toBe(true);
   await $('h1=Home').waitForDisplayed({ timeout: 15000 });
   await $('button[aria-label="Scan QR"]').click();
 
@@ -160,8 +167,9 @@ runMerchantPaymentTest(
       '[role="dialog"][aria-label="Review Merchant Payment"]'
     );
     await expect(reviewDialog).toBeDisplayed();
-    await expect(reviewDialog).toHaveTextContaining('Merchant');
-    await expect(reviewDialog).toHaveTextContaining('Change');
+    const reviewText = await reviewDialog.getText();
+    expect(reviewText).toContain('Merchant');
+    expect(reviewText).toContain('Change');
 
     // Review-only is the default. The broadcast branch is deliberately
     // opt-in because it consumes live Chipnet funds and cannot be run in CI.

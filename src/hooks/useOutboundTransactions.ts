@@ -25,6 +25,7 @@ export default function useOutboundTransactions(
   const [reconciling, setReconciling] = useState(false);
   const currentWalletIdRef = useRef(walletId);
   const refreshingWalletIdsRef = useRef(new Set<number>());
+  const queuedRefreshWalletIdsRef = useRef(new Set<number>());
 
   useLayoutEffect(() => {
     currentWalletIdRef.current = walletId;
@@ -41,22 +42,27 @@ export default function useOutboundTransactions(
   );
 
   const refresh = useCallback(async () => {
-    if (
-      !walletId ||
-      walletId <= 0 ||
-      refreshingWalletIdsRef.current.has(walletId)
-    ) {
+    if (!walletId || walletId <= 0) {
       return;
     }
+    if (refreshingWalletIdsRef.current.has(walletId)) {
+      queuedRefreshWalletIdsRef.current.add(walletId);
+      return;
+    }
+
     refreshingWalletIdsRef.current.add(walletId);
     setReconciling(true);
     try {
-      await runOutboundReconcile(walletId, () =>
-        reconcileOutboundTransactions(walletId)
-      );
-      await load(walletId);
+      do {
+        queuedRefreshWalletIdsRef.current.delete(walletId);
+        await runOutboundReconcile(walletId, () =>
+          reconcileOutboundTransactions(walletId)
+        );
+        await load(walletId);
+      } while (queuedRefreshWalletIdsRef.current.has(walletId));
     } finally {
       refreshingWalletIdsRef.current.delete(walletId);
+      queuedRefreshWalletIdsRef.current.delete(walletId);
       setReconciling(refreshingWalletIdsRef.current.size > 0);
     }
   }, [load, walletId]);
@@ -92,8 +98,15 @@ export default function useOutboundTransactions(
     if (!enabled) return;
     void load();
     void refresh();
-    return OutboundTransactionTracker.subscribe(() => {
+    return OutboundTransactionTracker.subscribe((record, previousState) => {
       void load();
+      // A pre-send `broadcasting` event is intentionally ignored. Once the
+      // node accepts the transaction, reconcile immediately in the background
+      // instead of waiting for focus, Home subscriptions, or the 60s recovery
+      // interval to discover it.
+      if (record?.state === 'broadcasted' && previousState !== 'broadcasted') {
+        void refresh();
+      }
     });
   }, [enabled, load, refresh]);
 
