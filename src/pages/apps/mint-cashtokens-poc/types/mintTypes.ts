@@ -9,6 +9,12 @@ export type MintConfig = {
   ftAmount: string;
   nftCapability: NftCapability;
   nftCommitment: string;
+  /**
+   * The NFT's number when its commitment was built from one. The commitment
+   * is then derived from the collection layout, and rebuilt if the layout
+   * changes; without a serial the commitment is custom hex, kept as typed.
+   */
+  nftSerial?: string;
 };
 
 export const DEFAULT_CFG: MintConfig = {

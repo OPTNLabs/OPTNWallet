@@ -34,9 +34,18 @@ type SimpleSendLocationState = {
   selectedNftCommitment?: string;
 };
 
-function Label({ children }: { children: React.ReactNode }) {
+function Label({
+  children,
+  htmlFor,
+}: {
+  children: React.ReactNode;
+  htmlFor?: string;
+}) {
   return (
-    <label className="text-sm font-semibold wallet-text-strong">
+    <label
+      htmlFor={htmlFor}
+      className="text-sm font-semibold wallet-text-strong"
+    >
       {children}
     </label>
   );
@@ -318,8 +327,11 @@ export default function SimpleSend() {
 
   const renderTokenBchValue = () => (
     <div className="flex flex-col gap-1">
-      <Label>{t('send.tokenBchAmount')}</Label>
+      <Label htmlFor="simple-send-token-bch-value">
+        {t('send.tokenBchAmount')}
+      </Label>
       <input
+        id="simple-send-token-bch-value"
         value={tokenOutputBch}
         onChange={(e) => setTokenOutputBch(e.target.value)}
         inputMode="decimal"

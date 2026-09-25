@@ -1,6 +1,9 @@
+import { decodeTransaction, hexToBin } from '@bitauth/libauth';
+
 import TransactionManager from '../../../../apis/TransactionManager/TransactionManager';
 import TransactionService from '../../../../services/TransactionService';
 import type { TransactionOutput } from '../../../../types/types';
+import { toTokenAwareCashAddress } from '../../../../utils/cashAddress';
 import type {
   MintAppUtxo,
   MintBcmrPublication,
@@ -9,6 +12,8 @@ import type {
 } from '../types';
 import { selectFeeCandidates } from './selectFeeCandidates';
 import { buildBcmrPublicationOpReturn } from './bcmrOpReturn';
+import { readBcmrPublication } from './bcmrRegistryGenerator';
+import { sha256 } from '../../../../utils/hash';
 import {
   shortHash,
   sumOutputs,
@@ -16,7 +21,11 @@ import {
   utxoKey,
   utxoValue,
 } from '../utils';
-import { isSelectableMintSource } from '../utils/sourceHelpers';
+import {
+  isGenesisMintSource,
+  isMintingAuthorityMintSource,
+  isSelectableMintSource,
+} from '../utils/sourceHelpers';
 
 type BuildResult = Awaited<
   ReturnType<typeof TransactionService.buildTransaction>
@@ -95,6 +104,149 @@ type BuildMintPreviewParams = {
 
 const BCMR_IDENTITY_OUTPUT_SATS = 1000n;
 
+function toBigIntAmount(value: unknown): bigint {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    return BigInt(value);
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    return BigInt(value.trim());
+  }
+  return 0n;
+}
+
+function tokenAddressFor(
+  address: string,
+  addressBook: WalletAddressRecord[]
+): string {
+  return (
+    addressBook.find((entry) => entry.address === address)?.tokenAddress ||
+    toTokenAwareCashAddress(address)
+  );
+}
+
+/**
+ * The output that keeps a spent minting NFT alive.
+ *
+ * Consensus lets a transaction destroy an NFT simply by not re-creating it,
+ * and the CashScript builder only guards fungible amounts. Minting from an
+ * authority therefore has to put the authority back explicitly — same
+ * category, same commitment, any fungible amount it carried — or the token can
+ * never be minted again.
+ */
+function mintingAuthorityReturnOutput(
+  authority: MintAppUtxo,
+  changeAddress: string,
+  addressBook: WalletAddressRecord[],
+  tokenOutputSats: number
+): TransactionOutput {
+  const token = authority.token!;
+  return {
+    recipientAddress: tokenAddressFor(changeAddress, addressBook),
+    amount: tokenOutputSats,
+    token: {
+      category: token.category,
+      amount: toBigIntAmount(token.amount),
+      nft: {
+        capability: 'minting',
+        commitment: token.nft?.commitment ?? '',
+      },
+    },
+  };
+}
+
+/**
+ * Refuse a built mint that would lose something it cannot get back.
+ *
+ * Checked against the builder's final outputs, not the requested ones, so a
+ * builder that reorders or drops outputs cannot slip past.
+ */
+function assertMintPreservesAuthority(
+  inputs: MintAppUtxo[],
+  finalOutputs: TransactionOutput[],
+  changeAddress: string,
+  needsIdentityOutput: boolean
+): void {
+  for (const input of inputs) {
+    if (!isMintingAuthorityMintSource(input)) continue;
+    const category = input.token!.category;
+    const kept = finalOutputs.some(
+      (output) =>
+        output.token?.category === category &&
+        output.token.nft?.capability === 'minting'
+    );
+    if (!kept) {
+      throw new Error(
+        `Refusing to build: the minting NFT for ${shortHash(
+          category,
+          12,
+          0
+        )} would be destroyed.`
+      );
+    }
+  }
+
+  if (needsIdentityOutput) {
+    const first = finalOutputs[0];
+    const walletOwned =
+      !!first &&
+      !('opReturn' in first && first.opReturn) &&
+      !first.token &&
+      first.recipientAddress === changeAddress;
+    if (!walletOwned) {
+      throw new Error(
+        'Refusing to build: output 0 must stay in this wallet so the token metadata can be updated later.'
+      );
+    }
+  }
+}
+
+const BCMR_PUBLICATION_PREFIX = [0x6a, 0x04, 0x42, 0x43, 0x4d, 0x52];
+
+function isBcmrPrefixed(lockingBytecode: Uint8Array): boolean {
+  return BCMR_PUBLICATION_PREFIX.every(
+    (byte, index) => lockingBytecode[index] === byte
+  );
+}
+
+/**
+ * Read the publication back out of the transaction that will be signed.
+ *
+ * The builder is handed text chunks and encodes them itself, so the requested
+ * outputs say nothing certain about the bytes on chain. The first
+ * `OP_RETURN <'BCMR'>` output is the definitive one by the specification — a
+ * malformed first match is not rescued by a later one — so that is the output
+ * checked, with the same reader the wallet uses for other tokens' metadata.
+ */
+function assertPublishesRegistry(
+  transactionHex: string,
+  publication: MintBcmrPublication
+): void {
+  const decoded = decodeTransaction(hexToBin(transactionHex));
+  if (typeof decoded === 'string') {
+    throw new Error(
+      `Refusing to build: could not read back the mint transaction (${decoded}).`
+    );
+  }
+  const output = decoded.outputs.find((candidate) =>
+    isBcmrPrefixed(candidate.lockingBytecode)
+  );
+  const read = output ? readBcmrPublication(output.lockingBytecode) : undefined;
+  const expectedUris = publication.uris
+    .map((uri) => uri.trim())
+    .filter(Boolean);
+  const matches =
+    !!read &&
+    read.sha256 === sha256.text(publication.registryJson) &&
+    read.uris.length === expectedUris.length &&
+    read.uris.every((uri, index) => uri === expectedUris[index]);
+  if (!matches) {
+    throw new Error(
+      'Refusing to build: the transaction does not publish the uploaded token metadata.'
+    );
+  }
+}
+
 export async function buildMintPreview({
   sdk,
   selectedUtxos,
@@ -125,9 +277,37 @@ export async function buildMintPreview({
     );
   }
 
+  const sourceByKey = new Map(mintInputs.map((u) => [utxoKey(u), u]));
+  const hasGenesisSource = mintInputs.some(isGenesisMintSource);
+  if (bcmrPublication?.enabled && !hasGenesisSource) {
+    // A publication only counts in a transaction that spends the identity
+    // output; minting from an authority NFT does not, so wallets would ignore
+    // it and the upload would be wasted.
+    throw new Error(
+      'Token metadata can only be published when creating a token from a genesis UTXO.'
+    );
+  }
+  // Output 0 of a transaction spending an output 0 continues that identity's
+  // chain: whoever holds it controls the token's metadata. Keep it here.
+  const needsIdentityOutput = mintInputs.some((u) => u.tx_pos === 0);
+
+  const authorityInputs = mintInputs.filter(isMintingAuthorityMintSource);
+  const authoritiesToReturn = authorityInputs.filter((authority) => {
+    const category = authority.token!.category;
+    // A drafted minting NFT of the same category already carries the
+    // authority forward; returning the input as well would duplicate it.
+    return !activeOutputDrafts.some((draft) => {
+      const src = sourceByKey.get(draft.sourceKey);
+      return (
+        draft.config.mintType === 'NFT' &&
+        draft.config.nftCapability === 'minting' &&
+        (src?.token?.category ?? src?.tx_hash) === category
+      );
+    });
+  });
+
   const mintSourceKeySet = new Set(mintInputs.map((u) => utxoKey(u)));
   const feeCandidates = selectFeeCandidates(flatUtxos, mintSourceKeySet);
-  const sourceByKey = new Map(mintInputs.map((u) => [utxoKey(u), u]));
 
   if (feeCandidates.length === 0) {
     throw new Error('No non-genesis UTXOs available to fund transaction fees.');
@@ -144,12 +324,13 @@ export async function buildMintPreview({
     inputsForBuild = mintInputs.concat(feeInputs);
 
     const outputs: TransactionOutput[] = [];
-    if (bcmrPublication?.enabled) {
+    if (needsIdentityOutput) {
       outputs.push({
         recipientAddress: changeAddress,
         amount: BCMR_IDENTITY_OUTPUT_SATS,
       });
-
+    }
+    if (bcmrPublication?.enabled) {
       const publication = buildBcmrPublicationOpReturn({
         registryJson: bcmrPublication.registryJson,
         uris: bcmrPublication.uris,
@@ -198,6 +379,17 @@ export async function buildMintPreview({
       outputs.push(out);
     }
 
+    for (const authority of authoritiesToReturn) {
+      outputs.push(
+        mintingAuthorityReturnOutput(
+          authority,
+          changeAddress,
+          sdkAddressBook,
+          tokenOutputSats
+        )
+      );
+    }
+
     const attempt = await TransactionService.buildTransaction(
       outputs,
       null,
@@ -221,6 +413,16 @@ export async function buildMintPreview({
     !built.finalTransaction
   ) {
     throw new Error(built?.errorMsg || 'Failed to build mint transaction.');
+  }
+
+  assertMintPreservesAuthority(
+    inputsForBuild,
+    built.finalOutputs,
+    changeAddress,
+    needsIdentityOutput
+  );
+  if (bcmrPublication?.enabled) {
+    assertPublishesRegistry(built.finalTransaction, bcmrPublication);
   }
 
   const totalInput = inputsForBuild.reduce((sum, u) => sum + utxoValue(u), 0n);

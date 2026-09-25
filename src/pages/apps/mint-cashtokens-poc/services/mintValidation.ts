@@ -7,6 +7,7 @@ import {
 } from '../utils';
 import {
   canMintFungibleFromSource,
+  isGenesisMintSource,
   isSelectableMintSource,
   selectMintSourceUtxos,
 } from '../utils/sourceHelpers';
@@ -47,6 +48,12 @@ export function validateMintRequest(
   const selectedSourceUtxos = selectMintSourceUtxos(selectedUtxos);
   if (selectedSourceUtxos.length === 0) {
     return 'Select at least one source UTXO.';
+  }
+  // Every new token is published with its own metadata, and a transaction
+  // carries at most one publication. Two genesis sources in one mint would
+  // leave one of the new tokens without any.
+  if (selectedSourceUtxos.filter(isGenesisMintSource).length > 1) {
+    return 'Create one new token per mint, so each gets its own metadata.';
   }
   if (activeOutputDrafts.length === 0)
     return 'Add at least one output mapping in Amounts.';

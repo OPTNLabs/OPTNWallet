@@ -15,12 +15,18 @@ import { useSelector } from 'react-redux';
 import { TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 
 import {
-  generateBcmrRegistryJson,
+  BcmrRegistryError,
+  bcmrSymbolProblem,
   buildBootstrapPreview,
   buildMintPreview,
-  parseUrisInput,
+  defaultParseBytecode,
+  generateBcmrRegistry,
+  parsableNftCommitment,
   selectFeeCandidates,
+  sequentialNftCommitment,
+  suggestBcmrIdentity,
   validateMintRequest,
+  type AuthoredBcmrRegistry,
   type BcmrNftsSchemaInput,
 } from './services';
 import {
@@ -67,10 +73,13 @@ import {
   canMintFungibleFromSource,
   getMintSourceCategory,
   getMintSourceKind,
+  isGenesisMintSource,
   selectMintSourceUtxos,
 } from './utils/sourceHelpers';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 import { selectWalletId } from '../../../state/slices/walletSlice';
+import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
+import FieldHint from './components/FieldHint';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
 
 type BcmrFieldKey =
@@ -119,6 +128,11 @@ type BcmrFormFingerprint = {
   tokenDecimals: number;
   iconUri: string;
   webUri: string;
+  network: string;
+  hasNfts: boolean;
+  nftKind: 'parsable' | 'sequential';
+  nftAdvanced: boolean;
+  nftCommitments: string[];
   nftsDescription: string;
   nftBytecode: string;
   nftTypesJson: string;
@@ -223,6 +237,10 @@ const MintCashTokensPoCApp: React.FC = () => {
   const [outputFormNftCapability, setOutputFormNftCapability] =
     useState<MintConfig['nftCapability']>('none');
   const [outputFormNftCommitment, setOutputFormNftCommitment] = useState('');
+  const [outputFormNftSerial, setOutputFormNftSerial] = useState('1');
+  const [outputFormCommitmentMode, setOutputFormCommitmentMode] = useState<
+    'serial' | 'custom'
+  >('serial');
   const draftSeq = useRef(0);
 
   // Bootstrap
@@ -242,10 +260,21 @@ const MintCashTokensPoCApp: React.FC = () => {
   const [confirmState, setConfirmState] =
     useState<ConfirmState>(initialConfirmState);
   const pendingConfirmActionRef = useRef<null | (() => Promise<void>)>(null);
-  const [bcmrEnabled, setBcmrEnabled] = useState(false);
   const [showBcmrPopup, setShowBcmrPopup] = useState(false);
-  const [bcmrRegistryJson, setBcmrRegistryJson] = useState('');
-  const [bcmrUrisText, setBcmrUrisText] = useState('');
+  // The registry exactly as the core wrote it, and the links it is published
+  // under. Kept together so the bytes hashed are the bytes uploaded.
+  const [bcmrAuthored, setBcmrAuthored] = useState<AuthoredBcmrRegistry | null>(
+    null
+  );
+  const [bcmrUris, setBcmrUris] = useState<string[]>([]);
+  const [bcmrNftKind, setBcmrNftKind] = useState<'parsable' | 'sequential'>(
+    'parsable'
+  );
+  const [bcmrNftAdvanced, setBcmrNftAdvanced] = useState(false);
+  const bcmrSuggestionRef = useRef<{ name: string; symbol: string } | null>(
+    null
+  );
+  const network = useSelector(selectCurrentNetwork);
   const [bcmrTokenName, setBcmrTokenName] = useState('');
   const [bcmrTokenDescription, setBcmrTokenDescription] = useState('');
   const [bcmrTokenSymbol, setBcmrTokenSymbol] = useState('');
@@ -261,8 +290,6 @@ const MintCashTokensPoCApp: React.FC = () => {
     useState<IpfsUploadResult | null>(null);
   const [bcmrImageUploadStatus, setBcmrImageUploadStatus] =
     useState<BcmrUploadStatus>(IDLE_BCMR_UPLOAD_STATUS);
-  const [bcmrRegistryUpload, setBcmrRegistryUpload] =
-    useState<IpfsUploadResult | null>(null);
   const [bcmrRegistryUploadStatus, setBcmrRegistryUploadStatus] =
     useState<BcmrUploadStatus>(IDLE_BCMR_UPLOAD_STATUS);
   const [bcmrConfirmedFingerprint, setBcmrConfirmedFingerprint] =
@@ -438,16 +465,33 @@ const MintCashTokensPoCApp: React.FC = () => {
 
   const selectedRecipientCount = orderedSelectedRecipients.length;
 
-  const bcmrSelectedCategories = useMemo(
-    () =>
-      Array.from(
-        new Set(selectedUtxos.map((utxo) => getMintSourceCategory(utxo)))
-      ),
+  // Metadata is published with every new token, and only then: spending the
+  // genesis UTXO is what makes this transaction continue the new token's
+  // identity chain. Validation allows one genesis source per mint.
+  const genesisSources = useMemo(
+    () => selectedUtxos.filter(isGenesisMintSource),
     [selectedUtxos]
   );
+  const bcmrEnabled = genesisSources.length > 0;
   const bcmrAuthbase =
-    bcmrSelectedCategories.length === 1 ? bcmrSelectedCategories[0] : '';
+    genesisSources.length === 1 ? genesisSources[0].tx_hash : '';
   const bcmrTokenCategory = bcmrAuthbase;
+  const bcmrRegistryJson = bcmrAuthored?.registryJson ?? '';
+  const genesisSourceKey =
+    genesisSources.length === 1 ? utxoKey(genesisSources[0]) : '';
+
+  // NFTs this mint creates in the new category. A sequential registry names
+  // each of them, so they are part of what the registry depends on.
+  const genesisNftDrafts = useMemo(() => {
+    const recipients = new Set(orderedSelectedRecipients);
+    return outputDrafts.filter(
+      (draft) =>
+        draft.sourceKey === genesisSourceKey &&
+        draft.config.mintType === 'NFT' &&
+        recipients.has(draft.recipientCashAddr)
+    );
+  }, [outputDrafts, genesisSourceKey, orderedSelectedRecipients]);
+  const bcmrHasNfts = genesisNftDrafts.length > 0;
 
   const bcmrFormFingerprint = useMemo(() => {
     const parsedDecimals = Number.parseInt(bcmrTokenDecimals, 10);
@@ -463,6 +507,13 @@ const MintCashTokensPoCApp: React.FC = () => {
           : -1,
       iconUri: bcmrIconUri.trim(),
       webUri: bcmrWebUri.trim(),
+      network,
+      hasNfts: bcmrHasNfts,
+      nftKind: bcmrNftKind,
+      nftAdvanced: bcmrNftAdvanced,
+      nftCommitments: genesisNftDrafts
+        .map((draft) => draft.config.nftCommitment.trim().toLowerCase())
+        .sort(),
       nftsDescription: bcmrNftsDescription.trim(),
       nftBytecode: bcmrNftBytecode.trim(),
       nftTypesJson: bcmrNftTypesJson.trim(),
@@ -478,32 +529,43 @@ const MintCashTokensPoCApp: React.FC = () => {
     bcmrTokenDecimals,
     bcmrIconUri,
     bcmrWebUri,
+    network,
+    bcmrHasNfts,
+    bcmrNftKind,
+    bcmrNftAdvanced,
+    genesisNftDrafts,
     bcmrNftsDescription,
     bcmrNftBytecode,
     bcmrNftTypesJson,
     bcmrNftFieldsJson,
   ]);
 
+  // Ready to mint when the registry was built from exactly the current form
+  // and is verified on IPFS.
   const bcmrRegistryIsCurrent =
-    bcmrRegistryUploadStatus.phase === 'ready' &&
-    bcmrRegistryJson.length > 0 &&
+    bcmrAuthored !== null &&
+    bcmrUris.length > 0 &&
     bcmrConfirmedFingerprint.length > 0 &&
-    bcmrConfirmedFingerprint === bcmrFormFingerprint;
+    bcmrConfirmedFingerprint === bcmrFormFingerprint &&
+    bcmrRegistryUploadStatus.phase === 'ready';
 
-  const bcmrUploadsComplete =
-    !bcmrEnabled ||
-    (bcmrRegistryUploadStatus.phase === 'ready' &&
-      bcmrRegistryUpload !== null &&
-      bcmrRegistryIsCurrent);
+  const bcmrUploadsComplete = !bcmrEnabled || bcmrRegistryIsCurrent;
 
   const bcmrPublication = useMemo<MintBcmrPublication | undefined>(() => {
     if (!bcmrEnabled || !bcmrUploadsComplete) return undefined;
     return {
       enabled: true,
       registryJson: bcmrRegistryJson,
-      uris: parseUrisInput(bcmrUrisText),
+      uris: bcmrUris,
     };
-  }, [bcmrEnabled, bcmrUploadsComplete, bcmrRegistryJson, bcmrUrisText]);
+  }, [bcmrEnabled, bcmrUploadsComplete, bcmrRegistryJson, bcmrUris]);
+
+  // Checked as the user types: the schema only describes this rule in prose,
+  // so no validator downstream would catch a bad symbol.
+  const bcmrSymbolIssue = useMemo(
+    () => bcmrSymbolProblem(bcmrTokenSymbol),
+    [bcmrTokenSymbol]
+  );
 
   const selectedSourceBcmrMetadata = useMemo(() => {
     for (const utxo of selectedUtxos) {
@@ -512,6 +574,27 @@ const MintCashTokensPoCApp: React.FC = () => {
     return null;
   }, [selectedUtxos]);
   const selectedSourceHasExistingBcmr = !!selectedSourceBcmrMetadata;
+
+  // Prefill a name and symbol derived from the new token's category, so a
+  // mint never waits on typing. A field is only replaced while it is empty or
+  // still holds the previous suggestion; anything the user typed stays.
+  useEffect(() => {
+    if (!/^[0-9a-f]{64}$/i.test(bcmrAuthbase)) return;
+    let next: { name: string; symbol: string };
+    try {
+      next = suggestBcmrIdentity(bcmrAuthbase, bcmrHasNfts);
+    } catch {
+      return;
+    }
+    const previous = bcmrSuggestionRef.current;
+    setBcmrTokenName((current) =>
+      !current.trim() || current === previous?.name ? next.name : current
+    );
+    setBcmrTokenSymbol((current) =>
+      !current.trim() || current === previous?.symbol ? next.symbol : current
+    );
+    bcmrSuggestionRef.current = next;
+  }, [bcmrAuthbase, bcmrHasNfts]);
 
   const recipientTokenAddressByCash = useMemo(() => {
     const out: Record<string, string> = {};
@@ -562,6 +645,55 @@ const MintCashTokensPoCApp: React.FC = () => {
     [addresses]
   );
 
+  /**
+   * How NFT commitments of `source`'s category are laid out: the choice made
+   * in this mint for a new token, or what the token's published metadata
+   * says for an existing one. 'custom' means only raw hex makes sense.
+   */
+  const nftLayoutForSource = useCallback(
+    (source: MintAppUtxo | null): 'parsable' | 'sequential' | 'custom' => {
+      if (!source) return 'custom';
+      if (isGenesisMintSource(source)) return bcmrNftKind;
+      const nfts = source.token?.BcmrTokenMetadata?.token?.nfts;
+      if (!nfts) return 'custom';
+      const bytecode = nfts.parse?.bytecode;
+      if (!bytecode) return 'sequential';
+      return bytecode.toLowerCase() === defaultParseBytecode()
+        ? 'parsable'
+        : 'custom';
+    },
+    [bcmrNftKind]
+  );
+
+  const commitmentForSerial = useCallback(
+    (layout: 'parsable' | 'sequential', serialText: string): string => {
+      const trimmed = serialText.trim();
+      if (!/^\d+$/.test(trimmed)) {
+        throw new Error('NFT number must be a whole number.');
+      }
+      const serial = Number(trimmed);
+      return layout === 'parsable'
+        ? parsableNftCommitment(serial)
+        : sequentialNftCommitment(serial);
+    },
+    []
+  );
+
+  // New collections count up from 1. For an existing token the numbers
+  // already minted are not known here, so the user picks the next one.
+  const nextNftSerial = useCallback(
+    (source: MintAppUtxo | null): string => {
+      if (!source || !isGenesisMintSource(source)) return '';
+      const key = utxoKey(source);
+      const used = outputDrafts
+        .filter((draft) => draft.sourceKey === key && draft.config.nftSerial)
+        .map((draft) => Number(draft.config.nftSerial))
+        .filter(Number.isFinite);
+      return String(used.length > 0 ? Math.max(...used) + 1 : 1);
+    },
+    [outputDrafts]
+  );
+
   const openAddOutputDraftForm = useCallback(() => {
     const initialSource = selectedUtxos[0] ?? null;
     setEditingOutputDraftId(null);
@@ -577,8 +709,18 @@ const MintCashTokensPoCApp: React.FC = () => {
     setOutputFormFtAmount('1');
     setOutputFormNftCapability('none');
     setOutputFormNftCommitment('');
+    setOutputFormNftSerial(nextNftSerial(initialSource));
+    setOutputFormCommitmentMode(
+      nftLayoutForSource(initialSource) === 'custom' ? 'custom' : 'serial'
+    );
     setShowOutputPopup(true);
-  }, [addresses, selectedRecipientCashAddrs, selectedUtxos]);
+  }, [
+    addresses,
+    nextNftSerial,
+    nftLayoutForSource,
+    selectedRecipientCashAddrs,
+    selectedUtxos,
+  ]);
 
   const openEditOutputDraftForm = useCallback((draft: MintOutputDraft) => {
     setEditingOutputDraftId(draft.id);
@@ -588,6 +730,8 @@ const MintCashTokensPoCApp: React.FC = () => {
     setOutputFormFtAmount(draft.config.ftAmount);
     setOutputFormNftCapability(draft.config.nftCapability);
     setOutputFormNftCommitment(draft.config.nftCommitment);
+    setOutputFormNftSerial(draft.config.nftSerial ?? '');
+    setOutputFormCommitmentMode(draft.config.nftSerial ? 'serial' : 'custom');
     setShowOutputPopup(true);
   }, []);
 
@@ -604,6 +748,34 @@ const MintCashTokensPoCApp: React.FC = () => {
       setErrorMessage('Minting authority sources can only mint NFT outputs.');
       return;
     }
+
+    let nftCommitment = '';
+    let nftSerial: string | undefined;
+    if (outputFormMintType === 'NFT') {
+      const layout = nftLayoutForSource(source);
+      if (outputFormCommitmentMode === 'serial' && layout !== 'custom') {
+        try {
+          nftCommitment = commitmentForSerial(layout, outputFormNftSerial);
+          nftSerial = outputFormNftSerial.trim();
+        } catch (e: unknown) {
+          setErrorMessage(getErrorMessage(e, 'Invalid NFT number.'));
+          return;
+        }
+      } else {
+        nftCommitment = outputFormNftCommitment.trim().toLowerCase();
+        if (
+          !/^[0-9a-f]*$/.test(nftCommitment) ||
+          nftCommitment.length % 2 !== 0 ||
+          nftCommitment.length / 2 > 128
+        ) {
+          setErrorMessage(
+            'Commitment must be even-length hex, at most 128 bytes.'
+          );
+          return;
+        }
+      }
+    }
+
     const nextDraft = {
       recipientCashAddr: outputFormRecipient,
       sourceKey: outputFormSourceKey,
@@ -612,11 +784,10 @@ const MintCashTokensPoCApp: React.FC = () => {
         ftAmount: outputFormMintType === 'FT' ? outputFormFtAmount : '1',
         nftCapability:
           outputFormMintType === 'NFT' ? outputFormNftCapability : 'none',
-        nftCommitment:
-          outputFormMintType === 'NFT' ? outputFormNftCommitment : '',
+        nftCommitment,
+        nftSerial,
       },
     };
-
     if (editingOutputDraftId) {
       setOutputDrafts((prev) =>
         prev.map((draft) =>
@@ -629,16 +800,47 @@ const MintCashTokensPoCApp: React.FC = () => {
     }
     setShowOutputPopup(false);
   }, [
+    commitmentForSerial,
     editingOutputDraftId,
+    nftLayoutForSource,
+    outputFormCommitmentMode,
     outputFormFtAmount,
     outputFormMintType,
     outputFormNftCapability,
     outputFormNftCommitment,
+    outputFormNftSerial,
     outputFormRecipient,
     outputFormSourceKey,
     selectedUtxos,
     setErrorMessage,
   ]);
+
+  // Switching a new collection between parsable and sequential changes how
+  // every numbered NFT's commitment is written, so rebuild those drafts.
+  // Custom-hex drafts are the user's own bytes and stay as typed.
+  useEffect(() => {
+    if (!genesisSourceKey) return;
+    setOutputDrafts((prev) => {
+      let changed = false;
+      const next = prev.map((draft) => {
+        if (
+          draft.sourceKey !== genesisSourceKey ||
+          draft.config.mintType !== 'NFT' ||
+          !draft.config.nftSerial
+        ) {
+          return draft;
+        }
+        const nftCommitment = commitmentForSerial(
+          bcmrNftKind,
+          draft.config.nftSerial
+        );
+        if (nftCommitment === draft.config.nftCommitment) return draft;
+        changed = true;
+        return { ...draft, config: { ...draft.config, nftCommitment } };
+      });
+      return changed ? next : prev;
+    });
+  }, [bcmrNftKind, commitmentForSerial, genesisSourceKey]);
 
   const removeOutputDraft = useCallback((id: string) => {
     setOutputDrafts((prev) => prev.filter((d) => d.id !== id));
@@ -690,6 +892,15 @@ const MintCashTokensPoCApp: React.FC = () => {
   const outputFormAllowsFungible = outputFormSource
     ? canMintFungibleFromSource(outputFormSource)
     : false;
+  const outputFormLayout = nftLayoutForSource(outputFormSource);
+  const outputFormCommitmentPreview = useMemo(() => {
+    if (outputFormLayout === 'custom') return '';
+    try {
+      return commitmentForSerial(outputFormLayout, outputFormNftSerial);
+    } catch {
+      return '';
+    }
+  }, [commitmentForSerial, outputFormLayout, outputFormNftSerial]);
 
   useEffect(() => {
     if (!outputFormAllowsFungible && outputFormMintType === 'FT') {
@@ -760,25 +971,6 @@ const MintCashTokensPoCApp: React.FC = () => {
     dispatchFlow({ type: 'reset_messages' });
   }, []);
 
-  const setBcmrPublicationEnabled = useCallback(
-    (enabled: boolean) => {
-      setBcmrEnabled(enabled);
-      if (enabled) return;
-
-      setShowBcmrPopup(false);
-      setBcmrRegistryJson('');
-      setBcmrUrisText('');
-      setBcmrImageFile(null);
-      setBcmrImageUpload(null);
-      setBcmrImageUploadStatus(IDLE_BCMR_UPLOAD_STATUS);
-      setBcmrRegistryUpload(null);
-      setBcmrRegistryUploadStatus(IDLE_BCMR_UPLOAD_STATUS);
-      setBcmrConfirmedFingerprint('');
-      clearBcmrFieldErrors();
-    },
-    [clearBcmrFieldErrors]
-  );
-
   const resetMintComposer = useCallback(() => {
     setSelectedKeys(new Set());
     setOutputDrafts([]);
@@ -789,9 +981,13 @@ const MintCashTokensPoCApp: React.FC = () => {
       addresses[0]?.address ? new Set([addresses[0].address]) : new Set()
     );
     draftSeq.current = 0;
-    setBcmrEnabled(false);
-    setBcmrRegistryJson('');
-    setBcmrUrisText('');
+    setBcmrAuthored(null);
+    setBcmrUris([]);
+    setBcmrNftKind('parsable');
+    setBcmrNftAdvanced(false);
+    bcmrSuggestionRef.current = null;
+    setBcmrRegistryUploadStatus(IDLE_BCMR_UPLOAD_STATUS);
+    setBcmrConfirmedFingerprint('');
     setBcmrTokenName('');
     setBcmrTokenDescription('');
     setBcmrTokenSymbol('');
@@ -804,7 +1000,6 @@ const MintCashTokensPoCApp: React.FC = () => {
     setBcmrNftFieldsJson('');
     setBcmrImageFile(null);
     setBcmrImageUpload(null);
-    setBcmrRegistryUpload(null);
     clearBcmrFieldErrors();
   }, [addresses, clearBcmrFieldErrors]);
 
@@ -943,9 +1138,135 @@ const MintCashTokensPoCApp: React.FC = () => {
    * - outputs: N token outputs + auto change
    * Enforce 1 sat/byte by builder.
    */
-  const prepareMint = useCallback(async () => {
-    resetFlowMessages();
-    const validationError = validateMintRequest({
+  const prepareMint = useCallback(
+    async (freshPublication?: MintBcmrPublication) => {
+      resetFlowMessages();
+      const publication = freshPublication ?? bcmrPublication;
+      const validationError = validateMintRequest({
+        walletId,
+        selectedRecipientCount,
+        changeAddress,
+        selectedUtxos,
+        activeOutputDrafts,
+        selectedRecipientSet,
+        selectedSourceKeySet,
+      });
+      if (validationError) {
+        setErrorMessage(validationError);
+        return;
+      }
+      if (bcmrEnabled) {
+        if (
+          bcmrImageUploadStatus.phase === 'uploading' ||
+          bcmrImageUploadStatus.phase === 'verifying' ||
+          bcmrRegistryUploadStatus.phase === 'uploading' ||
+          bcmrRegistryUploadStatus.phase === 'verifying'
+        ) {
+          setErrorMessage(
+            'Wait for the BCMR IPFS upload to finish before minting.'
+          );
+          return;
+        }
+        if (!publication) {
+          setErrorMessage(
+            'Token metadata is not published yet. Publish it before minting.'
+          );
+          return;
+        }
+      }
+
+      setLoading(true);
+      setStatus('Preparing transaction for review...');
+
+      try {
+        const { built, inputsForBuild, feePaid } = await buildMintPreview({
+          selectedUtxos,
+          flatUtxos,
+          activeOutputDrafts,
+          changeAddress,
+          sdkAddressBook,
+          tokenOutputSats: TOKEN_OUTPUT_SATS,
+          bcmrPublication: bcmrEnabled ? publication : undefined,
+        });
+
+        openConfirm({
+          title: `Confirm mint (${activeOutputDrafts.length} output${
+            activeOutputDrafts.length === 1 ? '' : 's'
+          })`,
+          subtitle: 'Fee policy: 1 sat/byte. Review before broadcast.',
+          warning: (
+            <>
+              {addonT(
+                'module.broadcastWarning',
+                'This will broadcast immediately after confirmation.'
+              )}
+            </>
+          ),
+          body: (
+            <TxSummary
+              inputs={asTxSummaryInputs(inputsForBuild)}
+              outputs={asTxSummaryOutputs(built.finalOutputs)}
+              bytes={built.bytes}
+              fee={feePaid}
+            />
+          ),
+          onConfirm: async () => {
+            setConfirmLoading(true);
+            try {
+              setStatus('Broadcasting mint transaction...');
+              const sent = await TransactionService.sendTransaction(
+                built.finalTransaction
+              );
+              const sentTxid = sent?.txid ?? '';
+              if (!sentTxid)
+                throw new Error(sent?.errorMessage || 'Broadcast failed.');
+              const submitted = sent.broadcastState === 'submitted';
+              closeConfirm();
+              setTxid(sentTxid);
+              setStatus(
+                submitted
+                  ? 'Mint transaction submitted. Refreshing wallet data...'
+                  : 'Mint successful. Refreshing wallet data...'
+              );
+              showToast(submitted ? 'Transaction submitted' : 'Broadcasted');
+
+              let refreshFailed = false;
+              try {
+                await refreshWalletSnapshot(true);
+              } catch (refreshError) {
+                refreshFailed = true;
+                console.error(refreshError);
+              }
+
+              await runSmoothReset(async () => {
+                resetMintComposer();
+              });
+              setStatus(
+                refreshFailed
+                  ? submitted
+                    ? 'Mint transaction submitted. Wallet refresh failed; keep the txid and refresh manually.'
+                    : 'Mint successful. Wallet refresh failed; refresh manually.'
+                  : submitted
+                    ? 'Mint transaction submitted. Keep the txid and avoid sending it again.'
+                    : 'Mint successful. Returned to the start screen.'
+              );
+            } finally {
+              setConfirmLoading(false);
+            }
+          },
+        });
+
+        setStatus('');
+      } catch (e: unknown) {
+        console.error(e);
+        setErrorMessage(getErrorMessage(e, 'Mint failed.'));
+        setStatus('');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      resetFlowMessages,
       walletId,
       selectedRecipientCount,
       changeAddress,
@@ -953,149 +1274,26 @@ const MintCashTokensPoCApp: React.FC = () => {
       activeOutputDrafts,
       selectedRecipientSet,
       selectedSourceKeySet,
-    });
-    if (validationError) {
-      setErrorMessage(validationError);
-      return;
-    }
-    if (bcmrEnabled) {
-      if (
-        bcmrImageUploadStatus.phase === 'uploading' ||
-        bcmrImageUploadStatus.phase === 'verifying' ||
-        bcmrRegistryUploadStatus.phase === 'uploading' ||
-        bcmrRegistryUploadStatus.phase === 'verifying'
-      ) {
-        setErrorMessage(
-          'Wait for the BCMR IPFS upload to finish before minting.'
-        );
-        return;
-      }
-      if (!bcmrUploadsComplete) {
-        setErrorMessage(
-          'Finish BCMR metadata confirmation and IPFS verification before minting.'
-        );
-        return;
-      }
-    }
-
-    setLoading(true);
-    setStatus('Preparing transaction for review...');
-
-    try {
-      const { built, inputsForBuild, feePaid } = await buildMintPreview({
-        selectedUtxos,
-        flatUtxos,
-        activeOutputDrafts,
-        changeAddress,
-        sdkAddressBook,
-        tokenOutputSats: TOKEN_OUTPUT_SATS,
-        bcmrPublication,
-      });
-
-      openConfirm({
-        title: `Confirm mint (${activeOutputDrafts.length} output${
-          activeOutputDrafts.length === 1 ? '' : 's'
-        })`,
-        subtitle: 'Fee policy: 1 sat/byte. Review before broadcast.',
-        warning: (
-          <>
-            {addonT(
-              'module.broadcastWarning',
-              'This will broadcast immediately after confirmation.'
-            )}
-          </>
-        ),
-        body: (
-          <TxSummary
-            inputs={asTxSummaryInputs(inputsForBuild)}
-            outputs={asTxSummaryOutputs(built.finalOutputs)}
-            bytes={built.bytes}
-            fee={feePaid}
-          />
-        ),
-        onConfirm: async () => {
-          setConfirmLoading(true);
-          try {
-            setStatus('Broadcasting mint transaction...');
-            const sent = await TransactionService.sendTransaction(
-              built.finalTransaction
-            );
-            const sentTxid = sent?.txid ?? '';
-            if (!sentTxid)
-              throw new Error(sent?.errorMessage || 'Broadcast failed.');
-            const submitted = sent.broadcastState === 'submitted';
-            closeConfirm();
-            setTxid(sentTxid);
-            setStatus(
-              submitted
-                ? 'Mint transaction submitted. Refreshing wallet data...'
-                : 'Mint successful. Refreshing wallet data...'
-            );
-            showToast(submitted ? 'Transaction submitted' : 'Broadcasted');
-
-            let refreshFailed = false;
-            try {
-              await refreshWalletSnapshot(true);
-            } catch (refreshError) {
-              refreshFailed = true;
-              console.error(refreshError);
-            }
-
-            await runSmoothReset(async () => {
-              resetMintComposer();
-            });
-            setStatus(
-              refreshFailed
-                ? submitted
-                  ? 'Mint transaction submitted. Wallet refresh failed; keep the txid and refresh manually.'
-                  : 'Mint successful. Wallet refresh failed; refresh manually.'
-                : submitted
-                  ? 'Mint transaction submitted. Keep the txid and avoid sending it again.'
-                  : 'Mint successful. Returned to the start screen.'
-            );
-          } finally {
-            setConfirmLoading(false);
-          }
-        },
-      });
-
-      setStatus('');
-    } catch (e: unknown) {
-      console.error(e);
-      setErrorMessage(getErrorMessage(e, 'Mint failed.'));
-      setStatus('');
-    } finally {
-      setLoading(false);
-    }
-  }, [
-    resetFlowMessages,
-    walletId,
-    selectedRecipientCount,
-    changeAddress,
-    selectedUtxos,
-    activeOutputDrafts,
-    selectedRecipientSet,
-    selectedSourceKeySet,
-    bcmrEnabled,
-    bcmrImageUploadStatus.phase,
-    bcmrRegistryUploadStatus.phase,
-    bcmrUploadsComplete,
-    setErrorMessage,
-    setLoading,
-    setStatus,
-    flatUtxos,
-    sdkAddressBook,
-    bcmrPublication,
-    openConfirm,
-    setTxid,
-    closeConfirm,
-    showToast,
-    addonT,
-    refreshWalletSnapshot,
-    setConfirmLoading,
-    resetMintComposer,
-    runSmoothReset,
-  ]);
+      bcmrEnabled,
+      bcmrImageUploadStatus.phase,
+      bcmrRegistryUploadStatus.phase,
+      setErrorMessage,
+      setLoading,
+      setStatus,
+      flatUtxos,
+      sdkAddressBook,
+      bcmrPublication,
+      openConfirm,
+      setTxid,
+      closeConfirm,
+      showToast,
+      addonT,
+      refreshWalletSnapshot,
+      setConfirmLoading,
+      resetMintComposer,
+      runSmoothReset,
+    ]
+  );
 
   const handleCopyRecipientAddress = useCallback(
     (addr: string) => {
@@ -1111,63 +1309,11 @@ const MintCashTokensPoCApp: React.FC = () => {
     [copyText]
   );
 
-  const openBcmrEditor = useCallback(
-    (prefillFromExisting: boolean) => {
-      const existing = prefillFromExisting ? selectedSourceBcmrMetadata : null;
-
-      setBcmrEnabled(true);
-      setBcmrRegistryJson('');
-      setBcmrUrisText(
-        existing
-          ? Object.values(existing.uris ?? {})
-              .filter(Boolean)
-              .join('\n')
-          : ''
-      );
-      setBcmrTokenName(existing?.name ?? '');
-      setBcmrTokenDescription(existing?.description ?? '');
-      setBcmrTokenSymbol(existing?.token?.symbol ?? '');
-      setBcmrTokenDecimals(String(existing?.token?.decimals ?? 0));
-      setBcmrIconUri(existing?.uris?.icon ?? '');
-      setBcmrWebUri(existing?.uris?.web ?? '');
-      const existingNfts = (
-        existing?.token as unknown as
-          | {
-              nfts?: {
-                description?: string;
-                fields?: Record<string, unknown>;
-                parse?: {
-                  bytecode?: string;
-                  types?: Record<string, unknown>;
-                };
-              };
-            }
-          | undefined
-      )?.nfts;
-      setBcmrNftsDescription(existingNfts?.description ?? '');
-      setBcmrNftBytecode(existingNfts?.parse?.bytecode ?? '');
-      setBcmrNftTypesJson(
-        existingNfts?.parse?.types &&
-          Object.keys(existingNfts.parse.types).length > 0
-          ? JSON.stringify(existingNfts.parse.types, null, 2)
-          : ''
-      );
-      setBcmrNftFieldsJson(
-        existingNfts?.fields && Object.keys(existingNfts.fields).length > 0
-          ? JSON.stringify(existingNfts.fields, null, 2)
-          : ''
-      );
-      setBcmrImageFile(null);
-      setBcmrImageUpload(null);
-      setBcmrImageUploadStatus(IDLE_BCMR_UPLOAD_STATUS);
-      setBcmrRegistryUpload(null);
-      setBcmrRegistryUploadStatus(IDLE_BCMR_UPLOAD_STATUS);
-      setBcmrConfirmedFingerprint('');
-      clearBcmrFieldErrors();
-      setShowBcmrPopup(true);
-    },
-    [clearBcmrFieldErrors, selectedSourceBcmrMetadata]
-  );
+  // The form is always prefilled, so opening the editor only reveals it.
+  const openBcmrEditor = useCallback(() => {
+    clearBcmrFieldErrors();
+    setShowBcmrPopup(true);
+  }, [clearBcmrFieldErrors]);
 
   const handleJumpToAmounts = useCallback(() => {
     setStep(3);
@@ -1250,198 +1396,232 @@ const MintCashTokensPoCApp: React.FC = () => {
     }
   }, [bcmrImageFile, setBcmrFieldError, setLoading, setStatus]);
 
-  const handleConfirmBcmr = useCallback(async () => {
-    const trimmedCategory = bcmrTokenCategory.trim();
-    const trimmedName = bcmrTokenName.trim();
-    const trimmedSymbol = bcmrTokenSymbol.trim();
-    const trimmedIcon = bcmrIconUri.trim();
-    const trimmedWeb = bcmrWebUri.trim();
-    const parsedDecimals = Number.parseInt(bcmrTokenDecimals, 10);
-    const trimmedNftBytecode = bcmrNftBytecode.trim();
-    const trimmedNftTypes = bcmrNftTypesJson.trim();
-    const trimmedNftFields = bcmrNftFieldsJson.trim();
+  /**
+   * Author the registry in the core, upload it, and return what the mint
+   * transaction should publish — or null, with the reason shown, when it is
+   * not ready. Called from the editor and, when nothing is published yet,
+   * directly from "Review & mint", so a mint never needs a separate step.
+   */
+  const handleConfirmBcmr =
+    useCallback(async (): Promise<MintBcmrPublication | null> => {
+      const parsedDecimals = Number.parseInt(bcmrTokenDecimals, 10);
+      const trimmedNftTypes = bcmrNftTypesJson.trim();
+      const trimmedNftFields = bcmrNftFieldsJson.trim();
+      const nextErrors: Partial<Record<BcmrFieldKey, string>> = {};
 
-    const nextErrors: Partial<Record<BcmrFieldKey, string>> = {};
-
-    if (bcmrSelectedCategories.length !== 1) {
-      nextErrors.general =
-        'BCMR publication requires exactly one selected token category.';
-    } else if (!/^[0-9a-f]{64}$/i.test(bcmrAuthbase.trim())) {
-      nextErrors.general = 'Authbase is not ready. Select a valid source UTXO.';
-    }
-    if (!/^[0-9a-f]{64}$/i.test(trimmedCategory)) {
-      nextErrors.tokenCategory = 'Token category must be 64 hex characters.';
-    }
-    if (!trimmedName) {
-      nextErrors.tokenName = 'Name is required.';
-    }
-    if (!trimmedSymbol) {
-      nextErrors.tokenSymbol = 'Symbol is required.';
-    }
-    if (!Number.isFinite(parsedDecimals) || parsedDecimals < 0) {
-      nextErrors.tokenDecimals = 'Decimals must be a non-negative number.';
-    }
-    if (trimmedIcon && !/^(ipfs|https?):\/\//i.test(trimmedIcon)) {
-      nextErrors.iconUri = 'Icon URI must start with ipfs:// or https://';
-    }
-    if (trimmedWeb && !/^https?:\/\//i.test(trimmedWeb)) {
-      nextErrors.webUri = 'Official site must start with https:// or http://';
-    }
-    if (
-      trimmedNftBytecode &&
-      (!/^[0-9a-f]+$/i.test(trimmedNftBytecode) ||
-        trimmedNftBytecode.length % 2 !== 0)
-    ) {
-      nextErrors.nftBytecode = 'Parse bytecode must be even-length hex.';
-    }
-    let nftTypes: Record<string, { name: string }> | undefined;
-    if (trimmedNftTypes) {
-      try {
-        const parsed: unknown = JSON.parse(trimmedNftTypes);
-        if (
-          typeof parsed !== 'object' ||
-          parsed === null ||
-          Array.isArray(parsed)
-        ) {
-          throw new Error();
-        }
-        nftTypes = parsed as Record<string, { name: string }>;
-      } catch {
-        nextErrors.nftTypes =
-          'NFT types must be valid JSON: an object of type keys.';
+      if (
+        genesisSources.length !== 1 ||
+        !/^[0-9a-f]{64}$/i.test(bcmrAuthbase)
+      ) {
+        nextErrors.general =
+          'Token metadata needs exactly one genesis source for the new token.';
       }
-    }
-    let nftFields: BcmrNftsSchemaInput['fields'] | undefined;
-    if (trimmedNftFields) {
-      try {
-        const parsed: unknown = JSON.parse(trimmedNftFields);
-        if (
-          typeof parsed !== 'object' ||
-          parsed === null ||
-          Array.isArray(parsed)
-        ) {
-          throw new Error();
-        }
-        nftFields = parsed as BcmrNftsSchemaInput['fields'];
-      } catch {
-        nextErrors.nftFields =
-          'NFT fields must be valid JSON: an object of field identifiers.';
+      if (!Number.isFinite(parsedDecimals) || parsedDecimals < 0) {
+        nextErrors.tokenDecimals =
+          'Decimals must be a whole number from 0 to 18.';
       }
-    }
+      const parseJsonObject = (
+        text: string,
+        field: BcmrFieldKey,
+        message: string
+      ) => {
+        if (!text) return undefined;
+        try {
+          const parsed: unknown = JSON.parse(text);
+          if (typeof parsed === 'object' && parsed && !Array.isArray(parsed)) {
+            return parsed as Record<string, never>;
+          }
+        } catch {
+          // Reported below.
+        }
+        nextErrors[field] = message;
+        return undefined;
+      };
 
-    if (Object.keys(nextErrors).length > 0) {
-      setBcmrFieldErrors(nextErrors);
+      let nfts: BcmrNftsSchemaInput | undefined;
+      if (bcmrHasNfts && bcmrNftKind === 'sequential') {
+        // A sequential registry names every NFT, keyed by its exact commitment.
+        const types: Record<string, { name: string }> = {};
+        for (const draft of genesisNftDrafts) {
+          const key = draft.config.nftCommitment.trim().toLowerCase();
+          types[key] = {
+            name: draft.config.nftSerial
+              ? `#${draft.config.nftSerial}`
+              : key
+                ? `NFT ${key}`
+                : '#0',
+          };
+        }
+        nfts = {
+          kind: 'sequential',
+          description: bcmrNftsDescription.trim(),
+          types,
+        };
+      } else if (bcmrHasNfts) {
+        nfts = { kind: 'parsable', description: bcmrNftsDescription.trim() };
+        if (bcmrNftAdvanced) {
+          const bytecode = bcmrNftBytecode.trim();
+          if (bytecode) nfts.bytecode = bytecode;
+          const types = parseJsonObject(
+            trimmedNftTypes,
+            'nftTypes',
+            'NFT types must be valid JSON: an object of type keys.'
+          );
+          if (types) nfts.types = types;
+          const fields = parseJsonObject(
+            trimmedNftFields,
+            'nftFields',
+            'NFT fields must be valid JSON: an object of field identifiers.'
+          );
+          if (fields) nfts.fields = fields;
+        }
+      }
+
+      if (Object.keys(nextErrors).length > 0) {
+        setBcmrFieldErrors(nextErrors);
+        setShowBcmrPopup(true);
+        return null;
+      }
+
+      clearBcmrFieldErrors();
+      setBcmrRegistryUploadStatus({
+        phase: 'uploading',
+        message: 'Uploading token metadata to IPFS...',
+      });
+
+      setLoading(true);
+      try {
+        let authored: AuthoredBcmrRegistry;
+        try {
+          authored = generateBcmrRegistry({
+            network,
+            baseRegistry: await (async () => {
+              try {
+                const existing =
+                  await bcmrService.resolveIdentityRegistry(bcmrAuthbase);
+                return existing.registry;
+              } catch (error) {
+                if (isBcmrRegistryNotFoundError(error)) return undefined;
+                throw error;
+              }
+            })(),
+            authbase: bcmrAuthbase,
+            tokenCategory: bcmrTokenCategory,
+            tokenName: bcmrTokenName,
+            tokenDescription: bcmrTokenDescription,
+            tokenSymbol: bcmrTokenSymbol,
+            tokenDecimals: parsedDecimals,
+            iconUri: bcmrIconUri,
+            webUri: bcmrWebUri,
+            nfts,
+          });
+        } catch (e: unknown) {
+          const message = getErrorMessage(e, 'Could not build token metadata.');
+          const field =
+            e instanceof BcmrRegistryError
+              ? e.field
+              : mapBcmrErrorToField(message);
+          setBcmrRegistryUploadStatus({ phase: 'error', message });
+          setBcmrFieldError(field as BcmrFieldKey, message);
+          setShowBcmrPopup(true);
+          return null;
+        }
+
+        // From here the registry is fixed: its hash and link are known, so
+        // even a failed upload can be finished later without changing the mint.
+        setBcmrAuthored(authored);
+        setBcmrConfirmedFingerprint(bcmrFormFingerprint);
+        setBcmrUris([authored.ipfsUri]);
+
+        try {
+          const result = await uploadToIpfsRelay(
+            new Blob([authored.registryJson], { type: 'application/json' }),
+            { filename: 'bitcoin-cash-metadata-registry.json', rawCid: true }
+          );
+          const relayUri = `ipfs://${result.cid}`;
+          setBcmrRegistryUploadStatus({
+            phase: 'verifying',
+            message:
+              'Waiting for the token metadata to be reachable from IPFS...',
+          });
+          await waitForIpfsAvailability(relayUri, {
+            timeoutMs: 45_000,
+            pollIntervalMs: 1_500,
+            validateResponse: async (response) => {
+              const body = await response.text();
+              if (sha256.text(body) !== authored.sha256) {
+                throw new Error(
+                  'Uploaded token metadata is reachable but does not match the expected content.'
+                );
+              }
+            },
+          });
+
+          // OPTN's upload relay currently answers with a CIDv0 link, not the
+          // raw CIDv1 computed from the bytes. The link it actually serves
+          // goes first; the computed one follows so anyone re-adding the
+          // file with cid-version=1 makes it resolve too.
+          const uris =
+            result.cid === authored.ipfsCid
+              ? [authored.ipfsUri]
+              : [relayUri, authored.ipfsUri];
+          setBcmrUris(uris);
+          setBcmrRegistryUploadStatus({
+            phase: 'ready',
+            message: 'Token metadata uploaded and verified on IPFS.',
+          });
+          showToast('Token metadata uploaded and verified on IPFS.');
+          setShowBcmrPopup(false);
+          return { enabled: true, registryJson: authored.registryJson, uris };
+        } catch (e: unknown) {
+          const message = getErrorMessage(
+            e,
+            'Failed to upload token metadata.'
+          );
+          setBcmrRegistryUploadStatus({ phase: 'error', message });
+          setBcmrFieldError('registry', message);
+          return null;
+        }
+      } finally {
+        setLoading(false);
+      }
+    }, [
+      bcmrTokenDecimals,
+      bcmrNftTypesJson,
+      bcmrNftFieldsJson,
+      genesisSources.length,
+      bcmrAuthbase,
+      bcmrHasNfts,
+      bcmrNftKind,
+      genesisNftDrafts,
+      bcmrNftsDescription,
+      bcmrNftAdvanced,
+      bcmrNftBytecode,
+      clearBcmrFieldErrors,
+      network,
+      bcmrService,
+      bcmrTokenCategory,
+      bcmrTokenName,
+      bcmrTokenDescription,
+      bcmrTokenSymbol,
+      bcmrIconUri,
+      bcmrWebUri,
+      mapBcmrErrorToField,
+      setBcmrFieldError,
+      bcmrFormFingerprint,
+      setLoading,
+      showToast,
+    ]);
+
+  const handleReviewAndMint = useCallback(async () => {
+    if (bcmrEnabled && !bcmrUploadsComplete) {
+      const publication = await handleConfirmBcmr();
+      if (!publication) return;
+      await prepareMint(publication);
       return;
     }
-
-    clearBcmrFieldErrors();
-    setBcmrRegistryUpload(null);
-    setBcmrRegistryUploadStatus({
-      phase: 'uploading',
-      message: 'Uploading BCMR registry to IPFS...',
-    });
-
-    setLoading(true);
-    try {
-      const json = generateBcmrRegistryJson({
-        baseRegistry: await (async () => {
-          try {
-            const existing =
-              await bcmrService.resolveIdentityRegistry(bcmrAuthbase);
-            return existing.registry;
-          } catch (error) {
-            if (isBcmrRegistryNotFoundError(error)) {
-              return undefined;
-            }
-            throw error;
-          }
-        })(),
-        authbase: bcmrAuthbase,
-        tokenCategory: bcmrTokenCategory,
-        tokenName: bcmrTokenName,
-        tokenDescription: bcmrTokenDescription,
-        tokenSymbol: bcmrTokenSymbol,
-        tokenDecimals: parsedDecimals,
-        iconUri: bcmrIconUri,
-        webUri: bcmrWebUri,
-        nfts: outputDrafts.some((draft) => draft.config.mintType === 'NFT')
-          ? {
-              description: bcmrNftsDescription.trim() || undefined,
-              parse: {
-                bytecode: trimmedNftBytecode || undefined,
-                types: nftTypes,
-              },
-              fields: nftFields,
-            }
-          : undefined,
-      });
-      setBcmrRegistryJson(json);
-
-      const blob = new Blob([json], { type: 'application/json' });
-      const result = await uploadToIpfsRelay(blob, {
-        filename: 'bitcoin-cash-metadata-registry.json',
-      });
-      const ipfsUri = `ipfs://${result.cid}`;
-      setBcmrRegistryUploadStatus({
-        phase: 'verifying',
-        message: 'Waiting for the BCMR registry to be reachable from IPFS...',
-      });
-      const expectedHash = sha256.text(json);
-      await waitForIpfsAvailability(ipfsUri, {
-        timeoutMs: 45_000,
-        pollIntervalMs: 1_500,
-        validateResponse: async (response) => {
-          const body = await response.text();
-          if (sha256.text(body) !== expectedHash) {
-            throw new Error(
-              'Uploaded BCMR registry is reachable but does not match the expected content.'
-            );
-          }
-        },
-      });
-      setBcmrRegistryUpload(result);
-      setBcmrUrisText(ipfsUri);
-      setBcmrConfirmedFingerprint(bcmrFormFingerprint);
-      setBcmrRegistryUploadStatus({
-        phase: 'ready',
-        message: 'BCMR registry uploaded and verified on IPFS.',
-      });
-      showToast('BCMR registry uploaded and verified on IPFS.');
-      setShowBcmrPopup(false);
-    } catch (e: unknown) {
-      const message = getErrorMessage(e, 'Failed to confirm BCMR metadata.');
-      setBcmrRegistryUploadStatus({
-        phase: 'error',
-        message,
-      });
-      const field = mapBcmrErrorToField(message);
-      setBcmrFieldError(field, message);
-    } finally {
-      setLoading(false);
-    }
-  }, [
-    clearBcmrFieldErrors,
-    bcmrTokenCategory,
-    bcmrTokenName,
-    bcmrTokenSymbol,
-    bcmrTokenDecimals,
-    bcmrIconUri,
-    bcmrWebUri,
-    bcmrNftsDescription,
-    bcmrNftBytecode,
-    bcmrNftTypesJson,
-    bcmrNftFieldsJson,
-    bcmrAuthbase,
-    bcmrSelectedCategories.length,
-    outputDrafts,
-    setLoading,
-    bcmrTokenDescription,
-    bcmrFormFingerprint,
-    bcmrService,
-    mapBcmrErrorToField,
-    showToast,
-    setBcmrFieldError,
-  ]);
+    await prepareMint();
+  }, [bcmrEnabled, bcmrUploadsComplete, handleConfirmBcmr, prepareMint]);
 
   return (
     <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] min-h-0 px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
@@ -1544,61 +1724,79 @@ const MintCashTokensPoCApp: React.FC = () => {
                       <h3 className="text-base font-semibold">
                         {addonT('common.tokenMetadata', 'Token metadata')}
                       </h3>
-                      {selectedSourceHasExistingBcmr ? (
+                      {bcmrEnabled ? (
+                        <Badge tone={bcmrUploadsComplete ? 'green' : 'amber'}>
+                          {!bcmrUploadsComplete
+                            ? addonT(
+                                'module.bcmrWithMint',
+                                'Published with mint'
+                              )
+                            : addonT('module.bcmrReady', 'Ready')}
+                        </Badge>
+                      ) : selectedSourceHasExistingBcmr ? (
                         <Badge tone="green">
                           {addonT('module.bcmrPresent', 'BCMR already present')}
                         </Badge>
                       ) : null}
                     </div>
-                    <p className="text-sm wallet-muted">
-                      {selectedSourceHasExistingBcmr
-                        ? 'This mint source already has BCMR. You can mint now without publishing anything new.'
-                        : 'Optional: publish BCMR metadata if you want to describe this token family before minting.'}
-                    </p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        aria-pressed={!bcmrEnabled}
-                        onClick={() => setBcmrPublicationEnabled(false)}
-                        className={`px-3 py-2 text-sm font-semibold rounded-xl ${
-                          !bcmrEnabled
-                            ? 'wallet-segment-active'
-                            : 'wallet-segment-inactive'
-                        }`}
-                      >
-                        Mint without BCMR
-                      </button>
-                      <button
-                        type="button"
-                        aria-pressed={bcmrEnabled}
-                        onClick={() => {
-                          setBcmrPublicationEnabled(true);
-                          openBcmrEditor(selectedSourceHasExistingBcmr);
-                        }}
-                        className={`px-3 py-2 text-sm font-semibold rounded-xl ${
-                          bcmrEnabled
-                            ? 'wallet-segment-active'
-                            : 'wallet-segment-inactive'
-                        }`}
-                      >
-                        Publish BCMR
-                      </button>
-                    </div>
                     {bcmrEnabled ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          openBcmrEditor(selectedSourceHasExistingBcmr);
-                        }}
-                        className="wallet-btn-primary px-3 py-2 text-sm"
-                      >
-                        {selectedSourceHasExistingBcmr
-                          ? addonT('common.replaceMetadata', 'Replace metadata')
-                          : bcmrRegistryUpload
-                            ? addonT('common.editMetadata', 'Edit metadata')
-                            : addonT('common.addMetadata', 'Add metadata')}
-                      </button>
-                    ) : null}
+                      <>
+                        <p className="text-sm wallet-muted">
+                          {addonT(
+                            'module.bcmrAlwaysPublished',
+                            'Every new token is published with its metadata. The fields are prefilled; edit them if you like.'
+                          )}
+                        </p>
+                        <div className="text-sm">
+                          <span className="font-semibold">
+                            {bcmrTokenName || '—'}
+                          </span>
+                          {' · '}
+                          <span className="font-mono">
+                            {bcmrTokenSymbol || '—'}
+                          </span>
+                          {bcmrHasNfts
+                            ? ` · ${
+                                bcmrNftKind === 'parsable'
+                                  ? addonT('module.parsable', 'Parsable')
+                                  : addonT('module.sequential', 'Sequential')
+                              }`
+                            : null}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={openBcmrEditor}
+                          className="wallet-btn-secondary px-3 py-2 text-sm"
+                        >
+                          {addonT('common.editMetadata', 'Edit metadata')}
+                        </button>
+                        {bcmrRegistryUploadStatus.phase === 'error' &&
+                        bcmrAuthored ? (
+                          <div className="rounded-xl wallet-surface-strong p-3 space-y-2 text-sm">
+                            <p className="wallet-danger-text">
+                              {bcmrRegistryUploadStatus.message}
+                            </p>
+                            <div>
+                              <button
+                                type="button"
+                                disabled={loading}
+                                onClick={() => void handleConfirmBcmr()}
+                                className="wallet-btn-secondary px-3 py-2 text-sm disabled:opacity-50"
+                              >
+                                {addonT('module.retryUpload', 'Retry upload')}
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <p className="text-sm wallet-muted">
+                        {addonT(
+                          'module.bcmrFromAuthority',
+                          'Minting from an existing token keeps its current metadata. Metadata is published when a new token is created.'
+                        )}
+                      </p>
+                    )}
                   </div>
                 ) : null}
               </div>
@@ -1692,20 +1890,21 @@ const MintCashTokensPoCApp: React.FC = () => {
           ) : (
             <button
               type="button"
-              onClick={prepareMint}
+              onClick={() => void handleReviewAndMint()}
               disabled={
                 loading ||
                 selectedCount === 0 ||
                 selectedRecipientCount === 0 ||
                 activeOutputDrafts.length === 0 ||
-                (bcmrEnabled && !bcmrUploadsComplete)
+                bcmrImageUploadStatus.phase === 'uploading' ||
+                bcmrImageUploadStatus.phase === 'verifying'
               }
               className="wallet-btn-primary w-full px-4 py-3 font-semibold disabled:opacity-50"
             >
-              {bcmrEnabled && !bcmrUploadsComplete
-                ? 'BCMR pending'
-                : loading
-                  ? 'Preparing…'
+              {loading
+                ? 'Preparing…'
+                : bcmrEnabled && !bcmrUploadsComplete
+                  ? `Publish metadata & review (${activeOutputDrafts.length})`
                   : `Review & mint (${activeOutputDrafts.length})`}
             </button>
           )}
@@ -1775,6 +1974,12 @@ const MintCashTokensPoCApp: React.FC = () => {
                     if (nextSource && !canMintFungibleFromSource(nextSource)) {
                       setOutputFormMintType('NFT');
                     }
+                    setOutputFormCommitmentMode(
+                      nftLayoutForSource(nextSource ?? null) === 'custom'
+                        ? 'custom'
+                        : 'serial'
+                    );
+                    setOutputFormNftSerial(nextNftSerial(nextSource ?? null));
                   }}
                   className="wallet-input p-4 w-full rounded-[16px] text-sm min-h-14"
                 >
@@ -1869,19 +2074,104 @@ const MintCashTokensPoCApp: React.FC = () => {
                     <option value="minting">minting</option>
                   </select>
                 </div>
-                <div>
-                  <label className="block text-sm font-semibold mb-1">
-                    Commitment
-                  </label>
-                  <input
-                    value={outputFormNftCommitment}
-                    onChange={(e) => setOutputFormNftCommitment(e.target.value)}
-                    className="wallet-input w-full"
-                    placeholder={addonT('module.optionalHex', 'optional hex')}
-                  />
-                </div>
+                {outputFormLayout !== 'custom' &&
+                outputFormCommitmentMode === 'serial' ? (
+                  <div>
+                    <label className="block text-sm font-semibold mb-1">
+                      {addonT('module.nftNumber', 'NFT number')}{' '}
+                      <FieldHint
+                        label={addonT('module.nftNumber', 'NFT number')}
+                        hint={addonT(
+                          'module.hintNftNumber',
+                          'Written into the NFT'
+                        )}
+                      />
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={outputFormNftSerial}
+                      onChange={(e) => setOutputFormNftSerial(e.target.value)}
+                      className="wallet-input w-full"
+                      placeholder={addonT('module.nextNumber', 'next number')}
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-semibold mb-1">
+                      Commitment{' '}
+                      <FieldHint
+                        label="Commitment"
+                        hint={addonT(
+                          'module.hintCommitment',
+                          'Raw NFT data, in hex'
+                        )}
+                      />
+                    </label>
+                    <input
+                      value={outputFormNftCommitment}
+                      onChange={(e) =>
+                        setOutputFormNftCommitment(e.target.value)
+                      }
+                      className="wallet-input w-full font-mono text-xs"
+                      placeholder={addonT('module.optionalHex', 'optional hex')}
+                    />
+                  </div>
+                )}
               </div>
             )}
+
+            {outputFormMintType === 'NFT' && outputFormLayout !== 'custom' ? (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  {(['serial', 'custom'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      aria-pressed={outputFormCommitmentMode === mode}
+                      onClick={() => setOutputFormCommitmentMode(mode)}
+                      className={`px-3 py-2 rounded-xl text-sm font-semibold ${
+                        outputFormCommitmentMode === mode
+                          ? 'wallet-segment-active'
+                          : 'wallet-segment-inactive'
+                      }`}
+                    >
+                      {mode === 'serial'
+                        ? addonT('module.byNumber', 'By number')
+                        : addonT('module.customHex', 'Custom hex')}
+                    </button>
+                  ))}
+                </div>
+                {outputFormCommitmentMode === 'serial' ? (
+                  <p className="text-xs wallet-muted break-all">
+                    {outputFormLayout === 'parsable'
+                      ? addonT(
+                          'module.commitmentParsable',
+                          'Commitment: type 00, then the number.'
+                        )
+                      : addonT(
+                          'module.commitmentSequential',
+                          'Commitment: the number itself.'
+                        )}{' '}
+                    <span className="font-mono">
+                      {outputFormCommitmentPreview || '—'}
+                    </span>
+                  </p>
+                ) : outputFormLayout === 'parsable' &&
+                  !outputFormNftCommitment
+                    .trim()
+                    .toLowerCase()
+                    .startsWith('00') ? (
+                  <p className="text-xs wallet-danger-text">
+                    {addonT(
+                      'module.commitmentOffLayout',
+                      'This commitment does not start with type 00, so wallets will not match it to the collection.'
+                    )}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             <button
               type="button"
@@ -1917,8 +2207,10 @@ const MintCashTokensPoCApp: React.FC = () => {
                 {addonT('common.tokenMetadata', 'Token metadata')}
               </h3>
               <p className="mt-1 text-sm wallet-muted text-center">
-                Configure BCMR metadata and finish IPFS verification before
-                minting.
+                {addonT(
+                  'module.bcmrEditorIntro',
+                  'Published with the new token. The prefilled fields work as they are.'
+                )}
               </p>
             </div>
 
@@ -1930,7 +2222,11 @@ const MintCashTokensPoCApp: React.FC = () => {
 
             <div className="grid grid-cols-1 gap-2">
               <label className="block text-sm font-semibold">
-                {addonT('module.tokenCategory', 'Token category')}
+                {addonT('module.tokenCategory', 'Token category')}{' '}
+                <FieldHint
+                  label={addonT('module.tokenCategory', 'Token category')}
+                  hint={addonT('module.hintCategory', "The new token's ID")}
+                />
               </label>
               <input
                 value={bcmrTokenCategory}
@@ -1951,7 +2247,11 @@ const MintCashTokensPoCApp: React.FC = () => {
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-sm font-semibold">
-                  {addonT('module.name', 'Name')}
+                  {addonT('module.name', 'Name')}{' '}
+                  <FieldHint
+                    label={addonT('module.name', 'Name')}
+                    hint={addonT('module.hintName', 'Shown in every wallet')}
+                  />
                 </label>
                 <input
                   value={bcmrTokenName}
@@ -1966,16 +2266,23 @@ const MintCashTokensPoCApp: React.FC = () => {
               </div>
               <div>
                 <label className="block text-sm font-semibold">
-                  {addonT('module.symbol', 'Symbol')}
+                  {addonT('module.symbol', 'Symbol')}{' '}
+                  <FieldHint
+                    label={addonT('module.symbol', 'Symbol')}
+                    hint={addonT('module.hintSymbol', 'Short ticker, like BCH')}
+                  />
                 </label>
                 <input
                   value={bcmrTokenSymbol}
-                  onChange={(e) => setBcmrTokenSymbol(e.target.value)}
-                  className="wallet-input w-full"
+                  onChange={(e) =>
+                    setBcmrTokenSymbol(e.target.value.toUpperCase())
+                  }
+                  autoCapitalize="characters"
+                  className="wallet-input w-full font-mono"
                 />
-                {bcmrFieldErrors.tokenSymbol ? (
+                {bcmrFieldErrors.tokenSymbol || bcmrSymbolIssue ? (
                   <p className="text-xs wallet-danger-text mt-1">
-                    {bcmrFieldErrors.tokenSymbol}
+                    {bcmrFieldErrors.tokenSymbol || bcmrSymbolIssue}
                   </p>
                 ) : null}
               </div>
@@ -1983,7 +2290,14 @@ const MintCashTokensPoCApp: React.FC = () => {
 
             <div>
               <label className="block text-sm font-semibold">
-                {addonT('module.description', 'Description')}
+                {addonT('module.description', 'Description')}{' '}
+                <FieldHint
+                  label={addonT('module.description', 'Description')}
+                  hint={addonT(
+                    'module.hintDescription',
+                    'Optional, one short sentence'
+                  )}
+                />
               </label>
               <input
                 value={bcmrTokenDescription}
@@ -1995,11 +2309,19 @@ const MintCashTokensPoCApp: React.FC = () => {
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-sm font-semibold">
-                  {addonT('module.decimals', 'Decimals')}
+                  {addonT('module.decimals', 'Decimals')}{' '}
+                  <FieldHint
+                    label={addonT('module.decimals', 'Decimals')}
+                    hint={addonT(
+                      'module.hintDecimals',
+                      'Digits after the point'
+                    )}
+                  />
                 </label>
                 <input
                   type="number"
                   min="0"
+                  max="18"
                   value={bcmrTokenDecimals}
                   onChange={(e) => setBcmrTokenDecimals(e.target.value)}
                   className="wallet-input w-full"
@@ -2012,7 +2334,11 @@ const MintCashTokensPoCApp: React.FC = () => {
               </div>
               <div>
                 <label className="block text-sm font-semibold">
-                  {addonT('module.iconUri', 'Icon URI')}
+                  {addonT('module.iconUri', 'Icon URI')}{' '}
+                  <FieldHint
+                    label={addonT('module.iconUri', 'Icon URI')}
+                    hint={addonT('module.hintIcon', 'Link to the token image')}
+                  />
                 </label>
                 <input
                   value={bcmrIconUri}
@@ -2030,7 +2356,11 @@ const MintCashTokensPoCApp: React.FC = () => {
 
             <div>
               <label className="block text-sm font-semibold">
-                {addonT('module.officialSite', 'Official site')}
+                {addonT('module.officialSite', 'Official site')}{' '}
+                <FieldHint
+                  label={addonT('module.officialSite', 'Official site')}
+                  hint={addonT('module.hintSite', 'Project website, optional')}
+                />
               </label>
               <input
                 value={bcmrWebUri}
@@ -2045,55 +2375,164 @@ const MintCashTokensPoCApp: React.FC = () => {
               ) : null}
             </div>
 
-            <div className="rounded-xl wallet-surface-strong border border-[var(--wallet-border)] p-3 space-y-2">
-              <label className="block text-sm font-semibold">NFT schema</label>
-              <p className="text-xs wallet-muted">
-                {outputDrafts.some((draft) => draft.config.mintType === 'NFT')
-                  ? 'The NFT schema is always recorded for NFT categories, even when empty, and can be extended in later snapshots. Empty bytecode = sequential collection.'
-                  : 'No NFT outputs selected yet — the schema will be recorded for NFT mints.'}
-              </p>
-              <input
-                value={bcmrNftsDescription}
-                onChange={(e) => setBcmrNftsDescription(e.target.value)}
-                className="wallet-input w-full"
-                placeholder="How this identity uses NFTs (optional)"
-              />
-              <input
-                value={bcmrNftBytecode}
-                onChange={(e) => setBcmrNftBytecode(e.target.value)}
-                className="wallet-input w-full font-mono text-xs"
-                placeholder="Parse bytecode hex (empty = sequential)"
-              />
-              {bcmrFieldErrors.nftBytecode ? (
-                <p className="text-xs wallet-danger-text mt-1">
-                  {bcmrFieldErrors.nftBytecode}
+            {bcmrHasNfts ? (
+              <div className="rounded-xl wallet-surface-strong border border-[var(--wallet-border)] p-3 space-y-2">
+                <label className="block text-sm font-semibold">
+                  {addonT('module.collectionType', 'Collection type')}{' '}
+                  <FieldHint
+                    label={addonT('module.collectionType', 'Collection type')}
+                    hint={addonT(
+                      'module.hintCollectionType',
+                      'How NFT data is read'
+                    )}
+                  />
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['parsable', 'sequential'] as const).map((kind) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      aria-pressed={bcmrNftKind === kind}
+                      onClick={() => setBcmrNftKind(kind)}
+                      className={`px-3 py-2 rounded-xl text-sm font-semibold ${
+                        bcmrNftKind === kind
+                          ? 'wallet-segment-active'
+                          : 'wallet-segment-inactive'
+                      }`}
+                    >
+                      {kind === 'parsable'
+                        ? addonT('module.parsable', 'Parsable')
+                        : addonT('module.sequential', 'Sequential')}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs wallet-muted">
+                  {bcmrNftKind === 'parsable'
+                    ? addonT(
+                        'module.parsableExplain',
+                        'Default: a type byte, then the NFT number. NFTs minted later need no metadata update.'
+                      )
+                    : addonT(
+                        'module.sequentialExplain',
+                        'Each NFT is listed by number. NFTs minted later need a metadata update to be named.'
+                      )}
                 </p>
-              ) : null}
-              <textarea
-                value={bcmrNftTypesJson}
-                onChange={(e) => setBcmrNftTypesJson(e.target.value)}
-                rows={4}
-                className="wallet-input w-full font-mono text-xs"
-                placeholder='Types JSON, e.g. {"01":{"name":"#1","description":"Token number 1"}}'
-              />
-              {bcmrFieldErrors.nftTypes ? (
-                <p className="text-xs wallet-danger-text mt-1">
-                  {bcmrFieldErrors.nftTypes}
-                </p>
-              ) : null}
-              <textarea
-                value={bcmrNftFieldsJson}
-                onChange={(e) => setBcmrNftFieldsJson(e.target.value)}
-                rows={3}
-                className="wallet-input w-full font-mono text-xs"
-                placeholder='Fields JSON, e.g. {"serial":{"name":"Serial","encoding":{"type":"number"},"offset":"1","byteLength":"2"}}'
-              />
-              {bcmrFieldErrors.nftFields ? (
-                <p className="text-xs wallet-danger-text mt-1">
-                  {bcmrFieldErrors.nftFields}
-                </p>
-              ) : null}
-            </div>
+                <label className="block text-sm font-semibold">
+                  {addonT('module.nftsDescription', 'NFT description')}{' '}
+                  <FieldHint
+                    label={addonT('module.nftsDescription', 'NFT description')}
+                    hint={addonT(
+                      'module.hintNftsDescription',
+                      'How the NFTs are used'
+                    )}
+                  />
+                </label>
+                <input
+                  value={bcmrNftsDescription}
+                  onChange={(e) => setBcmrNftsDescription(e.target.value)}
+                  className="wallet-input w-full"
+                />
+
+                {bcmrNftKind === 'parsable' ? (
+                  <>
+                    <button
+                      type="button"
+                      aria-expanded={bcmrNftAdvanced}
+                      onClick={() => setBcmrNftAdvanced((value) => !value)}
+                      className="text-xs font-semibold wallet-accent-text"
+                    >
+                      {bcmrNftAdvanced
+                        ? addonT(
+                            'module.hideAdvancedLayout',
+                            'Use the default layout'
+                          )
+                        : addonT(
+                            'module.showAdvancedLayout',
+                            'Custom layout (advanced)'
+                          )}
+                    </button>
+                    {bcmrNftAdvanced ? (
+                      <div className="space-y-2">
+                        <p className="text-xs wallet-muted">
+                          {addonT(
+                            'module.advancedLayoutExplain',
+                            'Empty fields keep the default layout. A custom bytecode needs its own types and fields.'
+                          )}
+                        </p>
+                        <label className="block text-xs font-semibold">
+                          {addonT('module.parseBytecode', 'Parse bytecode')}{' '}
+                          <FieldHint
+                            label={addonT(
+                              'module.parseBytecode',
+                              'Parse bytecode'
+                            )}
+                            hint={addonT(
+                              'module.hintBytecode',
+                              'Reads fields from NFT data'
+                            )}
+                          />
+                        </label>
+                        <input
+                          value={bcmrNftBytecode}
+                          onChange={(e) => setBcmrNftBytecode(e.target.value)}
+                          className="wallet-input w-full font-mono text-xs"
+                          placeholder={defaultParseBytecode()}
+                        />
+                        {bcmrFieldErrors.nftBytecode ? (
+                          <p className="text-xs wallet-danger-text mt-1">
+                            {bcmrFieldErrors.nftBytecode}
+                          </p>
+                        ) : null}
+                        <label className="block text-xs font-semibold">
+                          {addonT('module.nftTypes', 'NFT types')}{' '}
+                          <FieldHint
+                            label={addonT('module.nftTypes', 'NFT types')}
+                            hint={addonT(
+                              'module.hintNftTypes',
+                              'Names for each NFT type'
+                            )}
+                          />
+                        </label>
+                        <textarea
+                          value={bcmrNftTypesJson}
+                          onChange={(e) => setBcmrNftTypesJson(e.target.value)}
+                          rows={4}
+                          className="wallet-input w-full font-mono text-xs"
+                          placeholder='{"00":{"name":"Collection","fields":["serial"]}}'
+                        />
+                        {bcmrFieldErrors.nftTypes ? (
+                          <p className="text-xs wallet-danger-text mt-1">
+                            {bcmrFieldErrors.nftTypes}
+                          </p>
+                        ) : null}
+                        <label className="block text-xs font-semibold">
+                          {addonT('module.nftFields', 'NFT fields')}{' '}
+                          <FieldHint
+                            label={addonT('module.nftFields', 'NFT fields')}
+                            hint={addonT(
+                              'module.hintNftFields',
+                              'Names for each data field'
+                            )}
+                          />
+                        </label>
+                        <textarea
+                          value={bcmrNftFieldsJson}
+                          onChange={(e) => setBcmrNftFieldsJson(e.target.value)}
+                          rows={3}
+                          className="wallet-input w-full font-mono text-xs"
+                          placeholder='{"serial":{"name":"Serial","encoding":{"type":"number"}}}'
+                        />
+                        {bcmrFieldErrors.nftFields ? (
+                          <p className="text-xs wallet-danger-text mt-1">
+                            {bcmrFieldErrors.nftFields}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="rounded-xl wallet-surface-strong border border-[var(--wallet-border)] p-3 space-y-2">
               <label className="block text-sm font-semibold">
@@ -2149,7 +2588,7 @@ const MintCashTokensPoCApp: React.FC = () => {
             <div className="space-y-2">
               <button
                 type="button"
-                onClick={handleConfirmBcmr}
+                onClick={() => void handleConfirmBcmr()}
                 disabled={
                   loading ||
                   bcmrImageUploadStatus.phase === 'uploading' ||
@@ -2158,12 +2597,12 @@ const MintCashTokensPoCApp: React.FC = () => {
                 className="wallet-btn-primary px-3 py-2 text-sm"
               >
                 {bcmrRegistryUploadStatus.phase === 'uploading'
-                  ? 'Uploading BCMR...'
+                  ? 'Uploading metadata...'
                   : bcmrRegistryUploadStatus.phase === 'verifying'
-                    ? 'Verifying BCMR...'
+                    ? 'Verifying metadata...'
                     : loading
-                      ? 'Confirming...'
-                      : 'Confirm BCMR'}
+                      ? 'Publishing...'
+                      : addonT('module.publishMetadata', 'Publish metadata')}
               </button>
               {bcmrRegistryUploadStatus.message ? (
                 <p
@@ -2178,15 +2617,38 @@ const MintCashTokensPoCApp: React.FC = () => {
                   {bcmrRegistryUploadStatus.message}
                 </p>
               ) : null}
-              {bcmrRegistryUpload ? (
-                <div className="text-xs break-all">
-                  Registry URI: ipfs://{bcmrRegistryUpload.cid}
+              {bcmrUris.length > 0 ? (
+                <div className="text-xs break-all space-y-1">
+                  {bcmrUris.map((uri) => (
+                    <div key={uri}>Registry URI: {uri}</div>
+                  ))}
                 </div>
               ) : null}
-              {bcmrRegistryUpload && !bcmrRegistryIsCurrent ? (
+              {bcmrAuthored ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void copyText(
+                      bcmrAuthored.registryJson,
+                      'Metadata JSON copied'
+                    )
+                  }
+                  className="text-xs font-semibold wallet-accent-text"
+                >
+                  {addonT(
+                    'module.copyMetadataJson',
+                    'Copy metadata JSON (backup)'
+                  )}
+                </button>
+              ) : null}
+              {bcmrAuthored &&
+              bcmrConfirmedFingerprint &&
+              bcmrConfirmedFingerprint !== bcmrFormFingerprint ? (
                 <p className="text-xs wallet-danger-text">
-                  BCMR fields changed after the last confirmation. Confirm BCMR
-                  again before minting.
+                  {addonT(
+                    'module.metadataChanged',
+                    'Fields changed after publishing. Publish again before minting.'
+                  )}
                 </p>
               ) : null}
               {bcmrFieldErrors.registry ? (

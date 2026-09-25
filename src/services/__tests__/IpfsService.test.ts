@@ -130,6 +130,38 @@ describe('IpfsService', () => {
     expect(result.cid).toBe('bafyfallback');
   });
 
+  it('asks a Kubo relay for a raw CIDv1 when requested', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('down', { status: 502 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ Name: 'r.json', Hash: 'bafkreiraw', Size: '2' }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await uploadToIpfsRelay(new Blob(['{}']), {
+      filename: 'r.json',
+      rawCid: true,
+    });
+
+    // The relay order is unchanged; only the Kubo request carries the CID
+    // settings, since other relays do not take them.
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://upload.optnlabs.com/v1/ipfs/add',
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://ipfs-api.optnlabs.com/api/v0/add?pin=true&cid-version=1&raw-leaves=true',
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(result.cid).toBe('bafkreiraw');
+  });
+
   it('uses Kubo paths only for the exact Kubo relay host', async () => {
     const fetchMock = vi.fn(async () =>
       new Response(

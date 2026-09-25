@@ -89,7 +89,7 @@ describe('mint flow services', () => {
   });
 
   it('buildMintPreview retries fee candidates until build succeeds', async () => {
-    const genesis = makeUtxo({ tx_hash: 'g1', tx_pos: 0, value: 1000, token: null });
+    const genesis = makeUtxo({ tx_hash: 'g1', tx_pos: 0, value: 2000, token: null });
     const fee1 = makeUtxo({ tx_hash: 'f1', tx_pos: 1, value: 100, token: null });
     const fee2 = makeUtxo({ tx_hash: 'f2', tx_pos: 1, value: 200, token: null });
     const draft = makeDraft({ sourceKey: 'g1:0' });
@@ -113,6 +113,8 @@ describe('mint flow services', () => {
         bytecodeSize: 250,
         finalTransaction: 'beef',
         finalOutputs: [
+          // A genesis mint always keeps output 0, the identity output, here.
+          { recipientAddress: 'bitcoincash:qchange', amount: 1000n },
           {
             recipientAddress: draft.recipientCashAddr,
             amount: 546n,

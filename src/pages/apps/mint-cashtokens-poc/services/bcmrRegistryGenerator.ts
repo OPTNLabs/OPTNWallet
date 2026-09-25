@@ -1,8 +1,24 @@
+// The mint screen's handle on crates/optn-core/src/bcmr_author.rs.
+//
+// Registries used to be assembled here in TypeScript. The bytes of a registry
+// are hashed and committed on chain for good, so there must be exactly one
+// implementation deciding what they are; that implementation is now the Rust
+// core, shared with the CLI. This file only adapts the wallet's input shape to
+// the core's request, and checks the result a second, independent way with
+// libauth before anything is uploaded.
+import { importMetadataRegistry, MetadataRegistry } from '@bitauth/libauth';
+
 import {
-  importMetadataRegistry,
-  MetadataRegistry,
-  IdentityHistory,
-} from '@bitauth/libauth';
+  bcmrAuthorRegistry,
+  bcmrDefaultParseBytecode,
+  bcmrIpfsCid,
+  bcmrParsableCommitment,
+  bcmrReadPublication,
+  bcmrSequentialCommitment,
+  bcmrSuggestIdentity,
+  bcmrSymbolError,
+  ensureOptnCore,
+} from '../../../../wasm/optn-core';
 
 export type BcmrNftFieldEncoding =
   | {
@@ -26,9 +42,12 @@ export type BcmrNftFieldInput = {
   name?: string;
   description?: string;
   encoding: BcmrNftFieldEncoding;
+  /** Documentation only; published under the field's `extensions`. */
   offset?: string;
+  /** Documentation only; published under the field's `extensions`. */
   byteLength?: string;
   uris?: Record<string, string>;
+  extensions?: Record<string, unknown>;
 };
 
 export type BcmrNftTypeInput = {
@@ -38,16 +57,28 @@ export type BcmrNftTypeInput = {
   uris?: Record<string, string>;
 };
 
-export type BcmrNftsSchemaInput = {
-  description?: string;
-  fields?: Record<string, BcmrNftFieldInput>;
-  parse: {
-    bytecode?: string;
-    types?: Record<string, BcmrNftTypeInput>;
-  };
-};
+/**
+ * How the category's NFT commitments are read. A parsable collection with no
+ * `bytecode`, `fields` or `types` gets the default type-and-serial layout.
+ */
+export type BcmrNftsSchemaInput =
+  | {
+      kind: 'parsable';
+      description?: string;
+      bytecode?: string;
+      fields?: Record<string, BcmrNftFieldInput>;
+      types?: Record<string, BcmrNftTypeInput>;
+    }
+  | {
+      kind: 'sequential';
+      description?: string;
+      types?: Record<string, BcmrNftTypeInput>;
+    };
+
+export type BcmrNetwork = 'mainnet' | 'chipnet' | 'regtest';
 
 export type BcmrGeneratorInput = {
+  network: BcmrNetwork;
   authbase: string;
   tokenCategory: string;
   tokenName: string;
@@ -56,318 +87,262 @@ export type BcmrGeneratorInput = {
   tokenDecimals: number;
   iconUri?: string;
   webUri?: string;
+  /** Defaults to now. */
   latestRevision?: string;
-  registryName?: string;
-  registryDescription?: string;
   baseRegistry?: MetadataRegistry | string;
+  /** Present exactly when the category will hold NFTs. */
   nfts?: BcmrNftsSchemaInput;
 };
 
-type BcmrV2Registry = {
-  $schema: string;
-  version: { major: number; minor: number; patch: number };
-  latestRevision: string;
-  registryIdentity: string;
-  identities: Record<string, IdentityHistory>;
+/** The registry to publish, and where IPFS will serve it. */
+export type AuthoredBcmrRegistry = {
+  /** The exact bytes to upload and hash. Never re-serialize them. */
+  registryJson: string;
+  sha256: string;
+  ipfsCid: string;
+  ipfsUri: string;
 };
 
-function requireText(value: string, field: string): string {
-  const out = value.trim();
-  if (!out) throw new Error(`${field} is required.`);
-  return out;
-}
+export type BcmrErrorField =
+  | 'tokenCategory'
+  | 'tokenName'
+  | 'tokenSymbol'
+  | 'tokenDecimals'
+  | 'iconUri'
+  | 'webUri'
+  | 'nftBytecode'
+  | 'nftTypes'
+  | 'nftFields'
+  | 'registry'
+  | 'general';
 
-function requireHexTxid(value: string, field: string): string {
-  const out = requireText(value, field).toLowerCase();
-  if (!/^[0-9a-f]{64}$/i.test(out)) {
-    throw new Error(`${field} must be 64 hex characters.`);
+/** A rejected registry input, naming the form field it is about. */
+export class BcmrRegistryError extends Error {
+  readonly field: BcmrErrorField;
+
+  constructor(field: BcmrErrorField, message: string) {
+    super(message);
+    this.name = 'BcmrRegistryError';
+    this.field = field;
   }
-  return out;
 }
 
-function requireIsoTimestamp(value: string): string {
-  const out = value.trim();
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(out)) {
-    throw new Error(
-      'Latest revision must be an ISO timestamp like 2026-01-01T00:00:00.000Z.'
-    );
+const MAX_U32 = 0xffff_ffff;
+
+function toRegistryError(error: unknown): BcmrRegistryError {
+  const raw =
+    typeof error === 'string'
+      ? error
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  try {
+    const parsed = JSON.parse(raw) as { field?: string; message?: string };
+    if (parsed && typeof parsed.message === 'string') {
+      return new BcmrRegistryError(
+        (parsed.field as BcmrErrorField) ?? 'general',
+        parsed.message
+      );
+    }
+  } catch {
+    // Not the core's structured error; fall through.
   }
-  return out;
+  return new BcmrRegistryError('general', raw);
 }
 
-function ensureValidRegistry(registry: BcmrV2Registry): BcmrV2Registry {
-  const imported = importMetadataRegistry(registry);
-  if (typeof imported === 'string') {
-    throw new Error(imported);
-  }
-  return registry;
-}
-
-function normalizeBaseRegistry(
-  registry: MetadataRegistry | string | undefined
-): BcmrV2Registry | undefined {
-  if (!registry) return undefined;
-  const imported =
-    typeof registry === 'string' ? importMetadataRegistry(registry) : registry;
-  if (typeof imported === 'string') {
-    throw new Error(imported);
-  }
-  return imported as BcmrV2Registry;
-}
-
-type BcmrNftsLike = {
-  description?: string;
-  fields?: Record<string, Record<string, unknown>>;
-  parse?: {
-    bytecode?: string;
-    types?: Record<string, Record<string, unknown>>;
-  };
-};
-
-const NFT_FIELD_ENCODING_TYPES = new Set([
-  'binary',
-  'boolean',
-  'hex',
-  'https-url',
-  'ipfs-cid',
-  'locktime',
-  'number',
-  'utf8',
-]);
-
-function requireEvenHex(value: string, field: string): string {
-  const out = value.trim().toLowerCase();
-  if (!/^[0-9a-f]*$/.test(out) || out.length % 2 !== 0) {
-    throw new Error(`${field} must be even-length hex.`);
-  }
-  return out;
-}
-
-function normalizeNftField(
+function fieldForCore(
   id: string,
   field: BcmrNftFieldInput
 ): Record<string, unknown> {
-  const fieldId = requireText(id, 'NFT field identifier');
-  if (!NFT_FIELD_ENCODING_TYPES.has(field.encoding.type)) {
-    throw new Error(
-      `NFT field "${fieldId}" has an unsupported encoding type "${field.encoding.type}".`
-    );
-  }
-  const encoding: Record<string, unknown> = { type: field.encoding.type };
-  if (field.encoding.type === 'number') {
-    const decimals = field.encoding.decimals;
-    if (decimals !== undefined) {
-      if (
-        !Number.isInteger(decimals) ||
-        decimals < 0 ||
-        decimals > 18
-      ) {
-        throw new Error(
-          `NFT field "${fieldId}" decimals must be an integer between 0 and 18.`
-        );
-      }
-      encoding.decimals = decimals;
-    }
-    if (field.encoding.aggregate !== undefined) {
-      if (field.encoding.aggregate !== 'add') {
-        throw new Error(
-          `NFT field "${fieldId}" aggregate must be "add".`
-        );
-      }
-      encoding.aggregate = field.encoding.aggregate;
-    }
-    if (field.encoding.unit?.trim()) {
-      encoding.unit = field.encoding.unit.trim();
-    }
-  }
-  const out: Record<string, unknown> = { encoding };
-  if (field.name?.trim()) {
-    out.name = field.name.trim();
-  }
-  if (field.description?.trim()) {
-    out.description = field.description.trim();
-  }
-  const extensions: Record<string, string> = {};
+  const out: Record<string, unknown> = { encoding: field.encoding };
+  if (field.name?.trim()) out.name = field.name.trim();
+  if (field.description?.trim()) out.description = field.description.trim();
+  if (field.uris && Object.keys(field.uris).length > 0) out.uris = field.uris;
+  const extensions: Record<string, unknown> = { ...(field.extensions ?? {}) };
   if (field.offset !== undefined) {
-    if (!/^\d+$/.test(field.offset.trim())) {
-      throw new Error(
-        `NFT field "${fieldId}" offset must be a non-negative integer.`
+    const offset = field.offset.trim();
+    if (!/^\d+$/.test(offset)) {
+      throw new BcmrRegistryError(
+        'nftFields',
+        `NFT field "${id}" offset must be a non-negative integer.`
       );
     }
-    extensions.offset = field.offset.trim();
+    extensions.offset = offset;
   }
   if (field.byteLength !== undefined) {
     const length = field.byteLength.trim();
     if (!/^\d+$/.test(length) && length !== 'variable') {
-      throw new Error(
-        `NFT field "${fieldId}" byteLength must be an integer or "variable".`
+      throw new BcmrRegistryError(
+        'nftFields',
+        `NFT field "${id}" byteLength must be an integer or "variable".`
       );
     }
     extensions.byteLength = length;
   }
-  if (Object.keys(extensions).length > 0) {
-    out.extensions = extensions;
-  }
-  if (field.uris && Object.keys(field.uris).length > 0) {
-    out.uris = field.uris;
-  }
+  if (Object.keys(extensions).length > 0) out.extensions = extensions;
   return out;
 }
 
-function normalizeNftType(
-  key: string,
-  type: BcmrNftTypeInput
-): Record<string, unknown> {
-  const typeKey = requireEvenHex(key, 'NFT type key');
+function nftsForCore(nfts: BcmrNftsSchemaInput): Record<string, unknown> {
+  if (nfts.kind === 'sequential') {
+    return {
+      kind: 'sequential',
+      description: nfts.description ?? '',
+      types: nfts.types ?? {},
+    };
+  }
   const out: Record<string, unknown> = {
-    name: requireText(type.name, `NFT type "${typeKey}" name`),
+    kind: 'parsable',
+    description: nfts.description ?? '',
   };
-  if (type.description?.trim()) {
-    out.description = type.description.trim();
+  if (nfts.bytecode !== undefined) out.bytecode = nfts.bytecode;
+  if (nfts.fields !== undefined) {
+    out.fields = Object.fromEntries(
+      Object.entries(nfts.fields).map(([id, field]) => [
+        id,
+        fieldForCore(id, field),
+      ])
+    );
   }
-  if (type.fields && type.fields.length > 0) {
-    out.fields = type.fields.map((id) => requireText(id, 'NFT field identifier'));
-  }
-  if (type.uris && Object.keys(type.uris).length > 0) {
-    out.uris = type.uris;
-  }
+  if (nfts.types !== undefined) out.types = nfts.types;
   return out;
 }
 
-type NormalizedNftsSchema = {
-  description?: string;
-  fields?: Record<string, Record<string, unknown>>;
-  parse: {
-    bytecode?: string;
-    types?: Record<string, Record<string, unknown>>;
-  };
-};
-
-function normalizeNftsSchema(input: BcmrNftsSchemaInput): NormalizedNftsSchema {
-  const fields: Record<string, Record<string, unknown>> = {};
-  for (const [id, field] of Object.entries(input.fields ?? {})) {
-    fields[id] = normalizeNftField(id, field);
-  }
-  const types: Record<string, Record<string, unknown>> = {};
-  for (const [key, type] of Object.entries(input.parse.types ?? {})) {
-    types[key] = normalizeNftType(key, type);
-  }
-  const bytecode = input.parse.bytecode?.trim()
-    ? requireEvenHex(input.parse.bytecode, 'Parse bytecode')
-    : undefined;
-  return {
-    description: input.description?.trim() || undefined,
-    fields: Object.keys(fields).length > 0 ? fields : undefined,
-    parse: {
-      bytecode,
-      types: Object.keys(types).length > 0 ? types : undefined,
+/** Build the registry to publish. Throws {@link BcmrRegistryError}. */
+export function generateBcmrRegistry(
+  input: BcmrGeneratorInput
+): AuthoredBcmrRegistry {
+  ensureOptnCore();
+  const request = {
+    network: input.network,
+    revision: input.latestRevision?.trim() || new Date().toISOString(),
+    baseRegistry:
+      input.baseRegistry === undefined
+        ? null
+        : typeof input.baseRegistry === 'string'
+          ? input.baseRegistry
+          : JSON.stringify(input.baseRegistry),
+    identity: {
+      authbase: input.authbase,
+      category: input.tokenCategory,
+      name: input.tokenName,
+      description: input.tokenDescription ?? '',
+      symbol: input.tokenSymbol,
+      decimals: input.tokenDecimals,
+      iconUri: input.iconUri ?? '',
+      webUri: input.webUri ?? '',
+      nfts: input.nfts ? nftsForCore(input.nfts) : null,
     },
   };
-}
-
-function latestIdentitySnapshot(
-  identity: IdentityHistory | undefined,
-  revision: string
-): Record<string, unknown> | undefined {
-  if (!identity) return undefined;
-  const timestamps = Object.keys(identity)
-    .filter((timestamp) => timestamp <= revision)
-    .sort();
-  const latest = timestamps[timestamps.length - 1];
-  return latest ? identity[latest] : undefined;
-}
-
-export function generateBcmrRegistry(input: BcmrGeneratorInput): BcmrV2Registry {
-  const authbase = requireHexTxid(input.authbase, 'Authbase');
-  const tokenCategory = requireHexTxid(input.tokenCategory, 'Token category');
-  const tokenName = requireText(input.tokenName, 'Token name');
-  const tokenSymbol = requireText(input.tokenSymbol, 'Token symbol');
-  const latestRevision = input.latestRevision?.trim()
-    ? requireIsoTimestamp(input.latestRevision)
-    : new Date().toISOString();
-
-  const uris: Record<string, string> = {};
-  if (input.iconUri?.trim()) {
-    uris.icon = input.iconUri.trim();
-  }
-  if (input.webUri?.trim()) {
-    uris.web = input.webUri.trim();
+  if (
+    !Number.isInteger(request.identity.decimals) ||
+    request.identity.decimals < 0
+  ) {
+    throw new BcmrRegistryError(
+      'tokenDecimals',
+      'Token decimals must be between 0 and 18.'
+    );
   }
 
-  const baseRegistry = normalizeBaseRegistry(input.baseRegistry);
-
-  const snapshot: BcmrV2Registry['identities'][string][string] = {
-    name: tokenName,
-    description: input.tokenDescription?.trim() || undefined,
-    token: {
-      category: tokenCategory,
-      symbol: tokenSymbol,
-      decimals: Number.isFinite(input.tokenDecimals)
-        ? Math.max(0, Math.trunc(input.tokenDecimals))
-        : 0,
-    },
-    uris: Object.keys(uris).length > 0 ? uris : undefined,
-  };
-
-  if (input.nfts) {
-    const baseIdentity = baseRegistry?.identities?.[authbase];
-    const baseNfts = (
-      latestIdentitySnapshot(baseIdentity, latestRevision)?.token as
-        | { nfts?: BcmrNftsLike }
-        | undefined
-    )?.nfts;
-    const normalized = normalizeNftsSchema(input.nfts);
-
-    const mergedFields = {
-      ...(baseNfts?.fields ?? {}),
-      ...(normalized.fields ?? {}),
-    };
-    const mergedTypes = {
-      ...(baseNfts?.parse?.types ?? {}),
-      ...(normalized.parse.types ?? {}),
-    };
-
-    const token = snapshot.token as {
-      nfts?: {
-        description?: string;
-        fields?: Record<string, Record<string, unknown>>;
-        parse: {
-          bytecode?: string;
-          types: Record<string, Record<string, unknown>>;
-        };
-      };
-    };
-    token.nfts = {
-      description: normalized.description || baseNfts?.description || undefined,
-      fields: Object.keys(mergedFields).length > 0 ? mergedFields : undefined,
-      parse: {
-        bytecode: normalized.parse.bytecode ?? baseNfts?.parse?.bytecode ?? undefined,
-        types: mergedTypes,
-      },
-    };
+  let authored: AuthoredBcmrRegistry;
+  try {
+    authored = JSON.parse(
+      bcmrAuthorRegistry(JSON.stringify(request))
+    ) as AuthoredBcmrRegistry;
+  } catch (error) {
+    throw toRegistryError(error);
   }
 
-  const mergedIdentities: Record<string, IdentityHistory> = {
-    ...(baseRegistry?.identities || {}),
-  };
-  mergedIdentities[authbase] = {
-    ...(mergedIdentities[authbase] || {}),
-    [latestRevision]: snapshot,
-  };
-
-  return ensureValidRegistry({
-    $schema: 'https://cashtokens.org/bcmr-v2.schema.json',
-    version: {
-      major: baseRegistry?.version?.major ?? 0,
-      minor: baseRegistry?.version?.minor ?? 0,
-      patch: (baseRegistry?.version?.patch ?? 0) + 1,
-    },
-    latestRevision,
-    registryIdentity: authbase,
-    identities: mergedIdentities,
-  });
+  // A second, independent reader. If libauth cannot import what the core
+  // wrote, nothing is published.
+  const imported = importMetadataRegistry(authored.registryJson);
+  if (typeof imported === 'string') {
+    throw new BcmrRegistryError('registry', imported);
+  }
+  return authored;
 }
 
 export function generateBcmrRegistryJson(input: BcmrGeneratorInput): string {
-  return JSON.stringify(generateBcmrRegistry(input));
+  return generateBcmrRegistry(input).registryJson;
+}
+
+/** A default name and symbol derived from the token's category. */
+export function suggestBcmrIdentity(
+  category: string,
+  hasNfts: boolean
+): { name: string; symbol: string } {
+  ensureOptnCore();
+  try {
+    return JSON.parse(bcmrSuggestIdentity(category, hasNfts)) as {
+      name: string;
+      symbol: string;
+    };
+  } catch (error) {
+    throw toRegistryError(error);
+  }
+}
+
+/** Why `symbol` is not a valid ticker, or `undefined` when it is. */
+export function bcmrSymbolProblem(symbol: string): string | undefined {
+  ensureOptnCore();
+  return bcmrSymbolError(symbol.trim()) ?? undefined;
+}
+
+function requireU32(value: number, what: string): number {
+  // wasm-bindgen converts a JS number to u32 with ToUint32, which wraps
+  // negatives and truncates fractions without complaint.
+  if (!Number.isInteger(value) || value < 0 || value > MAX_U32) {
+    throw new BcmrRegistryError(
+      'nftTypes',
+      `${what} must be a whole number between 0 and ${MAX_U32}.`
+    );
+  }
+  return value;
+}
+
+/** Commitment hex of NFT number `number` in a sequential collection. */
+export function sequentialNftCommitment(number: number): string {
+  ensureOptnCore();
+  return bcmrSequentialCommitment(requireU32(number, 'NFT number'));
+}
+
+/** Commitment hex of serial `serial` in the default parsable layout. */
+export function parsableNftCommitment(serial: number, typeByte = 0): string {
+  ensureOptnCore();
+  if (!Number.isInteger(typeByte) || typeByte < 0 || typeByte > 0xff) {
+    throw new BcmrRegistryError(
+      'nftTypes',
+      'NFT type must be a single byte (0-255).'
+    );
+  }
+  return bcmrParsableCommitment(typeByte, requireU32(serial, 'Serial number'));
+}
+
+/** Parse bytecode of the default type-and-serial layout. */
+export function defaultParseBytecode(): string {
+  ensureOptnCore();
+  return bcmrDefaultParseBytecode();
+}
+
+/** The IPFS CID (CIDv1, raw) IPFS assigns this content with cid-version=1. */
+export function ipfsCidOf(content: string | Uint8Array): string {
+  ensureOptnCore();
+  const bytes =
+    typeof content === 'string' ? new TextEncoder().encode(content) : content;
+  return bcmrIpfsCid(bytes);
+}
+
+/** What a BCMR publication output commits to. */
+export type BcmrPublicationRead = { sha256: string; uris: string[] };
+
+/**
+ * Read a publication output back with the core's reader, or `undefined` when
+ * `lockingBytecode` is not one.
+ */
+export function readBcmrPublication(
+  lockingBytecode: Uint8Array
+): BcmrPublicationRead | undefined {
+  ensureOptnCore();
+  const read = bcmrReadPublication(lockingBytecode);
+  return read ? (JSON.parse(read) as BcmrPublicationRead) : undefined;
 }

@@ -55,10 +55,18 @@ export default function useOutboundTransactions(
     try {
       do {
         queuedRefreshWalletIdsRef.current.delete(walletId);
-        await runOutboundReconcile(walletId, () =>
-          reconcileOutboundTransactions(walletId)
-        );
-        await load(walletId);
+        try {
+          await runOutboundReconcile(walletId, () =>
+            reconcileOutboundTransactions(walletId)
+          );
+          await load(walletId);
+        } catch {
+          // A failed pass must not swallow a refresh queued behind it: the
+          // broadcast that queued it still needs reconciling, so the loop
+          // runs again when one is waiting. With nothing queued, the periodic
+          // recovery pass picks it up. Every caller fires and forgets, so a
+          // rejection here would only surface as an unhandled promise.
+        }
       } while (queuedRefreshWalletIdsRef.current.has(walletId));
     } finally {
       refreshingWalletIdsRef.current.delete(walletId);
@@ -104,11 +112,17 @@ export default function useOutboundTransactions(
       // node accepts the transaction, reconcile immediately in the background
       // instead of waiting for focus, Home subscriptions, or the 60s recovery
       // interval to discover it.
-      if (record?.state === 'broadcasted' && previousState !== 'broadcasted') {
+      // The tracker notifies every subscriber; only this wallet's broadcasts
+      // are a reason to reconcile this wallet.
+      if (
+        record?.walletId === walletId &&
+        record?.state === 'broadcasted' &&
+        previousState !== 'broadcasted'
+      ) {
         void refresh();
       }
     });
-  }, [enabled, load, refresh]);
+  }, [enabled, load, refresh, walletId]);
 
   const reservedOutpointKeys = useMemo(
     () =>

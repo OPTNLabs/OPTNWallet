@@ -197,4 +197,21 @@ describe('validateMintRequest', () => {
       })
     ).toBeNull();
   });
+
+  it('allows only one new token per mint', () => {
+    const second: MintAppUtxo = { ...baseUtxo, tx_hash: 'h'.repeat(64) } as MintAppUtxo;
+    const secondDraft: MintOutputDraft = {
+      ...baseDraft,
+      id: 'd2',
+      sourceKey: `${second.tx_hash}:0`,
+    };
+    expect(
+      validateMintRequest({
+        ...validParams(),
+        selectedUtxos: [baseUtxo, second],
+        activeOutputDrafts: [baseDraft, secondDraft],
+        selectedSourceKeySet: new Set([baseDraft.sourceKey, secondDraft.sourceKey]),
+      })
+    ).toBe('Create one new token per mint, so each gets its own metadata.');
+  });
 });

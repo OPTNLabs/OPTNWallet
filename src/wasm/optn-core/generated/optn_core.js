@@ -1,6 +1,176 @@
 /* @ts-self-types="./optn_core.d.ts" */
 
 /**
+ * Build the registry to publish. Takes and returns JSON; see
+ * `bcmr_author::AuthorRequest` and `bcmr_author::Authored` for the shapes.
+ * @param {string} request_json
+ * @returns {string}
+ */
+export function bcmrAuthorRegistry(request_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(request_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.bcmrAuthorRegistry(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * The parse bytecode of the default type-and-serial layout.
+ * @returns {string}
+ */
+export function bcmrDefaultParseBytecode() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.bcmrDefaultParseBytecode();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * The IPFS CID (CIDv1, raw) of `content`, as IPFS assigns it with
+ * `cid-version=1` for a single-block file.
+ * @param {Uint8Array} content
+ * @returns {string}
+ */
+export function bcmrIpfsCid(content) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passArray8ToWasm0(content, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.bcmrIpfsCid(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Commitment hex of serial `serial` of type `type_byte` in the default
+ * parsable layout.
+ * @param {number} type_byte
+ * @param {number} serial
+ * @returns {string}
+ */
+export function bcmrParsableCommitment(type_byte, serial) {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.bcmrParsableCommitment(type_byte, serial);
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * Read a BCMR publication output back: `{"sha256": hex, "uris": [...]}`, or
+ * `undefined` when `locking_bytecode` is not one.
+ *
+ * The mint screen hands the builder text chunks and the builder encodes them,
+ * so this is how the wallet checks the bytes that will actually be signed
+ * commit to the registry it uploaded — with the same reader the wallet uses
+ * to resolve other tokens' metadata.
+ * @param {Uint8Array} locking_bytecode
+ * @returns {string | undefined}
+ */
+export function bcmrReadPublication(locking_bytecode) {
+    const ptr0 = passArray8ToWasm0(locking_bytecode, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.bcmrReadPublication(ptr0, len0);
+    let v2;
+    if (ret[0] !== 0) {
+        v2 = getStringFromWasm0(ret[0], ret[1]);
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    }
+    return v2;
+}
+
+/**
+ * Commitment hex of NFT number `number` in a sequential collection.
+ * @param {number} number
+ * @returns {string}
+ */
+export function bcmrSequentialCommitment(number) {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.bcmrSequentialCommitment(number);
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * Default `{"name": ..., "symbol": ...}` for a new token or collection.
+ * @param {string} category
+ * @param {boolean} has_nfts
+ * @returns {string}
+ */
+export function bcmrSuggestIdentity(category, has_nfts) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(category, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.bcmrSuggestIdentity(ptr0, len0, has_nfts);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Why `symbol` is not a valid ticker, or `undefined` when it is.
+ * @param {string} symbol
+ * @returns {string | undefined}
+ */
+export function bcmrSymbolError(symbol) {
+    const ptr0 = passStringToWasm0(symbol, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.bcmrSymbolError(ptr0, len0);
+    let v2;
+    if (ret[0] !== 0) {
+        v2 = getStringFromWasm0(ret[0], ret[1]);
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    }
+    return v2;
+}
+
+/**
  * @param {Uint8Array} public_key
  * @returns {Uint8Array}
  */
