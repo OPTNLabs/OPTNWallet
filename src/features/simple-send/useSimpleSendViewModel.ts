@@ -121,8 +121,12 @@ export function useSimpleSendViewModel({
 
   const ftCategories = categories.filter((c) => c.ftAmount > 0n);
   const nftCategories = categories.filter((c) => c.isNft);
+  const tokenOutputSatsValue = parseAmountToSats(tokenOutputBch);
+  // An amount too large for a safe integer would reach the planner as a value
+  // it cannot represent; it is not a valid request, however large.
   const validTokenOutputValue =
-    parseAmountToSats(tokenOutputBch) >= TOKEN_OUTPUT_SATS;
+    Number.isSafeInteger(tokenOutputSatsValue) &&
+    tokenOutputSatsValue >= TOKEN_OUTPUT_SATS;
 
   const canReview =
     (assetType === 'bch' && !!recipient && !!amountBch) ||

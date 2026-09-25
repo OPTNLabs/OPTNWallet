@@ -665,6 +665,13 @@ export default function useSimpleSend() {
         return;
       }
 
+      // Rejected here, before the planner: for a non-finite value the planner
+      // would fall back to the minimum and quietly send less than requested.
+      if (!Number.isSafeInteger(tokenOutputSats)) {
+        setError('CashToken output value is too large.');
+        setMode('error');
+        return;
+      }
       if (tokenOutputSats < TOKEN_OUTPUT_SATS) {
         setError(
           `CashToken output value must be at least ${TOKEN_OUTPUT_SATS} sats.`

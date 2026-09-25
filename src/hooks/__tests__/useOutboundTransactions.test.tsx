@@ -16,7 +16,10 @@ const {
 }));
 
 let trackerListener:
-  | ((record?: { state?: string }, previousState?: string) => void)
+  | ((
+      record?: { state?: string; walletId?: number | null },
+      previousState?: string
+    ) => void)
   | undefined;
 
 vi.mock('../../services/OutboundTransactionTracker', () => ({
@@ -103,11 +106,11 @@ describe('useOutboundTransactions', () => {
     });
 
     runOutboundReconcileMock.mockClear();
-    trackerListener?.({ state: 'broadcasting' });
+    trackerListener?.({ state: 'broadcasting', walletId: 7 });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(runOutboundReconcileMock).not.toHaveBeenCalled();
 
-    trackerListener?.({ state: 'broadcasted' }, 'broadcasting');
+    trackerListener?.({ state: 'broadcasted', walletId: 7 }, 'broadcasting');
     await waitFor(() => {
       expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
     });
@@ -129,12 +132,51 @@ describe('useOutboundTransactions', () => {
       expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
     });
 
-    trackerListener?.({ state: 'broadcasted' }, 'broadcasting');
+    trackerListener?.({ state: 'broadcasted', walletId: 7 }, 'broadcasting');
     expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
 
     finishFirst();
     await waitFor(() => {
       expect(runOutboundReconcileMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("ignores another wallet's broadcast", async () => {
+    runOutboundReconcileMock.mockResolvedValue(undefined);
+
+    render(<Harness walletId={7} />);
+    await waitFor(() => {
+      expect(trackerListener).toBeTypeOf('function');
+      expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
+    });
+
+    runOutboundReconcileMock.mockClear();
+    trackerListener?.({ state: 'broadcasted', walletId: 8 }, 'broadcasting');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(runOutboundReconcileMock).not.toHaveBeenCalled();
+  });
+
+  it('still runs a queued refresh when the pass before it fails', async () => {
+    let failFirst!: (error: Error) => void;
+    const firstReconciliation = new Promise<void>((_, reject) => {
+      failFirst = reject;
+    });
+    runOutboundReconcileMock
+      .mockReturnValueOnce(firstReconciliation)
+      .mockResolvedValue(undefined);
+
+    render(<Harness />);
+    await waitFor(() => {
+      expect(trackerListener).toBeTypeOf('function');
+      expect(runOutboundReconcileMock).toHaveBeenCalledTimes(1);
+    });
+
+    trackerListener?.({ state: 'broadcasted', walletId: 7 }, 'broadcasting');
+    failFirst(new Error('electrum down'));
+
+    await waitFor(() => {
+      expect(runOutboundReconcileMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByText('false')).toBeTruthy();
     });
   });
 
