@@ -176,13 +176,13 @@ export async function openWalletInEngine(
   autoLockMinutes?: number
 ): Promise<{ opened: boolean; reason?: string }> {
   if (!isDesktopPlatform()) return { opened: false, reason: 'not desktop' };
-  const handle = await engineHandleFor(walletId);
-  if (!handle) {
-    // Watch-only and hardware wallets may have no file mirror; nothing to open.
-    return { opened: false, reason: 'no wallet file for this wallet' };
-  }
   let failureContext = 'Engine wallet open failed';
   try {
+    const handle = await engineHandleFor(walletId);
+    if (!handle) {
+      // Watch-only and hardware wallets may have no file mirror; nothing to open.
+      return { opened: false, reason: 'no wallet file for this wallet' };
+    }
     if (typeof autoLockMinutes === 'number') {
       await shareAutoLockChoice(autoLockMinutes);
     }
@@ -192,12 +192,14 @@ export async function openWalletInEngine(
     failureContext = 'Wallet opened, but legacy HD inventory migration failed';
     await importLegacyHdInventory(walletId, handle, opened);
     return { opened: true };
-  } catch (error) {
+  } catch {
     return {
       opened: false,
       // Existing callers warn on !opened; never claim a completed handoff
       // when the public database read, ownership check, or durable import failed.
-      reason: `${failureContext}: ${error instanceof Error ? error.message : String(error)}`,
+      // Native/SQL errors may include file contents or device paths. Callers
+      // may display or log this result, so expose only the fixed stage label.
+      reason: failureContext,
     };
   }
 }

@@ -191,9 +191,7 @@ describe('legacy public HD inventory handoff', () => {
       ]);
       expect(await openWalletInEngine(7, 'test-password')).toEqual({
         opened: false,
-        reason: expect.stringContaining(
-          `unsupported accounts; only ${accountPath}`
-        ),
+        reason: 'Wallet opened, but legacy HD inventory migration failed',
       });
       expect(importCalls()).toEqual([]);
     }
@@ -220,7 +218,7 @@ describe('legacy public HD inventory handoff', () => {
       ]);
       expect(await openWalletInEngine(7, 'test-password')).toMatchObject({
         opened: false,
-        reason: expect.stringContaining('malformed or unsupported'),
+        reason: 'Wallet opened, but legacy HD inventory migration failed',
       });
       expect(importCalls()).toEqual([]);
     }
@@ -281,7 +279,7 @@ describe('legacy public HD inventory handoff', () => {
         .mockResolvedValueOnce({ ...session, ...changed });
       expect(await openWalletInEngine(7, 'test-password')).toMatchObject({
         opened: false,
-        reason: expect.stringContaining('changed before'),
+        reason: 'Wallet opened, but legacy HD inventory migration failed',
       });
       expect(importCalls()).toEqual([]);
     }
@@ -297,7 +295,7 @@ describe('legacy public HD inventory handoff', () => {
         .mockRejectedValueOnce(new Error(failure));
       expect(await openWalletInEngine(7, 'test-password')).toEqual({
         opened: false,
-        reason: `Wallet opened, but legacy HD inventory migration failed: ${failure}`,
+        reason: 'Wallet opened, but legacy HD inventory migration failed',
       });
       expect(importCalls()).toHaveLength(1);
     }
@@ -311,7 +309,7 @@ describe('legacy public HD inventory handoff', () => {
       .mockResolvedValueOnce({ ...session, epoch: 43 });
     expect(await openWalletInEngine(7, 'test-password')).toMatchObject({
       opened: false,
-      reason: expect.stringContaining('changed during'),
+      reason: 'Wallet opened, but legacy HD inventory migration failed',
     });
   });
 
@@ -331,4 +329,29 @@ describe('legacy public HD inventory handoff', () => {
     expect(mocks.getDatabase).not.toHaveBeenCalled();
     expect(mocks.invoke).toHaveBeenCalledOnce();
   });
+
+  it.each(['lookup', 'open', 'inventory'])(
+    'keeps %s error details out of renderer messages',
+    async (stage) => {
+      const detail = 'private native diagnostics must not leave the adapter';
+      if (stage === 'lookup')
+        mocks.handle.mockRejectedValueOnce(new Error(detail));
+      if (stage === 'open')
+        mocks.invoke.mockRejectedValueOnce(new Error(detail));
+      if (stage === 'inventory')
+        mocks.getDatabase.mockImplementationOnce(() => {
+          throw new Error(detail);
+        });
+      const result = await openWalletInEngine(7, 'test-password');
+      expect(result).toEqual({
+        opened: false,
+        reason:
+          stage === 'inventory'
+            ? 'Wallet opened, but legacy HD inventory migration failed'
+            : 'Engine wallet open failed',
+      });
+      expect(JSON.stringify(result)).not.toContain(detail);
+      expect(importCalls()).toEqual([]);
+    }
+  );
 });
