@@ -68,6 +68,41 @@ Chat transport still exist, and legacy direct-WSS diagnostics must not be shown
 as evidence of the chain-source Tor policy. Unified Rust relay persistence,
 disable/ban semantics and privacy enforcement remain separate backend work.
 
+### Nostr ownership follows the same source pattern
+
+The Nostr card is a service-specific view of the source model, not an exception
+to ownership, lifecycle or transport policy:
+
+```text
+Nostr relays
+  Public relays       -> maintained entries: enable / disable / ban
+  Custom relays       -> user-added entries: enable / disable / ban / remove
+  My Infrastructure   -> explicitly owned entries: enable / disable / ban / remove
+```
+
+Adding somebody else's relay creates a custom source. Adding a relay the user
+owns or controls requires an explicit My Infrastructure choice. A hostname,
+private address or the act of adding an endpoint does not establish ownership.
+Existing saved custom relay URLs must migrate as custom, never silently as owned.
+
+My Infrastructure must show an owned relay as a logical source with a Nostr
+service. The Nostr card and infrastructure directory must edit that same record;
+do not create duplicate records or ask the user to add the relay twice. Compatible
+same-host services can share a logical source; different hosts in one group
+remain separate sources. Nostr is messaging, not another BCH sync protocol.
+
+The lifecycle table below applies to relays too. Keep the maintained base separate
+from durable user intent. Bans must survive restart and catalog updates, and
+discovery/recipient relay hints must not bypass them or silently expand an empty
+permitted pool. Ownership does not itself grant a transport/privacy exception.
+
+This is the required contract, not a claim about the current legacy editor. That
+editor supports custom URL add/remove and protects bootstrap entries from removal;
+it does not yet implement owned-relay classification, durable bans or shared Rust
+transport enforcement. Connect and verify those behaviors before exposing controls
+that promise them. Reuse the Rust source lifecycle rather than implementing new
+relay policy in renderer state.
+
 ## Source lifecycle
 
 | Origin | Enable / disable / ban | User removal |
