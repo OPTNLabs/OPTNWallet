@@ -9,11 +9,11 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workflow = readFileSync(
   resolve(repoRoot, '.github', 'workflows', 'release.yml'),
   'utf8'
-);
+).replaceAll('\r\n', '\n');
 const desktopPreviewWorkflow = readFileSync(
   resolve(repoRoot, '.github', 'workflows', 'desktop-preview.yml'),
   'utf8'
-);
+).replaceAll('\r\n', '\n');
 const extensionBuildConfig = readFileSync(
   resolve(repoRoot, 'vite.extension.config.ts'),
   'utf8'
@@ -70,6 +70,16 @@ function publishNeeds(): string {
   );
 }
 
+// Git for Windows supplies Bash; use the same shell for workflow regressions.
+const bash =
+  process.env.BASH ||
+  (process.platform === 'win32'
+    ? resolve(
+        execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(),
+        '../../../bin/bash.exe'
+      )
+    : 'bash');
+
 describe('release workflow', () => {
   describe('Android instrumentation guard', () => {
     const android = assetWorkflows.find(
@@ -79,15 +89,6 @@ describe('release workflow', () => {
       /^ {12}run_instrumentation\(\) \{[\s\S]*?^ {12}\}/m
     )?.[0];
     const method = 'useAppContext';
-    // Git for Windows supplies Bash; derive its location from the installed Git.
-    const bash =
-      process.env.BASH ||
-      (process.platform === 'win32'
-        ? resolve(
-            execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(),
-            '../../../bin/bash.exe'
-          )
-        : 'bash');
     // Replay the AndroidJUnitRunner transcript from CI run 34218705281,
     // with only the GitHub step/timestamp prefix removed.
     const status = (code: number, total = 1) =>
@@ -348,10 +349,10 @@ describe('release workflow', () => {
     expect(previewTimeout).toBeGreaterThanOrEqual(60);
   });
 
-  it('keeps pull-request desktop validation unbundled and reuses target caches', () => {
+  it('keeps non-Linux PRs unbundled and reuses target caches', () => {
     // Full installer packaging is repeated by the staging/main release matrix.
     // Pull requests still compile every native target, while avoiding the
-    // uncached Linux AppImage/DEB/RPM bottleneck measured in the CI audit.
+    // uncached Linux AppImage bottleneck measured in the CI audit.
     expect(desktopPreviewWorkflow).toContain(
       'npx tauri build --debug --no-bundle --target "$target" --verbose'
     );
@@ -362,32 +363,65 @@ describe('release workflow', () => {
       'shared-key: tauri-${{ matrix.target }}'
     );
     expect(desktopPreviewWorkflow).toContain(
-      'if: github.event_name != \'pull_request\''
+      "if: github.event_name != 'pull_request'"
     );
     expect(desktopPreviewWorkflow).toContain(
-      'if: github.event_name == \'pull_request\''
+      "if: github.event_name == 'pull_request'"
     );
     expect(desktopPreviewWorkflow).toContain(
       'Verify the unbundled native binary'
     );
   });
 
+  it('builds PR Linux DEBs for Flatpak without invoking AppImage packaging', () => {
+    const build = desktopPreviewWorkflow.match(
+      /^ {10}build\(\) \{[\s\S]*?^ {10}\}/m
+    )?.[0];
+    expect(build).toBeDefined();
+    for (const [event, os, option] of [
+      ['pull_request', 'Linux', '--bundles deb'],
+      ['pull_request', 'Windows', '--no-bundle'],
+      ['pull_request', 'macOS', '--no-bundle'],
+      ['workflow_dispatch', 'Linux', '--target'],
+      ['push', 'Linux', '--target'],
+    ]) {
+      const script = build!
+        .replaceAll('${{ github.event_name }}', event)
+        .replaceAll('${{ runner.os }}', os);
+      const result = spawnSync(
+        bash,
+        [
+          '-c',
+          `set -eu\nnpx() { printf '%s\\n' "$*"; }\ntarget=test-target\n${script}\nbuild`,
+        ],
+        { encoding: 'utf8' }
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(
+        `tauri build --debug ${option === '--target' ? '' : `${option} `}--target test-target --verbose`
+      );
+    }
+    const flatpakJob = desktopPreviewWorkflow
+      .split('  flatpak-preview:')[1]
+      .split('    steps:')[0];
+    expect(flatpakJob).not.toContain('    if:');
+    const debUpload = desktopPreviewWorkflow
+      .split('- name: Upload DEB package')[1]
+      .split('      - name:')[0];
+    expect(debUpload).toContain("if: runner.os == 'Linux'");
+    expect(debUpload).not.toContain('github.event_name');
+  });
+
   it('keeps full desktop packaging on main pushes and manual previews', () => {
     // The fast path is limited to pull_request events. Main promotion and a
     // maintainer-triggered preview must still exercise the packages that ship.
-    expect(desktopPreviewWorkflow).toMatch(
-      /push:\n    branches: \[main\]/
-    );
+    expect(desktopPreviewWorkflow).toMatch(/push:\n    branches: \[main\]/);
     expect(desktopPreviewWorkflow).toContain('workflow_dispatch:');
     expect(desktopPreviewWorkflow).toContain(
       'npx tauri build --debug --target "$target" --verbose'
     );
-    expect(workflow).toMatch(
-      /branches:\n      - main\n      - staging/
-    );
-    expect(workflow).toContain(
-      'shared-key: tauri-${{ matrix.target }}'
-    );
+    expect(workflow).toMatch(/branches:\n      - main\n      - staging/);
+    expect(workflow).toContain('shared-key: tauri-${{ matrix.target }}');
   });
 
   it('ships Linux x64 and ARM64 AppImages as the portable all-distro Linux path', () => {
