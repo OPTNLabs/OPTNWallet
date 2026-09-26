@@ -485,6 +485,12 @@ impl NativeChainRuntime {
             .map_err(|_| "network settings reader stopped".to_string())?
     }
 
+    /// Changes before a native policy/trust edit or stack revocation. Outbound
+    /// observations must discard results from an earlier generation.
+    pub(crate) fn policy_generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
     /// The proxy situation for an outbound request that is not chain traffic.
     ///
     /// An update check is a connection to a third party like any other, so it

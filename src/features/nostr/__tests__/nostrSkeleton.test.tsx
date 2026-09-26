@@ -11,9 +11,7 @@ import { P2pFusionTransportPreview } from '../P2pFusionTransportPreview';
 import { normalizeRelayDraft } from '../nostrRelayDraft';
 import { I18nProvider } from '../../../i18n/I18nProvider';
 import { WalletConfirmProvider } from '../../../components/WalletConfirmDialog';
-import experimentalReducer, {
-  setNostrChatEnabled,
-} from '../../../state/slices/experimentalSlice';
+import experimentalReducer from '../../../state/slices/experimentalSlice';
 import preferencesReducer from '../../../state/slices/preferencesSlice';
 
 function renderWithStore(ui: React.ReactElement) {
@@ -42,16 +40,17 @@ describe('Nostr UI safety', () => {
     expect(html).toContain('Nostr identity');
     expect(html).toContain('Display name');
     expect(html).toContain('wss://');
+    expect(html).not.toContain('Disable Nostr chat');
+    expect(html).not.toContain('Enable Nostr chat');
   });
 
-  it('does not mount the chat client after an explicit opt-out', () => {
+  it.each([0, 5])('mounts chat only with an opened wallet (%i)', (walletId) => {
     const store = configureStore({
       reducer: {
         experimental: experimentalReducer,
-        wallet_id: (state = { currentWalletId: 5 }) => state,
+        wallet_id: (state = { currentWalletId: walletId }) => state,
       },
     });
-    store.dispatch(setNostrChatEnabled(false));
 
     const html = renderToStaticMarkup(
       <Provider store={store}>
@@ -63,7 +62,7 @@ describe('Nostr UI safety', () => {
       </Provider>
     );
 
-    expect(html).not.toContain('chat client mounted');
+    expect(html.includes('chat client mounted')).toBe(walletId > 0);
   });
 
   it('P2P Fusion panel: gated (disabled) shows the reason, no round can start', () => {

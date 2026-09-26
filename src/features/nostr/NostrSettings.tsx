@@ -1,20 +1,17 @@
 // Default-on Nostr chat settings: the wallet's separate Nostr identity and the
 // relay pool used for chat. P2P Fusion has separate relay selection.
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { MdAdd, MdKey, MdRefresh, MdRouter } from 'react-icons/md';
 
 import { normalizeRelayDraft } from './nostrRelayDraft';
 import type { RootState } from '../../state/store';
 import {
-  selectNostrChatEnabled,
   selectNostrRelays,
-  setNostrChatEnabled,
   addNostrRelay,
   removeNostrRelay,
 } from '../../state/slices/experimentalSlice';
 import {
-  checkRelayStatus,
   fetchProfile,
   fetchPublishedDisplayName,
   myIdentity,
@@ -30,12 +27,12 @@ import { useWalletConfirm } from '../../components/WalletConfirmDialog';
 // Import from source of truth (not re-export) so Remove never desyncs from list.
 import { isDefaultNostrRelay } from '../../platform/desktop/nostr/defaultRelays';
 import { useI18n } from '../../i18n/useI18n';
+import { useNostrRelayHealth } from '../../platform/desktop/nostr/useNostrRelayHealth';
 
 export const NostrSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { t } = useI18n();
   const confirm = useWalletConfirm();
-  const enabled = useSelector(selectNostrChatEnabled);
   const relays = useSelector(selectNostrRelays);
   const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
 
@@ -47,8 +44,7 @@ export const NostrSettings: React.FC = () => {
   const [mlsDeviceIndex, setMlsDeviceIndex] = useState(0);
   const [relayDraft, setRelayDraft] = useState('');
   const [draftError, setDraftError] = useState('');
-  const [relayStatus, setRelayStatus] = useState<Record<string, boolean>>({});
-  const [checking, setChecking] = useState(false);
+  const { health, checking, refresh: refreshRelays } = useNostrRelayHealth();
   const [loadingProfile, setLoadingProfile] = useState(false);
 
   useEffect(() => {
@@ -58,7 +54,7 @@ export const NostrSettings: React.FC = () => {
     setIdErr(null);
     setDisplayName('');
     setProfileMsg(null);
-    if (!enabled || walletId <= 0) return;
+    if (walletId <= 0) return;
     myIdentity(walletId)
       .then(async (id) => {
         const slot = await loadMlsDeviceIndex(id.pubkey);
@@ -73,23 +69,9 @@ export const NostrSettings: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [enabled, walletId]);
+  }, [walletId]);
 
-  // Legacy Chat diagnostics remain explicit; opening settings is passive.
-  // This direct-WSS probe is not evidence of the chain-source Tor policy.
-  const refreshRelays = useCallback(() => {
-    if (relays.length === 0) return;
-    setChecking(true);
-    setRelayStatus({});
-    checkRelayStatus(relays, 8_000, (url, online) => {
-      setRelayStatus((prev) => ({ ...prev, [url]: online }));
-    })
-      .then(setRelayStatus)
-      .catch((e) => setDraftError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setChecking(false));
-  }, [relays]);
-
-  const activeCount = relays.filter((r) => relayStatus[r] === true).length;
+  const activeCount = health.relays.filter((r) => r.reachable === true).length;
 
   const addRelay = () => {
     const relay = normalizeRelayDraft(relayDraft);
@@ -104,7 +86,7 @@ export const NostrSettings: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Enable toggle */}
+      {/* Chat is available without a separate feature switch. */}
       <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3">
         <div>
           <p className="text-sm font-semibold wallet-text-strong">
@@ -114,96 +96,102 @@ export const NostrSettings: React.FC = () => {
             {t('nostr.dmDescription')}
           </p>
         </div>
-        <button
-          onClick={() => dispatch(setNostrChatEnabled(!enabled))}
-          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
-            enabled
-              ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
-              : 'wallet-surface-strong border-[var(--wallet-border)]'
-          }`}
-          aria-label={`${enabled ? t('nostr.disable') : t('nostr.enable')} ${t('nostr.chat')}`}
-        >
-          <span
-            className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`}
-          />
-        </button>
       </div>
 
       <>
         {/* Identity */}
-        {enabled && (
-          <section className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
-            <div className="flex items-start gap-3">
-              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--wallet-accent)]/15 text-[var(--wallet-accent)]">
-                <MdKey className="text-xl" aria-hidden="true" />
+        <section className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
+          <div className="flex items-start gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--wallet-accent)]/15 text-[var(--wallet-accent)]">
+              <MdKey className="text-xl" aria-hidden="true" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold wallet-text-strong">
+                {t('nostr.identity')}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
+                {t('nostr.identityDescription')}
+              </p>
+              <div className="mt-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2 font-mono text-[10px] break-all wallet-text-strong">
+                {npub ?? idErr ?? t('nostr.deriving')}
               </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold wallet-text-strong">
-                  {t('nostr.identity')}
-                </p>
-                <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-                  {t('nostr.identityDescription')}
-                </p>
-                <div className="mt-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2 font-mono text-[10px] break-all wallet-text-strong">
-                  {npub ?? idErr ?? t('nostr.deriving')}
-                </div>
-                <input
-                  aria-label={t('chat.displayName')}
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder={t('chat.displayName')}
-                  className="wallet-input mt-3 w-full text-xs"
-                />
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={!pubkey || loadingProfile}
-                    className="wallet-btn-secondary px-3 py-1 text-xs"
-                    onClick={async () => {
-                      if (!pubkey) return;
-                      setLoadingProfile(true);
+              <input
+                aria-label={t('chat.displayName')}
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder={t('chat.displayName')}
+                className="wallet-input mt-3 w-full text-xs"
+              />
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!pubkey || loadingProfile}
+                  className="wallet-btn-secondary px-3 py-1 text-xs"
+                  onClick={async () => {
+                    if (!pubkey) return;
+                    setLoadingProfile(true);
+                    setProfileMsg(null);
+                    try {
+                      const [mine, publishedName] = await Promise.all([
+                        fetchProfile(pubkey, relays),
+                        fetchPublishedDisplayName(relays, pubkey),
+                      ]);
+                      setDisplayName(publishedName || mine.name || '');
+                    } catch (e) {
+                      setProfileMsg(e instanceof Error ? e.message : String(e));
+                    } finally {
+                      setLoadingProfile(false);
+                    }
+                  }}
+                >
+                  {loadingProfile
+                    ? 'Loading profile…'
+                    : 'Load published profile'}
+                </button>
+                <button
+                  type="button"
+                  disabled={!pubkey || loadingProfile}
+                  onClick={() => {
+                    void (async () => {
                       setProfileMsg(null);
                       try {
-                        const [mine, publishedName] = await Promise.all([
-                          fetchProfile(pubkey, relays),
-                          fetchPublishedDisplayName(relays, pubkey),
+                        await Promise.all([
+                          publishMyProfile(
+                            walletId,
+                            { name: displayName || undefined },
+                            relays
+                          ),
+                          displayName
+                            ? publishDisplayName(walletId, displayName, relays)
+                            : Promise.resolve(),
                         ]);
-                        setDisplayName(publishedName || mine.name || '');
+                        setProfileMsg(t('chat.profilePublished'));
                       } catch (e) {
                         setProfileMsg(
                           e instanceof Error ? e.message : String(e)
                         );
-                      } finally {
-                        setLoadingProfile(false);
                       }
-                    }}
-                  >
-                    {loadingProfile
-                      ? 'Loading profile…'
-                      : 'Load published profile'}
-                  </button>
+                    })();
+                  }}
+                  className="wallet-btn-primary px-3 py-1 text-xs"
+                >
+                  {t('chat.publishProfile')}
+                </button>
+                {mlsDeviceIndex === 0 ? (
                   <button
                     type="button"
-                    disabled={!pubkey || loadingProfile}
+                    className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
                     onClick={() => {
+                      if (!pubkey) return;
                       void (async () => {
-                        setProfileMsg(null);
+                        const ok = await confirm(
+                          'Only on the new install. This device becomes a separate MLS leaf (slot 1). Do not tap this on your first device.'
+                        );
+                        if (!ok) return;
                         try {
-                          await Promise.all([
-                            publishMyProfile(
-                              walletId,
-                              { name: displayName || undefined },
-                              relays
-                            ),
-                            displayName
-                              ? publishDisplayName(
-                                  walletId,
-                                  displayName,
-                                  relays
-                                )
-                              : Promise.resolve(),
-                          ]);
-                          setProfileMsg(t('chat.profilePublished'));
+                          const slot = await claimExtraMlsDeviceSlot(pubkey);
+                          setMlsDeviceIndex(slot);
+                          await publishMlsKeyPackage(walletId, relays);
                         } catch (e) {
                           setProfileMsg(
                             e instanceof Error ? e.message : String(e)
@@ -211,48 +199,21 @@ export const NostrSettings: React.FC = () => {
                         }
                       })();
                     }}
-                    className="wallet-btn-primary px-3 py-1 text-xs"
                   >
-                    {t('chat.publishProfile')}
+                    Extra device
                   </button>
-                  {mlsDeviceIndex === 0 ? (
-                    <button
-                      type="button"
-                      className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
-                      onClick={() => {
-                        if (!pubkey) return;
-                        void (async () => {
-                          const ok = await confirm(
-                            'Only on the new install. This device becomes a separate MLS leaf (slot 1). Do not tap this on your first device.'
-                          );
-                          if (!ok) return;
-                          try {
-                            const slot = await claimExtraMlsDeviceSlot(pubkey);
-                            setMlsDeviceIndex(slot);
-                            await publishMlsKeyPackage(walletId, relays);
-                          } catch (e) {
-                            setProfileMsg(
-                              e instanceof Error ? e.message : String(e)
-                            );
-                          }
-                        })();
-                      }}
-                    >
-                      Extra device
-                    </button>
-                  ) : (
-                    <span className="text-[10px] wallet-muted">
-                      Device {mlsDeviceIndex}
-                    </span>
-                  )}
-                </div>
-                {profileMsg ? (
-                  <p className="mt-2 text-[10px] wallet-muted">{profileMsg}</p>
-                ) : null}
+                ) : (
+                  <span className="text-[10px] wallet-muted">
+                    Device {mlsDeviceIndex}
+                  </span>
+                )}
               </div>
+              {profileMsg ? (
+                <p className="mt-2 text-[10px] wallet-muted">{profileMsg}</p>
+              ) : null}
             </div>
-          </section>
-        )}
+          </div>
+        </section>
 
         {/* Relays */}
         <section className="space-y-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
@@ -286,12 +247,17 @@ export const NostrSettings: React.FC = () => {
           </div>
 
           <p className="text-xs wallet-muted">
-            This pool is shared across Mainnet and Chipnet. Opening this page
-            does not contact relays. Checks and profile actions use the existing
-            Nostr connection; the Network Tor setting is not applied to them
-            yet.
+            This pool is shared across Mainnet and Chipnet. Reachability is
+            checked automatically while a wallet is open, using the current
+            network privacy rules. Profile actions remain explicit. Chat and
+            profile connections do not yet follow the Network Tor setting.
           </p>
-          {Object.keys(relayStatus).length > 0 && (
+          {health.error && (
+            <p role="status" className="text-xs wallet-muted">
+              {health.error}
+            </p>
+          )}
+          {health.relays.length > 0 && (
             <p role="status" className="text-xs wallet-muted">
               {activeCount}/{relays.length} reachable at last check
             </p>
@@ -299,7 +265,8 @@ export const NostrSettings: React.FC = () => {
 
           <div className="space-y-2">
             {relays.map((url) => {
-              const online = relayStatus[url];
+              const result = health.relays.find((relay) => relay.url === url);
+              const online = result?.reachable ?? undefined;
               return (
                 <div
                   key={url}
@@ -315,7 +282,7 @@ export const NostrSettings: React.FC = () => {
                     }`}
                     title={
                       online === undefined
-                        ? t('nostr.unknown')
+                        ? result?.reason ?? t('nostr.unknown')
                         : online
                           ? 'Reachable at last check'
                           : 'Unreachable at last check'

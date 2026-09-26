@@ -625,7 +625,32 @@ passed, as did TypeScript, strict core/runtime/CLI/native Clippy, architecture,
 WASM freshness and nine generated-WASM signing tests. These are automated
 integration checks, not yet a packaged/live legacy-wallet migration result.
 
-Biometric/file/seed import sibling handoffs still require integration. RPA
-receipts, tracked contracts and multiple-account inventory remain outside this
-HD-only migration. Whole-wallet scalar replacement remains blocked on their
-durable union; this change does not close #75.
+Biometric/file/seed import sibling handoffs now reuse the same bridge, retain
+auto-lock settings, and surface failures without undoing an already successful
+unlock/import. Affected bootstrap calls retain the selected account index.
+Validation: 81 adapter/onboarding tests and the combined TypeScript check passed;
+no physical biometric-device acceptance is claimed. RPA receipts, tracked
+contracts and multiple-account inventory remain outside this HD-only migration.
+Whole-wallet scalar replacement remains blocked on their durable union; this
+change does not close #75.
+
+### 2026-09-26: default-on Chat and automatic native relay health
+
+The retained UI no longer has a Chat enable switch or persisted enable flag.
+The Chat route still requires an open wallet. Desktop wallet-open and Network ->
+Nostr now request automatic reachability checks, refreshed every 30 seconds with
+a bounded native cache; users can also explicitly recheck. Native Rust validates
+the entire supplied WSS pool, applies the public-source boundary and trusted Tor
+requirement, and performs only TLS/WebSocket handshake and close. It sends no
+Nostr identity, subscription, profile, or message. Network/session/policy changes
+cancel stale probes and invalidate cached results. Blocked checks remain unknown
+rather than incorrectly marking the relay unreachable.
+
+Validation: seven native tests cover URL limits, policy/transport refusal, cache
+scope/coalescing, cancellation and a local handshake that sends only Close.
+Nineteen Redux/SSR/UI tests cover retired settings, wallet gating, automatic
+checks/timer cleanup, stale replies, relay edits and explicit profile actions.
+Combined TypeScript, scoped ESLint/formatting, strict native Clippy and the
+desktop package build passed. These are automated checks, not yet packaged live
+relay acceptance. Chat/profile traffic itself still uses the legacy transport;
+owned-relay classification and non-desktop native health remain separate gaps.

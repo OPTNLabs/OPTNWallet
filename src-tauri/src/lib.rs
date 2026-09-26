@@ -1385,6 +1385,7 @@ pub fn run() {
             nostr_tor::nostr_tor_open,
             nostr_tor::nostr_tor_send,
             nostr_tor::nostr_tor_close,
+            nostr_tor::nostr_relay_health,
             #[cfg(desktop)]
             hw::session::hw_enumerate,
             #[cfg(desktop)]

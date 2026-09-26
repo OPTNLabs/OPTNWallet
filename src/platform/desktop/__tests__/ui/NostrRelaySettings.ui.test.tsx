@@ -1,6 +1,7 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -12,10 +13,13 @@ import { Provider } from 'react-redux';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { NostrSettings } from '../../../../features/nostr/NostrSettings';
 import experimental, {
-  setNostrChatEnabled,
   selectNostrRelays,
 } from '../../../../state/slices/experimentalSlice';
 import preferences from '../../../../state/slices/preferencesSlice';
+import networkReducer, {
+  Network,
+  setNetwork,
+} from '../../../../state/slices/networkSlice';
 import { I18nProvider } from '../../../../i18n/I18nProvider';
 import type { RootState } from '../../../../state/store';
 
@@ -27,8 +31,11 @@ const network = vi.hoisted(() => ({
   publishName: vi.fn(),
   publishProfile: vi.fn(),
 }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: network.probe }));
+vi.mock('../../../../utils/platform', () => ({
+  isDesktopPlatform: () => true,
+}));
 vi.mock('../../nostr/chat', () => ({
-  checkRelayStatus: network.probe,
   myIdentity: network.identity,
   fetchProfile: network.profile,
   fetchPublishedDisplayName: network.name,
@@ -43,7 +50,31 @@ vi.mock('../../nostr/mls', () => ({
 vi.mock('../../../../components/WalletConfirmDialog', () => ({
   useWalletConfirm: () => vi.fn(),
 }));
-afterEach(cleanup);
+
+function showSettings(walletId = 1) {
+  const store = configureStore({
+    reducer: {
+      experimental,
+      preferences,
+      network: networkReducer,
+      wallet_id: () => ({ currentWalletId: walletId }),
+    },
+  });
+  store.dispatch(setNetwork(Network.CHIPNET));
+  render(
+    <Provider store={store}>
+      <I18nProvider>
+        <NostrSettings />
+      </I18nProvider>
+    </Provider>
+  );
+  return store;
+}
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 beforeEach(() => {
   vi.clearAllMocks();
   network.identity.mockResolvedValue({
@@ -52,78 +83,61 @@ beforeEach(() => {
   });
   network.profile.mockResolvedValue({ name: 'Saved name' });
   network.name.mockResolvedValue('');
-  network.probe.mockImplementation(async (relays: string[]) =>
-    Object.fromEntries(relays.map((url) => [url, true]))
+  network.probe.mockImplementation(
+    async (_command: string, { relays }: { relays: string[] }) => ({
+      relays: relays.map((url) => ({ url, reachable: true })),
+    })
   );
 });
 
-it('edits the relay pool while chat is off and checks reachability only on request', async () => {
-  const store = configureStore({
-    reducer: {
-      experimental,
-      preferences,
-      wallet_id: () => ({ currentWalletId: 1 }),
-    },
+it('automatically checks native reachability, supports relay edits and an explicit recheck', async () => {
+  const store = showSettings();
+  await screen.findByText(/reachable at last check/);
+  expect(network.probe).toHaveBeenCalledWith('nostr_relay_health', {
+    relays: selectNostrRelays(store.getState() as RootState),
+    network: 'chipnet',
+    force: false,
   });
-  store.dispatch(setNostrChatEnabled(false));
-  render(
-    <Provider store={store}>
-      <I18nProvider>
-        <NostrSettings />
-      </I18nProvider>
-    </Provider>
-  );
-  expect(screen.queryByText('Nostr identity')).not.toBeInTheDocument();
-  expect(screen.queryByText(/P2P-fusion transport/)).not.toBeInTheDocument();
   expect(
-    screen.queryByRole('button', { name: /Check relay/i })
-  ).toBeInTheDocument();
-  fireEvent(document, new Event('visibilitychange'));
+    screen.queryByRole('button', { name: /(?:Enable|Disable) Nostr chat/i })
+  ).not.toBeInTheDocument();
+  expect(network.profile).not.toHaveBeenCalled();
+  expect(network.publishProfile).not.toHaveBeenCalled();
+  expect(network.publishName).not.toHaveBeenCalled();
+
   const relay = 'wss://relay.user.example';
   fireEvent.change(screen.getByLabelText('Relay URL'), {
     target: { value: relay },
   });
   fireEvent.keyDown(screen.getByLabelText('Relay URL'), { key: 'Enter' });
   expect(selectNostrRelays(store.getState() as RootState)).toContain(relay);
-  fireEvent.click(screen.getByRole('button', { name: `Remove ${relay}` }));
-  expect(selectNostrRelays(store.getState() as RootState)).not.toContain(relay);
-  expect(store.getState().experimental.nostrChatEnabled).toBe(false);
-  expect(network.identity).not.toHaveBeenCalled();
-  expect(network.probe).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: /Check relay/i }));
-  await screen.findByText(/reachable at last check/);
-  expect(network.probe).toHaveBeenCalledTimes(1);
-  expect(network.probe).toHaveBeenCalledWith(
-    selectNostrRelays(store.getState() as RootState),
-    8000,
-    expect.any(Function)
+  await waitFor(() =>
+    expect(network.probe).toHaveBeenLastCalledWith('nostr_relay_health', {
+      relays: expect.arrayContaining([relay]),
+      network: 'chipnet',
+      force: false,
+    })
   );
-  expect(store.getState().experimental.nostrChatEnabled).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove ' + relay }));
+  expect(selectNostrRelays(store.getState() as RootState)).not.toContain(relay);
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: /Check relay/i })).toBeEnabled()
+  );
+  fireEvent.click(screen.getByRole('button', { name: /Check relay/i }));
+  await waitFor(() =>
+    expect(network.probe).toHaveBeenLastCalledWith('nostr_relay_health', {
+      relays: selectNostrRelays(store.getState() as RootState),
+      network: 'chipnet',
+      force: true,
+    })
+  );
 });
 
-it('keeps enablement, identity, profile loading and publishing together without automatic relay requests', async () => {
-  const store = configureStore({
-    reducer: {
-      experimental,
-      preferences,
-      wallet_id: () => ({ currentWalletId: 1 }),
-    },
-  });
-  store.dispatch(setNostrChatEnabled(true));
-  render(
-    <Provider store={store}>
-      <I18nProvider>
-        <NostrSettings />
-      </I18nProvider>
-    </Provider>
-  );
+it('keeps profile loading and publishing explicit despite automatic health checks', async () => {
+  const store = showSettings();
   await screen.findByText('npub-test');
-  expect(
-    screen.getByRole('button', { name: /Disable Nostr chat/i })
-  ).toBeInTheDocument();
   expect(network.profile).not.toHaveBeenCalled();
   expect(network.name).not.toHaveBeenCalled();
-  expect(network.probe).not.toHaveBeenCalled();
   expect(network.publishProfile).not.toHaveBeenCalled();
   fireEvent.click(
     screen.getByRole('button', { name: 'Load published profile' })
@@ -145,8 +159,62 @@ it('keeps enablement, identity, profile loading and publishing together without 
     'New name',
     selectNostrRelays(store.getState() as RootState)
   );
-  fireEvent.click(screen.getByRole('button', { name: /Disable Nostr chat/i }));
-  expect(store.getState().experimental.nostrChatEnabled).toBe(false);
-  expect(screen.queryByText('Nostr identity')).not.toBeInTheDocument();
-  expect(screen.getByLabelText('Relay URL')).toBeInTheDocument();
+});
+
+it('ignores an old network reply and keeps policy-blocked relays distinct from unreachable ones', async () => {
+  let resolveOld!: (reply: unknown) => void;
+  network.probe.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveOld = resolve;
+      })
+  );
+  const store = showSettings();
+  const relays = selectNostrRelays(store.getState() as RootState);
+  network.probe.mockResolvedValueOnce({
+    relays: relays.map((url) => ({
+      url,
+      reachable: null,
+      reason: 'Blocked by source policy',
+    })),
+    error: 'Blocked by source policy',
+  });
+  act(() => {
+    store.dispatch(setNetwork(Network.MAINNET));
+  });
+  await screen.findByText('Blocked by source policy');
+  await act(async () => {
+    resolveOld({ relays: relays.map((url) => ({ url, reachable: true })) });
+  });
+  expect(screen.queryByText('Reachable')).not.toBeInTheDocument();
+  expect(screen.queryByText('Unreachable')).not.toBeInTheDocument();
+  expect(screen.getAllByText('Not checked')).toHaveLength(relays.length);
+  expect(network.probe).toHaveBeenLastCalledWith('nostr_relay_health', {
+    relays,
+    network: 'mainnet',
+    force: false,
+  });
+});
+
+it('does not check relays or derive identity before a wallet opens', () => {
+  showSettings(0);
+  expect(network.probe).not.toHaveBeenCalled();
+  expect(network.identity).not.toHaveBeenCalled();
+});
+
+it('rechecks automatically and stops its timer when the view is unmounted', async () => {
+  vi.useFakeTimers();
+  showSettings();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+  expect(network.probe).toHaveBeenCalledTimes(2);
+  expect(network.probe).toHaveBeenLastCalledWith(
+    'nostr_relay_health',
+    expect.objectContaining({ force: false })
+  );
+  cleanup();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(network.probe).toHaveBeenCalledTimes(2);
+  expect(network.publishProfile).not.toHaveBeenCalled();
 });
