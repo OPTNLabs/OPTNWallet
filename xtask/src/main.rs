@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const FRAMEWORK_NAMES: &[&str] = &["leptos", "tauri", "dioxus", "capacitor"];
+const FRAMEWORK_NAMES: &[&str] = &["leptos", "tauri", "dioxus", "capacitor", "slint"];
 const APPLE_REFERENCE_DEPENDENCIES: &[&str] = &[
     "opalbase",
     "opalcrypto",
@@ -97,8 +97,8 @@ fn audit() {
             Err(error) => {
                 eprintln!(
                     "dependency audit: could not run cargo-audit ({error}). Install it with \
-                     `cargo install cargo-audit --locked`; a missing tool is a failed audit, not \
-                     a skipped one."
+ `cargo install cargo-audit --locked`; a missing tool is a failed audit, not \
+ a skipped one."
                 );
                 std::process::exit(1);
             }
@@ -140,6 +140,7 @@ fn architecture() {
         root.join("crates/optn-platform-apple/Cargo.toml"),
         root.join("crates/optn-runtime/Cargo.toml"),
         root.join("crates/optn-chain-native/Cargo.toml"),
+        root.join("crates/optn-transport-native/Cargo.toml"),
         root.join("crates/optn-transport/Cargo.toml"),
     ];
 
@@ -172,7 +173,7 @@ fn architecture() {
             if text.contains(dependency) {
                 failures.push(format!(
                     "{} depends on Apple provider package '{dependency}'; wallet truth stays \
-                     in Rust and Apple adapters belong behind optn-platform",
+ in Rust and Apple adapters belong behind optn-platform",
                     manifest.display()
                 ));
             }
@@ -204,7 +205,7 @@ fn architecture() {
         {
             failures.push(format!(
                 "crates/optn-ui-text depends on '{framework}'; it exists to prove a renderer \
-                 needs only optn-app and optn-transport, so a framework there defeats it"
+ needs only optn-app and optn-transport, so a framework there defeats it"
             ));
         }
     }
@@ -255,7 +256,7 @@ fn architecture() {
         {
             failures.push(format!(
                 "crates/optn-ui-egui depends on '{framework}'; it renders on egui alone, and a \
-                 second framework there would mean the toolkits are not interchangeable"
+ second framework there would mean the toolkits are not interchangeable"
             ));
         }
     }
@@ -268,50 +269,209 @@ fn architecture() {
         &mut failures,
     );
 
+    // A fourth crate, Dioxus, is still a plugin on the same seam: optn-app
+    // and optn-transport only, plus Dioxus SSR. A windowing stack here would
+    // break the no-display swap proof the same way eframe would for egui.
+    let dioxus_ui_manifest = read(&root.join("crates/optn-ui-dioxus/Cargo.toml"));
+    require_dependency(
+        "crates/optn-ui-dioxus",
+        &dioxus_ui_manifest,
+        "optn-app",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-dioxus",
+        &dioxus_ui_manifest,
+        "optn-transport",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-dioxus",
+        &dioxus_ui_manifest,
+        "dioxus",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-ui-dioxus",
+        &dioxus_ui_manifest,
+        &[
+            "optn-core",
+            "optn-runtime",
+            "optn-platform",
+            "optn-platform-native",
+        ],
+        &mut failures,
+    );
+    for framework in FRAMEWORK_NAMES {
+        if *framework == "dioxus" {
+            continue;
+        }
+        if manifest_body(&dioxus_ui_manifest)
+            .to_lowercase()
+            .contains(framework)
+        {
+            failures.push(format!(
+ "crates/optn-ui-dioxus depends on '{framework}'; it renders on dioxus alone, and a \
+ second framework there would mean the toolkits are not interchangeable"
+ ));
+        }
+    }
+    forbid_dependencies(
+        "crates/optn-ui-dioxus",
+        &dioxus_ui_manifest,
+        &["dioxus-desktop", "wry", "tao", "winit", "egui", "eframe"],
+        &mut failures,
+    );
+    // dioxus-ssr is the no-display backend; a desktop/web renderer is not.
+
+    // Slint is an excluded native pilot. Keep it on the same renderer seam as
+    // the other pilots: shared application views and typed transport in the
+    // native composition, with the shared native adapter allowed only as its
+    // host seam. The protected crates must remain independent of the GUI
+    // toolkit.
+    for (scope, manifest) in [
+        ("crates/optn-core", root.join("crates/optn-core/Cargo.toml")),
+        ("crates/optn-app", root.join("crates/optn-app/Cargo.toml")),
+        (
+            "crates/optn-runtime",
+            root.join("crates/optn-runtime/Cargo.toml"),
+        ),
+        (
+            "crates/optn-transport",
+            root.join("crates/optn-transport/Cargo.toml"),
+        ),
+        (
+            "crates/optn-platform",
+            root.join("crates/optn-platform/Cargo.toml"),
+        ),
+        (
+            "crates/optn-platform-native",
+            root.join("crates/optn-platform-native/Cargo.toml"),
+        ),
+        (
+            "crates/optn-platform-apple",
+            root.join("crates/optn-platform-apple/Cargo.toml"),
+        ),
+    ] {
+        let manifest = read(&manifest);
+        forbid_dependencies(scope, &manifest, &["slint", "slint-build"], &mut failures);
+    }
+
+    let slint_ui_manifest = read(&root.join("crates/optn-ui-slint/Cargo.toml"));
+    require_dependency(
+        "crates/optn-ui-slint",
+        &slint_ui_manifest,
+        "optn-app",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-slint",
+        &slint_ui_manifest,
+        "optn-transport",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-slint",
+        &slint_ui_manifest,
+        "optn-transport-native",
+        &mut failures,
+    );
+    require_dependency(
+        "crates/optn-ui-slint",
+        &slint_ui_manifest,
+        "slint",
+        &mut failures,
+    );
+    forbid_dependencies(
+        "crates/optn-ui-slint",
+        &slint_ui_manifest,
+        &[
+            "optn-core",
+            "optn-runtime",
+            "optn-platform",
+            "optn-platform-native",
+            "optn-platform-apple",
+            "optn-chain-native",
+            "optn-transport-tauri",
+            "tauri",
+            "leptos",
+            "webview",
+            "wry",
+            "tao",
+            "dioxus",
+            "capacitor",
+        ],
+        &mut failures,
+    );
+    let slint_lib =
+        rust_code_only(&read(&root.join("crates/optn-ui-slint/src/lib.rs"))).to_lowercase();
+    if slint_lib.contains("optn_transport_native") {
+        failures.push(
+            "crates/optn-ui-slint/src/lib.rs imports 'optn_transport_native'; the native adapter belongs in the host binary"
+                .to_string(),
+        );
+    }
+    for (unit, path) in [
+        (
+            "crates/optn-ui-slint/src/lib.rs",
+            root.join("crates/optn-ui-slint/src/lib.rs"),
+        ),
+        (
+            "crates/optn-ui-slint/src/main.rs",
+            root.join("crates/optn-ui-slint/src/main.rs"),
+        ),
+    ] {
+        let source = rust_code_only(&read(&path)).to_lowercase();
+        for (name, token) in [
+            ("optn-core", "optn_core::"),
+            ("Tauri", "tauri::"),
+            ("Leptos", "leptos::"),
+            ("Dioxus", "dioxus::"),
+            ("egui", "egui::"),
+            ("wry", "wry::"),
+            ("webview", "webview"),
+            ("optn-transport-tauri", "optn_transport_tauri"),
+        ] {
+            if source.contains(token) {
+                failures.push(format!(
+                    "{unit} refers directly to {name}; the Slint host and renderer library stay framework-neutral apart from Slint"
+                ));
+            }
+        }
+    }
+
     // "The renderer is swappable" is a claim with a number in it: one line.
-    // Both renderer crates carry the same host block -- the same script through
+    // Renderer crates carry the same host block -- the same script through
     // the same `optn_transport::run`, asserting the same facts -- and the only
     // line that may differ between them is the `type Ui<T> = ...` alias naming
     // the renderer. Checked rather than stated, because a claim about a diff
     // stops being true the moment someone edits one side.
-    let text_host = host_block(&read(&root.join("crates/optn-ui-text/src/lib.rs")));
-    let egui_host = host_block(&read(&root.join("crates/optn-ui-egui/src/lib.rs")));
-    match (text_host, egui_host) {
-        (Some(text), Some(egui)) => {
-            let differences: Vec<(usize, &str, &str)> = text
-                .iter()
-                .zip(egui.iter())
-                .enumerate()
-                .filter(|(_, (a, b))| a != b)
-                .map(|(index, (a, b))| (index, a.as_str(), b.as_str()))
-                .collect();
-            if text.len() != egui.len() {
-                failures.push(format!(
-                    "the two renderers' host blocks are {} and {} lines; swapping renderers must \
-                     be one line, so they have to stay the same block",
-                    text.len(),
-                    egui.len()
-                ));
-            } else if differences.len() != 1 {
-                failures.push(format!(
-                    "the two renderers' host blocks differ on {} lines; only the `type Ui` alias \
-                     may differ, or swapping renderers is not one line: {:?}",
-                    differences.len(),
-                    differences
-                ));
-            } else if !differences[0].1.trim_start().starts_with("type Ui<T> =") {
-                failures.push(format!(
-                    "the one line that differs between the renderers' host blocks is not the \
-                     renderer alias: {:?}",
-                    differences[0]
-                ));
+    let renderer_hosts = [
+        (
+            "crates/optn-ui-text",
+            host_block(&read(&root.join("crates/optn-ui-text/src/lib.rs"))),
+        ),
+        (
+            "crates/optn-ui-egui",
+            host_block(&read(&root.join("crates/optn-ui-egui/src/lib.rs"))),
+        ),
+        (
+            "crates/optn-ui-dioxus",
+            host_block(&read(&root.join("crates/optn-ui-dioxus/src/lib.rs"))),
+        ),
+    ];
+    for (index, (left_name, left_host)) in renderer_hosts.iter().enumerate() {
+        for (right_name, right_host) in renderer_hosts.iter().skip(index + 1) {
+            match (left_host, right_host) {
+                (Some(left), Some(right)) => {
+                    compare_host_blocks(left_name, left, right_name, right, &mut failures);
+                }
+                _ => failures.push(format!(
+                    "{left_name} or {right_name} has no host block; the swap is only demonstrated \
+ while every renderer drives optn_transport::run through the same script"
+                )),
             }
         }
-        _ => failures.push(
-            "one of the renderer crates has no host block; the swap is only demonstrated while \
-             both drive optn_transport::run through the same script"
-                .into(),
-        ),
     }
 
     let opal_reference_manifest = read(&root.join("apple/OPTNOpalReference/Package.swift"));
@@ -330,8 +490,8 @@ fn architecture() {
     for forbidden in ["OpalBase", "OpalCrypto", "OpalFusion", "OpalHedge"] {
         if opal_reference_manifest.contains(forbidden) {
             failures.push(format!(
-                "apple/OPTNOpalReference must not link preview/secret-authority package '{forbidden}'"
-            ));
+ "apple/OPTNOpalReference must not link preview/secret-authority package '{forbidden}'"
+ ));
         }
     }
     if opal_reference_manifest.contains("branch:") {
@@ -366,9 +526,9 @@ fn architecture() {
             for dependency in APPLE_REFERENCE_DEPENDENCIES {
                 if text.contains(dependency) {
                     failures.push(format!(
-                        "{} refers to Apple/Opal package '{dependency}' in code; wallet truth                          stays in Rust and Apple adapters belong behind optn-platform",
-                        path.display()
-                    ));
+ "{} refers to Apple/Opal package '{dependency}' in code; wallet truth stays in Rust and Apple adapters belong behind optn-platform",
+ path.display()
+ ));
                 }
             }
         }
@@ -516,6 +676,10 @@ fn architecture() {
         }
     }
 
+    cashcode_policy(&root, &mut failures);
+    explorer_policy(&root, &mut failures);
+    tauri_handler_modules(&root, &mut failures);
+
     if failures.is_empty() {
         println!("architecture boundary check: PASS");
         return;
@@ -525,6 +689,348 @@ fn architecture() {
         eprintln!("architecture boundary violation: {failure}");
     }
     std::process::exit(1);
+}
+
+/// An encoder or a prefix family that can stamp a legacy `paycode:`.
+///
+/// `'legacy-paycode'` is the TypeScript spelling of the same idea. Single
+/// quotes are kept deliberately: `rust_code_only` strips double-quoted
+/// strings and every comment, so prose explaining why the family is gone
+/// does not trip this, and a live TS union member does.
+const LEGACY_PAYCODE_APIS: &[&str] = &["PrefixFamily", "encode_with_family", "'legacy-paycode'"];
+
+/// PR #89's decision, enforced where a merge cannot quietly revert it.
+///
+/// OPTN accepts `cashcode:` / `cashcodetest:` and refuses `paycode:` /
+/// `paycodetest:`. That is not a naming preference. A legacy PayCode carries
+/// keys its owner derived under the legacy rules, so deriving a destination
+/// from one with CashCode's compressed semantics pays an address the legacy
+/// recipient never derived and cannot scan for.
+///
+/// This lives in xtask rather than in `optn-core`'s own tests because the way
+/// it was actually lost was a merge that replaced `rpa.rs` wholesale -- tests
+/// included. A test inside the file cannot guard the file. This check reads
+/// the tree from outside it, so reverting the policy fails the architecture
+/// job instead of waiting for someone to read a 400-line diff.
+fn cashcode_policy(root: &Path, failures: &mut Vec<String>) {
+    // The refusal itself, and the fact that `decode` reaches it. Refusing by
+    // prefix has to happen *before* the checksum: a legacy string is
+    // perfectly well formed, so a checksum will not reject it.
+    let rpa_path = root.join("crates/optn-core/src/rpa.rs");
+    let rpa = rust_code_only(&read(&rpa_path));
+    for required in ["fn is_legacy_paycode", "if is_legacy_paycode(code)"] {
+        if !rpa.contains(required) {
+            failures.push(format!(
+                "crates/optn-core/src/rpa.rs no longer contains '{required}'; PR #89 made \
+ Cash Code exclusive and decoding a legacy PayCode under compressed semantics \
+ pays an address its recipient cannot scan for"
+            ));
+        }
+    }
+
+    // No surface may offer a way to *produce* one either. An encoder able to
+    // stamp the prefix is a way to manufacture the very strings `decode`
+    // refuses, which turns the refusal into an inconvenience.
+    let mut scanned = Vec::new();
+    for directory in ["crates", "src"] {
+        scanned.extend(walk_files(&root.join(directory)));
+    }
+    for path in scanned {
+        let is_source = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| matches!(extension, "rs" | "ts" | "tsx"));
+        if !is_source {
+            continue;
+        }
+        let code = rust_code_only(&read(&path));
+        for api in LEGACY_PAYCODE_APIS {
+            if code.contains(api) {
+                failures.push(format!(
+                    "{} declares or uses legacy PayCode emit API '{api}'; OPTN emits \
+ cashcode: only, and an encoder for the legacy prefix defeats the \
+ refusal in optn-core's decode",
+                    path.display()
+                ));
+            }
+        }
+    }
+}
+
+/// The hostnames of the public explorers OPTN can offer.
+///
+/// Any one of these outside the core module means a surface built a link for
+/// itself, which is how the renderer used to hand a txid to a public site
+/// while the wallet was set to use only the holder's own infrastructure.
+/// Only hosts that are explorers and nothing else. `bch.ninja` is deliberately
+/// absent: `chipnet.bch.ninja` is also an Electrum server this wallet dials,
+/// so naming it would flag chain configuration that has nothing to do with
+/// explorer links.
+const PUBLIC_EXPLORER_HOSTS: &[&str] = &[
+    "bchexplorer.cash",
+    "explorer.imaginary.cash",
+    "blockchair.com",
+    "3xpl.com",
+    "tokenexplorer.cash",
+];
+
+/// #75 row 15: one place decides whether an explorer link may be built.
+///
+/// The rule is not "explorers are dangerous" -- an explorer link is navigation
+/// and nothing here touches consensus. It is that the decision is governed by
+/// the connection policy, and a second copy of that decision is how a policy
+/// ends up enforced on one surface and not another. That is not hypothetical:
+/// `src/utils/servers/explorers.ts` held one, with no notion of the policy at
+/// all.
+fn explorer_policy(root: &Path, failures: &mut Vec<String>) {
+    let core = root.join("crates/optn-core/src/explorer.rs");
+    let code = rust_code_only(&read(&core));
+    for required in ["ExplorerPolicy::UserOwnedOnly", "PublicExplorerRefused"] {
+        if !code.contains(required) {
+            failures.push(format!(
+                "crates/optn-core/src/explorer.rs no longer contains '{required}'; without \
+ the fail-closed arm an own-infrastructure-only wallet hands transaction \
+ ids to a public website"
+            ));
+        }
+    }
+
+    let allowed = [
+        Path::new("crates/optn-core/src/explorer.rs"),
+        // Names them to assert this guard works.
+        Path::new("xtask/src/main.rs"),
+    ];
+    let mut scanned = Vec::new();
+    for directory in ["crates", "src", "src-tauri"] {
+        scanned.extend(walk_files(&root.join(directory)));
+    }
+    scanned.extend(walk_files(&root.join("xtask")));
+    for path in scanned {
+        let is_source = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| matches!(extension, "rs" | "ts" | "tsx"));
+        if !is_source {
+            continue;
+        }
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        if allowed.contains(&relative) {
+            continue;
+        }
+        if relative.starts_with("crates/optn-runtime/src/explorer.rs") {
+            continue;
+        }
+        // A test may name a host, to assert what the core produced or to print
+        // a link for whoever is reading the run. Nothing a test builds reaches
+        // a holder, so the rule that matters here does not apply to it.
+        let is_test = relative.components().any(|component| {
+            matches!(
+                component.as_os_str().to_str(),
+                Some("tests") | Some("__tests__")
+            )
+        }) || relative
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(".test.") || name.contains(".live."));
+        if is_test {
+            continue;
+        }
+        // Deliberately NOT `rust_code_only`: it treats the `//` in `https://`
+        // as the start of a line comment and eats the rest of the line, so a
+        // hardcoded explorer URL -- the exact thing being looked for -- is
+        // invisible to it. Whole comment lines are dropped instead, which is
+        // enough to let prose name an explorer while code may not.
+        let code = code_lines_only(&read(&path));
+        for host in PUBLIC_EXPLORER_HOSTS {
+            if code.contains(host) {
+                failures.push(format!(
+                    "{} names the public explorer '{host}'; explorer URLs are built in \
+ crates/optn-core/src/explorer.rs so the connection policy governs \
+ them on every surface",
+                    relative.display()
+                ));
+            }
+        }
+    }
+}
+
+/// Source with whole-line comments removed.
+///
+/// Coarse on purpose. `rust_code_only` strips string literals, which is right
+/// for an API-name check and wrong for a URL check: the URL lives *in* the
+/// string. This keeps strings and drops only lines that are entirely comment,
+/// so a doc comment may discuss an explorer while a line of code may not name
+/// one.
+fn code_lines_only(source: &str) -> String {
+    source
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !(trimmed.starts_with("//")
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*')
+                || trimmed.starts_with("#"))
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        )
+}
+
+/// A `cfg`-gated module's commands must be gated the same way in the handler
+/// list.
+///
+/// `generate_handler!` does accept `#[cfg(...)]` on its entries -- `clipboard`
+/// and `hw` rely on it. What it cannot do is resolve `app_update::command` on a
+/// target where `mod app_update;` was compiled out. The two have to agree, and
+/// when they disagree the failure appears only on Android and iOS, which a
+/// typical dev box cannot build: there is no NDK, so the first sight of it is a
+/// red CI run twenty minutes later.
+///
+/// This is not hypothetical. Inserting `mod app_update;` directly beneath an
+/// existing `#[allow(dead_code)] #[cfg(desktop)]` pair silently took both
+/// attributes from `mod menu;` below it, breaking both mobile targets two ways
+/// at once: the new module vanished from them, and the old one appeared and
+/// failed on `tauri::menu`.
+/// Modules that must stay behind the cfg they are behind today.
+///
+/// Each of these compiles only on the platforms named: `menu` reaches for
+/// `tauri::menu`, `clipboard`/`hw`/`platform` use desktop-only APIs, and
+/// `platform_mobile` the reverse. Ungating one breaks a target that cannot be
+/// built on a normal dev box -- there is no Android NDK here -- so the failure
+/// arrives as a red CI run rather than a compile error.
+///
+/// The list exists because losing one of these gates is easy and silent: an
+/// item inserted between an attribute and its `mod` takes the attribute with
+/// it, leaving the module below ungated and the module above wrongly gated.
+/// That happened to `menu` and `app_update` in one edit.
+const PLATFORM_GATED_MODULES: &[(&str, &str)] = &[
+    ("menu", "cfg(desktop)"),
+    ("clipboard", "cfg(desktop)"),
+    ("hw", "cfg(desktop)"),
+    ("platform", "cfg(desktop)"),
+    ("app_update", "cfg(desktop)"),
+    ("platform_mobile", "cfg(mobile)"),
+];
+
+fn tauri_handler_modules(root: &Path, failures: &mut Vec<String>) {
+    let path = root.join("src-tauri/src/lib.rs");
+    let source = read(&path);
+    let Some(start) = source.find("tauri::generate_handler![") else {
+        failures.push(
+ "src-tauri/src/lib.rs has no generate_handler! list; if the command surface moved, update this check with it"
+ .to_string(),
+        );
+        return;
+    };
+
+    // Modules whose declaration carries a cfg, and the cfg text itself.
+    let lines: Vec<&str> = source.lines().collect();
+    let mut gated: Vec<(String, String)> = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed
+            .strip_prefix("pub mod ")
+            .or_else(|| trimmed.strip_prefix("mod "))
+        else {
+            continue;
+        };
+        let Some(name) = rest.strip_suffix(';') else {
+            continue;
+        };
+        for previous in lines[..index].iter().rev() {
+            let previous = previous.trim();
+            if previous.is_empty() || !previous.starts_with("#[") {
+                break;
+            }
+            if let Some(at) = previous.find("cfg(") {
+                let cfg = previous[at..].trim_end_matches(']').to_string();
+                gated.push((name.to_string(), cfg));
+                break;
+            }
+        }
+    }
+
+    for (module, required) in PLATFORM_GATED_MODULES {
+        match gated.iter().find(|(name, _)| name == module) {
+ Some((_, actual)) if actual == required => {}
+ Some((_, actual)) => failures.push(format!(
+ "src-tauri/src/lib.rs gates `mod {module};` with `#[{actual}]`, but it must be `#[{required}]`"
+ )),
+ None => failures.push(format!(
+ "src-tauri/src/lib.rs no longer gates `mod {module};` with `#[{required}]`. It compiles on those platforms only, so ungating it breaks a target this machine cannot build -- check whether an inserted item took the attribute"
+ )),
+        }
+    }
+
+    // Each handler entry, with whatever cfg attribute sits directly above it.
+    let list = &source[start..];
+    let list_end = list.find("])").unwrap_or(list.len());
+    let entries: Vec<&str> = list[..list_end].lines().skip(1).collect();
+    for (index, entry) in entries.iter().enumerate() {
+        let entry = entry.trim().trim_end_matches(',');
+        if entry.is_empty() || entry.starts_with("//") || entry.starts_with("#[") {
+            continue;
+        }
+        let Some((module, _)) = entry.split_once("::") else {
+            continue;
+        };
+        let Some((_, required)) = gated.iter().find(|(name, _)| name == module) else {
+            continue;
+        };
+        let attribute = entries[..index]
+            .iter()
+            .rev()
+            .map(|line| line.trim())
+            .take_while(|line| line.starts_with("#["))
+            .find(|line| line.contains("cfg("));
+        let satisfied = attribute
+            .and_then(|line| line.find("cfg(").map(|at| line[at..].trim_end_matches(']')))
+            .is_some_and(|cfg| cfg == required);
+        if !satisfied {
+            failures.push(format!(
+ "src-tauri/src/lib.rs declares `mod {module};` behind `#[{required}]`, but the generate_handler! entry `{entry}` is not gated the same way. On a target where the module is compiled out the macro still tries to resolve it, which fails on Android and iOS only"
+ ));
+        }
+    }
+}
+
+fn compare_host_blocks(
+    left_name: &str,
+    left: &[String],
+    right_name: &str,
+    right: &[String],
+    failures: &mut Vec<String>,
+) {
+    let differences: Vec<(usize, &str, &str)> = left
+        .iter()
+        .zip(right.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(index, (a, b))| (index, a.as_str(), b.as_str()))
+        .collect();
+    if left.len() != right.len() {
+        failures.push(format!(
+ "{left_name} and {right_name} host blocks are {} and {} lines; swapping renderers must \
+ be one line, so they have to stay the same block",
+ left.len(),
+ right.len()
+        ));
+    } else if differences.len() != 1 {
+        failures.push(format!(
+ "{left_name} and {right_name} host blocks differ on {} lines; only the `type Ui` alias \
+ may differ, or swapping renderers is not one line: {:?}",
+ differences.len(),
+ differences
+        ));
+    } else if !differences[0].1.trim_start().starts_with("type Ui<T> =") {
+        failures.push(format!(
+ "the one line that differs between {left_name} and {right_name} host blocks is not the \
+ renderer alias: {:?}",
+ differences[0]
+        ));
+    }
 }
 
 /// The shared host block a renderer crate carries, if it carries one.
@@ -727,11 +1233,11 @@ for tab in tabs {\n\
         // A guard that fails on the import is one worth keeping, so this checks
         // both halves: prose passes, code does not.
         let prose = r##"
-            //! SwiftFulcrum is an independent implementation, named here to
-            //! explain why nothing in this crate reaches for it.
-            /* opalbase /* nested */ is likewise only discussed */
-            fn label() -> &'static str { "SwiftFulcrum" }
-            fn raw() -> &'static str { r#"opalcrypto"# }
+ //! SwiftFulcrum is an independent implementation, named here to
+ //! explain why nothing in this crate reaches for it.
+ /* opalbase /* nested */ is likewise only discussed */
+ fn label() -> &'static str { "SwiftFulcrum" }
+ fn raw() -> &'static str { r#"opalcrypto"# }
         "##;
         let stripped = rust_code_only(prose).to_lowercase();
         for dependency in APPLE_REFERENCE_DEPENDENCIES {

@@ -1,0 +1,20 @@
+[package]
+name = "optn-ui-slint"
+version = "1.7.3"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Native Network Sources pilot using OPTN shared Rust policy and storage"
+
+# Separate from the shipping matrix while the native renderer is evaluated.
+[dependencies]
+optn-app = { path = "../optn-app", version = "=1.7.3" }
+optn-transport = { path = "../optn-transport", version = "=1.7.3" }
+optn-transport-native = { path = "../optn-transport-native", version = "=1.7.3" }
+slint = { version = "=1.18.0", default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-18"] }
+
+[build-dependencies]
+slint-build = "=1.18.0"
+
+[[bin]]
+name = "optn-slint-pilot"
+path = "src/main.rs"

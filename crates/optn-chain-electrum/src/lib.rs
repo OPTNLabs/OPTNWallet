@@ -505,11 +505,13 @@ impl ChainBackend for ElectrumBackend {
                     from_height,
                 } => self.wallet_refresh(interests, *from_height).await,
                 ChainRequest::TransactionLookup { txid } => self.transaction_lookup(*txid).await,
+                ChainRequest::OutpointSpentness { .. } => Err(ChainBackendError::Unsupported),
                 ChainRequest::Broadcast { raw_tx, txid } => self.broadcast(raw_tx, *txid).await,
                 ChainRequest::HeaderSync {
                     start_height,
                     count,
                 } => self.header_sync(*start_height, *count).await,
+                ChainRequest::HeaderSyncFromLocator { .. } => Err(ChainBackendError::Unsupported),
                 ChainRequest::HistoricalHeaderProof {
                     height,
                     checkpoint_height,

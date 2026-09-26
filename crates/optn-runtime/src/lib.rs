@@ -9,6 +9,7 @@
 //! The runtime does not choose an executor for the host. `AppRuntime::new`
 //! returns a driver future which Tauri, tests, or another shell can spawn.
 
+mod airgap;
 /// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
 pub mod authchain;
 /// Provenance-preserving normalization of upstream node/server bootstrap feeds.
@@ -20,6 +21,7 @@ pub mod capability_planner;
 pub mod chain;
 /// Runtime-owned operation-aware provider selection and bounded failover.
 pub mod chain_service;
+pub mod coin_holds;
 /// Query-before-apply gate for lossy event-stream sequence gaps.
 pub mod event_recovery;
 /// Provider-neutral normalized chain event streams. Event delivery is never
@@ -40,6 +42,8 @@ pub mod network_config;
 pub mod reconciliation;
 /// Native-only Cash Code discovery and public spending recipes.
 pub mod rpa_receive;
+pub mod rpc_credentials;
+pub mod source_selection;
 /// Progressive capability-route wallet synchronization.
 pub mod sync_worker;
 /// Broadcast state tracking. Timeout/offline ambiguity is preserved rather than
@@ -54,6 +58,7 @@ pub mod wallet_birthday;
 pub mod wallet_checkpoint;
 /// Private ciphertext sessions and password verification shared by native hosts.
 pub mod wallet_security;
+pub mod wallet_spend;
 /// Session-bound publication of provider observations into application state.
 pub mod wallet_sync;
 
@@ -115,6 +120,11 @@ pub struct AppRuntime {
 }
 
 enum RuntimeRequest {
+    Airgap(
+        optn_transport::AirgapRequest,
+        u64,
+        oneshot::Sender<Result<optn_transport::AirgapResponse, TransportError>>,
+    ),
     WalletSync(WalletSyncRequest),
     WalletOperation(
         optn_app::AuthScope,
@@ -122,6 +132,7 @@ enum RuntimeRequest {
         oneshot::Sender<Result<optn_core::hd::Wallet, TransportError>>,
     ),
     Action(AppAction, oneshot::Sender<()>),
+    Observation(AppAction, oneshot::Sender<()>),
     Security(
         WalletSecurityRequest,
         u64,
@@ -130,6 +141,7 @@ enum RuntimeRequest {
 }
 
 pub struct AppRuntimeDriver {
+    airgap: airgap::AirgapSession,
     action_rx: mpsc::Receiver<RuntimeRequest>,
     state_tx: watch::Sender<AppState>,
     event_tx: broadcast::Sender<AppEvent>,
@@ -157,6 +169,12 @@ impl DirectTransport {
 }
 
 impl AppTransport for DirectTransport {
+    fn airgap<'a>(
+        &'a self,
+        request: optn_transport::AirgapRequest,
+    ) -> TransportFuture<'a, optn_transport::AirgapResponse> {
+        Box::pin(async move { self.runtime.airgap(request).await })
+    }
     fn wallet_security<'a>(
         &'a self,
         request: WalletSecurityRequest,
@@ -221,6 +239,7 @@ impl AppRuntime {
                 wallet_sync_rx,
             },
             AppRuntimeDriver {
+                airgap: Default::default(),
                 action_rx,
                 state_tx,
                 event_tx,
@@ -256,6 +275,28 @@ impl AppRuntime {
         let (applied_tx, applied_rx) = oneshot::channel();
         self.action_tx
             .send(RuntimeRequest::Action(action, applied_tx))
+            .await
+            .map_err(|_| RuntimeStopped)?;
+        applied_rx.await.map_err(|_| RuntimeStopped)
+    }
+
+    /// Publish a wallet observation the interface is not allowed to make.
+    ///
+    /// [`Self::dispatch`] uses `reduce_intent`, which refuses
+    /// `SetTokenIdentity`. Hash-verified BCMR results enter through this path.
+    pub async fn observe(&self, action: AppAction) -> Result<(), RuntimeStopped> {
+        if !matches!(
+            action,
+            AppAction::SetTokenIdentity { .. }
+                | AppAction::SetFusionPhase(_)
+                | AppAction::SetTorReady(_)
+                | AppAction::InsertCoin(_)
+        ) {
+            return Err(RuntimeStopped);
+        }
+        let (applied_tx, applied_rx) = oneshot::channel();
+        self.action_tx
+            .send(RuntimeRequest::Observation(action, applied_tx))
             .await
             .map_err(|_| RuntimeStopped)?;
         applied_rx.await.map_err(|_| RuntimeStopped)
@@ -324,6 +365,11 @@ impl AppRuntimeDriver {
             security.reconcile(&self.state);
         }
         self.wallet_sync.project_status(&mut self.state);
+        self.airgap.reconcile(
+            &self.state,
+            self.revocation.load(Ordering::SeqCst),
+            self.wallet_sync.coins_are_fresh(),
+        );
         publish_state(&mut self.state, &self.state_tx);
         let _ = self.event_tx.send(event);
     }
@@ -354,6 +400,9 @@ impl AppRuntimeDriver {
             self.expire_session();
             let now_ms = self.now_ms();
             match request {
+                RuntimeRequest::Airgap(request, generation, reply) => {
+                    self.handle_airgap(request, generation, reply);
+                }
                 RuntimeRequest::WalletSync(request) => {
                     self.wallet_sync.handle(
                         request,
@@ -403,10 +452,17 @@ impl AppRuntimeDriver {
                         continue;
                     }
                     let is_query = matches!(request, WalletSecurityRequest::Status);
+                    let changes_birthday = matches!(
+                        request,
+                        WalletSecurityRequest::SetBirthday { .. }
+                            | WalletSecurityRequest::ClearRescan { .. }
+                    );
+                    let previous_restore_state = self.wallet_sync.restore_state().clone();
                     let opens_wallet = matches!(
                         request,
                         WalletSecurityRequest::Open { .. }
                             | WalletSecurityRequest::Create { .. }
+                            | WalletSecurityRequest::ImportWatchOnly { .. }
                             | WalletSecurityRequest::UnlockBiometric { .. }
                     );
                     let authenticates =
@@ -438,6 +494,7 @@ impl AppRuntimeDriver {
                             request,
                             now_ms,
                             self.wallet_sync.reconciliation(),
+                            self.wallet_sync.header_progress(),
                         )
                     } else {
                         Err(TransportError::Unsupported)
@@ -446,6 +503,14 @@ impl AppRuntimeDriver {
                     let revoked = generation != self.revocation.load(Ordering::SeqCst)
                         || (!is_query && reply.is_closed())
                         || (!opens_wallet && previous_lock.idle_should_lock(finished_ms));
+                    let birthday_restore_state = if !revoked && result.is_ok() && changes_birthday {
+                        self.security
+                            .as_ref()
+                            .and_then(|security| security.restore_state())
+                            .cloned()
+                    } else {
+                        None
+                    };
                     // Storage may already have committed a password change. Keep its state
                     // coherent even if an OS enrollment refresh subsequently returned an error.
                     self.state = candidate;
@@ -457,6 +522,13 @@ impl AppRuntimeDriver {
                                 .into(),
                         ))
                     } else {
+                        if let Some(restore_state) = birthday_restore_state {
+                            if restore_state != previous_restore_state {
+                                self.revocation.fetch_add(1, Ordering::SeqCst);
+                                self.state.spend = None;
+                                self.wallet_sync.birthday_changed(restore_state);
+                            }
+                        }
                         if result.is_ok()
                             && (opens_wallet
                                 || authenticates
@@ -500,12 +572,19 @@ impl AppRuntimeDriver {
                     };
                     let _ = reply.send(result);
                 }
+                RuntimeRequest::Observation(action, applied) => {
+                    if let Some(event) = self.state.reduce(action) {
+                        self.publish(event);
+                    }
+                    let _ = applied.send(());
+                }
                 RuntimeRequest::Action(action, applied) => {
                     if self.security.is_some()
                         && matches!(
                             action,
                             AppAction::OpenCreatedWallet { .. }
                                 | AppAction::OpenImportedWallet { .. }
+                                | AppAction::OpenWatchOnlyWallet(_)
                         )
                     {
                         self.state.notice = Some(
@@ -553,8 +632,17 @@ impl AppRuntimeDriver {
                         AppAction::FreezeCoin(_)
                             | AppAction::UnfreezeCoin(_)
                             | AppAction::SetCoinLabel { .. }
+                            | AppAction::RequestRescanFrom { .. }
                     )
                     .then(|| self.state.clone());
+                    let requested_rescan_height = match &action {
+                        AppAction::RequestRescanFrom { height } => Some(*height),
+                        _ => None,
+                    };
+                    let mut annotation_restore_state = self.wallet_sync.restore_state().clone();
+                    if let Some(height) = requested_rescan_height {
+                        annotation_restore_state.request_rescan_from(height);
+                    }
                     let annotation_generation = self.revocation.load(Ordering::SeqCst);
                     let mut event = if self.wallet_sync.requires_fresh_coins(&action, &self.state) {
                         self.state.spend = None;
@@ -577,13 +665,24 @@ impl AppRuntimeDriver {
                             event = Some(self.wallet_sync.persist_annotation(
                                 &mut self.state,
                                 previous,
-                                |app, sync| security.persist_checkpoint(app, sync),
+                                &annotation_restore_state,
+                                |app, sync, restore_state, progress| {
+                                    security.persist_checkpoint(app, sync, restore_state, progress)
+                                },
                                 |app| guard.allows(app, applied.is_closed()),
                             ));
                             if event == Some(AppEvent::CoinsChanged) {
                                 security.checkpoint_published();
                             }
                         }
+                    }
+                    if event == Some(AppEvent::CoinsChanged) {
+                        self.wallet_sync
+                            .install_restore_state(annotation_restore_state);
+                    }
+                    if requested_rescan_height.is_some() && event == Some(AppEvent::CoinsChanged) {
+                        self.state.spend = None;
+                        self.wallet_sync.rescan_requested();
                     }
                     // Storage may have crossed the idle deadline. Lock and drop the
                     // private session before publishing any annotation result.
@@ -725,6 +824,74 @@ mod tests {
         );
         state = transport.snapshot().await.unwrap();
         assert_eq!(state.theme, ThemeMode::Dark);
+    }
+
+    /// Native CLI actions and renderer wire actions share session revocation.
+    #[tokio::test]
+    async fn fusion_consent_is_revoked_across_interface_and_wallet_boundaries() {
+        use optn_app::fusion::{FusionPhase, FusionSession, FusionWaitReason};
+        use optn_app::{AppSurface, FeatureFlag};
+        use optn_transport::{WireAction, WireState};
+
+        for boundary in [
+            AppAction::LockWallet,
+            AppAction::SetNetwork(optn_core::network::Network::Chipnet),
+            AppAction::SetSurface(AppSurface::Extension),
+            AppAction::SetAutoFusionEnabled(false),
+            AppAction::SetFeatureEnabled {
+                flag: FeatureFlag::CashFusion,
+                enabled: false,
+            },
+            AppAction::CancelFusion,
+        ] {
+            let mut state = AppState::for_surface(AppSurface::Desktop);
+            state.reduce(AppAction::OpenCreatedWallet {
+                name: "session-boundary".into(),
+                receive_address: "bitcoincash:qq0000000000000000000000000000000000000000".into(),
+                account_path: "m/44'/145'/0'".into(),
+            });
+            state.reduce(AppAction::SetAutoFusionEnabled(true));
+            let runtime = AppRuntime::spawn(state);
+            let renderer = DirectTransport::new(runtime.clone());
+            // CLI/native intent arms; renderer sees the same state.
+            runtime.dispatch(AppAction::StartFusion).await.unwrap();
+            assert!(renderer.snapshot().await.unwrap().fusion.session_armed);
+            for forged in [
+                AppAction::SetTorReady(true),
+                AppAction::SetFusionPhase(FusionPhase::Completed {
+                    txid: "ab".repeat(32),
+                    fused_sats: 9_000,
+                    at_ms: 1,
+                }),
+            ] {
+                renderer
+                    .dispatch(AppAction::try_from(WireAction::from(forged)).unwrap())
+                    .await
+                    .unwrap();
+            }
+            assert!(!runtime.state().tor_ready);
+            assert_eq!(runtime.state().fusion.rounds_completed, 0);
+            renderer
+                .dispatch(AppAction::try_from(WireAction::from(boundary.clone())).unwrap())
+                .await
+                .unwrap();
+            let snapshot = AppState::try_from(WireState::from(&runtime.state())).unwrap();
+            assert!(!snapshot.fusion.session_armed, "{boundary:?}");
+            assert_eq!(snapshot.fusion.phase, FusionPhase::Idle, "{boundary:?}");
+        }
+
+        // A waiting paid service must still offer cancellation in either UI.
+        let waiting = FusionSession {
+            session_armed: true,
+            phase: FusionPhase::Waiting {
+                reason: FusionWaitReason::Cooldown,
+                until_ms: 20_000,
+            },
+            ..FusionSession::new()
+        };
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.fusion = waiting;
+        assert!(optn_app::fusion_view_model(&state).can_cancel);
     }
 
     #[tokio::test]

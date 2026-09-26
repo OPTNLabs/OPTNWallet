@@ -18,7 +18,7 @@ import {
   setFeeMode,
   setCustomFeeSatPerByte,
 } from '../../state/slices/preferencesSlice';
-import { EXPLORER_PRESETS } from '../../utils/servers/explorers';
+import { getExplorerPresets } from '../../utils/servers/explorers';
 import {
   getUserServers,
   addUserServer,
@@ -33,7 +33,11 @@ import {
   removeUserNode,
 } from '../../utils/servers/userNodes';
 import { Bip37NodeRow } from './Bip37NodeSettings';
-import { ServerPrivacySettings } from './ServerPrivacySettings';
+import { ChainSourcesSettings } from './ChainSourcesSettings';
+import { NostrSettings } from '../nostr/NostrSettings';
+import { CashFusionSettings } from './CashFusionSettings';
+import { WalletBirthdaySettings } from './WalletBirthdaySettings';
+import { selectWalletId } from '../../state/slices/walletSlice';
 import {
   getBackend,
   setBackend,
@@ -64,11 +68,14 @@ function readLastHealthy(): string {
   return readStorageItem(getPreferredStorage(), LAST_HEALTHY_KEY) ?? '';
 }
 
-export const ServerSettings: React.FC = () => {
+export const ServerSettings: React.FC<{
+  backRef?: React.MutableRefObject<(() => void) | null>;
+}> = ({ backRef }) => {
   const dispatch = useDispatch();
   const { t } = useI18n();
   const desktop = isDesktopPlatform();
   const currentNetwork = useSelector(selectCurrentNetwork);
+  const walletId = useSelector(selectWalletId);
   const defaultServers = getElectrumServers(currentNetwork);
   const explorerId = useSelector(selectExplorerId);
   const explorerCustom = useSelector(selectExplorerCustom);
@@ -157,13 +164,14 @@ export const ServerSettings: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (desktop) return;
     const saved = readUserServer();
     if (saved) {
       setCustomServer(saved);
       setAutoMode(false);
     }
     refreshCurrent();
-  }, [refreshCurrent]);
+  }, [desktop, refreshCurrent]);
 
   const handleConnect = async () => {
     setConnecting(true);
@@ -254,6 +262,124 @@ export const ServerSettings: React.FC = () => {
       setConnecting(false);
     }
   };
+
+  const explorerSettings = (
+    <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
+      <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
+        {t('server.blockExplorer')}
+      </p>
+      <p className="text-xs wallet-muted">{t('server.explorerDescription')}</p>
+      <select
+        value={explorerId}
+        onChange={(e) => dispatch(setExplorerId(e.target.value))}
+        className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+      >
+        {getExplorerPresets().map((e) => (
+          <option key={e.id} value={e.id}>
+            {e.label}
+          </option>
+        ))}
+        <option value="custom">{t('server.custom')}</option>
+      </select>
+
+      {explorerId === 'custom' && (
+        <div className="flex flex-col gap-2">
+          <input
+            type="text"
+            value={customTx}
+            onChange={(e) => setCustomTx(e.target.value)}
+            placeholder={t('server.txUrlPlaceholder')}
+            className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+          />
+          <input
+            type="text"
+            value={customAddr}
+            onChange={(e) => setCustomAddr(e.target.value)}
+            placeholder={t('server.addressUrlPlaceholder')}
+            className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+          />
+          <p className="text-[10px] wallet-muted">
+            {t('server.placeholderHelp')}
+          </p>
+          <button
+            onClick={() =>
+              dispatch(setExplorerCustom({ tx: customTx, address: customAddr }))
+            }
+            disabled={!customTx.includes('{txid}')}
+            className="self-start rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
+          >
+            {t('server.saveCustom')}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  const feeSettings = (
+    <>
+      {/* Transaction fee */}
+      <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
+        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
+          {t('server.transactionFee')}
+        </p>
+        <p className="text-xs wallet-muted">{t('server.feeDescription')}</p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => dispatch(setFeeMode('auto'))}
+            className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+              feeMode === 'auto'
+                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+                : 'border-[var(--wallet-border)] wallet-muted'
+            }`}
+          >
+            {t('server.automatic')}
+          </button>
+          <button
+            type="button"
+            onClick={() => dispatch(setFeeMode('custom'))}
+            className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+              feeMode === 'custom'
+                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+                : 'border-[var(--wallet-border)] wallet-muted'
+            }`}
+          >
+            {t('server.customFee')}
+          </button>
+        </div>
+        {feeMode === 'custom' && (
+          <label className="flex items-center gap-2 text-sm wallet-text-strong">
+            <input
+              type="number"
+              min={1}
+              step={0.1}
+              value={customFeeSatPerByte}
+              onChange={(e) =>
+                dispatch(setCustomFeeSatPerByte(Number(e.target.value)))
+              }
+              className="w-28 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+            />
+            <span className="text-xs wallet-muted">{t('server.feeUnit')}</span>
+          </label>
+        )}
+      </div>
+    </>
+  );
+
+  if (desktop) {
+    return (
+      <ChainSourcesSettings
+        explorerSettings={explorerSettings}
+        feeSettings={feeSettings}
+        fusionSettings={<CashFusionSettings variant="servers" />}
+        nostrSettings={<NostrSettings variant="relays" />}
+        birthdaySettings={
+          <WalletBirthdaySettings key={walletId} walletId={walletId} />
+        }
+        backRef={backRef}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -463,109 +589,9 @@ export const ServerSettings: React.FC = () => {
         {addError && <p className="text-[10px] text-red-400">{addError}</p>}
       </div>
 
-      {/* Block explorer */}
-      <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
-        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
-          {t('server.blockExplorer')}
-        </p>
-        <p className="text-xs wallet-muted">
-          {t('server.explorerDescription')}
-        </p>
-        <select
-          value={explorerId}
-          onChange={(e) => dispatch(setExplorerId(e.target.value))}
-          className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-        >
-          {EXPLORER_PRESETS.map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.label}
-            </option>
-          ))}
-          <option value="custom">{t('server.custom')}</option>
-        </select>
+      {!desktop && explorerSettings}
 
-        {explorerId === 'custom' && (
-          <div className="flex flex-col gap-2">
-            <input
-              type="text"
-              value={customTx}
-              onChange={(e) => setCustomTx(e.target.value)}
-              placeholder={t('server.txUrlPlaceholder')}
-              className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-            />
-            <input
-              type="text"
-              value={customAddr}
-              onChange={(e) => setCustomAddr(e.target.value)}
-              placeholder={t('server.addressUrlPlaceholder')}
-              className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-            />
-            <p className="text-[10px] wallet-muted">
-              {t('server.placeholderHelp')}
-            </p>
-            <button
-              onClick={() =>
-                dispatch(
-                  setExplorerCustom({ tx: customTx, address: customAddr })
-                )
-              }
-              disabled={!customTx.includes('{txid}')}
-              className="self-start rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
-            >
-              {t('server.saveCustom')}
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Transaction fee */}
-      <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
-        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
-          {t('server.transactionFee')}
-        </p>
-        <p className="text-xs wallet-muted">{t('server.feeDescription')}</p>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => dispatch(setFeeMode('auto'))}
-            className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
-              feeMode === 'auto'
-                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
-                : 'border-[var(--wallet-border)] wallet-muted'
-            }`}
-          >
-            {t('server.automatic')}
-          </button>
-          <button
-            type="button"
-            onClick={() => dispatch(setFeeMode('custom'))}
-            className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
-              feeMode === 'custom'
-                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
-                : 'border-[var(--wallet-border)] wallet-muted'
-            }`}
-          >
-            {t('server.customFee')}
-          </button>
-        </div>
-        {feeMode === 'custom' && (
-          <label className="flex items-center gap-2 text-sm wallet-text-strong">
-            <input
-              type="number"
-              min={1}
-              step={0.1}
-              value={customFeeSatPerByte}
-              onChange={(e) =>
-                dispatch(setCustomFeeSatPerByte(Number(e.target.value)))
-              }
-              className="w-28 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-            />
-            <span className="text-xs wallet-muted">{t('server.feeUnit')}</span>
-          </label>
-        )}
-      </div>
-
-      {desktop && <ServerPrivacySettings />}
+      {feeSettings}
     </div>
   );
 };

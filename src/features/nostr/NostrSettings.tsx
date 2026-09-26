@@ -31,7 +31,9 @@ import { useWalletConfirm } from '../../components/WalletConfirmDialog';
 import { isDefaultNostrRelay } from '../../platform/desktop/nostr/defaultRelays';
 import { useI18n } from '../../i18n/useI18n';
 
-export const NostrSettings: React.FC = () => {
+export const NostrSettings: React.FC<{ variant?: 'all' | 'relays' }> = ({
+  variant = 'all',
+}) => {
   const dispatch = useDispatch();
   const { t } = useI18n();
   const confirm = useWalletConfirm();
@@ -49,11 +51,9 @@ export const NostrSettings: React.FC = () => {
   const [draftError, setDraftError] = useState('');
   const [relayStatus, setRelayStatus] = useState<Record<string, boolean>>({});
   const [checking, setChecking] = useState(false);
-  /** How often to re-probe while this screen is open (remote relays flap). */
-  const RELAY_HEALTH_INTERVAL_MS = 45_000;
 
   useEffect(() => {
-    if (!enabled || walletId <= 0) return;
+    if (variant === 'relays' || !enabled || walletId <= 0) return;
     myIdentity(walletId)
       .then(async (id) => {
         setNpub(id.npub);
@@ -67,10 +67,10 @@ export const NostrSettings: React.FC = () => {
         setDisplayName(publishedName || mine.name || '');
       })
       .catch((e) => setIdErr(e instanceof Error ? e.message : String(e)));
-  }, [enabled, walletId, relays]);
+  }, [variant, enabled, walletId, relays]);
 
-  // Auto health probe: on open, on interval, on tab focus — not only Sync click.
-  // We cannot keep third-party relays "up"; we only re-measure reachability.
+  // Legacy Chat diagnostics remain explicit. The Network directory only edits
+  // saved relay settings; it must not use this direct-WSS probe as Tor evidence.
   const refreshRelays = useCallback(() => {
     if (relays.length === 0) return;
     setChecking(true);
@@ -80,26 +80,6 @@ export const NostrSettings: React.FC = () => {
       .then(setRelayStatus)
       .finally(() => setChecking(false));
   }, [relays]);
-
-  useEffect(() => {
-    if (!enabled || relays.length === 0) return;
-    let cancelled = false;
-    const run = () => {
-      if (cancelled) return;
-      refreshRelays();
-    };
-    run();
-    const interval = window.setInterval(run, RELAY_HEALTH_INTERVAL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') run();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [enabled, relays, refreshRelays]);
 
   const activeCount = relays.filter((r) => relayStatus[r] === true).length;
 
@@ -117,98 +97,79 @@ export const NostrSettings: React.FC = () => {
   return (
     <div className="flex flex-col gap-4">
       {/* Enable toggle */}
-      <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3">
-        <div>
-          <p className="text-sm font-semibold wallet-text-strong">
-            {t('nostr.chat')}
-          </p>
-          <p className="mt-0.5 text-[11px] wallet-muted">
-            {t('nostr.dmDescription')}
-          </p>
+      {variant === 'all' && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3">
+          <div>
+            <p className="text-sm font-semibold wallet-text-strong">
+              {t('nostr.chat')}
+            </p>
+            <p className="mt-0.5 text-[11px] wallet-muted">
+              {t('nostr.dmDescription')}
+            </p>
+          </div>
+          <button
+            onClick={() => dispatch(setNostrChatEnabled(!enabled))}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+              enabled
+                ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
+                : 'wallet-surface-strong border-[var(--wallet-border)]'
+            }`}
+            aria-label={`${enabled ? t('nostr.disable') : t('nostr.enable')} ${t('nostr.chat')}`}
+          >
+            <span
+              className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`}
+            />
+          </button>
         </div>
-        <button
-          onClick={() => dispatch(setNostrChatEnabled(!enabled))}
-          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
-            enabled
-              ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
-              : 'wallet-surface-strong border-[var(--wallet-border)]'
-          }`}
-          aria-label={`${enabled ? t('nostr.disable') : t('nostr.enable')} ${t('nostr.chat')}`}
-        >
-          <span
-            className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`}
-          />
-        </button>
-      </div>
+      )}
 
-      {enabled && (
+      {(enabled || variant === 'relays') && (
         <>
           {/* Identity */}
-          <section className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
-            <div className="flex items-start gap-3">
-              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--wallet-accent)]/15 text-[var(--wallet-accent)]">
-                <MdKey className="text-xl" aria-hidden="true" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold wallet-text-strong">
-                  {t('nostr.identity')}
-                </p>
-                <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-                  {t('nostr.identityDescription')}
-                </p>
-                <div className="mt-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2 font-mono text-[10px] break-all wallet-text-strong">
-                  {npub ?? idErr ?? t('nostr.deriving')}
+          {variant === 'all' && (
+            <section className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
+              <div className="flex items-start gap-3">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--wallet-accent)]/15 text-[var(--wallet-accent)]">
+                  <MdKey className="text-xl" aria-hidden="true" />
                 </div>
-                <input
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder={t('chat.displayName')}
-                  className="wallet-input mt-3 w-full text-xs"
-                />
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void (async () => {
-                        setProfileMsg(null);
-                        try {
-                          await Promise.all([
-                            publishMyProfile(
-                              walletId,
-                              { name: displayName || undefined },
-                              relays
-                            ),
-                            displayName
-                              ? publishDisplayName(walletId, displayName, relays)
-                              : Promise.resolve(),
-                          ]);
-                          setProfileMsg(t('chat.profilePublished'));
-                        } catch (e) {
-                          setProfileMsg(
-                            e instanceof Error ? e.message : String(e)
-                          );
-                        }
-                      })();
-                    }}
-                    className="wallet-btn-primary px-3 py-1 text-xs"
-                  >
-                    {t('chat.publishProfile')}
-                  </button>
-                  {mlsDeviceIndex === 0 ? (
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold wallet-text-strong">
+                    {t('nostr.identity')}
+                  </p>
+                  <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
+                    {t('nostr.identityDescription')}
+                  </p>
+                  <div className="mt-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2 font-mono text-[10px] break-all wallet-text-strong">
+                    {npub ?? idErr ?? t('nostr.deriving')}
+                  </div>
+                  <input
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder={t('chat.displayName')}
+                    className="wallet-input mt-3 w-full text-xs"
+                  />
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
                       onClick={() => {
-                        if (!pubkey) return;
                         void (async () => {
-                          const ok = await confirm(
-                            'Only on the new install. This device becomes a separate MLS leaf (slot 1). Do not tap this on your first device.'
-                          );
-                          if (!ok) return;
+                          setProfileMsg(null);
                           try {
-                            const slot = await claimExtraMlsDeviceSlot(pubkey);
-                            setMlsDeviceIndex(slot);
-                            await publishMlsKeyPackage(walletId, relays);
+                            await Promise.all([
+                              publishMyProfile(
+                                walletId,
+                                { name: displayName || undefined },
+                                relays
+                              ),
+                              displayName
+                                ? publishDisplayName(
+                                    walletId,
+                                    displayName,
+                                    relays
+                                  )
+                                : Promise.resolve(),
+                            ]);
+                            setProfileMsg(t('chat.profilePublished'));
                           } catch (e) {
                             setProfileMsg(
                               e instanceof Error ? e.message : String(e)
@@ -216,21 +177,51 @@ export const NostrSettings: React.FC = () => {
                           }
                         })();
                       }}
+                      className="wallet-btn-primary px-3 py-1 text-xs"
                     >
-                      Extra device
+                      {t('chat.publishProfile')}
                     </button>
-                  ) : (
-                    <span className="text-[10px] wallet-muted">
-                      Device {mlsDeviceIndex}
-                    </span>
-                  )}
+                    {mlsDeviceIndex === 0 ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
+                        onClick={() => {
+                          if (!pubkey) return;
+                          void (async () => {
+                            const ok = await confirm(
+                              'Only on the new install. This device becomes a separate MLS leaf (slot 1). Do not tap this on your first device.'
+                            );
+                            if (!ok) return;
+                            try {
+                              const slot =
+                                await claimExtraMlsDeviceSlot(pubkey);
+                              setMlsDeviceIndex(slot);
+                              await publishMlsKeyPackage(walletId, relays);
+                            } catch (e) {
+                              setProfileMsg(
+                                e instanceof Error ? e.message : String(e)
+                              );
+                            }
+                          })();
+                        }}
+                      >
+                        Extra device
+                      </button>
+                    ) : (
+                      <span className="text-[10px] wallet-muted">
+                        Device {mlsDeviceIndex}
+                      </span>
+                    )}
+                  </div>
+                  {profileMsg ? (
+                    <p className="mt-2 text-[10px] wallet-muted">
+                      {profileMsg}
+                    </p>
+                  ) : null}
                 </div>
-                {profileMsg ? (
-                  <p className="mt-2 text-[10px] wallet-muted">{profileMsg}</p>
-                ) : null}
               </div>
-            </div>
-          </section>
+            </section>
+          )}
 
           {/* Relays */}
           <section className="space-y-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
@@ -247,26 +238,37 @@ export const NostrSettings: React.FC = () => {
                   {t('nostr.relaysDescription')}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={refreshRelays}
-                disabled={checking}
-                className="flex shrink-0 items-center gap-1 rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
-                aria-label={t('nostr.checkRelayStatus')}
-                title={t('nostr.checkRelayStatus')}
-              >
-                <MdRefresh
-                  className={checking ? 'animate-spin' : ''}
-                  aria-hidden="true"
-                />
-                {checking
-                  ? t('nostr.checking')
-                  : t('nostr.active', {
-                      active: activeCount,
-                      total: relays.length,
-                    })}
-              </button>
+              {variant === 'all' && (
+                <button
+                  type="button"
+                  onClick={refreshRelays}
+                  disabled={checking}
+                  className="flex shrink-0 items-center gap-1 rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
+                  aria-label={t('nostr.checkRelayStatus')}
+                  title={t('nostr.checkRelayStatus')}
+                >
+                  <MdRefresh
+                    className={checking ? 'animate-spin' : ''}
+                    aria-hidden="true"
+                  />
+                  {checking
+                    ? t('nostr.checking')
+                    : t('nostr.active', {
+                        active: activeCount,
+                        total: relays.length,
+                      })}
+                </button>
+              )}
             </div>
+
+            {variant === 'relays' && (
+              <p className="text-xs wallet-muted">
+                Saved relay endpoints for Nostr chat. This pool is shared across
+                Mainnet and Chipnet. Opening this page does not connect to
+                relays. Identity and messaging controls remain in Nostr &amp;
+                Chat.
+              </p>
+            )}
 
             <div className="space-y-2">
               {relays.map((url) => {
@@ -316,6 +318,7 @@ export const NostrSettings: React.FC = () => {
               <div className="flex gap-2">
                 <input
                   type="url"
+                  aria-label="Relay URL"
                   value={relayDraft}
                   onChange={(e) => setRelayDraft(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && addRelay()}

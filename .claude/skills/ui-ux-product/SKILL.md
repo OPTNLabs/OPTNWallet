@@ -1,11 +1,26 @@
 ---
 name: ui-ux-product
-description: Product-minded UI/UX engineering standard for the OPTN wallet. Use when designing, reviewing, simplifying or implementing any user-facing screen, flow, dialog, settings group, or state indicator across the mobile app and the Tauri desktop build — and before adding a new screen, alert, confirmation, or navigation level. Covers wallet-specific trust interactions (create/import, network switching, derivation paths, resync, send/receive, seed phrases, error and offline states), progressive disclosure, wallet-owned dialogs instead of browser alert/confirm/prompt, and component reuse.
+description: Implement or review OPTN wallet screens against the product references, shared Rust state, responsive layouts and wallet trust requirements.
 ---
 
 # UI/UX Product Agent
 
 ## Role
+
+This is the canonical OPTN UI guide for Claude and Codex. Start with the
+affected screen in `docs/ui-overhaul/README.md` and its supplied image, plus
+`docs/ui-overhaul/PR-CONFORMANCE.md`. Those product references and current #71
+requirements take precedence over generic styling preferences below.
+
+New wallet behavior and normalized state belong in shared Rust. Leptos renders
+the typed application/transport contract; it does not own signing, networking,
+metadata truth or capability authorization. CLI uses the same application/runtime
+without depending on Leptos or Tauri. Preserve the legacy UI until its replacement
+has the required evidence; do not import a JavaScript wallet architecture.
+
+Read capability visibility, experimental opt-in and execution availability from
+canonical Rust policy. A disabled entry may explain unavailable functionality;
+rendering that entry never grants permission to execute it.
 
 You are a product-minded UI/UX engineering agent responsible for improving the wallet's usability, clarity, and visual quality.
 
@@ -140,7 +155,10 @@ Maintain shared interaction patterns while respecting each platform's layout:
 - Touch targets must be comfortable on mobile
 - Keyboard navigation and focus states must work on desktop
 
-Do not assume iPhone support unless it is explicitly in scope.
+Honor the requested target matrix, including iOS and browser-extension lifecycle
+restrictions. Desktop windows must resize, maximize and minimize normally; use
+the explicit desktop layout described in the product references instead of
+stretching a fixed phone canvas. Share state, actions and reusable components.
 
 ## Visual design
 
@@ -188,16 +206,17 @@ Prefer the smallest correct change that improves the user experience.
 
 ## Working process
 
-Before changing code:
+Inspect the affected flow and product reference, then make the smallest coherent
+change. Propose a new information architecture only when the task requires one.
+Exercise changed behavior and inspect the rendered layout at the affected widths,
+including narrow/resized desktop, keyboard focus and mobile safe areas as relevant.
+Run the affected automated checks and required platform gates. A visual check does
+not replace money/state tests; a component test does not prove a packaged app.
 
-1. Inspect the existing screen, flow, components, and styles.
-2. Identify the user's goal and the main source of complexity.
-3. Map the current interaction flow.
-4. Identify redundant screens, actions, labels, and navigation.
-5. Propose a simpler information architecture.
-6. Consider mobile, desktop, accessibility, and failure states.
-7. Make the smallest coherent change.
-8. Verify the result with focused tests, typechecks, builds, or visual inspection.
+Use a physical device when the claim depends on its hardware or native behavior.
+Report emulator, desktop, browser, device and packaged evidence separately. If a
+target cannot be exercised, keep that milestone unverified and continue independent
+authorized work. Do not require a phone for an unrelated desktop-only correction.
 
 If the request is for planning or assessment only, do not modify code.
 
@@ -225,31 +244,9 @@ Before considering work complete, confirm:
 
 ## Response format
 
-For each task, report:
-
-### Understanding
-
-What user problem is being solved.
-
-### Proposed experience
-
-The simplified flow, screen structure, and interaction model.
-
-### Implementation
-
-The components, states, and code areas involved.
-
-### Risks and edge cases
-
-What could confuse users or break existing behavior.
-
-### Verification
-
-What was inspected, tested, built, or manually verified.
-
-### Remaining considerations
-
-Any follow-up improvements that are useful but outside the current scope.
+Report the resulting behavior, evidence and remaining gaps at a level appropriate
+to the change. Do not claim #71 completion until the referenced screens and their
+required platform workflows are demonstrated.
 
 ## Definition of success
 

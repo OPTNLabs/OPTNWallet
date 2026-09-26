@@ -103,9 +103,14 @@ impl NetworkServers {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServerOverrides {
     mainnet: NetworkServers,
+    /// The three test chains share an address prefix but not a server: a
+    /// testnet4 node answers a chipnet handshake and then serves a different
+    /// chain, so each keeps its own slot.
+    testnet3: NetworkServers,
+    testnet4: NetworkServers,
     chipnet: NetworkServers,
     /// Kept per-network like the others. A regtest override must never be
-    /// reachable from a mainnet or chipnet wallet.
+    /// reachable from a wallet on a chain other people use.
     regtest: NetworkServers,
 }
 
@@ -113,6 +118,8 @@ impl ServerOverrides {
     pub const fn new() -> Self {
         Self {
             mainnet: NetworkServers::new(),
+            testnet3: NetworkServers::new(),
+            testnet4: NetworkServers::new(),
             chipnet: NetworkServers::new(),
             regtest: NetworkServers::new(),
         }
@@ -123,6 +130,8 @@ impl ServerOverrides {
     pub const fn for_network(&self, network: Network) -> &NetworkServers {
         match network {
             Network::Mainnet => &self.mainnet,
+            Network::Testnet3 => &self.testnet3,
+            Network::Testnet4 => &self.testnet4,
             Network::Chipnet => &self.chipnet,
             Network::Regtest => &self.regtest,
         }
@@ -131,6 +140,8 @@ impl ServerOverrides {
     fn for_network_mut(&mut self, network: Network) -> &mut NetworkServers {
         match network {
             Network::Mainnet => &mut self.mainnet,
+            Network::Testnet3 => &mut self.testnet3,
+            Network::Testnet4 => &mut self.testnet4,
             Network::Chipnet => &mut self.chipnet,
             Network::Regtest => &mut self.regtest,
         }

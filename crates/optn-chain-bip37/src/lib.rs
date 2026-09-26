@@ -275,6 +275,7 @@ impl Bip37Backend {
         &self,
         start_height: u32,
         count: u32,
+        requested_locator: Option<[u8; 32]>,
     ) -> Result<BackendObservation, ChainBackendError> {
         if start_height == 0 {
             return Err(ChainBackendError::Rejected(
@@ -283,13 +284,16 @@ impl Bip37Backend {
         }
         // `getheaders` names its starting point by hash, so the block below
         // the requested height has to be one the runtime already accepted.
-        let locator = self.headers.hash_at(start_height - 1).ok_or_else(|| {
-            ChainBackendError::Rejected(format!(
-                "no accepted header at {}: sync forward from the retained range {:?}",
-                start_height - 1,
-                self.headers.retained_span()
-            ))
-        })?;
+        let locator = match requested_locator {
+            Some(locator) => locator,
+            None => self.headers.hash_at(start_height - 1).ok_or_else(|| {
+                ChainBackendError::Rejected(format!(
+                    "no accepted header at {}: sync forward from the retained range {:?}",
+                    start_height - 1,
+                    self.headers.retained_span()
+                ))
+            })?,
+        };
         let port = self
             .config
             .endpoint
@@ -757,7 +761,7 @@ impl ChainBackend for Bip37Backend {
             ChainOperation::WalletRefresh => self.capabilities.is_usable(Capability::UtxoQuery),
             ChainOperation::Broadcast | ChainOperation::HeaderSync => true,
             ChainOperation::HistoricalHeaderProof => self.probe.serves_shv,
-            ChainOperation::TransactionLookup => false,
+            ChainOperation::TransactionLookup | ChainOperation::OutpointSpentness => false,
         }
     }
     fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
@@ -782,7 +786,15 @@ impl ChainBackend for Bip37Backend {
                 ChainRequest::HeaderSync {
                     start_height,
                     count,
-                } => self.header_sync(*start_height, *count).await,
+                } => self.header_sync(*start_height, *count, None).await,
+                ChainRequest::HeaderSyncFromLocator {
+                    start_height,
+                    count,
+                    locator,
+                } => {
+                    self.header_sync(*start_height, *count, Some(*locator))
+                        .await
+                }
                 ChainRequest::HistoricalHeaderProof {
                     height,
                     checkpoint_height,
@@ -791,6 +803,7 @@ impl ChainBackend for Bip37Backend {
                         .await
                 }
                 ChainRequest::TransactionLookup { .. } => Err(ChainBackendError::Unsupported),
+                ChainRequest::OutpointSpentness { .. } => Err(ChainBackendError::Unsupported),
             }
         })
     }
@@ -1712,9 +1725,9 @@ mod tests {
         let mut backend = backend_at(port, false);
         backend.headers = store.clone();
         tokio::time::timeout(Duration::from_secs(3), async {
-            backend.header_sync(1, 1).await.unwrap();
+            backend.header_sync(1, 1, None).await.unwrap();
             store.write(|headers| headers.insert_hash_only(1, hash));
-            backend.header_sync(2, 1).await.unwrap();
+            backend.header_sync(2, 1, None).await.unwrap();
             peer.await.unwrap();
         })
         .await

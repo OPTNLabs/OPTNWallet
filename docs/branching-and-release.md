@@ -13,6 +13,15 @@ for all shared branches. Protect `dev`, `staging`, and `main` in the repository
 settings with required CI checks and at least one reviewer; protect `main` with
 the strongest review and signed-release requirements.
 
+The proposed full PR check set is in [required-status-checks.json](required-status-checks.json).
+It preserves the existing 11 required checks and adds platform builds, preview
+completeness, asset completeness, Rust verification, lockfiles, and the CodeQL
+analysis result. On 2026-09-12, ruleset `20756244` still required 11 checks:
+GitHub rejected the update because the connected account has write access but
+no administration access. An administrator must merge this status-check
+configuration into the current ruleset, preserving its review rules and any
+concurrent changes. Committing this file does not change GitHub enforcement.
+
 ## Promotion flow
 
 ```text

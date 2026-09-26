@@ -4,7 +4,7 @@ inputs:
   node-version:
     description: Node.js version used for the gate.
     required: false
-    default: '20'
+    default: '22.23.2'
   run-build:
     description: Run the production web build after verification.
     required: false

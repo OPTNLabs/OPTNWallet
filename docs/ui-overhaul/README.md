@@ -54,3 +54,5 @@ Rule:
 - Desktop screens that need space get an explicit desktop shell (module swap), two-pane or wide table, keyboard, no phone column.
 - Do not use Tailwind breakpoints in shared components to switch product layout.
 - Prove both the Capacitor build and the desktop Vite config. A swap that only works in one of them is a regression.
+
+Network source navigation and evidence rules: [Network sources product contract](NETWORK-SOURCES.md).

@@ -2,11 +2,17 @@
 #[cfg(desktop)]
 mod menu;
 
+// Desktop only, and its handler entries carry the same cfg -- mobile builds
+// are updated by their stores and have no business compiling an updater.
 pub mod app_transport;
+#[cfg(desktop)]
+mod app_update;
 mod appearance;
 pub mod chain_runtime;
+mod chain_sources;
 #[cfg(desktop)]
 pub mod clipboard;
+mod coin_holds;
 pub mod electrum_tcp;
 pub mod fusion;
 #[cfg(desktop)]
@@ -19,12 +25,14 @@ pub mod platform;
 pub mod platform_mobile;
 pub mod spv;
 mod wallet_security;
+mod wallet_spend;
 
-async fn verified_fusion_proxy<'a>(
+/// Resolve a SOCKS proxy from the one provenance policy shared by native
+/// network commands. A renderer can name destinations, never a proxy.
+async fn verified_native_proxy(
     destination_hosts: &[&str],
-    tor_host: Option<&'a str>,
-    tor_port: Option<u16>,
-) -> Result<Option<(&'a str, u16)>, String> {
+    trusted_ports: &[u16],
+) -> Result<Option<u16>, String> {
     if destination_hosts
         .iter()
         .all(|host| fusion::is_local_server(host))
@@ -32,30 +40,131 @@ async fn verified_fusion_proxy<'a>(
         return Ok(None);
     }
 
-    let (host, port) = match (tor_host, tor_port) {
-        (Some(host), Some(port)) if !host.trim().is_empty() && port > 0 => (host, port),
-        (Some(_), None) | (None, Some(_)) => {
-            return Err("CashFusion Tor proxy configuration is incomplete".into())
-        }
-        _ => return Err("CashFusion needs a verified Tor proxy for every remote endpoint".into()),
-    };
-
-    if !fusion::tor::is_tor_port(host, port).await {
-        return Err("CashFusion refused an unverified Tor proxy".into());
-    }
-    Ok(Some((host, port)))
+    let managed_port = fusion::tor_manager::owned_socks_port();
+    optn_chain_native::tor_status_from_trust(optn_chain_native::TorProxyTrust {
+        managed: managed_port.as_slice(),
+        trusted: trusted_ports,
+    })
+    .await
+    .usable_port()
+    .map(Some)
+    .ok_or_else(|| "a verified Tor proxy is required for every remote endpoint".into())
 }
 
-fn fusion_transport_for_host<'a>(
+async fn verified_native_proxy_for_network(
+    destination_hosts: &[&str],
+    network_settings: &crate::network_config::NetworkSettingsStore,
+    network: optn_core::network::Network,
+) -> Result<Option<u16>, String> {
+    let settings = network_settings.clone();
+    let trusted_ports = tokio::task::spawn_blocking(move || settings.trusted_socks_ports(network))
+        .await
+        .unwrap_or_default();
+    verified_native_proxy(destination_hosts, &trusted_ports).await
+}
+
+fn bip37_endpoint_matches(endpoint: &optn_runtime::chain::Endpoint, host: &str, port: u16) -> bool {
+    endpoint.kind == optn_runtime::chain::EndpointKind::BchP2p
+        && endpoint.port == Some(port)
+        && endpoint
+            .host
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case(host.trim().trim_end_matches('.'))
+}
+
+fn bip37_selected_endpoint_is_declared_own(
+    catalog: &optn_runtime::chain::SourceCatalog,
+    policy: &optn_runtime::chain::ConnectionPolicy,
+    host: &str,
+    port: u16,
+) -> Result<bool, String> {
+    use optn_runtime::chain::{build_selection_plan, ProtocolFamily};
+
+    if !policy.protocols.contains(ProtocolFamily::Bip37) {
+        return Err("BIP37 is not allowed by the current source selection".into());
+    }
+
+    let plan = build_selection_plan(catalog, policy);
+    plan.primary
+        .iter()
+        .chain(plan.fallback.iter())
+        .filter_map(|id| catalog.get(id))
+        .find(|source| {
+            source
+                .endpoints
+                .iter()
+                .any(|endpoint| bip37_endpoint_matches(endpoint, host, port))
+        })
+        .map(|source| source.is_user_infrastructure())
+        .ok_or_else(|| "BIP37 endpoint is not enabled by the current source selection".into())
+}
+
+async fn bip37_transport_for_catalog(
+    host: &str,
+    port: u16,
+    catalog: &optn_runtime::chain::SourceCatalog,
+    policy: &optn_runtime::chain::ConnectionPolicy,
+    trusted_ports: &[u16],
+) -> Result<fusion::Transport<'static>, String> {
+    let selected_is_own = bip37_selected_endpoint_is_declared_own(catalog, policy, host, port)?;
+    if fusion::is_local_server(host) || selected_is_own {
+        return Ok(fusion::Transport::Direct);
+    }
+    let verified_proxy = verified_native_proxy(&[host], trusted_ports).await?;
+    fusion_transport_for_host(host, verified_proxy)
+}
+
+fn ensure_bip37_network_current(
+    active: optn_core::network::Network,
+    requested: optn_core::network::Network,
+) -> Result<(), String> {
+    if active == requested {
+        Ok(())
+    } else {
+        Err("BIP37 request network is no longer selected".into())
+    }
+}
+
+async fn bip37_transport_for_active_network(
+    host: &str,
+    port: u16,
+    network: optn_core::network::Network,
+    runtime: &optn_runtime::AppRuntime,
+    network_settings: &crate::network_config::NetworkSettingsStore,
+) -> Result<fusion::Transport<'static>, String> {
+    let state = runtime.state();
+    ensure_bip37_network_current(state.network, network)?;
+
+    let settings = network_settings.clone();
+    let (persisted, trusted_ports) = tokio::task::spawn_blocking(move || {
+        Ok::<_, String>((
+            settings.chain_selection(network)?,
+            settings.trusted_socks_ports(network),
+        ))
+    })
+    .await
+    .map_err(|_| "network settings reader stopped".to_string())??;
+    let (catalog, policy) = persisted
+        .unwrap_or_else(|| crate::chain_runtime::catalog_and_policy_from_app_state(&state));
+    let transport =
+        bip37_transport_for_catalog(host, port, &catalog, &policy, &trusted_ports).await?;
+    ensure_bip37_network_current(runtime.state().network, network)?;
+    Ok(transport)
+}
+
+fn fusion_transport_for_host(
     destination_host: &str,
-    verified_proxy: Option<(&'a str, u16)>,
-) -> Result<fusion::Transport<'a>, String> {
+    verified_proxy: Option<u16>,
+) -> Result<fusion::Transport<'static>, String> {
     if fusion::is_local_server(destination_host) {
         return Ok(fusion::Transport::Direct);
     }
-    let (host, port) = verified_proxy
+    let port = verified_proxy
         .ok_or_else(|| "CashFusion remote endpoint has no verified Tor route".to_string())?;
-    Ok(fusion::Transport::Tor { host, port })
+    Ok(fusion::Transport::Tor {
+        host: fusion::tor::DEFAULT_TOR_HOST,
+        port,
+    })
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -63,8 +172,8 @@ struct FusionStatusCacheKey {
     host: String,
     port: u16,
     use_ssl: bool,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
+    network: String,
+    socks_port: Option<u16>,
 }
 
 #[derive(Clone)]
@@ -134,8 +243,7 @@ async fn fetch_fusion_server_status(
     host: &str,
     port: u16,
     use_ssl: bool,
-    tor_host: Option<&str>,
-    tor_port: Option<u16>,
+    verified_proxy: Option<u16>,
 ) -> Result<fusion::FusionServerStatus, String> {
     log::info!(
         "[FusionTrace] status start host={} port={} ssl={}",
@@ -143,7 +251,6 @@ async fn fetch_fusion_server_status(
         port,
         use_ssl
     );
-    let verified_proxy = verified_fusion_proxy(&[host], tor_host, tor_port).await?;
     let transport = fusion_transport_for_host(host, verified_proxy)?;
     let result = fusion::server_status(host, port, use_ssl, transport, None).await;
     match &result {
@@ -171,7 +278,12 @@ async fn fusion_server_status(
     use_ssl: bool,
     tor_host: Option<String>,
     tor_port: Option<u16>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<fusion::FusionServerStatus, String> {
+    // Legacy IPC fields remain accepted while the renderer migrates, but it
+    // cannot choose a proxy or convert a SOCKS greeting into Tor provenance.
+    let _ = (tor_host, tor_port);
     // Electron Cash's rule (plugin.py start_fusion), reproduced exactly: fusing
     // against a REMOTE server without Tor defeats the protocol's own privacy
     // guarantee — the server can re-link a player's covert connections by IP —
@@ -180,23 +292,24 @@ async fn fusion_server_status(
     if host.trim().is_empty() || port == 0 {
         return Err("CashFusion server endpoint is invalid".into());
     }
+    let network = runtime.state().network;
+    // Resolve provenance before consulting the cache. A revoked trust entry or
+    // exited managed child must fail now rather than reuse a prior success.
+    let verified_proxy =
+        verified_native_proxy_for_network(&[host.as_str()], &network_settings, network).await?;
 
     let key = FusionStatusCacheKey {
         host: host.trim().trim_end_matches('.').to_ascii_lowercase(),
         port,
         use_ssl,
-        tor_host: tor_host
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.trim_end_matches('.').to_ascii_lowercase()),
-        tor_port,
+        network: network.to_string(),
+        socks_port: verified_proxy,
     };
     // All WebViews share the native process. Coalescing here prevents four
     // wallet windows from opening four identical Tor handshakes at once. The
     // short failure TTL still lets a manual retry observe a repaired server.
     shared_fusion_server_status(key, || {
-        fetch_fusion_server_status(&host, port, use_ssl, tor_host.as_deref(), tor_port)
+        fetch_fusion_server_status(&host, port, use_ssl, verified_proxy)
     })
     .await
 }
@@ -214,14 +327,18 @@ async fn fusion_join_status(
     use_ssl: bool,
     tiers: Vec<u64>,
     wait_secs: u64,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<fusion::round::FusionJoinResult, String> {
     if host.trim().is_empty() || port == 0 {
         return Err("CashFusion server endpoint is invalid".into());
     }
-    let verified_proxy =
-        verified_fusion_proxy(&[host.as_str()], tor_host.as_deref(), tor_port).await?;
+    let verified_proxy = verified_native_proxy_for_network(
+        &[host.as_str()],
+        &network_settings,
+        runtime.state().network,
+    )
+    .await?;
     let transport = fusion_transport_for_host(&host, verified_proxy)?;
 
     fusion::round::join_pool_status(
@@ -252,6 +369,21 @@ struct FusionRunInputReq {
     pubkey: String,
     value: u64,
     privkey: String,
+}
+
+fn fusion_run_destination_hosts<'a>(
+    host: &'a str,
+    lookup_host: &'a str,
+    lookup_fallbacks: &'a [FusionLookupEndpointReq],
+) -> Vec<&'a str> {
+    std::iter::once(host)
+        .chain(std::iter::once(lookup_host))
+        .chain(
+            lookup_fallbacks
+                .iter()
+                .map(|endpoint| endpoint.host.as_str()),
+        )
+        .collect()
 }
 
 #[derive(serde::Serialize)]
@@ -326,9 +458,12 @@ async fn fusion_run(
     lookup_fallbacks: Vec<FusionLookupEndpointReq>,
     tor_host: Option<String>,
     tor_port: Option<u16>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
     expected_hello: fusion::server_plan::ExpectedHello,
     join_inactive_timeout_ms: Option<u64>,
 ) -> Result<fusion::run::FusionOutcome, String> {
+    let _ = (tor_host, tor_port);
     log::info!(
         "[FusionTrace] round start id={} host={} port={} plans={} inputs={}",
         round_id,
@@ -347,15 +482,21 @@ async fn fusion_run(
     if lookup_host.trim().is_empty() || lookup_port == 0 {
         return Err("CashFusion peer-input lookup endpoint is invalid".into());
     }
-    let verified_proxy = verified_fusion_proxy(
-        &[host.as_str(), lookup_host.as_str()],
-        tor_host.as_deref(),
-        tor_port,
+    // The lookup transport is reused by each configured fallback. Resolve Tor
+    // against the complete destination set first, so a local primary cannot
+    // make a remote fallback inherit a direct route.
+    let destination_hosts = fusion_run_destination_hosts(&host, &lookup_host, &lookup_fallbacks);
+    let verified_proxy = verified_native_proxy_for_network(
+        &destination_hosts,
+        &network_settings,
+        runtime.state().network,
     )
     .await?;
     let transport = fusion_transport_for_host(&host, verified_proxy)?;
-    let lookup_transport = fusion_transport_for_host(&lookup_host, verified_proxy)?;
-    let remote_transport = verified_proxy.map(|(host, port)| fusion::Transport::Tor { host, port });
+    let remote_transport = verified_proxy.map(|port| fusion::Transport::Tor {
+        host: fusion::tor::DEFAULT_TOR_HOST,
+        port,
+    });
 
     let join_inactive_timeout = match join_inactive_timeout_ms {
         None => None,
@@ -412,7 +553,7 @@ async fn fusion_run(
             }
         }))
         .collect(),
-        lookup_transport,
+        lookup_remote_transport: remote_transport,
         timing: fusion::run::FusionTiming::default(),
         join_inactive_timeout,
         cancel,
@@ -534,7 +675,10 @@ async fn fusion_transaction_is_known(
     lookup_fallbacks: Vec<FusionLookupEndpointReq>,
     tor_host: Option<String>,
     tor_port: Option<u16>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<bool, String> {
+    let _ = (tor_host, tor_port);
     let endpoints: Vec<fusion::electrum_input::ElectrumEndpoint> =
         std::iter::once(fusion::electrum_input::ElectrumEndpoint {
             host: lookup_host,
@@ -551,7 +695,9 @@ async fn fusion_transaction_is_known(
         .collect();
 
     let hosts: Vec<&str> = endpoints.iter().map(|e| e.host.as_str()).collect();
-    let verified_proxy = verified_fusion_proxy(&hosts, tor_host.as_deref(), tor_port).await?;
+    let verified_proxy =
+        verified_native_proxy_for_network(&hosts, &network_settings, runtime.state().network)
+            .await?;
 
     let mut last_error = String::from("no Electrum server could answer");
     for endpoint in &endpoints {
@@ -588,7 +734,10 @@ async fn fusion_relay_broadcast_and_observe(
     observer_port: u16,
     tor_host: Option<String>,
     tor_port: Option<u16>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<spv::FusionRelayObservation, String> {
+    let _ = (tor_host, tor_port);
     if !fusion::fusion_execution_ready() {
         return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
     }
@@ -600,36 +749,36 @@ async fn fusion_relay_broadcast_and_observe(
     validate_fusion_relay_request(&tx_hex, &network)?;
     let tx_bytes = decode_hex(&tx_hex).map_err(|_| "invalid transaction hex".to_string())?;
 
-    let any_remote = !fusion_relay_is_local(&relay_host) || !fusion_relay_is_local(&observer_host);
-    let tor_verified = if any_remote {
-        match (tor_host.as_deref(), tor_port) {
-            (Some(host), Some(port)) => fusion::tor::is_tor_port(host, port).await,
-            _ => false,
-        }
-    } else {
-        false
-    };
+    let verified_proxy = verified_native_proxy_for_network(
+        &[relay_host.as_str(), observer_host.as_str()],
+        &network_settings,
+        runtime.state().network,
+    )
+    .await?;
+    let tor_verified = verified_proxy.is_some();
     let (relay_route, observer_route) =
         fusion_relay_transport_policy(&relay_host, &observer_host, tor_verified)?;
 
-    let verified_proxy = match (tor_host.as_deref(), tor_port) {
-        (Some(host), Some(port)) if tor_verified => Some((host, port)),
-        _ => None,
-    };
     let relay_transport = match relay_route {
         FusionRelayRoute::Direct => fusion::Transport::Direct,
         FusionRelayRoute::Tor => {
-            let (host, port) =
+            let port =
                 verified_proxy.ok_or("verified Tor proxy details unavailable for remote relay")?;
-            fusion::Transport::Tor { host, port }
+            fusion::Transport::Tor {
+                host: fusion::tor::DEFAULT_TOR_HOST,
+                port,
+            }
         }
     };
     let observer_transport = match observer_route {
         FusionRelayRoute::Direct => fusion::Transport::Direct,
         FusionRelayRoute::Tor => {
-            let (host, port) = verified_proxy
+            let port = verified_proxy
                 .ok_or("verified Tor proxy details unavailable for remote observer")?;
-            fusion::Transport::Tor { host, port }
+            fusion::Transport::Tor {
+                host: fusion::tor::DEFAULT_TOR_HOST,
+                port,
+            }
         }
     };
 
@@ -648,18 +797,19 @@ async fn fusion_relay_broadcast_and_observe(
 
 /// Find a running Tor SOCKS proxy, mirroring Electron Cash's auto-detection
 /// (ports 9050 = daemon, 9150 = Tor Browser). Returns the port, or null if Tor
-/// isn't running. Verifies it's genuinely Tor, not just something listening.
+/// isn't running. This reports a SOCKS-capable candidate; settings confirmation
+/// or an app-owned child establishes the provenance needed for use.
 #[tauri::command]
 async fn fusion_tor_detect(host: Option<String>) -> Option<u16> {
     let host = host.unwrap_or_else(|| fusion::tor::DEFAULT_TOR_HOST.to_string());
     fusion::tor::scan_tor_port(&host).await
 }
 
-/// Check one specific host:port for a Tor proxy (used when the user pins a
-/// manual port rather than relying on auto-detection).
+/// Check one specific host:port for SOCKS capability. It is not a Tor identity
+/// proof and does not authorize the proxy for outbound Fusion traffic.
 #[tauri::command]
 async fn fusion_tor_check(host: String, port: u16) -> bool {
-    fusion::tor::is_tor_port(&host, port).await
+    fusion::tor::socks_answers(&host, port).await
 }
 
 // BIP37 SPV — Phase 1 node probe.
@@ -667,21 +817,27 @@ async fn fusion_tor_check(host: String, port: u16) -> bool {
 // A full node speaks the raw BCH P2P protocol, not Electrum, so — like fusion —
 // the client lives in Rust. This performs a real version/verack handshake and
 // reports the peer's parameters (user-agent, height, whether it serves BIP37).
-// It does not sync or track UTXOs; see the plan for later phases. tor_host/
-// tor_port route the connection through Tor (optional; LAN/localhost go direct).
+// It does not sync or track UTXOs; see the plan for later phases.
 #[tauri::command]
 async fn bip37_node_probe(
     host: String,
     port: u16,
     network: String,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
+    app: tauri::AppHandle,
 ) -> Result<spv::NodeProbe, String> {
-    let transport = match (tor_host.as_deref(), tor_port) {
-        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
-        _ => fusion::Transport::Direct,
-    };
-    spv::probe_node(&host, port, &network, transport).await
+    use tauri::Manager;
+
+    // Tauri ignores surplus legacy IPC keys. A renderer cannot nominate a
+    // SOCKS listener; routing is selected from native state below.
+    let runtime = app.state::<optn_runtime::AppRuntime>();
+    let network_settings = app.state::<crate::network_config::NetworkSettingsStore>();
+    let network = network
+        .parse::<optn_core::network::Network>()
+        .map_err(|_| "invalid BIP37 network".to_string())?;
+    let transport =
+        bip37_transport_for_active_network(&host, port, network, &runtime, &network_settings)
+            .await?;
+    spv::probe_node(&host, port, &network.to_string(), transport).await
 }
 
 /// Decode an even-length ASCII hex value, rejecting malformed input before I/O.
@@ -693,6 +849,13 @@ fn decode_hex(h: &str) -> Result<Vec<u8>, String> {
         return Err("odd-length hex".into());
     }
     hex::decode(h).map_err(|_| "invalid hex".to_string())
+}
+
+fn decode_bip37_transaction(tx_hex: &str) -> Result<Vec<u8>, String> {
+    if tx_hex.len() % 2 != 0 || tx_hex.is_empty() {
+        return Err("transaction hex must be non-empty and even length".into());
+    }
+    decode_hex(tx_hex).map_err(|_| "invalid transaction hex".to_string())
 }
 
 /// Decode exactly 20 bytes of hash160 without accepting non-hex UTF-8 input.
@@ -727,27 +890,35 @@ async fn bip37_headers(
     locator: Option<String>,
     locator_height: Option<u32>,
     locator_time: Option<i64>,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<spv::HeaderInfo>, String> {
-    let locator = locator.as_deref().filter(|s| !s.is_empty());
-    let start = match locator {
+    use tauri::Manager;
+
+    // Tauri ignores surplus legacy IPC keys. A renderer cannot nominate a
+    // SOCKS listener; routing is selected from native state below.
+    let runtime = app.state::<optn_runtime::AppRuntime>();
+    let network_settings = app.state::<crate::network_config::NetworkSettingsStore>();
+    let network = network
+        .parse::<optn_core::network::Network>()
+        .map_err(|_| "invalid BIP37 network".to_string())?;
+    let network_name = network.to_string();
+    let start = match locator.as_deref().filter(|s| !s.is_empty()) {
         Some(h) => parse_block_hash(h)?,
-        None => spv::genesis_hash(&network),
+        None => spv::genesis_hash(&network_name),
     };
-    let (locator_height, locator_time) = match locator {
-        Some(_) => (
-            locator_height.ok_or("resuming headers requires locator height")?,
-            locator_time.ok_or("resuming headers requires locator time")?,
-        ),
-        None => (0, 0),
-    };
-    let transport = match (tor_host.as_deref(), tor_port) {
-        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
-        _ => fusion::Transport::Direct,
-    };
-    let walk = spv::HeaderWalk::for_network(&network, start, locator_height, locator_time)?;
-    spv::fetch_headers_after_from(&host, port, &network, transport, walk).await
+    let transport =
+        bip37_transport_for_active_network(&host, port, network, &runtime, &network_settings)
+            .await?;
+    // Fallible on purpose: an unrecognised network name is refused here rather
+    // than walked against mainnet's genesis, which is what the string-keyed
+    // tables underneath would otherwise do. The `?` is the whole point.
+    let walk = spv::HeaderWalk::for_network(
+        &network_name,
+        start,
+        locator_height.unwrap_or(0),
+        locator_time.unwrap_or(0),
+    )?;
+    spv::fetch_headers_after_from(&host, port, &network_name, transport, walk).await
 }
 
 // Scan the given blocks (display-hex hashes) for outputs/inputs touching the
@@ -760,9 +931,14 @@ async fn bip37_scan(
     network: String,
     pubkey_hashes: Vec<String>,
     block_hashes: Vec<String>,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
+    app: tauri::AppHandle,
 ) -> Result<spv::ScanResult, String> {
+    use tauri::Manager;
+
+    // Tauri ignores surplus legacy IPC keys. A renderer cannot nominate a
+    // SOCKS listener; routing is selected from native state below.
+    let runtime = app.state::<optn_runtime::AppRuntime>();
+    let network_settings = app.state::<crate::network_config::NetworkSettingsStore>();
     let watched: std::collections::HashSet<[u8; 20]> = pubkey_hashes
         .iter()
         .map(|h| parse_pkh(h))
@@ -771,11 +947,21 @@ async fn bip37_scan(
         .iter()
         .map(|h| parse_block_hash(h))
         .collect::<Result<_, _>>()?;
-    let transport = match (tor_host.as_deref(), tor_port) {
-        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
-        _ => fusion::Transport::Direct,
-    };
-    spv::scan_blocks(&host, port, &network, transport, &blocks, &watched).await
+    let network = network
+        .parse::<optn_core::network::Network>()
+        .map_err(|_| "invalid BIP37 network".to_string())?;
+    let transport =
+        bip37_transport_for_active_network(&host, port, network, &runtime, &network_settings)
+            .await?;
+    spv::scan_blocks(
+        &host,
+        port,
+        &network.to_string(),
+        transport,
+        &blocks,
+        &watched,
+    )
+    .await
 }
 
 // Broadcast a signed raw transaction (hex) to a node over P2P. Returns the txid.
@@ -786,25 +972,29 @@ async fn bip37_broadcast(
     port: u16,
     network: String,
     tx_hex: String,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    if tx_hex.len() % 2 != 0 || tx_hex.is_empty() {
-        return Err("transaction hex must be non-empty and even length".into());
-    }
-    let tx_bytes = decode_hex(&tx_hex).map_err(|_| "invalid transaction hex".to_string())?;
-    let transport = match (tor_host.as_deref(), tor_port) {
-        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
-        _ => fusion::Transport::Direct,
-    };
-    spv::broadcast_tx(&host, port, &network, transport, tx_bytes).await
+    use tauri::Manager;
+
+    // Tauri ignores surplus legacy IPC keys. A renderer cannot nominate a
+    // SOCKS listener; routing is selected from native state below.
+    let runtime = app.state::<optn_runtime::AppRuntime>();
+    let network_settings = app.state::<crate::network_config::NetworkSettingsStore>();
+    let tx_bytes = decode_bip37_transaction(&tx_hex)?;
+    let network = network
+        .parse::<optn_core::network::Network>()
+        .map_err(|_| "invalid BIP37 network".to_string())?;
+    let transport =
+        bip37_transport_for_active_network(&host, port, network, &runtime, &network_settings)
+            .await?;
+    spv::broadcast_tx(&host, port, &network.to_string(), transport, tx_bytes).await
 }
 
 // ── Integrated (app-managed) Tor ────────────────────────────────────────────
 //
 // SOCKS port for the app's own Tor — deliberately not 9050/9150 so it never
 // clashes with a Tor the user is already running.
-const INTEGRATED_TOR_SOCKS_PORT: u16 = 9251;
+pub(crate) const INTEGRATED_TOR_SOCKS_PORT: u16 = 9251;
 
 /// Resolve where the tor binary + geoip data live: a dev override via
 /// OPTN_TOR_BIN, otherwise the bundled resource dir (resources/tor/).
@@ -1101,6 +1291,7 @@ fn multisig_inspect(
 /// failures abort startup rather than continuing with an uninitialized policy.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
@@ -1110,16 +1301,48 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_keyring::init());
 
+    // Unsigned previews must start without an installer. The updater plugin
+    // deserializes its config at startup, so registering it with no config
+    // aborts the whole wallet before the landing screen can render.
+    #[cfg(desktop)]
+    let builder = if app_update::has_update_key(context.config()) {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        builder
+    };
+
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
 
     builder
         .invoke_handler(tauri::generate_handler![
             app_transport::optn_app_dispatch,
+            chain_sources::optn_chain_sources,
+            chain_sources::optn_chain_rpc_credentials,
+            chain_sources::optn_chain_set_policy,
+            chain_sources::optn_chain_set_selection,
+            chain_sources::optn_chain_export_configuration,
+            chain_sources::optn_chain_import_configuration,
+            chain_sources::optn_chain_trust_socks_proxy,
+            chain_sources::optn_tor_readiness,
+            #[cfg(desktop)]
+            app_update::optn_check_for_update,
+            #[cfg(desktop)]
+            app_update::optn_install_update,
+            chain_sources::optn_chain_set_source_disposition,
+            chain_sources::optn_chain_add_source,
+            chain_sources::optn_chain_remove_source,
+            chain_sources::optn_chain_rebuild,
+            coin_holds::optn_coin_holds,
+            coin_holds::optn_coin_freeze,
+            coin_holds::optn_coin_unfreeze,
+            wallet_spend::optn_wallet_prepare_spend,
+            wallet_spend::optn_wallet_send,
             app_transport::optn_app_snapshot,
             app_transport::optn_wallet_refresh,
             app_transport::optn_wallet_rescan,
             app_transport::optn_wallet_security,
+            app_transport::optn_airgap,
             #[cfg(desktop)]
             clipboard::clipboard_write_text,
             #[cfg(desktop)]
@@ -1282,29 +1505,12 @@ pub fn run() {
             // flash a stale menu before the frontend replaces it via setAsAppMenu().
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn resumed_headers_require_both_cursor_fields_before_connecting() {
-        for (height, time) in [(None, Some(1)), (Some(1), None), (None, None)] {
-            let result = super::bip37_headers(
-                "127.0.0.1".into(),
-                1,
-                "chipnet".into(),
-                Some("00".repeat(32)),
-                height,
-                time,
-                None,
-                None,
-            )
-            .await;
-            assert!(result.unwrap_err().contains("resuming headers requires"));
-        }
-    }
     use super::*;
 
     #[tokio::test]
@@ -1317,15 +1523,7 @@ mod tests {
         }
         for value in ["雪a", "😀", "aé0", "+0", "0g"] {
             assert_eq!(
-                bip37_broadcast(
-                    "unused.invalid".into(),
-                    0,
-                    "chipnet".into(),
-                    value.into(),
-                    None,
-                    None
-                )
-                .await,
+                decode_bip37_transaction(value),
                 Err("invalid transaction hex".into())
             );
         }
@@ -1334,6 +1532,171 @@ mod tests {
         let decoded = parse_block_hash(&hex::encode_upper(display)).unwrap();
         display.reverse();
         assert_eq!(decoded, display);
+    }
+
+    #[test]
+    fn bip37_rejects_stale_network_requests() {
+        use optn_core::network::Network;
+
+        assert!(ensure_bip37_network_current(Network::Chipnet, Network::Chipnet).is_ok());
+        assert_eq!(
+            ensure_bip37_network_current(Network::Chipnet, Network::Mainnet),
+            Err("BIP37 request network is no longer selected".into())
+        );
+    }
+
+    fn bip37_source_catalog(
+        host: &str,
+        port: u16,
+        origin: optn_runtime::chain::SourceOrigin,
+    ) -> (
+        optn_runtime::chain::SourceCatalog,
+        optn_runtime::chain::SourceId,
+    ) {
+        use optn_runtime::chain::{
+            CapabilitySet, ChainSource, Endpoint, EndpointKind, SourceCatalog, SourceDisposition,
+            SourceId,
+        };
+
+        let mut catalog = SourceCatalog::default();
+        let id = SourceId::new("bip37-node");
+        catalog
+            .insert(ChainSource {
+                id: id.clone(),
+                label: "BCH node".into(),
+                origin,
+                endpoints: vec![Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: host.into(),
+                    port: Some(port),
+                }],
+                capabilities: CapabilitySet::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 0,
+            })
+            .unwrap();
+        (catalog, id)
+    }
+
+    fn declared_bip37_infrastructure(host: &str, port: u16) -> optn_runtime::chain::SourceCatalog {
+        bip37_source_catalog(
+            host,
+            port,
+            optn_runtime::chain::SourceOrigin::UserInfrastructure {
+                group: "home".into(),
+            },
+        )
+        .0
+    }
+
+    #[tokio::test]
+    async fn bip37_transport_requires_trusted_proxy_unless_exact_own_endpoint() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut greeting = [0; 3];
+                if stream.read_exact(&mut greeting).await.is_ok() {
+                    let _ = stream.write_all(&[0x05, 0x00]).await;
+                }
+            }
+        });
+        let (remote_catalog, remote_id) = bip37_source_catalog(
+            "remote-bip37.example",
+            8333,
+            optn_runtime::chain::SourceOrigin::UserAdded,
+        );
+        let remote_policy = optn_runtime::chain::ConnectionPolicy::exact(
+            remote_id,
+            optn_runtime::chain::ProtocolFamily::Bip37,
+        );
+
+        assert!(bip37_transport_for_catalog(
+            "remote-bip37.example",
+            8333,
+            &remote_catalog,
+            &remote_policy,
+            &[],
+        )
+        .await
+        .is_err());
+        assert!(matches!(
+            bip37_transport_for_catalog(
+                "remote-bip37.example",
+                8333,
+                &remote_catalog,
+                &remote_policy,
+                &[proxy_port],
+            )
+            .await
+            .unwrap(),
+            fusion::Transport::Tor {
+                host: "127.0.0.1",
+                port
+            } if port == proxy_port
+        ));
+
+        let own_catalog = declared_bip37_infrastructure("node.example.", 8333);
+        let own_policy = optn_runtime::chain::ConnectionPolicy::own_infrastructure();
+        assert!(matches!(
+            bip37_transport_for_catalog("NODE.EXAMPLE", 8333, &own_catalog, &own_policy, &[])
+                .await
+                .unwrap(),
+            fusion::Transport::Direct
+        ));
+        server.abort();
+    }
+
+    #[test]
+    fn bip37_transport_requires_an_enabled_selected_bip37_source() {
+        use optn_runtime::chain::{
+            ConnectionPolicy, ProtocolFamily, ProtocolSet, SourceDisposition, SourceScope,
+        };
+
+        let (mut catalog, id) = bip37_source_catalog(
+            "remote-bip37.example",
+            8333,
+            optn_runtime::chain::SourceOrigin::UserAdded,
+        );
+        let exact_bip37 = ConnectionPolicy::exact(id.clone(), ProtocolFamily::Bip37);
+
+        assert!(bip37_selected_endpoint_is_declared_own(
+            &catalog,
+            &ConnectionPolicy::own_infrastructure(),
+            "remote-bip37.example",
+            8333,
+        )
+        .unwrap_err()
+        .contains("not enabled"));
+
+        let electrum_only = ConnectionPolicy {
+            protocols: ProtocolSet::only(ProtocolFamily::Electrum),
+            primary_scope: SourceScope::Explicit(std::collections::BTreeSet::from([id.clone()])),
+            fallback_scope: None,
+            preferred: Vec::new(),
+        };
+        assert!(bip37_selected_endpoint_is_declared_own(
+            &catalog,
+            &electrum_only,
+            "remote-bip37.example",
+            8333,
+        )
+        .unwrap_err()
+        .contains("not allowed"));
+
+        for disposition in [SourceDisposition::Disabled, SourceDisposition::Banned] {
+            catalog.set_disposition(&id, disposition).unwrap();
+            assert!(bip37_selected_endpoint_is_declared_own(
+                &catalog,
+                &exact_bip37,
+                "remote-bip37.example",
+                8333,
+            )
+            .unwrap_err()
+            .contains("not enabled"));
+        }
     }
 
     #[test]
@@ -1365,8 +1728,8 @@ mod tests {
             host: "coalesce-test.invalid".into(),
             port: 8789,
             use_ssl: true,
-            tor_host: Some("127.0.0.1".into()),
-            tor_port: Some(9050),
+            network: "chipnet".into(),
+            socks_port: Some(9050),
         };
         let calls = std::sync::Arc::new(AtomicUsize::new(0));
 
@@ -1396,8 +1759,8 @@ mod tests {
             host: "failure-backoff-test.invalid".into(),
             port: 8789,
             use_ssl: true,
-            tor_host: Some("127.0.0.1".into()),
-            tor_port: Some(9050),
+            network: "chipnet".into(),
+            socks_port: Some(9050),
         };
         let calls = std::sync::Arc::new(AtomicUsize::new(0));
         let first_calls = calls.clone();
@@ -1419,6 +1782,31 @@ mod tests {
     }
 
     #[test]
+    fn fusion_status_cache_scopes_network_and_effective_proxy() {
+        let key = FusionStatusCacheKey {
+            host: "fusion.example".into(),
+            port: 8789,
+            use_ssl: true,
+            network: "chipnet".into(),
+            socks_port: Some(9050),
+        };
+        assert_ne!(
+            key,
+            FusionStatusCacheKey {
+                network: "mainnet".into(),
+                ..key.clone()
+            }
+        );
+        assert_ne!(
+            key,
+            FusionStatusCacheKey {
+                socks_port: Some(9150),
+                ..key.clone()
+            }
+        );
+    }
+
+    #[test]
     fn fusion_command_transport_requires_a_verified_proxy_for_remote_hosts() {
         for host in ["localhost", "127.0.0.1", "::1"] {
             assert!(matches!(
@@ -1431,12 +1819,61 @@ mod tests {
             .unwrap_err()
             .contains("verified Tor"));
         assert!(matches!(
-            fusion_transport_for_host("fusion.example", Some(("127.0.0.1", 9050))).unwrap(),
+            fusion_transport_for_host("fusion.example", Some(9050)).unwrap(),
             fusion::Transport::Tor {
                 host: "127.0.0.1",
                 port: 9050
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn fusion_proxy_requires_provenance_for_a_remote_lookup_fallback() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut greeting = [0; 3];
+                if stream.read_exact(&mut greeting).await.is_ok() {
+                    let _ = stream.write_all(&[0x05, 0x00]).await;
+                }
+            }
+        });
+
+        let destinations = ["127.0.0.1", "remote-fallback.example"];
+        assert!(verified_native_proxy(&destinations, &[]).await.is_err());
+        assert_eq!(
+            verified_native_proxy(&destinations, &[port]).await,
+            Ok(Some(port))
+        );
+        server.abort();
+    }
+
+    #[test]
+    fn fusion_run_includes_every_lookup_fallback_in_proxy_decision() {
+        let fallbacks = vec![
+            FusionLookupEndpointReq {
+                host: "remote-fallback.example".into(),
+                port: 50002,
+                use_ssl: true,
+            },
+            FusionLookupEndpointReq {
+                host: "127.0.0.1".into(),
+                port: 50001,
+                use_ssl: false,
+            },
+        ];
+        assert_eq!(
+            fusion_run_destination_hosts("fusion.example", "localhost", &fallbacks),
+            vec![
+                "fusion.example",
+                "localhost",
+                "remote-fallback.example",
+                "127.0.0.1"
+            ]
+        );
     }
 
     #[test]

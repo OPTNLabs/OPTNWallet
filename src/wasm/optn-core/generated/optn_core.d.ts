@@ -1,6 +1,11 @@
 /* tslint:disable */
 /* eslint-disable */
 
+/**
+ * Shared Rust ceiling for the legacy untrusted iframe bridge.
+ */
+export function addonLegacyGuestCallAllowed(module: string, method: string): boolean;
+
 export function connectP2pkhLock(public_key: Uint8Array): Uint8Array;
 
 export function connectPublicKey(private_key: Uint8Array): Uint8Array;
@@ -36,6 +41,34 @@ export function deriveRpaKeys(mnemonic: string, passphrase: string, scan_path: s
  * would be a way to manufacture the very strings `decodeCashcode` refuses.
  */
 export function encodeCashcode(scan_pubkey: Uint8Array, spend_pubkey: Uint8Array, network: string, prefix_bits: number): string;
+
+/**
+ * A link to the holder's own explorer, from the templates they supplied.
+ */
+export function explorerCustomUrl(tx_template: string, address_template: string, network: string, kind: string, value: string, chain_policy: string): string;
+
+/**
+ * The preset used when the holder has not chosen one.
+ */
+export function explorerDefaultPresetId(): string;
+
+/**
+ * What a chain connection policy means for explorer links:
+ * `public-allowed`, `user-owned-only` or `disabled`.
+ */
+export function explorerPolicyForChainPolicy(policy: string): string;
+
+/**
+ * A link to one of the shipped public explorers, or an error explaining why
+ * the policy refuses it.
+ */
+export function explorerPresetUrl(preset_id: string, network: string, kind: string, value: string, chain_policy: string): string;
+
+/**
+ * Every shipped preset, as JSON, so the settings picker lists exactly what
+ * the router will accept.
+ */
+export function explorerPresets(): string;
 
 /**
  * Compressed one-shot nonce point published for a credential slot.
@@ -153,6 +186,37 @@ export function grindString(scan_pubkey: Uint8Array, prefix_bits: number): strin
 export function isLegacyPaycode(candidate: string): boolean;
 
 /**
+ * The P2 value for an address encoding. `cashaddr` is 3.
+ */
+export function ledgerAddressFormat(name: string): number;
+
+/**
+ * A BIP32 path as the Bitcoin app expects it: count byte, then big-endian
+ * u32 per level with the high bit set on hardened levels.
+ */
+export function ledgerEncodeBip32Path(path: string): Uint8Array;
+
+/**
+ * GET WALLET PUBLIC KEY, as JSON so the renderer can frame it.
+ *
+ * `format` defaults to cashaddr when empty: a Ledger asked for the app
+ * default returns a legacy address, which is a real address on the same
+ * chain that no modern Bitcoin Cash wallet displays.
+ */
+export function ledgerGetWalletPublicKey(path: string, verify: boolean, format: string): string;
+
+/**
+ * Read the device's reply. Every length is checked against what arrived, so
+ * a truncated reply is refused rather than read as a short address.
+ */
+export function ledgerParseWalletPublicKey(response: Uint8Array): string;
+
+/**
+ * A status word as something the holder can act on. Empty string is success.
+ */
+export function ledgerStatusWord(status: number): string;
+
+/**
  * The message to show for a legacy PayCode. Exported rather than duplicated
  * in TypeScript so the wallet and the CLI refuse it in the same words.
  */
@@ -205,6 +269,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
     readonly connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
     readonly connectPublicKey: (a: number, b: number) => [number, number, number, number];
     readonly connectSignInput: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
@@ -213,6 +278,11 @@ export interface InitOutput {
     readonly decodeCashcode: (a: number, b: number) => [number, number, number, number];
     readonly deriveRpaKeys: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
     readonly encodeCashcode: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly explorerCustomUrl: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+    readonly explorerDefaultPresetId: () => [number, number];
+    readonly explorerPolicyForChainPolicy: (a: number, b: number) => [number, number];
+    readonly explorerPresetUrl: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+    readonly explorerPresets: () => [number, number];
     readonly fusionBlindIssuerNoncePoint: (a: number, b: number) => [number, number, number, number];
     readonly fusionBlindIssuerPublicKey: (a: number, b: number) => [number, number, number, number];
     readonly fusionBlindIssuerSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
@@ -230,6 +300,11 @@ export interface InitOutput {
     readonly grindSequence: (a: number) => [number, number, number];
     readonly grindString: (a: number, b: number, c: number) => [number, number, number, number];
     readonly isLegacyPaycode: (a: number, b: number) => number;
+    readonly ledgerAddressFormat: (a: number, b: number) => [number, number, number];
+    readonly ledgerEncodeBip32Path: (a: number, b: number) => [number, number, number, number];
+    readonly ledgerGetWalletPublicKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly ledgerParseWalletPublicKey: (a: number, b: number) => [number, number, number, number];
+    readonly ledgerStatusWord: (a: number) => [number, number];
     readonly legacyPaycodeRejection: () => [number, number];
     readonly looksLikeRpa: (a: number, b: number) => number;
     readonly paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
@@ -240,9 +315,9 @@ export interface InitOutput {
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_start: () => void;
 }
 

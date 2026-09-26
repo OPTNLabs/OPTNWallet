@@ -1,6 +1,21 @@
 /* @ts-self-types="./optn_core.d.ts" */
 
 /**
+ * Shared Rust ceiling for the legacy untrusted iframe bridge.
+ * @param {string} module
+ * @param {string} method
+ * @returns {boolean}
+ */
+export function addonLegacyGuestCallAllowed(module, method) {
+    const ptr0 = passStringToWasm0(module, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(method, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.addonLegacyGuestCallAllowed(ptr0, len0, ptr1, len1);
+    return ret !== 0;
+}
+
+/**
  * @param {Uint8Array} public_key
  * @returns {Uint8Array}
  */
@@ -186,6 +201,142 @@ export function encodeCashcode(scan_pubkey, spend_pubkey, network, prefix_bits) 
         return getStringFromWasm0(ptr4, len4);
     } finally {
         wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * A link to the holder's own explorer, from the templates they supplied.
+ * @param {string} tx_template
+ * @param {string} address_template
+ * @param {string} network
+ * @param {string} kind
+ * @param {string} value
+ * @param {string} chain_policy
+ * @returns {string}
+ */
+export function explorerCustomUrl(tx_template, address_template, network, kind, value, chain_policy) {
+    let deferred8_0;
+    let deferred8_1;
+    try {
+        const ptr0 = passStringToWasm0(tx_template, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(address_template, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passStringToWasm0(value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ptr5 = passStringToWasm0(chain_policy, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ret = wasm.explorerCustomUrl(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
+        var ptr7 = ret[0];
+        var len7 = ret[1];
+        if (ret[3]) {
+            ptr7 = 0; len7 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred8_0 = ptr7;
+        deferred8_1 = len7;
+        return getStringFromWasm0(ptr7, len7);
+    } finally {
+        wasm.__wbindgen_free(deferred8_0, deferred8_1, 1);
+    }
+}
+
+/**
+ * The preset used when the holder has not chosen one.
+ * @returns {string}
+ */
+export function explorerDefaultPresetId() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.explorerDefaultPresetId();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * What a chain connection policy means for explorer links:
+ * `public-allowed`, `user-owned-only` or `disabled`.
+ * @param {string} policy
+ * @returns {string}
+ */
+export function explorerPolicyForChainPolicy(policy) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(policy, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.explorerPolicyForChainPolicy(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * A link to one of the shipped public explorers, or an error explaining why
+ * the policy refuses it.
+ * @param {string} preset_id
+ * @param {string} network
+ * @param {string} kind
+ * @param {string} value
+ * @param {string} chain_policy
+ * @returns {string}
+ */
+export function explorerPresetUrl(preset_id, network, kind, value, chain_policy) {
+    let deferred7_0;
+    let deferred7_1;
+    try {
+        const ptr0 = passStringToWasm0(preset_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passStringToWasm0(chain_policy, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ret = wasm.explorerPresetUrl(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
+        var ptr6 = ret[0];
+        var len6 = ret[1];
+        if (ret[3]) {
+            ptr6 = 0; len6 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred7_0 = ptr6;
+        deferred7_1 = len6;
+        return getStringFromWasm0(ptr6, len6);
+    } finally {
+        wasm.__wbindgen_free(deferred7_0, deferred7_1, 1);
+    }
+}
+
+/**
+ * Every shipped preset, as JSON, so the settings picker lists exactly what
+ * the router will accept.
+ * @returns {string}
+ */
+export function explorerPresets() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.explorerPresets();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
     }
 }
 
@@ -560,6 +711,118 @@ export function isLegacyPaycode(candidate) {
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.isLegacyPaycode(ptr0, len0);
     return ret !== 0;
+}
+
+/**
+ * The P2 value for an address encoding. `cashaddr` is 3.
+ * @param {string} name
+ * @returns {number}
+ */
+export function ledgerAddressFormat(name) {
+    const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.ledgerAddressFormat(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0];
+}
+
+/**
+ * A BIP32 path as the Bitcoin app expects it: count byte, then big-endian
+ * u32 per level with the high bit set on hardened levels.
+ * @param {string} path
+ * @returns {Uint8Array}
+ */
+export function ledgerEncodeBip32Path(path) {
+    const ptr0 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.ledgerEncodeBip32Path(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
+ * GET WALLET PUBLIC KEY, as JSON so the renderer can frame it.
+ *
+ * `format` defaults to cashaddr when empty: a Ledger asked for the app
+ * default returns a legacy address, which is a real address on the same
+ * chain that no modern Bitcoin Cash wallet displays.
+ * @param {string} path
+ * @param {boolean} verify
+ * @param {string} format
+ * @returns {string}
+ */
+export function ledgerGetWalletPublicKey(path, verify, format) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.ledgerGetWalletPublicKey(ptr0, len0, verify, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * Read the device's reply. Every length is checked against what arrived, so
+ * a truncated reply is refused rather than read as a short address.
+ * @param {Uint8Array} response
+ * @returns {string}
+ */
+export function ledgerParseWalletPublicKey(response) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArray8ToWasm0(response, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.ledgerParseWalletPublicKey(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * A status word as something the holder can act on. Empty string is success.
+ * @param {number} status
+ * @returns {string}
+ */
+export function ledgerStatusWord(status) {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.ledgerStatusWord(status);
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
 }
 
 /**

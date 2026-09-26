@@ -1058,10 +1058,24 @@ mod tests {
 
     #[test]
     fn header_walk_rejects_unknown_networks_instead_of_using_mainnet() {
-        assert!(HeaderWalk::for_network("testnet3", [0; 32], 0, 0).is_err());
-        assert!(HeaderWalk::for_network("unknown", [0; 32], 0, 0).is_err());
-        for network in ["mainnet", "chipnet", "testnet4", "testnet", "regtest"] {
-            assert!(HeaderWalk::for_network(network, [0; 32], 0, 0).is_ok());
+        // `testnet3` used to be refused here because the typed `Network` had
+        // no such variant -- the name resolved to nothing. It is a real
+        // network now, so it walks like any other; what must still be refused
+        // is a name that names no chain, and `bchtest`, which three chains
+        // share and therefore identifies none of them.
+        for refused in ["unknown", "bchtest", ""] {
+            assert!(
+                HeaderWalk::for_network(refused, [0; 32], 0, 0).is_err(),
+                "{refused} must not resolve to a chain"
+            );
+        }
+        for network in [
+            "mainnet", "chipnet", "testnet3", "testnet4", "testnet", "regtest",
+        ] {
+            assert!(
+                HeaderWalk::for_network(network, [0; 32], 0, 0).is_ok(),
+                "{network} must walk its own chain"
+            );
         }
     }
 

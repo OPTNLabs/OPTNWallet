@@ -92,6 +92,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
         with:
+          # `tools` was removed from the SDK catalog; the debug-apk job already
+          # installs platform-tools only. cmdline-tools are on the runner.
           packages: platform-tools
 
       - name: Install pinned Android SDK and NDK
@@ -137,11 +139,25 @@ jobs:
         run: npx tauri android build --debug --apk --target aarch64 --config src-tauri/tauri.leptos.mobile.conf.json
 
       - name: Verify APK
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          APK="$(find src-tauri/gen/android -type f -name '*.apk' -print -quit)"
-          test -n "$APK"
-          test -s "$APK"
-          echo "Tauri Android APK: $APK"
+          mapfile -t apks < <(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*-debug.apk' -not -path '*/androidTest/*')
+          test "${#apks[@]}" -eq 1
+          test -s "${apks[0]}"
+          mkdir -p artifacts
+          cp "${apks[0]}" artifacts/optn-leptos-android-aarch64-debug.apk
+          printf 'git_sha=%s\npr_head_sha=%s\ninterface=Rust Leptos\ntarget=aarch64-linux-android\nprofile=debug\n' \
+            "$GITHUB_SHA" "$PR_HEAD_SHA" > artifacts/build-info.txt
+          (cd artifacts && sha256sum optn-leptos-android-aarch64-debug.apk > SHA256SUMS)
+
+      - name: Upload Rust Android APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: optn-leptos-android-aarch64-debug
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 7
 
   ios:
     name: Tauri Leptos iOS
@@ -181,23 +197,6 @@ jobs:
 
       - name: Initialize Tauri iOS
         run: npx tauri ios init --ci --config src-tauri/tauri.leptos.mobile.conf.json
-
-      - name: Resolve Tauri Swift package dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo fetch --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios-sim
-
-          tauri_version="$(awk '$0 == "name = \"tauri\"" { getline; gsub(/version = \"|\"/, ""); print; exit }' src-tauri/Cargo.lock)"
-          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          tauri_source="$(find "$cargo_home/registry/src" -maxdepth 3 -type d -name "tauri-$tauri_version" -print -quit)"
-
-          if [[ -z "$tauri_version" || -z "$tauri_source" ]]; then
-            echo "Could not locate the locked Tauri crate source for SwiftPM resolution." >&2
-            exit 1
-          fi
-
-          swift package --package-path "$tauri_source/mobile/ios-api" resolve
 
       - name: Build Tauri Leptos iOS simulator
         run: npx tauri ios build --debug --target aarch64-sim --ci --config src-tauri/tauri.leptos.mobile.conf.json

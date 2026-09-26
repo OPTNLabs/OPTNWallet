@@ -2,6 +2,7 @@ import { ROUTE_PATHS } from '../../navigation/routes';
 import { Network } from '../../state/slices/networkSlice';
 
 export type SettingsPanelKey =
+  | 'appearance'
   | 'recovery'
   | 'about'
   | 'terms'
@@ -24,7 +25,8 @@ export type SettingsPanelKey =
   | 'language'
   | 'app-lock'
   | 'rebuild-wallet'
-  | 'export-archive';
+  | 'export-archive'
+  | 'updates';
 
 export type SettingsGroupKey = 'wallet' | 'features' | 'about';
 
@@ -38,6 +40,13 @@ export type SettingsRowConfig = {
 };
 
 export const WALLET_ROWS: SettingsRowConfig[] = [
+  {
+    key: 'appearance',
+    title: 'Appearance',
+    description: 'Theme mode and skin',
+    action: 'panel',
+    target: 'appearance',
+  },
   {
     key: 'language',
     title: 'Language',
@@ -221,6 +230,9 @@ export function getSettingsGroupRows(
         'export-archive',
         'console',
         'addons',
+        // Mobile builds are updated by their stores and the web build is
+        // whatever the server served, so only desktop has anything to check.
+        'updates',
       ].includes(String(row.key))
     ) {
       return false;
@@ -280,7 +292,15 @@ export const CONNECTION_ROWS: SettingsRowConfig[] = [
 ];
 
 export const ABOUT_ROWS: SettingsRowConfig[] = [
+  WALLET_ROWS.find((row) => row.key === 'appearance')!,
   WALLET_ROWS.find((row) => row.key === 'language')!,
+  {
+    key: 'updates',
+    title: 'Updates',
+    description: 'Check for a newer release · pre-release channels',
+    action: 'panel',
+    target: 'updates',
+  },
   {
     key: 'about',
     title: 'About OPTN',

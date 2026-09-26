@@ -6,9 +6,12 @@
 //! adapters may subscribe to typed events. No UI or native-shell framework
 //! belongs in this crate.
 
+use std::collections::BTreeMap;
+
 pub use optn_core::wallet_file::SecretText;
 pub mod connect;
 mod flow;
+pub mod fusion;
 pub mod identity;
 pub mod menu;
 pub use connect::{
@@ -469,6 +472,27 @@ pub struct AppState {
     pub settings_focus: Option<SettingsRowId>,
     pub watch_only_kind: WatchOnlyKind,
     pub multisig_step: MultisigStep,
+    /// What Auto Fusion is doing. Owned by the runtime driver; a renderer
+    /// displays it and configures the policy, and never drives a round.
+    pub fusion: fusion::FusionSession,
+    /// Whether the Tor SOCKS proxy is up.
+    ///
+    /// Runtime-observed, not a preference: P2P fusion cannot start without it,
+    /// and a renderer asserting it would let a round attempt a clearnet
+    /// connection the holder never agreed to.
+    pub tor_ready: bool,
+    /// The holder's Auto Fusion settings.
+    ///
+    /// The master switch is not here: it is `FeatureFlag::CashFusion`, and
+    /// keeping one source of truth for "is this feature on at all" is worth
+    /// more than the symmetry of storing it twice.
+    pub auto_fusion: fusion::AutoFusionSettings,
+    /// Verified token identities, keyed by category id in display order.
+    ///
+    /// Written by the runtime after BCMR resolution, never by a renderer. An
+    /// absent entry is not an error: it means this wallet has not established
+    /// the identity, and the category is shown as itself until it does.
+    pub token_identities: BTreeMap<String, TokenIdentity>,
     /// Tab that opened the current overlay. `None` on a section root.
     pub return_to: Option<AppRoute>,
     pub lock: AppLockState,
@@ -557,6 +581,10 @@ impl AppState {
             settings_focus: None,
             watch_only_kind: WatchOnlyKind::Single,
             multisig_step: MultisigStep::Policy,
+            tor_ready: false,
+            fusion: fusion::FusionSession::new(),
+            auto_fusion: fusion::AutoFusionSettings::new(),
+            token_identities: BTreeMap::new(),
             return_to: None,
             lock: AppLockState::new(),
         }
@@ -641,6 +669,38 @@ pub enum AppAction {
     DisconnectHardware,
     /// Hide the identifying wallet fields again. Needs no authorisation.
     HideWalletIdentity,
+    /// Record the RPA stealth balance a scan found.
+    /// Arm Auto Fusion for this session.
+    ///
+    /// The one explicit consent in the flow: a persisted preference says the
+    /// holder wants Auto Fusion, and this says they want it *now*, in this
+    /// session, with this wallet. After it the driver runs by itself; it is a
+    /// safety gate rather than a manual-mode switch, which is why reopening the
+    /// app does not resume spending fees.
+    StartFusion,
+    /// Stop the current round and disarm.
+    CancelFusion,
+    /// Turn the Auto Fusion preference on or off.
+    SetAutoFusionEnabled(bool),
+    /// Choose the transport. The two are mutually exclusive.
+    SetFusionMode(fusion::FusionMode),
+    /// Publish whether Tor is up.
+    SetTorReady(bool),
+    /// Publish what the driver is doing.
+    ///
+    /// An observation, not an instruction: a renderer that could set this could
+    /// claim a round completed, or hide one that failed.
+    SetFusionPhase(fusion::FusionPhase),
+    /// Publish a token identity the runtime resolved and verified.
+    ///
+    /// An observation, not an instruction, so a renderer may not make it: a
+    /// name that a screen could set is a name an addon or a compromised
+    /// renderer could set, and the whole point of BCMR is that the chain says
+    /// what a token is called.
+    SetTokenIdentity {
+        category_hex: String,
+        identity: TokenIdentity,
+    },
     /// Rescan this wallet from a chosen block height, inclusive.
     ///
     /// An instruction, not an observation, so the renderer may make it: it
@@ -723,7 +783,10 @@ pub enum AppEvent {
     NetworkChanged(Network),
     HelpVisibilityChanged(bool),
     SurfaceChanged(AppSurface),
-    FeatureFlagChanged { flag: FeatureFlag, enabled: bool },
+    FeatureFlagChanged {
+        flag: FeatureFlag,
+        enabled: bool,
+    },
     CoinsChanged,
     FlipstarterPledgesChanged,
     NoticeChanged,
@@ -737,6 +800,8 @@ pub enum AppEvent {
     AuthRequired,
     SpendAuthorized,
     WalletLocked,
+    /// Fusion policy or session state moved.
+    FusionChanged,
 }
 
 impl AppState {
@@ -745,7 +810,10 @@ impl AppState {
     /// the same boundary. `reduce` also serves trusted model/worker fixtures.
     pub fn reduce_intent(&mut self, action: AppAction) -> Option<AppEvent> {
         match action {
-            AppAction::InsertCoin(_) => self.reject(
+            AppAction::InsertCoin(_)
+            | AppAction::SetTokenIdentity { .. }
+            | AppAction::SetFusionPhase(_)
+            | AppAction::SetTorReady(_) => self.reject(
                 "Wallet observations must come from the shared sync service.".into(),
             ),
             AppAction::ConfirmAuth { .. } => self.reject(
@@ -861,6 +929,8 @@ impl AppState {
                 // request carried across the switch would be answered against
                 // coins that are not the ones it was built from.
                 self.connect.cancel_all();
+                self.fusion = fusion::FusionSession::new();
+                self.tor_ready = false;
                 Some(AppEvent::NetworkChanged(network))
             }
             AppAction::OpenHelp if !self.help_open => {
@@ -874,6 +944,8 @@ impl AppState {
             AppAction::SetSurface(surface) if self.surface != surface => {
                 self.surface = surface;
                 self.features = FeatureFlags::default();
+                self.fusion.disarm();
+                self.tor_ready = false;
                 Some(AppEvent::SurfaceChanged(surface))
             }
             AppAction::SetFeatureEnabled { flag, enabled } => {
@@ -896,6 +968,9 @@ impl AppState {
                     FeatureFlag::CashFusion => self.features.cash_fusion = Some(wanted),
                     FeatureFlag::HardwareWallet => self.features.hardware_wallet = Some(wanted),
                     FeatureFlag::WatchOnly => self.features.watch_only = Some(wanted),
+                }
+                if flag == FeatureFlag::CashFusion && !wanted {
+                    self.fusion.disarm();
                 }
                 Some(AppEvent::FeatureFlagChanged {
                     flag,
@@ -1020,6 +1095,88 @@ impl AppState {
                 // shows. The runtime replaces this view when the scan lands.
                 self.wallet_sync.rescan_requested = Some(height);
                 self.wallet_sync.error = None;
+                Some(AppEvent::CoinsChanged)
+            }
+            AppAction::StartFusion => {
+                if !self.features.enabled(self.surface, FeatureFlag::CashFusion) {
+                    return self.reject("CashFusion is not available here.".into());
+                }
+                if self.wallet.is_none() {
+                    return self.reject("Open a wallet before fusing.".into());
+                }
+                if self.wallet.as_ref().map(|wallet| wallet.kind) != Some(WalletKind::Seed) {
+                    return self.reject("Auto Fusion requires an unlocked seed wallet.".into());
+                }
+                if self.fusion.session_armed && self.fusion.is_scheduled() {
+                    return None;
+                }
+                self.fusion.session_armed = true;
+                // Deliberately does not set a running phase. Arming is consent;
+                // the driver decides when a round actually starts, and claiming
+                // otherwise here would show a round that is not happening.
+                self.fusion.hold_reason = None;
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::CancelFusion => {
+                if !self.fusion.session_armed && !self.fusion.is_scheduled() {
+                    return None;
+                }
+                // Disarm as well as stop. A cancel that left the session armed
+                // would have the driver start another round moments later,
+                // which is the opposite of what cancelling means.
+                self.fusion.disarm();
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::SetAutoFusionEnabled(enabled) => {
+                if self.auto_fusion.auto_fuse_enabled == enabled {
+                    return None;
+                }
+                self.auto_fusion.auto_fuse_enabled = enabled;
+                if !enabled {
+                    self.fusion.disarm();
+                }
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::SetFusionMode(mode) => {
+                let p2p = matches!(mode, fusion::FusionMode::P2p);
+                if self.auto_fusion.p2p_fusion_enabled == p2p {
+                    return None;
+                }
+                if self.fusion.is_busy() {
+                    return self.reject(
+                        "Finish or cancel the current round before changing transport.".into(),
+                    );
+                }
+                self.auto_fusion.p2p_fusion_enabled = p2p;
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::SetTorReady(ready) => {
+                if self.tor_ready == ready {
+                    return None;
+                }
+                self.tor_ready = ready;
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::SetFusionPhase(phase) => {
+                if self.fusion.phase == phase {
+                    return None;
+                }
+                // Keep the running totals the driver reports.
+                if let fusion::FusionPhase::Completed { fused_sats, .. } = &phase {
+                    self.fusion.rounds_completed = self.fusion.rounds_completed.saturating_add(1);
+                    self.fusion.fused_sats = self.fusion.fused_sats.saturating_add(*fused_sats);
+                }
+                self.fusion.phase = phase;
+                Some(AppEvent::FusionChanged)
+            }
+            AppAction::SetTokenIdentity {
+                category_hex,
+                identity,
+            } => {
+                if self.token_identities.get(&category_hex) == Some(&identity) {
+                    return None;
+                }
+                self.token_identities.insert(category_hex, identity);
                 Some(AppEvent::CoinsChanged)
             }
             AppAction::HideWalletIdentity => {
@@ -1326,6 +1483,8 @@ impl AppState {
         self.pledges.clear();
         self.spend = None;
         self.connect.cancel_all();
+        self.fusion = fusion::FusionSession::new();
+        self.auto_fusion = fusion::AutoFusionSettings::new();
         self.identity_revealed = false;
         self.hardware.account_xpub = None;
         self.notice = None;
@@ -1341,6 +1500,8 @@ impl AppState {
             return None;
         }
         self.lock.lock();
+        self.fusion = fusion::FusionSession::new();
+        self.auto_fusion = fusion::AutoFusionSettings::new();
         // A reveal must never outlive the unlocked session: coming back to a
         // locked wallet showing its xPub would defeat the gate entirely.
         self.identity_revealed = false;
@@ -1832,6 +1993,47 @@ pub struct CoinsViewModel {
     pub coins: Vec<Coin>,
 }
 
+/// How far an identity got, and therefore how much to trust the name.
+///
+/// Kept distinct all the way to the screen. A wallet that renders "could not
+/// reach the registry" the same as "the owner withdrew it" has thrown away the
+/// difference, and the holder is the one who needs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityStatus {
+    /// Fetched from the current authhead and hash-verified.
+    Verified,
+    /// Verified once and no longer current. Show it, and say so.
+    Stale,
+    /// The authhead publishes no registry. Not a failure; a decision.
+    Unpublished,
+    /// Nothing could be established. The tokens are still owned.
+    Unresolved,
+}
+
+impl IdentityStatus {
+    /// A short caveat, or `None` when the identity is current.
+    pub const fn caveat(self) -> Option<&'static str> {
+        match self {
+            Self::Verified => None,
+            Self::Stale => Some("last known"),
+            Self::Unpublished => Some("no registry published"),
+            Self::Unresolved => Some("unverified"),
+        }
+    }
+}
+
+/// A token's name as this wallet currently knows it.
+///
+/// Only ever built from a registry whose committed hash matched. A name that
+/// arrived without that check is not an identity, it is a string a server sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenIdentity {
+    pub name: String,
+    pub ticker: Option<String>,
+    pub decimals: u8,
+    pub status: IdentityStatus,
+}
+
 /// One CashToken category this wallet holds something of.
 ///
 /// Built from the wallet's own coins and nothing else. #71 is explicit that
@@ -1842,6 +2044,12 @@ pub struct CoinsViewModel {
 pub struct OwnedCategory {
     /// Category id in display order, the same order as a txid.
     pub category_hex: String,
+    /// The registry identity, when one has been verified.
+    ///
+    /// `None` means the category is shown as itself. That is deliberate: a
+    /// token whose metadata has not resolved is still owned, and hiding it
+    /// until a web server answers would make an owned asset disappear.
+    pub identity: Option<TokenIdentity>,
     /// Fungible amount across every coin in this category.
     pub amount: u64,
     /// How many of this wallet's coins carry the category.
@@ -1859,6 +2067,7 @@ pub struct OwnedCategory {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnedNft {
     pub category_hex: String,
+    pub identity: Option<TokenIdentity>,
     /// Hex of the commitment, which may be empty.
     pub commitment_hex: String,
     pub capability: TokenCapability,
@@ -1920,10 +2129,12 @@ pub fn assets_view_model(state: &AppState) -> AssetsViewModel {
             continue;
         };
         let hex = category_hex(&token.category);
+        let identity = state.token_identities.get(&hex).cloned();
         let entry = by_category
             .entry(hex.clone())
             .or_insert_with(|| OwnedCategory {
                 category_hex: hex,
+                identity,
                 amount: 0,
                 coins: 0,
                 nfts: 0,
@@ -1959,8 +2170,10 @@ pub fn nfts_view_model(state: &AppState) -> NftsViewModel {
         .filter_map(|coin| {
             let token = coin.token()?;
             let nft = token.nft.as_ref()?;
+            let hex = category_hex(&token.category);
             Some(OwnedNft {
-                category_hex: category_hex(&token.category),
+                identity: state.token_identities.get(&hex).cloned(),
+                category_hex: hex,
                 commitment_hex: nft
                     .commitment
                     .iter()
@@ -1997,8 +2210,40 @@ pub fn portfolio_totals(state: &AppState) -> PortfolioTotals {
     PortfolioTotals {
         spendable_sats: state.coins.spendable_sats(),
         reserved_sats: state.coins.reserved_sats(),
+        // Derived from the coin set rather than tracked beside it. A Cash Code
+        // payment is an ordinary coin, so a second running total could only
+        // ever disagree with the one the wallet actually spends from.
         stealth_sats: state.coins.rpa_sats(),
     }
+}
+
+/// Render Auto Fusion for a surface.
+///
+/// The master switch is read from the feature flag rather than stored twice,
+/// so the settings screen and the driver cannot disagree about whether the
+/// feature is on.
+pub fn fusion_view_model(state: &AppState) -> fusion::FusionViewModel {
+    let policy = state.auto_fusion.with_master_switch(
+        state
+            .features
+            .enabled(state.surface, FeatureFlag::CashFusion),
+    );
+    let mut view = fusion::fusion_view_model(
+        policy,
+        &state.fusion,
+        state.wallet.is_some(),
+        state.tor_ready,
+    );
+    if state
+        .wallet
+        .as_ref()
+        .is_some_and(|wallet| wallet.kind != WalletKind::Seed)
+    {
+        view.can_start = false;
+        view.status = "Auto Fusion requires an unlocked seed wallet.".into();
+        view.hint = Some(view.status.clone());
+    }
+    view
 }
 
 pub fn coins_view_model(state: &AppState) -> CoinsViewModel {
@@ -2178,7 +2423,7 @@ impl SettingsRowId {
             Self::AppLock => "App lock",
             Self::RebuildWallet => "Rebuild Wallet",
             Self::RescanFromHeight => "Rescan from block height",
-            Self::Servers => "Servers",
+            Self::Servers => "Network sources",
             Self::Device => "Hardware device",
             Self::CashFusion => "CashFusion",
         }
@@ -2198,7 +2443,7 @@ impl SettingsRowId {
             Self::RescanFromHeight => {
                 "Read the chain again from a block you choose. Anything earlier stays unscanned"
             }
-            Self::Servers => "Electrum · Block explorer · Transaction fees",
+            Self::Servers => "Sources · Routing · Privacy · Explorer",
             Self::Device => "Connected signer, its label, and how it is reached",
             Self::CashFusion => "Privacy mixing on desktop",
         }
@@ -2359,6 +2604,25 @@ pub fn watch_only_setup_preview(
         receive_token_address: preview.receive.token_address,
         change_address: preview.change.address,
     })
+}
+
+/// Preserve an explicitly supplied public-account origin (for example a
+/// SeedCash export) without relabelling its hardened account index.
+pub fn watch_only_setup_preview_at(
+    network: Network,
+    wallet_name: &str,
+    account_xpub: &str,
+    master_fingerprint: &str,
+    account: AccountPath,
+) -> Result<WatchOnlySetupPreview, String> {
+    let mut preview =
+        watch_only_setup_preview(network, wallet_name, account_xpub, master_fingerprint)?;
+    let derived = parse_account_path(&preview.account_path).map_err(|error| error.to_string())?;
+    if derived.account() != account.account() {
+        return Err("The account path index does not match the exported public key.".into());
+    }
+    preview.account_path = account.path();
+    Ok(preview)
 }
 
 /// Vendors onboarding offers, surfaced from `optn-platform` so the renderer
@@ -2870,6 +3134,88 @@ mod tests {
             assert!(assets_view_model(&state).categories.is_empty());
             assert!(nfts_view_model(&state).nfts.is_empty());
             assert_eq!(assets_view_model(&state).plain_sats, 0);
+        }
+
+        fn identity(name: &str, status: IdentityStatus) -> TokenIdentity {
+            TokenIdentity {
+                name: name.to_owned(),
+                ticker: Some("BCAT".into()),
+                decimals: 2,
+                status,
+            }
+        }
+
+        /// A verified name reaches the screens that show the category.
+        #[test]
+        fn a_resolved_identity_reaches_assets_and_nfts() {
+            let mut state = wallet_with(vec![
+                coin(1, 1_000, Some(TokenData::fungible(ALPHA, 10))),
+                coin(2, 1_000, Some(nft(ALPHA, b"\x01", NftCapability::None))),
+            ]);
+            state.reduce(AppAction::SetTokenIdentity {
+                category_hex: "aa".repeat(32),
+                identity: identity("Bitcats", IdentityStatus::Verified),
+            });
+
+            let assets = assets_view_model(&state);
+            assert_eq!(
+                assets.categories[0]
+                    .identity
+                    .as_ref()
+                    .map(|i| i.name.as_str()),
+                Some("Bitcats")
+            );
+            let nfts = nfts_view_model(&state);
+            assert_eq!(
+                nfts.nfts[0].identity.as_ref().map(|i| i.name.as_str()),
+                Some("Bitcats")
+            );
+        }
+
+        /// An unresolved category is still shown, because it is still owned.
+        #[test]
+        fn an_unresolved_category_still_appears() {
+            let state = wallet_with(vec![coin(1, 1_000, Some(TokenData::fungible(ALPHA, 10)))]);
+            let assets = assets_view_model(&state);
+            assert_eq!(assets.categories.len(), 1);
+            assert_eq!(
+                assets.categories[0].identity, None,
+                "no identity yet is not a reason to hide a coin the wallet holds"
+            );
+        }
+
+        /// Every status that is not current carries a caveat.
+        ///
+        /// "Bitcats" and "Bitcats (last known)" are different claims, and the
+        /// holder deciding whether to spend needs them to look different.
+        #[test]
+        fn only_a_verified_identity_is_shown_without_a_caveat() {
+            assert_eq!(IdentityStatus::Verified.caveat(), None);
+            for status in [
+                IdentityStatus::Stale,
+                IdentityStatus::Unpublished,
+                IdentityStatus::Unresolved,
+            ] {
+                assert!(
+                    status.caveat().is_some(),
+                    "{status:?} must not be presented as current metadata"
+                );
+            }
+        }
+
+        /// A renderer cannot name a token.
+        ///
+        /// The chain says what a token is called. A name a screen could set is
+        /// a name an addon or a compromised renderer could set.
+        #[test]
+        fn a_renderer_may_not_publish_a_token_identity() {
+            let mut state = wallet_with(vec![coin(1, 1_000, Some(TokenData::fungible(ALPHA, 1)))]);
+            state.reduce_intent(AppAction::SetTokenIdentity {
+                category_hex: "aa".repeat(32),
+                identity: identity("Totally Real Coin", IdentityStatus::Verified),
+            });
+            assert!(state.token_identities.is_empty());
+            assert!(state.notice.is_some(), "the refusal has to be visible");
         }
 
         /// My NFTs is a destination of its own, reachable and titled.
@@ -4291,6 +4637,195 @@ mod tests {
         assert_eq!(portfolio_totals(&state).spendable_sats, 0);
     }
 
+    /// Desktop, wallet open. CashFusion is desktop-only, so the surface is
+    /// part of the fixture rather than incidental to it.
+    fn seeded_wallet_state() -> AppState {
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.apply(AppAction::OpenCreatedWallet {
+            name: "Fusion".into(),
+            receive_address: "bitcoincash:qq0000000000000000000000000000000000000000".into(),
+            account_path: "m/44'/145'/0'".into(),
+        });
+        assert!(state.wallet.is_some(), "fixture must open a wallet");
+        state
+    }
+
+    /// Arming is consent to spend, and nothing more.
+    ///
+    /// A start that jumped straight to a running phase would show a round that
+    /// is not happening: only the driver knows whether it actually joined a
+    /// pool, and on P2P it may sit waiting for a rendezvous slot for over a
+    /// minute first.
+    #[test]
+    fn starting_fusion_arms_the_session_without_claiming_a_round() {
+        let mut state = seeded_wallet_state();
+        assert!(!state.fusion.session_armed);
+
+        assert_eq!(
+            state.reduce_intent(AppAction::StartFusion),
+            Some(AppEvent::FusionChanged)
+        );
+        assert!(state.fusion.session_armed);
+        assert_eq!(state.fusion.phase, fusion::FusionPhase::Idle);
+        assert!(!state.fusion.is_busy());
+    }
+
+    /// The preference persists; the arming does not.
+    #[test]
+    fn a_restored_session_is_not_armed_by_the_preference_alone() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::SetAutoFusionEnabled(true));
+
+        // Exactly the shape of a reopened app: preference on, never started.
+        assert!(state.auto_fusion.auto_fuse_enabled);
+        assert!(!state.fusion.session_armed);
+
+        let view = fusion_view_model(&state);
+        assert!(!view.session.session_armed);
+        assert_eq!(
+            view.status, "Fusion must be started once in this session first",
+            "the preference alone must not read as ready to spend"
+        );
+    }
+
+    /// Cancelling disarms. Otherwise the driver starts another round seconds
+    /// later, which is the opposite of what cancelling means.
+    #[test]
+    fn cancelling_disarms_rather_than_pausing() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::StartFusion);
+        state.apply(AppAction::SetFusionPhase(fusion::FusionPhase::Running {
+            mode: fusion::FusionMode::Server,
+            step: fusion::FusionStep::Gathering,
+            participants: Some(3),
+        }));
+
+        assert_eq!(
+            state.reduce_intent(AppAction::CancelFusion),
+            Some(AppEvent::FusionChanged)
+        );
+        assert!(!state.fusion.session_armed);
+        // Still Cancelling, not Idle: the round holds coin reservations until
+        // the teardown lands.
+        assert_eq!(state.fusion.phase, fusion::FusionPhase::Cancelling);
+        assert!(state.fusion.is_busy());
+    }
+
+    /// A renderer may configure and arm, but may not narrate.
+    ///
+    /// If the interface could publish the phase it could claim a round
+    /// completed, or hide one that failed.
+    #[test]
+    fn an_interface_cannot_publish_fusion_progress() {
+        let mut state = seeded_wallet_state();
+
+        assert_eq!(
+            state.reduce_intent(AppAction::SetFusionPhase(fusion::FusionPhase::Completed {
+                txid: "ff".repeat(32),
+                fused_sats: 100_000,
+                at_ms: 1,
+            })),
+            Some(AppEvent::NoticeChanged)
+        );
+        assert_eq!(state.fusion.phase, fusion::FusionPhase::Idle);
+        assert_eq!(state.fusion.rounds_completed, 0);
+        assert_eq!(state.fusion.fused_sats, 0);
+
+        assert_eq!(
+            state.reduce_intent(AppAction::SetTorReady(true)),
+            Some(AppEvent::NoticeChanged)
+        );
+        assert!(!state.tor_ready);
+
+        // The same actions from the sync service are accepted.
+        state.apply(AppAction::SetTorReady(true));
+        assert!(state.tor_ready);
+    }
+
+    /// Completed rounds accumulate, because a holder wants a session total
+    /// rather than only the most recent round.
+    #[test]
+    fn completed_rounds_accumulate_for_the_session() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::StartFusion);
+        for i in 0..2u64 {
+            state.apply(AppAction::SetFusionPhase(fusion::FusionPhase::Running {
+                mode: fusion::FusionMode::Server,
+                step: fusion::FusionStep::Signing,
+                participants: None,
+            }));
+            state.apply(AppAction::SetFusionPhase(fusion::FusionPhase::Completed {
+                txid: format!("{i:064}"),
+                fused_sats: 50_000,
+                at_ms: i,
+            }));
+        }
+        assert_eq!(state.fusion.rounds_completed, 2);
+        assert_eq!(state.fusion.fused_sats, 100_000);
+    }
+
+    /// Switching transport mid-round would strand the round that is running.
+    #[test]
+    fn the_transport_cannot_be_switched_mid_round() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::StartFusion);
+        state.apply(AppAction::SetFusionPhase(fusion::FusionPhase::Running {
+            mode: fusion::FusionMode::Server,
+            step: fusion::FusionStep::Assembling,
+            participants: Some(5),
+        }));
+
+        assert_eq!(
+            state.reduce_intent(AppAction::SetFusionMode(fusion::FusionMode::P2p)),
+            Some(AppEvent::NoticeChanged)
+        );
+        assert!(!state.auto_fusion.p2p_fusion_enabled);
+
+        // Once the round is over the switch goes through.
+        state.apply(AppAction::SetFusionPhase(fusion::FusionPhase::Idle));
+        state.apply(AppAction::SetFusionMode(fusion::FusionMode::P2p));
+        assert!(state.auto_fusion.p2p_fusion_enabled);
+    }
+
+    /// One source of truth for the master switch.
+    ///
+    /// The settings screen toggles `FeatureFlag::CashFusion`; the driver asks
+    /// the policy. A second stored copy would let them disagree.
+    #[test]
+    fn the_feature_flag_is_the_fusion_master_switch() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::SetAutoFusionEnabled(true));
+        state.apply(AppAction::StartFusion);
+        assert!(fusion_view_model(&state).policy.cash_fusion_enabled);
+
+        state.apply(AppAction::SetFeatureEnabled {
+            flag: FeatureFlag::CashFusion,
+            enabled: false,
+        });
+
+        let view = fusion_view_model(&state);
+        assert!(!view.policy.cash_fusion_enabled);
+        assert_eq!(view.status, "CashFusion is off");
+        assert!(!view.can_start);
+    }
+
+    /// P2P cannot start without Tor, and the reason has to say so.
+    #[test]
+    fn p2p_fusion_holds_until_tor_is_up() {
+        let mut state = seeded_wallet_state();
+        state.apply(AppAction::SetAutoFusionEnabled(true));
+        state.apply(AppAction::SetFusionMode(fusion::FusionMode::P2p));
+        state.apply(AppAction::StartFusion);
+
+        assert_eq!(
+            fusion_view_model(&state).status,
+            "Tor is not ready for P2P fusion"
+        );
+
+        state.apply(AppAction::SetTorReady(true));
+        assert_eq!(fusion_view_model(&state).status, "Ready");
+    }
+
     #[test]
     fn switching_network_drops_coins_that_belong_to_the_other_chain() {
         // Coins belong to a chain. Carrying them across a switch would count
@@ -4667,6 +5202,45 @@ mod tests {
         );
         trezor.disconnect();
         assert_eq!(trezor.vendor, Some(HardwareVendor::Trezor));
+    }
+
+    #[test]
+    fn watch_only_explicit_origin_survives_preview_and_rejects_another_account() {
+        let account = AccountPath::new(145, 2).unwrap();
+        let xpub = optn_core::hd::Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "")
+            .unwrap()
+            .account_xpub_at(account)
+            .unwrap();
+        let default =
+            watch_only_setup_preview(Network::Chipnet, "Public origin", &xpub, "a1b2c3d4").unwrap();
+        let selected = watch_only_setup_preview_at(
+            Network::Chipnet,
+            "Public origin",
+            &xpub,
+            "a1b2c3d4",
+            account,
+        )
+        .unwrap();
+        assert_eq!(default.account_path, "m/44'/1'/2'");
+        assert_eq!(selected.account_path, "m/44'/145'/2'");
+        assert_eq!(selected.receive_address, default.receive_address);
+        assert_eq!(selected.master_fingerprint.as_deref(), Some("a1b2c3d4"));
+        assert!(watch_only_setup_preview_at(
+            Network::Chipnet,
+            "Public origin",
+            &xpub,
+            "",
+            AccountPath::new(145, 0).unwrap()
+        )
+        .is_err());
+        assert!(watch_only_setup_preview_at(
+            Network::Chipnet,
+            "Public origin",
+            "not a key",
+            "",
+            account
+        )
+        .is_err());
     }
 
     #[test]

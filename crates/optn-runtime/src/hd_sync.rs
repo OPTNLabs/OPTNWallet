@@ -273,8 +273,13 @@ mod tests {
         caps: CapabilitySet,
         transactions: Vec<ObservedTransaction>,
         calls: Mutex<Vec<usize>>,
+        floors: Mutex<Vec<Option<u32>>>,
+        expected_floor: Mutex<Option<u32>>,
         entered: Notify,
         hold: bool,
+        headers: Mutex<Option<Vec<[u8; 80]>>>,
+        hold_headers: std::sync::atomic::AtomicBool,
+        header_entered: Notify,
     }
 
     impl ChainBackend for Backend {
@@ -295,9 +300,39 @@ mod tests {
         }
         fn supports(&self, operation: ChainOperation) -> bool {
             operation == ChainOperation::WalletRefresh
+                || (operation == ChainOperation::HeaderSync
+                    && self.headers.lock().unwrap().is_some())
         }
         fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
             Box::pin(async move {
+                if let ChainRequest::HeaderSync {
+                    start_height,
+                    count,
+                } = request
+                {
+                    self.header_entered.notify_one();
+                    if self.hold_headers.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::future::pending::<()>().await;
+                    }
+                    return Ok(BackendObservation {
+                        payload: ChainPayload::Headers {
+                            start_height: *start_height,
+                            headers: self
+                                .headers
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .unwrap()
+                                .iter()
+                                .skip(start_height.saturating_sub(1) as usize)
+                                .take(*count as usize)
+                                .copied()
+                                .collect(),
+                        },
+                        evidence: Evidence::ServerAssertion,
+                        chain_tip: None,
+                    });
+                }
                 let ChainRequest::WalletRefresh {
                     interests,
                     from_height,
@@ -305,18 +340,28 @@ mod tests {
                 else {
                     unreachable!()
                 };
-                assert!(
-                    from_height.is_none(),
-                    "each discovery round covers the entire watched scope"
+                assert_eq!(
+                    *from_height,
+                    *self.expected_floor.lock().unwrap(),
+                    "every discovery round must retain the expected floor (genesis by default)"
                 );
                 self.calls.lock().unwrap().push(interests.len());
+                self.floors.lock().unwrap().push(*from_height);
                 self.entered.notify_one();
                 if self.hold {
                     std::future::pending::<()>().await;
                 }
                 Ok(BackendObservation {
                     payload: ChainPayload::WalletRefresh {
-                        transactions: self.transactions.clone(),
+                        transactions: self
+                            .transactions
+                            .iter()
+                            .filter(|tx| match (tx.block_height, from_height) {
+                                (Some(height), Some(floor)) => height >= *floor,
+                                _ => true,
+                            })
+                            .cloned()
+                            .collect(),
                         tip: Some(ChainTip {
                             height: 100,
                             hash: [7; 32],
@@ -342,14 +387,24 @@ mod tests {
             CapabilityConfidence::Verified,
             CapabilityDiscovery::ActiveProbe,
         );
+        caps.record(
+            Capability::HeaderStream,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
         let backend = Arc::new(Backend {
             id: id.clone(),
             endpoint: endpoint.clone(),
             caps,
             transactions,
             calls: Mutex::new(vec![]),
+            floors: Mutex::new(vec![]),
+            expected_floor: Mutex::new(Some(0)),
             entered: Notify::new(),
             hold,
+            headers: Mutex::new(None),
+            hold_headers: std::sync::atomic::AtomicBool::new(false),
+            header_entered: Notify::new(),
         });
         let mut catalog = SourceCatalog::default();
         catalog
@@ -687,6 +742,411 @@ mod tests {
             AppRuntime::new_with_security(AppState::default(), security).unwrap();
         tokio::spawn(driver.run());
         runtime
+    }
+
+    #[tokio::test]
+    async fn durable_birthday_drives_every_hd_round_and_cancels_old_work() {
+        use optn_app::SecretText;
+        use optn_transport::{WalletBirthdayInput, WalletSecurityRequest as Request};
+        let storage = crate::wallet_security::tests::Storage::default();
+        let checkpoints = Checkpoints::default();
+        let runtime = private_runtime(storage.clone(), checkpoints.clone());
+        let opened = runtime
+            .wallet_security(Request::Create {
+                name: "Public birthday sync fixture".into(),
+                mnemonic: SecretText::new(BIP39_TEST_VECTOR_MNEMONIC.into()),
+                bip39_passphrase: SecretText::default(),
+                password: SecretText::default(),
+                confirmation: SecretText::default(),
+                network: "chipnet".into(),
+                account_path: "m/44'/1'/8'".into(),
+            })
+            .await
+            .unwrap();
+        let handle = opened.active.unwrap();
+        let xpub = runtime.state().wallet.unwrap().account_xpub.unwrap();
+        let mut transactions = history(&xpub);
+        let mut earlier = transaction(None, vec![(77, script(&xpub, 0, 0))]);
+        earlier.block_height = Some(1);
+        transactions.push(earlier);
+        let (mut chain, backend) = service(transactions.clone(), false);
+        let mut worker = ProgressiveSyncWorker::new(Default::default());
+        runtime
+            .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+            .await
+            .unwrap();
+        let before = runtime.state().coins.spendable_sats();
+        assert!(runtime.state().wallet_sync.utxos_fresh);
+        assert!(backend
+            .floors
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|floor| *floor == Some(0)));
+
+        let (mut held, held_backend) = service(transactions.clone(), true);
+        let other = runtime.clone();
+        let public = xpub.clone();
+        let pending = tokio::spawn(async move {
+            other
+                .sync_hd_wallet(
+                    &mut held,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    public,
+                    LIMITS,
+                )
+                .await
+        });
+        held_backend.entered.notified().await;
+        let generation = runtime.revocation.load(std::sync::atomic::Ordering::SeqCst);
+        runtime
+            .wallet_security(Request::SetBirthday {
+                epoch: opened.epoch,
+                birthday: WalletBirthdayInput::Height { height: 2 },
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.revocation.load(std::sync::atomic::Ordering::SeqCst),
+            generation + 1
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), pending)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(runtime.state().coins.spendable_sats(), before);
+        assert!(!runtime.state().wallet_sync.utxos_fresh);
+
+        // Reopen before the positive refresh: the floor must come from the seal.
+        drop(runtime);
+        let runtime = private_runtime(storage, checkpoints);
+        let reopened = runtime
+            .wallet_security(Request::Open {
+                handle,
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins.spendable_sats(), before);
+        let (mut chain, backend) = service(transactions, false);
+        *backend.expected_floor.lock().unwrap() = Some(2);
+        runtime
+            .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins.spendable_sats() + 77, before);
+        assert!(runtime.state().wallet_sync.utxos_fresh);
+        assert!(backend
+            .floors
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|floor| *floor == Some(2)));
+
+        runtime.request_wallet_rescan(1).await.unwrap();
+        *backend.expected_floor.lock().unwrap() = Some(1);
+        runtime
+            .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins.spendable_sats(), before);
+        let cleared = runtime
+            .wallet_security(Request::ClearRescan {
+                epoch: reopened.epoch,
+            })
+            .await
+            .unwrap();
+        assert_eq!(cleared.manual_rescan_from, None);
+        assert_eq!(
+            cleared.restore_birthday,
+            Some(optn_transport::WalletBirthdayView::ImportedAtHeight { height: 2 })
+        );
+        assert_eq!(runtime.state().coins.spendable_sats(), before);
+        assert!(!runtime.state().wallet_sync.utxos_fresh);
+        *backend.expected_floor.lock().unwrap() = Some(2);
+        runtime
+            .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins.spendable_sats() + 77, before);
+
+        runtime
+            .wallet_security(Request::SetBirthday {
+                epoch: reopened.epoch,
+                birthday: WalletBirthdayInput::Time {
+                    requested_time: 172800,
+                },
+            })
+            .await
+            .unwrap();
+        let calls = backend.calls.lock().unwrap().len();
+        let result = runtime
+            .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::wallet_sync::WalletSyncError::HistoryHeadersRequired(
+                _
+            ))
+        ));
+        assert_eq!(
+            backend.calls.lock().unwrap().len(),
+            calls,
+            "unresolved date must not query a guessed floor"
+        );
+        assert_eq!(runtime.state().coins.spendable_sats() + 77, before);
+        assert!(!runtime.state().wallet_sync.utxos_fresh);
+
+        // The actual HD entry point acquires authenticated time anchors from
+        // this selected route before any wallet query, then resolves inside
+        // the actor. Synthetic low-difficulty headers are test-only.
+        let (verifier, headers) = crate::sync_worker::tests::header_fixture_to(20);
+        let view = crate::header_view::VerifiedHeaderView::with_anchor_interval(
+            Network::Chipnet,
+            verifier,
+            1,
+        );
+        *backend.headers.lock().unwrap() = Some(headers);
+        *backend.expected_floor.lock().unwrap() = Some(20);
+        worker = ProgressiveSyncWorker::new(Default::default())
+            .with_header_view(view.clone())
+            .unwrap();
+        assert_eq!(
+            runtime
+                .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+                .await
+                .unwrap(),
+            ReconciliationDecision::Accepted
+        );
+        assert_eq!(worker.header_view().unwrap().tip().unwrap().0, 20);
+        assert_eq!(runtime.state().coins.spendable_sats() + 77, before);
+        assert!(runtime.state().wallet_sync.utxos_fresh);
+        assert!(backend.floors.lock().unwrap()[calls..]
+            .iter()
+            .all(|floor| *floor == Some(20)));
+
+        // Revocation while waiting for headers must never issue a wallet
+        // query or obtain a lease for the replacement restore intent.
+        let wallet_calls = backend.calls.lock().unwrap().len();
+        backend
+            .hold_headers
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Consume the notification from the completed acquisition first.
+        backend.header_entered.notified().await;
+        let task_runtime = runtime.clone();
+        let syncing = tokio::spawn(async move {
+            let mut worker = ProgressiveSyncWorker::new(Default::default())
+                .with_header_view(view)
+                .unwrap();
+            task_runtime
+                .sync_hd_wallet(&mut chain, &mut worker, xpub, LIMITS)
+                .await
+        });
+        backend.header_entered.notified().await;
+        runtime
+            .wallet_security(Request::SetBirthday {
+                epoch: reopened.epoch,
+                birthday: WalletBirthdayInput::Unknown,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), syncing)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(WalletSyncError::Superseded)
+        ));
+        assert_eq!(backend.calls.lock().unwrap().len(), wallet_calls);
+    }
+
+    #[tokio::test]
+    async fn private_hd_manual_rescan_persists_floor_across_failure_restart_and_cancellation() {
+        use optn_app::{ScanCoverageView, SecretText};
+        use optn_transport::WalletSecurityRequest as Request;
+
+        let storage = crate::wallet_security::tests::Storage::default();
+        let checkpoints = Checkpoints::default();
+        let runtime = private_runtime(storage.clone(), checkpoints.clone());
+        let opened = runtime
+            .wallet_security(Request::Create {
+                name: "Public manual rescan fixture".into(),
+                mnemonic: SecretText::new(BIP39_TEST_VECTOR_MNEMONIC.into()),
+                bip39_passphrase: SecretText::default(),
+                password: SecretText::default(),
+                confirmation: SecretText::default(),
+                network: "chipnet".into(),
+                // Separate public account for this fixture's checkpoint nonce stream.
+                account_path: "m/44'/1'/4'".into(),
+            })
+            .await
+            .unwrap();
+        let handle = opened.active.unwrap();
+        let xpub = runtime.state().wallet.unwrap().account_xpub.unwrap();
+        let mut transactions = history(&xpub);
+        let mut below_floor = transaction(None, vec![(77, script(&xpub, 0, 0))]);
+        below_floor.block_height = Some(0);
+        transactions.push(below_floor);
+        let (mut chain, backend) = service(transactions.clone(), false);
+        *backend.expected_floor.lock().unwrap() = Some(1);
+        let original = checkpoints.0.lock().unwrap().files.clone();
+        let before_io = backend.clone();
+        checkpoints.0.lock().unwrap().after_save = Some(Box::new(move || {
+            assert!(before_io.calls.lock().unwrap().is_empty());
+        }));
+        runtime.request_wallet_rescan(1).await.unwrap();
+        assert_eq!(runtime.state().wallet_sync.rescan_requested, Some(1));
+        let pending = checkpoints.0.lock().unwrap().files.clone();
+        assert_ne!(
+            pending, original,
+            "intent must reach encrypted storage before I/O"
+        );
+        assert!(backend.calls.lock().unwrap().is_empty());
+
+        // Reopening from ciphertext, before any provider call, must recover intent.
+        let restarted = private_runtime(storage.clone(), checkpoints.clone());
+        restarted
+            .wallet_security(Request::Open {
+                handle: handle.clone(),
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(restarted.state().wallet_sync.rescan_requested, Some(1));
+        assert!(restarted.state().coins.is_empty());
+        let mut worker = ProgressiveSyncWorker::new(Default::default());
+
+        // A complete provider response cannot clear pending intent or publish
+        // coins when its final checkpoint fails to persist.
+        checkpoints.0.lock().unwrap().fail = true;
+        assert!(matches!(
+            restarted
+                .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+                .await,
+            Err(WalletSyncError::Persistence(_))
+        ));
+        assert_eq!(*backend.calls.lock().unwrap(), [8, 14, 16]);
+        assert_eq!(*backend.floors.lock().unwrap(), [Some(1); 3]);
+        assert_eq!(restarted.state().wallet_sync.rescan_requested, Some(1));
+        assert!(restarted.state().coins.is_empty());
+        assert_eq!(restarted.state().wallet_sync.scan_coverage, None);
+        assert_eq!(checkpoints.0.lock().unwrap().files, pending);
+        checkpoints.0.lock().unwrap().fail = false;
+        assert_eq!(
+            restarted
+                .sync_hd_wallet(&mut chain, &mut worker, xpub.clone(), LIMITS)
+                .await
+                .unwrap(),
+            ReconciliationDecision::Accepted
+        );
+        let coverage = Some(ScanCoverageView {
+            from_height: 1,
+            skipped_below: Some(1),
+            chosen_by_holder: true,
+        });
+        assert_eq!(*backend.calls.lock().unwrap(), [8, 14, 16, 8, 14, 16]);
+        assert_eq!(*backend.floors.lock().unwrap(), [Some(1); 6]);
+        assert_eq!(restarted.state().wallet_sync.rescan_requested, None);
+        assert_eq!(restarted.state().wallet_sync.scan_coverage, coverage);
+        assert_eq!(restarted.state().coins.len(), 2);
+        assert_eq!(restarted.state().coins.spendable_sats(), 800);
+        let committed = checkpoints.0.lock().unwrap().files.clone();
+        assert_ne!(committed, pending);
+
+        let resumed = private_runtime(storage.clone(), checkpoints.clone());
+        resumed
+            .wallet_security(Request::Open {
+                handle: handle.clone(),
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(resumed.state().wallet_sync.rescan_requested, None);
+        assert_eq!(resumed.state().wallet_sync.scan_coverage, coverage);
+        assert_eq!(resumed.state().coins, restarted.state().coins);
+        assert!(!resumed.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        // No explicit floor: completed coverage must seed future default syncs.
+        let (mut future_chain, future_backend) = service(transactions.clone(), false);
+        *future_backend.expected_floor.lock().unwrap() = Some(1);
+        resumed
+            .sync_hd_wallet(
+                &mut future_chain,
+                &mut ProgressiveSyncWorker::new(Default::default()),
+                xpub.clone(),
+                LIMITS,
+            )
+            .await
+            .unwrap();
+        assert_eq!(*future_backend.calls.lock().unwrap(), [16]);
+        assert_eq!(*future_backend.floors.lock().unwrap(), [Some(1)]);
+        assert_eq!(resumed.state().wallet_sync.scan_coverage, coverage);
+
+        // A failed request preserves populated state and ciphertext while
+        // persistence invalidates freshness fail-closed.
+        let before = resumed.state();
+        let committed = checkpoints.0.lock().unwrap().files.clone();
+        checkpoints.0.lock().unwrap().fail = true;
+        assert!(matches!(
+            resumed.request_wallet_rescan(2).await,
+            Err(WalletSyncError::Persistence(_))
+        ));
+        assert_eq!(
+            resumed.state().wallet_sync.rescan_requested,
+            before.wallet_sync.rescan_requested
+        );
+        assert_eq!(resumed.state().wallet_sync.scan_coverage, coverage);
+        assert_eq!(resumed.state().coins, before.coins);
+        assert_eq!(checkpoints.0.lock().unwrap().files, committed);
+        assert!(!resumed.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        checkpoints.0.lock().unwrap().fail = false;
+
+        // Start a new hanging lease after the failure. A successfully persisted
+        // replacement request must cancel this older scan before it can publish.
+        let (mut held, held_backend) = service(transactions, true);
+        *held_backend.expected_floor.lock().unwrap() = Some(1);
+        let scanning = resumed.clone();
+        let task = tokio::spawn(async move {
+            scanning
+                .sync_hd_wallet(
+                    &mut held,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    xpub,
+                    LIMITS,
+                )
+                .await
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            held_backend.entered.notified(),
+        )
+        .await
+        .unwrap();
+        resumed.request_wallet_rescan(2).await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(WalletSyncError::Superseded)
+        );
+        assert_eq!(*held_backend.floors.lock().unwrap(), [Some(1)]);
+        assert_eq!(resumed.state().wallet_sync.rescan_requested, Some(2));
+        assert_eq!(resumed.state().coins, before.coins);
+        assert_ne!(checkpoints.0.lock().unwrap().files, committed);
+        let final_restart = private_runtime(storage, checkpoints);
+        final_restart
+            .wallet_security(Request::Open {
+                handle,
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(final_restart.state().wallet_sync.rescan_requested, Some(2));
+        assert_eq!(final_restart.state().wallet_sync.scan_coverage, coverage);
+        assert_eq!(final_restart.state().coins, before.coins);
     }
 
     #[tokio::test]
@@ -1063,6 +1523,296 @@ mod tests {
                 .sync
                 .utxos_fresh
         );
+    }
+
+    #[tokio::test]
+    async fn managed_watch_only_checkpoint_lifecycle_preserves_history_without_signing_authority() {
+        use optn_app::{AuthScope, ScanCoverageView, SecretText};
+        use optn_platform::WalletStorage;
+        use optn_transport::WalletSecurityRequest as Request;
+
+        async fn refuses_operation_wallets(runtime: &AppRuntime) {
+            assert_eq!(runtime.state().wallet.unwrap().kind, WalletKind::WatchOnly);
+            for scope in [
+                AuthScope::Spend,
+                AuthScope::Reveal,
+                AuthScope::Background,
+                AuthScope::Chat,
+            ] {
+                let Err(error) = runtime.wallet_for_operation(scope).await else {
+                    panic!("watch-only must not yield private material for {scope:?}");
+                };
+                // A stale wallet can be rejected first by the actor's freshness
+                // guard. Once fresh, rejection must be the capability boundary.
+                if runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh {
+                    assert_eq!(error, optn_transport::TransportError::Unsupported);
+                }
+            }
+        }
+
+        // Only this public fixture's account xpub enters the managed runtime.
+        let xpub = Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "")
+            .unwrap()
+            .account_xpub_at(AccountPath::new(1, 6).unwrap())
+            .unwrap();
+        let password = fixture_password(6);
+        let rotated = fixture_password(7);
+        let storage = crate::wallet_security::tests::Storage::default();
+        let checkpoints = Checkpoints::default();
+        let runtime = private_runtime(storage.clone(), checkpoints.clone());
+        let opened = runtime
+            .wallet_security(Request::ImportWatchOnly {
+                name: "Managed public account".into(),
+                account_xpub: SecretText::new(xpub.clone()),
+                master_fingerprint: "73c5da0a".into(),
+                password: SecretText::new(password.clone()),
+                confirmation: SecretText::new(password.clone()),
+                network: "chipnet".into(),
+                account_path: "m/44'/1'/6'".into(),
+            })
+            .await
+            .unwrap();
+        let handle = opened.active.unwrap();
+        let record = storage.read(&handle).unwrap();
+        assert!(!record
+            .windows(xpub.len())
+            .any(|window| window == xpub.as_bytes()));
+        assert_eq!(
+            storage.list().unwrap().as_slice(),
+            std::slice::from_ref(&handle)
+        );
+        let initial = checkpoints.0.lock().unwrap().files.clone();
+        assert_eq!(initial.len(), 1, "first allocation must already be durable");
+        assert_eq!(
+            runtime.state().hd_addresses.unwrap().current_receive(),
+            Some(0)
+        );
+        refuses_operation_wallets(&runtime).await;
+
+        // Verifying the storage password must not upgrade the public account.
+        runtime
+            .dispatch(AppAction::RequestReveal { now_ms: 0 })
+            .await
+            .unwrap();
+        runtime
+            .wallet_security(Request::Authenticate {
+                password: SecretText::new(password.clone()),
+                epoch: runtime.state().lock.unlock_epoch,
+            })
+            .await
+            .unwrap();
+        assert!(runtime.state().identity_revealed);
+        refuses_operation_wallets(&runtime).await;
+
+        let (mut provider, _) = service(history(&xpub), false);
+        let mut worker = ProgressiveSyncWorker::new(Default::default());
+        checkpoints.0.lock().unwrap().fail = true;
+        assert!(matches!(
+            runtime
+                .sync_hd_wallet(&mut provider, &mut worker, xpub.clone(), LIMITS)
+                .await,
+            Err(WalletSyncError::Persistence(_))
+        ));
+        assert!(runtime.state().coins.is_empty());
+        assert!(runtime.state().wallet_sync.history.is_empty());
+        assert!(!runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        assert_eq!(checkpoints.0.lock().unwrap().files, initial);
+        checkpoints.0.lock().unwrap().fail = false;
+        assert_eq!(
+            runtime
+                .sync_hd_wallet(&mut provider, &mut worker, xpub.clone(), LIMITS)
+                .await
+                .unwrap(),
+            ReconciliationDecision::Accepted
+        );
+        let coins = runtime.state().coins;
+        let observed_history = runtime.state().wallet_sync.history;
+        assert_eq!(coins.len(), 2);
+        assert_eq!(coins.spendable_sats(), 800);
+        assert!(!observed_history.is_empty());
+        assert!(runtime.subscribe_wallet_sync().borrow().sync.history_fresh);
+        let receive = runtime
+            .state()
+            .hd_addresses
+            .unwrap()
+            .current_receive()
+            .unwrap();
+        runtime
+            .wallet_security(Request::NextReceive {
+                epoch: runtime.state().lock.unlock_epoch,
+                acknowledge_gap: false,
+            })
+            .await
+            .unwrap();
+        let allocation = runtime.state().hd_addresses.unwrap();
+        assert_eq!(allocation.current_receive(), Some(receive + 1));
+        runtime.request_wallet_rescan(1).await.unwrap();
+        let pending = checkpoints.0.lock().unwrap().files.clone();
+        assert!(!pending.values().any(|bytes| bytes
+            .windows(xpub.len())
+            .any(|window| window == xpub.as_bytes())));
+        runtime.dispatch(AppAction::LockWallet).await.unwrap();
+        assert!(runtime
+            .wallet_for_operation(AuthScope::Background)
+            .await
+            .is_err());
+        drop(runtime);
+
+        let restarted = private_runtime(storage.clone(), checkpoints.clone());
+        let listed = restarted.wallet_security(Request::Status).await.unwrap();
+        assert_eq!(listed.active, None);
+        assert_eq!(listed.wallets.len(), 1);
+        assert_eq!(listed.wallets[0].handle, handle);
+        assert_eq!(listed.wallets[0].name, "Managed public account");
+        assert!(restarted
+            .wallet_security(Request::Open {
+                handle: handle.clone(),
+                password: SecretText::new(fixture_password(8)),
+            })
+            .await
+            .is_err());
+        assert!(restarted.state().wallet.is_none());
+        restarted
+            .wallet_security(Request::Open {
+                handle: handle.clone(),
+                password: SecretText::new(password.clone()),
+            })
+            .await
+            .unwrap();
+        let wallet = restarted.state().wallet.unwrap();
+        assert_eq!(wallet.account_xpub.as_deref(), Some(xpub.as_str()));
+        assert_eq!(wallet.account_path, "m/44'/1'/6'");
+        assert_eq!(wallet.master_fingerprint.as_deref(), Some("73c5da0a"));
+        assert_eq!(restarted.state().coins, coins);
+        assert_eq!(restarted.state().wallet_sync.history, observed_history);
+        assert_eq!(restarted.state().hd_addresses.unwrap(), allocation);
+        assert_eq!(restarted.state().wallet_sync.rescan_requested, Some(1));
+        assert!(!restarted.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        assert!(
+            !restarted
+                .subscribe_wallet_sync()
+                .borrow()
+                .sync
+                .history_fresh
+        );
+        refuses_operation_wallets(&restarted).await;
+
+        restarted
+            .wallet_security(Request::ChangePassword {
+                current: Some(SecretText::new(password.clone())),
+                password: SecretText::new(rotated.clone()),
+                confirmation: SecretText::new(rotated.clone()),
+                epoch: restarted.state().lock.unlock_epoch,
+            })
+            .await
+            .unwrap();
+        let rotated_record = storage.read(&handle).unwrap();
+        assert_ne!(rotated_record, record);
+        assert!(!rotated_record
+            .windows(xpub.len())
+            .any(|window| window == xpub.as_bytes()));
+        assert_eq!(
+            checkpoints.0.lock().unwrap().files,
+            pending,
+            "password rotation must retain the checkpoint key and history"
+        );
+        refuses_operation_wallets(&restarted).await;
+        restarted.dispatch(AppAction::LockWallet).await.unwrap();
+        drop(restarted);
+
+        let resumed = private_runtime(storage.clone(), checkpoints.clone());
+        assert!(resumed
+            .wallet_security(Request::Open {
+                handle: handle.clone(),
+                password: SecretText::new(password),
+            })
+            .await
+            .is_err());
+        assert!(resumed.state().wallet.is_none());
+        resumed
+            .wallet_security(Request::Open {
+                handle: handle.clone(),
+                password: SecretText::new(rotated.clone()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(resumed.state().coins, coins);
+        assert_eq!(resumed.state().wallet_sync.history, observed_history);
+        assert_eq!(resumed.state().hd_addresses.unwrap(), allocation);
+        assert_eq!(resumed.state().wallet_sync.rescan_requested, Some(1));
+        assert!(!resumed.subscribe_wallet_sync().borrow().sync.history_fresh);
+        refuses_operation_wallets(&resumed).await;
+
+        let (mut provider, backend) = service(history(&xpub), false);
+        *backend.expected_floor.lock().unwrap() = Some(1);
+        checkpoints.0.lock().unwrap().fail = true;
+        assert!(matches!(
+            resumed
+                .sync_hd_wallet(&mut provider, &mut worker, xpub.clone(), LIMITS)
+                .await,
+            Err(WalletSyncError::Persistence(_))
+        ));
+        assert_eq!(resumed.state().coins, coins);
+        assert_eq!(resumed.state().wallet_sync.history, observed_history);
+        assert_eq!(resumed.state().wallet_sync.rescan_requested, Some(1));
+        assert!(!resumed.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        assert_eq!(checkpoints.0.lock().unwrap().files, pending);
+        checkpoints.0.lock().unwrap().fail = false;
+        assert_eq!(
+            resumed
+                .sync_hd_wallet(&mut provider, &mut worker, xpub, LIMITS)
+                .await
+                .unwrap(),
+            ReconciliationDecision::Accepted
+        );
+        assert!(!backend.floors.lock().unwrap().is_empty());
+        assert!(backend
+            .floors
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|floor| *floor == Some(1)));
+        assert_eq!(resumed.state().wallet_sync.rescan_requested, None);
+        let coverage = Some(ScanCoverageView {
+            from_height: 1,
+            skipped_below: Some(1),
+            chosen_by_holder: true,
+        });
+        assert_eq!(resumed.state().wallet_sync.scan_coverage, coverage);
+        assert_eq!(resumed.state().coins, coins);
+        assert_eq!(resumed.state().wallet_sync.history, observed_history);
+        refuses_operation_wallets(&resumed).await;
+        resumed.dispatch(AppAction::LockWallet).await.unwrap();
+        drop(resumed);
+
+        let final_restart = private_runtime(storage, checkpoints);
+        final_restart
+            .wallet_security(Request::Open {
+                handle,
+                password: SecretText::new(rotated),
+            })
+            .await
+            .unwrap();
+        assert_eq!(final_restart.state().coins, coins);
+        assert_eq!(final_restart.state().wallet_sync.history, observed_history);
+        assert_eq!(final_restart.state().wallet_sync.rescan_requested, None);
+        assert_eq!(final_restart.state().wallet_sync.scan_coverage, coverage);
+        assert_eq!(
+            final_restart
+                .state()
+                .hd_addresses
+                .unwrap()
+                .current_receive(),
+            allocation.current_receive()
+        );
+        assert!(
+            !final_restart
+                .subscribe_wallet_sync()
+                .borrow()
+                .sync
+                .history_fresh
+        );
+        refuses_operation_wallets(&final_restart).await;
     }
 
     #[tokio::test]

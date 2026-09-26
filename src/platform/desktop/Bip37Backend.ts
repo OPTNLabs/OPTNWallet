@@ -150,13 +150,7 @@ export async function nodeSync(
 ): Promise<NodeSyncResult> {
   const { hashes, hashToAddress } = await watchedHashes(walletId);
   if (hashes.length === 0) {
-    return {
-      byAddress: new Map(),
-      totalSats: 0,
-      tipHash: null,
-      scannedBlocks: 0,
-      watchedAddresses: 0,
-    };
+    return { byAddress: new Map(), totalSats: 0, tipHash: null, scannedBlocks: 0, watchedAddresses: 0 };
   }
 
   const allBlocks = await syncHeaders(

@@ -36,6 +36,23 @@ pub const SANDBOX_ATTRIBUTE: &str = "allow-scripts";
 /// The token that must never appear in an add-on frame's sandbox attribute.
 pub const FORBIDDEN_SANDBOX_TOKEN: &str = "allow-same-origin";
 
+/// Compatibility ceiling for the untrusted iframe protocol, independent of
+/// manifest claims and user grants. The SDK's narrower read grants still apply.
+///
+/// Raw transaction operations, signing, storage writes and arbitrary HTTP are
+/// not guest capabilities. They need the runtime's proposal/session broker
+/// before this legacy transport can expose them. Internal reviewed UI clients
+/// are not iframe guests and do not pass through this boundary.
+pub fn legacy_guest_call_allowed(module: &str, method: &str) -> bool {
+    matches!(
+        (module, method),
+        (
+            "wallet",
+            "getContext" | "listAddresses" | "getPrimaryAddress" | "toTokenAddress"
+        ) | ("utxos", "listForWallet")
+    )
+}
+
 /// Refuse a sandbox attribute that would give the frame a real origin.
 ///
 /// Checked rather than trusted because the failure is silent: an add-on frame
@@ -441,6 +458,38 @@ impl PolicyEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_guest_cannot_reach_privileged_or_inherited_sdk_methods() {
+        assert!(legacy_guest_call_allowed("wallet", "getContext"));
+        assert!(legacy_guest_call_allowed("utxos", "listForWallet"));
+        for (module, method) in [
+            ("tx", "addOutput"),
+            ("tx", "build"),
+            ("tx", "broadcast"),
+            ("signing", "signMessage"),
+            ("signing", "signatureTemplateForAddress"),
+            ("utxos", "refreshAndStore"),
+            ("http", "fetchJson"),
+            ("ui", "confirmSensitiveAction"),
+            ("utxos", "listForAddress"),
+            ("chain", "getLatestBlock"),
+            ("bcmr", "getTokenMetadata"),
+            ("tokenIndex", "listTokenHolders"),
+            ("meta", "getInfo"),
+            ("meta", "getAuditTrail"),
+            ("logging", "info"),
+            ("wallet", "constructor"),
+            ("wallet", "toString"),
+            ("__proto__", "constructor"),
+            ("unknown", "getContext"),
+        ] {
+            assert!(
+                !legacy_guest_call_allowed(module, method),
+                "{module}.{method}"
+            );
+        }
+    }
 
     fn manifest() -> AddonManifest {
         AddonManifest::new(

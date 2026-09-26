@@ -5,8 +5,8 @@
 //! provenance instead of allowing the first feed to erase the others.
 
 use crate::chain::{
-    BootstrapProject, CapabilitySet, ChainSource, Endpoint, EndpointKind, SourceDisposition,
-    SourceId, SourceOrigin,
+    BootstrapProject, CapabilitySet, ChainSource, Endpoint, EndpointKind, SourceCatalog,
+    SourceDisposition, SourceId, SourceOrigin,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -119,39 +119,89 @@ impl BootstrapCatalog {
 /// wallet that refuses to guess, and an unreasonable one to ship to someone who
 /// just wants to receive a payment.
 ///
-/// So the shipped set is deliberately the product's own reviewed defaults --
-/// the same hosts `optn_core::network` already names -- rather than a list of
-/// third-party servers assembled here. Broadening it to the upstream feeds
-/// #75 lists (BCHN, Flowee, bchd, Knuth, Electron Cash `servers.json`,
-/// Fulcrum peer discovery) is an ingest into this same catalog, which is why
-/// [`BootstrapCatalog::ingest`] keeps every project's provenance instead of
-/// letting the first feed win.
-///
-/// These are discovery hints and nothing more. A bootstrap entry gets no trust
-/// from being shipped: it still has to handshake, still has to pass capability
-/// probing, and can be disabled or banned by the holder immediately. What it
-/// cannot be is deleted, because the base catalog has to stay recoverable for a
-/// later refresh to be deterministic.
+/// Pinned Electron Cash snapshots supply network-specific TLS endpoints. A shipped
+/// record grants no capability or health evidence; selection and transport policy
+/// still decide which candidates may be contacted. Regtest has no public hints.
 pub fn shipped_bootstrap_catalog(network: optn_core::network::Network) -> BootstrapCatalog {
     use optn_core::network::Network;
 
-    let mut catalog = BootstrapCatalog::default();
-    // A regtest build is one the operator started themselves. Shipping
-    // discovery hints for it would point a private chain at someone else's.
-    if matches!(network, Network::Regtest) {
-        return catalog;
+    let (snapshot, filename) = match network {
+        Network::Mainnet => (include_str!("bootstrap/servers.json"), "servers.json"),
+        Network::Chipnet => (
+            include_str!("bootstrap/servers_chipnet.json"),
+            "servers_chipnet.json",
+        ),
+        Network::Testnet3 => (
+            include_str!("bootstrap/servers_testnet.json"),
+            "servers_testnet.json",
+        ),
+        Network::Testnet4 => (
+            include_str!("bootstrap/servers_testnet4.json"),
+            "servers_testnet4.json",
+        ),
+        Network::Regtest => return BootstrapCatalog::default(),
+    };
+    #[derive(serde::Deserialize)]
+    struct Server {
+        s: Option<String>,
     }
+    let servers: BTreeMap<String, Server> = serde_json::from_str(snapshot)
+        .expect("reviewed embedded Electron Cash catalog must be valid JSON");
+    let provenance = format!("https://github.com/Electron-Cash/Electron-Cash/blob/bb67161b162c1eea2ed2128dc224f7c55532cb8f/electroncash/{filename}");
+    let mut catalog = BootstrapCatalog::default();
+    for (host, server) in servers {
+        let Some(port) = server.s else { continue };
+        let port: u16 = port.parse().expect("reviewed TLS port must fit u16");
+        assert_ne!(port, 0, "reviewed TLS port must be nonzero");
+        catalog.ingest(
+            Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host,
+                port: Some(port),
+            },
+            BootstrapProject::ElectronCash,
+            provenance.clone(),
+        );
+    }
+    // Reviewed upstream deployment examples identify separate chains. These are
+    // optional candidate-byte services, never chain or token-ownership evidence.
+    // Keep stable IDs so replacing the maintained catalog preserves user bans.
+    let metadata = match network {
+        Network::Mainnet => Some(("bcmr.paytaca.com", ".env.mainnet.example")),
+        Network::Chipnet => Some(("bcmr-chipnet.paytaca.com", ".env.chipnet.example")),
+        _ => None,
+    };
+    if let Some((host, deployment)) = metadata {
+        catalog.ingest(
+            Endpoint { kind: EndpointKind::BcmrIndexerHttps, host: host.into(), port: Some(443) },
+            BootstrapProject::Paytaca,
+            format!("https://github.com/paytaca/bitcoincash-explorer/blob/fa85e5017b405b0999a0b266c2db797e34ae8386/{deployment}"),
+        );
+        // IPFS content addressing is network independent; the runtime checks
+        // returned bytes against this chain's locally authenticated publication.
+        catalog.ingest(
+            Endpoint {
+                kind: EndpointKind::IpfsGatewayHttps,
+                host: "ipfs.io".into(),
+                port: Some(443),
+            },
+            BootstrapProject::Ipfs,
+            "https://docs.ipfs.tech/concepts/public-utilities/",
+        );
+    }
+    catalog
+}
 
-    let host = network.default_host();
-    catalog.ingest(
-        Endpoint {
-            kind: EndpointKind::ElectrumTls,
-            host: host.to_owned(),
-            port: Some(network.default_port()),
-        },
-        BootstrapProject::ElectronCash,
-        "optn_core::network::Network::default_host",
-    );
+/// The same unverified discovery candidates for every native interface.
+/// Materialization performs no network I/O and never persists defaults as intent.
+pub fn shipped_source_catalog(network: optn_core::network::Network) -> SourceCatalog {
+    let bootstrap = shipped_bootstrap_catalog(network);
+    let mut catalog = SourceCatalog::default();
+    for (priority, candidate) in bootstrap.candidates().enumerate() {
+        catalog
+            .insert(bootstrap.materialize_source(candidate, priority as u16))
+            .expect("shipped source ids are unique");
+    }
     catalog
 }
 
@@ -177,6 +227,8 @@ const fn endpoint_kind_code(kind: EndpointKind) -> u8 {
         EndpointKind::BchnZmq => 4,
         EndpointKind::ExplorerHttp => 5,
         EndpointKind::ExplorerHttps => 6,
+        EndpointKind::IpfsGatewayHttps => 7,
+        EndpointKind::BcmrIndexerHttps => 8,
     }
 }
 
@@ -189,6 +241,8 @@ const fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::BchnZmq => "zmq",
         EndpointKind::ExplorerHttp => "explorer-http",
         EndpointKind::ExplorerHttps => "explorer-https",
+        EndpointKind::IpfsGatewayHttps => "ipfs-gateway",
+        EndpointKind::BcmrIndexerHttps => "bcmr-indexer",
     }
 }
 
@@ -277,12 +331,43 @@ mod shipped {
                 "{network} ships no bootstrap candidates, so Auto has nothing to select"
             );
             for candidate in catalog.candidates() {
-                assert_eq!(candidate.endpoint.host, network.default_host());
+                assert!(candidate.endpoint.port.is_some_and(|port| port > 0));
                 assert!(
                     !candidate.provenance.is_empty(),
                     "a bootstrap entry without provenance cannot be refreshed or audited"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn chipnet_snapshot_retains_network_specific_ports_and_existing_ids() {
+        let catalog = shipped_source_catalog(Network::Chipnet);
+        assert_eq!(
+            catalog
+                .iter()
+                .filter(|source| source
+                    .endpoints
+                    .iter()
+                    .any(|endpoint| endpoint.kind == EndpointKind::ElectrumTls))
+                .count(),
+            5
+        );
+        let expected = [
+            ("chipnet.imaginary.cash", 50002),
+            ("chipnet.bch.ninja", 50002),
+            ("blackie.c3-soft.com", 64002),
+            ("chipnet.c3-soft.com", 64002),
+            ("cbch.loping.net", 62102),
+        ];
+        for (host, port) in expected {
+            let id = SourceId::new(format!("bootstrap:electrum-tls:{host}:{port}"));
+            let source = catalog.get(&id).expect("stable bootstrap ID");
+            assert_eq!(source.endpoints[0].port, Some(port));
+            assert!(source.capabilities.iter().next().is_none());
+            assert!(
+                matches!(&source.origin, SourceOrigin::Bootstrap { provenance, .. } if provenance.contains("bb67161b"))
+            );
         }
     }
 
@@ -305,6 +390,54 @@ mod shipped {
     #[test]
     fn regtest_ships_no_discovery_hints() {
         assert!(shipped_bootstrap_catalog(Network::Regtest).is_empty());
+    }
+
+    #[test]
+    fn metadata_bootstrap_is_network_scoped_unverified_and_keeps_bans_on_refresh() {
+        use crate::network_config::{set_source_disposition, UserNetworkOverlay};
+        for (network, expected) in [
+            (Network::Mainnet, "bcmr.paytaca.com"),
+            (Network::Chipnet, "bcmr-chipnet.paytaca.com"),
+        ] {
+            let base = shipped_source_catalog(network);
+            let metadata: Vec<_> = base
+                .iter()
+                .filter(|source| source.endpoints[0].kind == EndpointKind::BcmrIndexerHttps)
+                .collect();
+            assert_eq!(metadata.len(), 1);
+            assert_eq!(metadata[0].endpoints[0].host, expected);
+            assert!(metadata[0].capabilities.iter().next().is_none());
+            assert!(matches!(
+                metadata[0].origin,
+                SourceOrigin::Bootstrap {
+                    project: BootstrapProject::Paytaca,
+                    ..
+                }
+            ));
+            let mut overlay = UserNetworkOverlay::default();
+            set_source_disposition(&mut overlay, &metadata[0].id, SourceDisposition::Banned)
+                .unwrap();
+            let refreshed = crate::network_config::merge_bootstrap_with_user_overlay(
+                &shipped_source_catalog(network),
+                &crate::network_config::NetworkConfigEnvelope::current("metadata-v1", overlay),
+            )
+            .unwrap();
+            assert_eq!(
+                refreshed.get(&metadata[0].id).unwrap().disposition,
+                SourceDisposition::Banned
+            );
+            assert_eq!(
+                base.iter()
+                    .filter(|source| source.endpoints[0].kind == EndpointKind::IpfsGatewayHttps)
+                    .count(),
+                1
+            );
+        }
+        for network in [Network::Testnet3, Network::Testnet4, Network::Regtest] {
+            assert!(shipped_source_catalog(network)
+                .iter()
+                .all(|source| source.endpoints[0].kind != EndpointKind::BcmrIndexerHttps));
+        }
     }
 
     /// Shipped entries are hints, not trust. They arrive enabled and unprobed.

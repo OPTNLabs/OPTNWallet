@@ -1,0 +1,31 @@
+{
+  "$comment": [
+    "Signature-verified desktop updates. Merged over tauri.conf.json at build",
+    "time with `tauri build --config src-tauri/tauri.updater.conf.json`, and",
+    "only when a public key is available.",
+    "",
+    "It is a separate file precisely so the absence of a key is a build that",
+    "cannot update, rather than a build that updates without checking. There is",
+    "no third state: with this config the app verifies every byte against",
+    "`pubkey` before running it, and without it the app has no installer at all",
+    "and only links to the release page.",
+    "",
+    "`pubkey` is written here by CI from the TAURI_SIGNING_PUBLIC_KEY variable.",
+    "The placeholder below is not a key and will not verify anything -- that is",
+    "deliberate, so a build that forgot to substitute it fails closed instead of",
+    "trusting an attacker who knows the placeholder's private half.",
+    "",
+    "See docs/desktop-update-signing.md for generating the key pair."
+  ],
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY",
+      "endpoints": [
+        "https://github.com/OPTNLabs/OPTNWallet/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

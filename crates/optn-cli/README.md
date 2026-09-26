@@ -8,13 +8,13 @@ as readily as by people.
 Download the binary for your platform from a release and put it on your `PATH`.
 Binaries are published for:
 
-| Platform | Architectures |
-| -------- | ------------- |
+| Platform | Architectures                      |
+| -------- | ---------------------------------- |
 | Linux    | `x64`, `arm64`, `riscv64`, `armv7` |
-| macOS    | `arm64`, `x64` |
-| Windows  | `x64` |
+| macOS    | `arm64`, `x64`                     |
+| Windows  | `x64`                              |
 
-To build from source you need Rust 1.77.2 or newer:
+To build from source, use the Rust version pinned in `rust-toolchain.toml`:
 
 ```bash
 cargo build --release --manifest-path crates/optn-cli/Cargo.toml
@@ -74,6 +74,62 @@ optn decode <raw-hex>                         # inspect a transaction, tokens in
 
 Every spending command refuses to run without `--yes`, and `--dry-run` builds
 and signs without broadcasting so you can inspect the result first.
+
+## Wallet navigation and source selection
+
+Start `optn --network chipnet wallet` for an interactive session. Use `list`,
+`open <file>`, `sync`, `history`, `assets`, `nfts`, and `lock`; passwords use a
+hidden prompt. `help` lists the commands. The session uses the same Rust runtime
+as the GUI and does not depend on Tauri or Leptos.
+
+Inside that session:
+
+```text
+network status
+network policy auto
+network policy own-infrastructure
+network select <source-id> --protocol bip37
+network disposition <source-id> disabled
+network disposition <source-id> enabled
+network remove <source-id>
+```
+
+`network status` lists source IDs and primary/fallback routes. Other presets are
+`privacy`, `electrum-only`, `bip37-only` and `neutrino-only`. `network select`
+pins one source without public fallback. Removing the last selected source leaves
+an empty selection; choose another source or explicitly select Auto to reconnect.
+
+To add a source, save this as `source.json`, replacing the example host/port:
+
+```json
+{
+  "network": "chipnet",
+  "label": "My BCH peer",
+  "kind": "p2p",
+  "host": "chipnet.example",
+  "port": 48333,
+  "infrastructure_group": null
+}
+```
+
+Run `optn --network chipnet network add source.json`, or use
+`network add <JSON>` inside the wallet prompt. Only name an infrastructure group
+for a server you control: that declaration permits direct connections.
+Use `network configure <JSON>` in the wallet prompt for full protocol, primary,
+fallback and preferred-order settings; the one-shot command reads a JSON file.
+Top-level `network export` and `network import <file>` back up and restore the
+network-bound settings without wallet keys or RPC credentials.
+
+Desktop RPC authentication uses `network credentials set|status|remove <source-id>`
+in the wallet prompt. Set asks for hidden credentials; status reports presence
+only. Private automation uses `wallet --stdio` with the same typed operations.
+
+In the Rust GUI, open **Settings > Servers > Chain sources**. Choose the
+connection policy, or open **Advanced selection and failover** to choose the
+primary pool, protocols and optional fallback, then **Save selection**. Each
+source has availability and removal controls; **Add a source** uses the same
+source model. Settings survive restart. Changes invalidate wallet freshness;
+run sync to refresh balance/history before spending.
 
 ## Networks
 
@@ -352,7 +408,7 @@ After that, commands needing the wallet find it themselves:
 optn --network chipnet balance             # no OPTN_MNEMONIC, no stdin
 ```
 
-Entries are keyed by network *and* `--profile`, so a mainnet and a chipnet
+Entries are keyed by network _and_ `--profile`, so a mainnet and a chipnet
 wallet may share a profile name without one overwriting the other. `store`
 refuses to replace an existing entry without `--force`, and validates the
 phrase before writing it — an unusable phrase stored now fails later, at the
@@ -363,11 +419,11 @@ The environment wins so a scripted run can override without clearing what is
 stored. Stdin is last because reaching it means blocking on input, which for a
 binary driven by automation is a hang rather than a prompt.
 
-| Platform | Store | Survives a reboot |
-| --- | --- | --- |
-| Windows | Credential Manager | yes |
-| macOS | Keychain | yes |
-| Linux | kernel keyring | **no** |
+| Platform | Store              | Survives a reboot |
+| -------- | ------------------ | ----------------- |
+| Windows  | Credential Manager | yes               |
+| macOS    | Keychain           | yes               |
+| Linux    | kernel keyring     | **no**            |
 
 Linux uses the kernel keyring rather than Secret Service, because Secret
 Service means dbus, dbus means C, and C means the cross-builds to riscv64 and
@@ -420,14 +476,14 @@ second lock, not the first.
 - Nothing prompts. There is no interactive mode to get stuck in.
 - Exit codes distinguish causes, so a caller does not have to parse English:
 
-| Code | Meaning |
-| ---- | ------- |
-| `0`  | success |
-| `2`  | usage — malformed address, bad flag, wrong network |
-| `3`  | network — could not reach the server |
+| Code | Meaning                                                |
+| ---- | ------------------------------------------------------ |
+| `0`  | success                                                |
+| `2`  | usage — malformed address, bad flag, wrong network     |
+| `3`  | network — could not reach the server                   |
 | `4`  | protocol — the server answered with something unusable |
-| `5`  | server — the server returned an explicit error |
-| `70` | internal — a defect in this program, please report it |
+| `5`  | server — the server returned an explicit error         |
+| `70` | internal — a defect in this program, please report it  |
 
 ```bash
 optn --json balance "$ADDR" > out.json || case $? in
@@ -480,7 +536,7 @@ Spending always requires `--yes`. This binary is meant to be run by automation,
 so a spend is never reachable by accident, and `--dry-run` exists so a caller
 can inspect a signed transaction before committing to it.
 
-Not here yet: spending *from* a covenant. Addresses derive and contracts are
+Not here yet: spending _from_ a covenant. Addresses derive and contracts are
 inspectable, but building and signing a spend against one needs the unlocking
 script and the scriptCode substitution in the sighash, which is the next piece.
 See the tracking issue.

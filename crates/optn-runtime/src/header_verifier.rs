@@ -332,6 +332,24 @@ pub fn header_leaf(header: &BlockHeaderBytes) -> Hash32 {
 /// This is independently reviewed chain identity, not an Electrum server tip.
 pub const CHIPNET_GENESIS_HEADER_HEX: &str = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4af1a93c5fffff001d01d3cd06";
 
+/// Chipnet is testnet4 with later rules, so the chain they start from is the
+/// same block. Nothing in the headers distinguishes them; only the peers do.
+pub const TESTNET4_GENESIS_HEADER_HEX: &str = CHIPNET_GENESIS_HEADER_HEX;
+
+/// Mainnet genesis header.
+///
+/// Hash `000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f`.
+/// Version 1, nTime 1231006505, nBits 0x1d00ffff, nonce 2083236893.
+pub const MAINNET_GENESIS_HEADER_HEX: &str = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c";
+
+/// Testnet3 genesis header.
+///
+/// Hash `000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943`.
+/// Version 1, nTime 1296688602, nBits 0x1d00ffff, nonce 414098458. Shares
+/// regtest's timestamp and differs from it in nBits and nonce alone, which is
+/// exactly why each network names its own header rather than deriving one.
+pub const TESTNET3_GENESIS_HEADER_HEX: &str = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18";
+
 fn decode_header_hex(hex: &str) -> BlockHeaderBytes {
     let mut header = [0u8; 80];
     for i in 0..80 {
@@ -348,56 +366,173 @@ fn decode_header_hex(hex: &str) -> BlockHeaderBytes {
 /// 1, nTime 1296688602, nBits 0x207fffff, nonce 2.
 pub const REGTEST_GENESIS_HEADER_HEX: &str = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000";
 
-/// A verifier anchored at the regtest genesis.
+/// The genesis header this network's chain starts from.
 ///
-/// The same shape as the Chipnet one and for the same reason: an accumulator
-/// numbers its leaves by height, so a sync that starts anywhere other than the
-/// next leaf silently mis-attributes every header it is given. Anchoring at
-/// genesis is what makes "extend with heights 1..N" mean what it says.
+/// Total over `Network` on purpose. The string-keyed tables underneath this
+/// crate carry a catch-all that resolves to mainnet, and that has already
+/// cost us once: regtest fell through it and asked a local node to commit to
+/// mainnet's genesis. A wallet cannot reach that mistake through here.
+pub const fn genesis_header_hex(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => MAINNET_GENESIS_HEADER_HEX,
+        Network::Testnet3 => TESTNET3_GENESIS_HEADER_HEX,
+        Network::Testnet4 | Network::Chipnet => CHIPNET_GENESIS_HEADER_HEX,
+        Network::Regtest => REGTEST_GENESIS_HEADER_HEX,
+    }
+}
+
+/// How much a genesis anchor is worth as trust material.
 ///
-/// Regtest's difficulty context says the chain does not retarget, so ASERT has
-/// nothing to assert here -- but declared proof-of-work and linkage are still
-/// checked on every header.
-pub fn regtest_header_verifier() -> Result<ShvMmrHeaderVerifier, ShvMmrError> {
-    let header = decode_header_hex(REGTEST_GENESIS_HEADER_HEX);
+/// For every chain other people run, the genesis block *is* the chain's
+/// identity: it is published, permanent and checkable offline, which is what
+/// `ShippedReviewed` claims. A regtest chain is one we mined, so its anchor is
+/// our own work and says so.
+fn genesis_provenance(network: Network) -> CheckpointProvenance {
+    match network {
+        Network::Mainnet | Network::Testnet3 | Network::Testnet4 | Network::Chipnet => {
+            CheckpointProvenance::ShippedReviewed
+        }
+        Network::Regtest => CheckpointProvenance::SelfDerived,
+    }
+}
+
+/// A verifier anchored at `network`'s genesis, with that network's difficulty
+/// context attached.
+///
+/// An accumulator numbers its leaves by height, so a sync that starts anywhere
+/// other than the next leaf silently mis-attributes every header it is given.
+/// Anchoring at genesis is what makes "extend with heights 1..N" mean what it
+/// says — and it is why no network needs a hand-reviewed mid-chain checkpoint
+/// before it can verify headers at all.
+///
+/// BIP37/Neutrino workers must attach this (or a later host-authenticated
+/// checkpoint) before publishing balances. Electrum wallet first-paint stays
+/// `ServerAssertion` even after headers are linked; MMR/`HeaderLinked` is
+/// reported only for the header chain the verifier actually extended.
+///
+/// On a chain that does not retarget, ASERT has nothing to assert — but
+/// declared proof-of-work and linkage are still checked on every header.
+pub fn shipped_header_verifier(network: Network) -> Result<ShvMmrHeaderVerifier, ShvMmrError> {
+    let header = decode_header_hex(genesis_header_hex(network));
     let commitment = header_leaf(&header);
     Ok(ShvMmrHeaderVerifier::from_checkpoint_proof(
         0,
         header,
         &[],
         commitment,
-        CheckpointProvenance::SelfDerived,
+        genesis_provenance(network),
     )?
     .with_asert(
-        AsertParams::for_network(Network::Regtest),
-        AsertAnchor::for_network(Network::Regtest),
+        AsertParams::for_network(network),
+        AsertAnchor::for_network(network),
     ))
 }
 
+/// A verifier anchored at the regtest genesis.
+pub fn regtest_header_verifier() -> Result<ShvMmrHeaderVerifier, ShvMmrError> {
+    shipped_header_verifier(Network::Regtest)
+}
+
 /// Trusted Chipnet checkpoint at height 0 plus Chipnet ASERT context.
-///
-/// BIP37/Neutrino workers must attach this (or a later host-authenticated
-/// checkpoint) before publishing balances. Electrum first-paint stays
-/// `ServerAssertion` and must not be labeled MMR.
 pub fn shipped_chipnet_header_verifier() -> Result<ShvMmrHeaderVerifier, ShvMmrError> {
-    let header = decode_header_hex(CHIPNET_GENESIS_HEADER_HEX);
-    let commitment = header_leaf(&header);
-    Ok(ShvMmrHeaderVerifier::from_checkpoint_proof(
-        0,
-        header,
-        &[],
-        commitment,
-        CheckpointProvenance::ShippedReviewed,
-    )?
-    .with_asert(
-        AsertParams::for_network(Network::Chipnet),
-        AsertAnchor::for_network(Network::Chipnet),
-    ))
+    shipped_header_verifier(Network::Chipnet)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The published genesis hash of every network, in display order.
+    ///
+    /// These are the identities a shipped anchor claims. A constant that no
+    /// longer hashes to its network's genesis is a wallet pointed at the wrong
+    /// chain, which is the one failure a `bchtest:` address cannot reveal --
+    /// so the anchor is checked here rather than trusted.
+    const PUBLISHED_GENESIS: [(Network, &str); 5] = [
+        (
+            Network::Mainnet,
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+        ),
+        (
+            Network::Testnet3,
+            "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943",
+        ),
+        (
+            Network::Testnet4,
+            "000000001dd410c49a788668ce26751718cc797474d3152a5fc073dd44fd9f7b",
+        ),
+        (
+            Network::Chipnet,
+            "000000001dd410c49a788668ce26751718cc797474d3152a5fc073dd44fd9f7b",
+        ),
+        (
+            Network::Regtest,
+            "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+        ),
+    ];
+
+    fn display_hash(hash: Hash32) -> String {
+        hash.iter()
+            .rev()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    #[test]
+    fn every_shipped_genesis_anchor_is_the_chain_it_claims() {
+        assert_eq!(PUBLISHED_GENESIS.len(), Network::ALL.len());
+        for (network, expected) in PUBLISHED_GENESIS {
+            let header = decode_header_hex(genesis_header_hex(network));
+            assert_eq!(
+                display_hash(header_leaf(&header)),
+                expected,
+                "{network}'s shipped genesis header is not {network}'s genesis block"
+            );
+        }
+    }
+
+    /// Every network can verify headers, mainnet included.
+    ///
+    /// Mainnet used to refuse outright for want of a reviewed checkpoint.
+    /// Genesis is that checkpoint: published, permanent and checkable without
+    /// asking anyone, so no network is left unable to verify its own chain.
+    #[test]
+    fn every_network_has_a_usable_shipped_verifier() {
+        for network in Network::ALL {
+            let verifier = shipped_header_verifier(network)
+                .unwrap_or_else(|error| panic!("{network} has no usable anchor: {error:?}"));
+            let checkpoint = verifier.checkpoint();
+            assert_eq!(checkpoint.height, 0, "{network} did not anchor at genesis");
+            assert!(
+                verifier.has_difficulty_context(),
+                "{network} has no difficulty context attached"
+            );
+        }
+    }
+
+    /// A stored view from one chain must not restore onto another.
+    ///
+    /// Chipnet and testnet4 make this load-bearing: same genesis, same ASERT
+    /// anchor, same P2P magic, so the accumulator alone cannot tell them
+    /// apart and the network label is the only separation there is.
+    #[test]
+    fn a_chipnet_checkpoint_does_not_restore_as_testnet4() {
+        let verifier = shipped_header_verifier(Network::Chipnet).expect("chipnet anchor");
+        let json = verifier
+            .encode_checkpoint_json(Network::Chipnet)
+            .expect("encodes");
+        let trusted = verifier.checkpoint();
+
+        assert!(
+            ShvMmrHeaderVerifier::from_checkpoint_json(&json, Network::Chipnet, &trusted).is_ok(),
+            "a chipnet record must restore as chipnet"
+        );
+        assert_eq!(
+            ShvMmrHeaderVerifier::from_checkpoint_json(&json, Network::Testnet4, &trusted).err(),
+            Some(ShvMmrError::StoredCheckpointNetworkMismatch),
+            "a chipnet record must not restore as testnet4"
+        );
+    }
 
     fn genesis() -> BlockHeaderBytes {
         let hex = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c";

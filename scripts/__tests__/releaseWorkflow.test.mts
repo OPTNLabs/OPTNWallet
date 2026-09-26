@@ -348,46 +348,97 @@ describe('release workflow', () => {
     expect(previewTimeout).toBeGreaterThanOrEqual(60);
   });
 
-  it('keeps pull-request desktop validation unbundled and reuses target caches', () => {
-    // Full installer packaging is repeated by the staging/main release matrix.
-    // Pull requests still compile every native target, while avoiding the
-    // uncached Linux AppImage/DEB/RPM bottleneck measured in the CI audit.
+  it('adds a locked Leptos macOS build without replacing legacy targets or Tor checks', () => {
+    const matrix =
+      desktopPreviewWorkflow.match(
+        /matrix:\s*\n([\s\S]*?)\n    runs-on:/
+      )?.[1] ?? '';
+    const rows = matrix.split(/- platform: /).slice(1);
+    expect(rows).toHaveLength(6);
+    for (const label of [
+      'windows-x64',
+      'macos-arm64',
+      'macos-x64',
+      'linux-x64',
+      'linux-arm64',
+    ]) {
+      const row = rows.find(
+        (value) =>
+          value.includes(`label: ${label}\n`) ||
+          value.includes(`label: ${label}\r\n`)
+      );
+      expect(row, label).toBeDefined();
+      expect(row).not.toContain('renderer: leptos');
+    }
+    const leptos = rows.find((row) =>
+      row.includes('label: macos-arm64-leptos')
+    );
+    expect(leptos).toContain('macos-latest');
+    expect(leptos).toContain('target: aarch64-apple-darwin');
+    expect(leptos).toContain(
+      'rust-targets: aarch64-apple-darwin,wasm32-unknown-unknown'
+    );
+    expect(leptos).toContain('tor-target: macos-aarch64');
+    expect(leptos).toContain('renderer: leptos');
     expect(desktopPreviewWorkflow).toContain(
-      'npx tauri build --debug --no-bundle --target "$target" --verbose'
+      'targets: ${{ matrix.rust-targets || matrix.target }}'
+    );
+    expect(desktopPreviewWorkflow).toContain('toolchain: 1.98.1');
+    expect(desktopPreviewWorkflow).toContain(
+      'cargo install trunk --version 0.21.14 --locked'
     );
     expect(desktopPreviewWorkflow).toContain(
-      "if: startsWith(matrix.platform, 'ubuntu') && github.event_name != 'pull_request'"
+      '--config src-tauri/tauri.leptos.conf.json --config "$resources_config" -- --locked'
     );
     expect(desktopPreviewWorkflow).toContain(
-      'shared-key: tauri-${{ matrix.target }}'
+      'codesign --force --timestamp=none --sign - "$f"'
     );
     expect(desktopPreviewWorkflow).toContain(
-      'if: github.event_name != \'pull_request\''
+      'bash scripts/verify-macos-bundle.sh "$APP_PATH"'
     );
-    expect(desktopPreviewWorkflow).toContain(
-      'if: github.event_name == \'pull_request\''
-    );
-    expect(desktopPreviewWorkflow).toContain(
-      'Verify the unbundled native binary'
-    );
-  });
+    expect(desktopPreviewWorkflow).not.toMatch(/^\s*continue-on-error:/m);
 
-  it('keeps full desktop packaging on main pushes and manual previews', () => {
-    // The fast path is limited to pull_request events. Main promotion and a
-    // maintainer-triggered preview must still exercise the packages that ship.
-    expect(desktopPreviewWorkflow).toMatch(
-      /push:\n    branches: \[main\]/
+    const base = JSON.parse(
+      readFileSync(resolve(repoRoot, 'src-tauri/tauri.conf.json'), 'utf8')
     );
-    expect(desktopPreviewWorkflow).toContain('workflow_dispatch:');
+    const overlay = JSON.parse(
+      readFileSync(
+        resolve(repoRoot, 'src-tauri/tauri.leptos.conf.json'),
+        'utf8'
+      )
+    );
+    expect(base.bundle.resources).toContain('resources/tor/*');
+    // Compile-only jobs do not fetch Tor. The package build restores exactly
+    // the canonical resource list via its final Tauri config override.
+    expect(overlay.bundle.resources).toEqual([]);
+    const resourceScript = desktopPreviewWorkflow.match(
+      /resources_config="\$\(node -e '([^']+)'\)"/
+    )?.[1];
+    expect(resourceScript).toBeTruthy();
+    const packageOverlay = JSON.parse(
+      execFileSync(process.execPath, ['-e', resourceScript!], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      })
+    );
+    expect(packageOverlay).toEqual({
+      bundle: { resources: base.bundle.resources },
+    });
+    expect(overlay.build.beforeBuildCommand).toContain(
+      'trunk build --release --locked --config Trunk.tauri.toml'
+    );
+    expect(overlay.build.frontendDist).toBe('../crates/optn-ui/dist');
     expect(desktopPreviewWorkflow).toContain(
-      'npx tauri build --debug --target "$target" --verbose'
+      'checkout_sha="$(git rev-parse HEAD)"'
     );
-    expect(workflow).toMatch(
-      /branches:\n      - main\n      - staging/
+    expect(desktopPreviewWorkflow).toContain(
+      'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}'
     );
-    expect(workflow).toContain(
-      'shared-key: tauri-${{ matrix.target }}'
-    );
+    for (const file of ['build-info.txt', 'SHA256SUMS']) {
+      expect(desktopPreviewWorkflow).toContain(
+        `src-tauri/target/\${{ matrix.target }}/debug/bundle/dmg/${file}`
+      );
+    }
   });
 
   it('ships Linux x64 and ARM64 AppImages as the portable all-distro Linux path', () => {
@@ -492,6 +543,7 @@ describe('release workflow', () => {
       'preview-linux-arm64-rpm',
       'preview-linux-x64-flatpak',
       'preview-linux-arm64-flatpak',
+      'preview-macos-arm64-leptos-dmg',
     ]) {
       expect(desktopPreviewWorkflow, `${artifact} must be asserted`).toContain(
         `expect ${artifact}`
@@ -519,22 +571,6 @@ describe('release workflow', () => {
     }
     // publish must wait for it, or a release is cut without the CLI.
     expect(publishNeeds(), 'publish job needs').toContain('cli');
-  });
-
-  it('assembles, checksums, and attests extensionless CLI and Flatpak assets', () => {
-    // Unix CLI binaries are extensionless and Flatpaks use .flatpak. Both
-    // still need to reach the release set, checksum file, and provenance
-    // attestation like every other published artifact.
-    const findStart = workflow.indexOf('done < <(find artifacts');
-    const findEnd = workflow.indexOf(') -print0)', findStart);
-    const assemblyFind = workflow.slice(findStart, findEnd);
-    expect(assemblyFind).toContain("-name '*.flatpak'");
-    expect(assemblyFind).toContain(
-      "-o \\( -path 'artifacts/cli-*/*' -a -name 'optn-*' \\)"
-    );
-    expect(assemblyFind).not.toContain("-o -name 'optn-*'");
-    expect(workflow).toContain('release-files/*.flatpak');
-    expect(workflow).toContain('release-files/optn-*');
   });
 
   it('arms the CLI requirement from a probe rather than from the artifacts', () => {
@@ -614,6 +650,61 @@ describe('release workflow', () => {
       expect(cliPreviewWorkflow, `${label} must be asserted`).toContain(label);
     }
     expect(cliPreviewWorkflow).toMatch(/complete:[\s\S]*?if: always\(\)/);
+  });
+
+  it('ships a CLI binary for exactly the platforms the manifest declares', () => {
+    // The lists above are written out, which is readable but means a new
+    // `when: "cli"` asset can be declared and never built: the release-time
+    // completeness gate would catch it, but only after every other platform
+    // had already compiled. Deriving the expectation from the manifest moves
+    // that failure onto the pull request, and closes the other direction too
+    // -- a matrix entry nothing publishes wastes a runner on every release.
+    const declared = (
+      JSON.parse(releaseAssets) as {
+        assets: { label: string; pattern: string; when?: string }[];
+      }
+    ).assets.filter((asset) => asset.when === 'cli');
+    expect(declared.length, 'CLI assets declared').toBeGreaterThan(0);
+
+    // `optn-${VERSION}-linux-x64` and `optn-${VERSION}-windows-x64.exe` both
+    // carry the matrix label between the version and any extension.
+    const labels = declared.map((asset) => {
+      const match = /^optn-\$\{VERSION\}-(.+?)(?:\.exe)?$/.exec(asset.pattern);
+      expect(match, `unparsable CLI pattern ${asset.pattern}`).not.toBeNull();
+      return match![1];
+    });
+
+    // The `cli` job only, not the whole file: `label:` is a matrix key other
+    // jobs use too, and a set comparison against all of them would compare the
+    // manifest to every platform the release builds.
+    const matrixLabels = (contents: string, jobId: string) => {
+      // `\r?$` throughout: these files are read from the working tree, which
+      // on Windows has CRLF, and a bare `$` would match nothing there.
+      const job = new RegExp(
+        `^ {2}${jobId}:\\r?$[\\s\\S]*?(?=^ {2}\\S)`,
+        'm'
+      ).exec(contents);
+      expect(job, `a ${jobId} job must exist`).not.toBeNull();
+      return new Set(
+        [...job![0].matchAll(/^ +label: (\S+)\r?$/gm)].map((match) => match[1])
+      );
+    };
+
+    for (const label of labels) {
+      expect(cliPreviewWorkflow, `preview builds CLI ${label}`).toContain(
+        `label: ${label}`
+      );
+    }
+    // Set equality, so both directions fail loudly: a declared asset with no
+    // builder, and a builder whose output nothing publishes.
+    expect(
+      matrixLabels(workflow, 'cli'),
+      'the release CLI matrix and the manifest must name the same platforms'
+    ).toEqual(new Set(labels));
+    expect(
+      matrixLabels(cliPreviewWorkflow, 'build'),
+      'the preview CLI matrix must match the release one'
+    ).toEqual(new Set(labels));
   });
   it('runs every asset check on pull requests to main as well', () => {
     // main is where releases are cut from. A pull request straight to it was

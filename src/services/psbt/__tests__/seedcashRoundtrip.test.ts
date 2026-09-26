@@ -93,9 +93,9 @@ describeLive('SeedCash round trip', () => {
             sequenceNumber: 0xffffffff,
           },
         ],
-        outputs: Array.from({ length: inputCount }, (_, vout) => ({
+        outputs: Array.from({ length: inputCount }, () => ({
           lockingBytecode,
-          valueSatoshis: satoshis + BigInt(vout),
+          valueSatoshis: satoshis,
         })),
         locktime: 0,
       };
@@ -105,7 +105,7 @@ describeLive('SeedCash round trip', () => {
       const inputs = Array.from({ length: inputCount }, (_, vout) => ({
         txid: parentTxid,
         vout,
-        satoshis: parent.outputs[vout].valueSatoshis,
+        satoshis,
         lockingBytecodeHex: binToHex(lockingBytecode),
         publicKeyHex: binToHex(publicKey),
         branchIndex: 1 as const,
