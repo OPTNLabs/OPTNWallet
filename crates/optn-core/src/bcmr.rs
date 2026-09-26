@@ -82,17 +82,24 @@ impl RegistryPublication {
     /// Turn one published URI into something fetchable.
     ///
     /// A bare authority means HTTPS at the Well-Known path; an authority with
-    /// a path means HTTPS at that path. Anything already carrying a scheme is
-    /// returned untouched, including `ipfs:` and friends, because deciding
+    /// a path means HTTPS at that path. HTTPS authorities without a path also
+    /// use the Well-Known path. Other schemes are returned untouched because deciding
     /// whether this client can reach them is the caller's job and not a
     /// property of the publication.
     pub fn resolve_uri(uri: &str) -> String {
-        if uri.contains("://") {
-            return uri.to_owned();
-        }
-        match uri.split_once('/') {
-            None => format!("https://{uri}{WELL_KNOWN_PATH}"),
-            Some(_) => format!("https://{uri}"),
+        let authority_and_path = match uri.split_once("://") {
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("https") => rest,
+            Some(_) => return uri.to_owned(),
+            None => uri,
+        };
+        let suffix_at = authority_and_path
+            .find(['?', '#'])
+            .unwrap_or(authority_and_path.len());
+        let (path, suffix) = authority_and_path.split_at(suffix_at);
+        if path.contains('/') {
+            format!("https://{authority_and_path}")
+        } else {
+            format!("https://{path}{WELL_KNOWN_PATH}{suffix}")
         }
     }
 }
@@ -160,10 +167,15 @@ pub fn parse_publication(script: &[u8]) -> Option<RegistryPublication> {
 /// Only this transaction's outputs are examined. An authhead that publishes
 /// nothing has no current metadata, and reaching back to an ancestor for one
 /// would present withdrawn metadata as though it were still endorsed.
+/// The first matching prefix is definitive even when its payload is malformed;
+/// later publication outputs cannot override it (CHIP-BCMR publication outputs).
 pub fn publication_in<'a>(
     output_scripts: impl IntoIterator<Item = &'a [u8]>,
 ) -> Option<RegistryPublication> {
-    output_scripts.into_iter().find_map(parse_publication)
+    output_scripts
+        .into_iter()
+        .find(|script| script.starts_with(&PUBLICATION_PREFIX))
+        .and_then(parse_publication)
 }
 
 /// Name, ticker and decimals taken from a hash-verified BCMR registry.
@@ -419,6 +431,37 @@ mod tests {
         let found = publication_in([payment, script.as_slice()]).expect("a publication");
         assert_eq!(found.content_hash, hash);
         assert_eq!(publication_in([payment]), None);
+        let later = publication_script([6; 32], &["later.example"]);
+        assert_eq!(
+            publication_in([script.as_slice(), later.as_slice()]),
+            Some(found)
+        );
+        // Do not let a second output override the definitive malformed first.
+        assert_eq!(
+            publication_in([PUBLICATION_PREFIX.as_slice(), script.as_slice()]),
+            None
+        );
+    }
+
+    #[test]
+    fn explicit_https_authorities_use_well_known_but_explicit_paths_are_preserved() {
+        for input in ["https://example.com", "HTTPS://example.com"] {
+            assert_eq!(
+                RegistryPublication::resolve_uri(input),
+                format!("https://example.com{WELL_KNOWN_PATH}")
+            );
+        }
+        assert_eq!(
+            RegistryPublication::resolve_uri("https://example.com?version=1"),
+            format!("https://example.com{WELL_KNOWN_PATH}?version=1")
+        );
+        for input in [
+            "https://example.com/",
+            "https://example.com/registry.json",
+            "ipfs://CaseSensitiveCid/path",
+        ] {
+            assert_eq!(RegistryPublication::resolve_uri(input), input);
+        }
     }
 
     /// Long URIs use PUSHDATA1, and must still be read.

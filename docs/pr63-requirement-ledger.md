@@ -484,3 +484,18 @@ architecture gate, CLI native check and Leptos WASM check. Two existing catalog 
 separately from metadata entries. General TokenIndex/Chaingraph query adapters and
 metadata proxy/cache remain unavailable; adding a hostname would not implement
 those APIs. No live Paytaca token-identity acceptance is claimed.
+
+### 2026-09-26: BCMR publication acceptance corrections
+
+Rust now treats the first BCMR-prefix output as definitive even when malformed,
+so a later output cannot substitute a different registry. HTTPS authorities
+without paths use the specified well-known path, preserving query/fragment
+suffixes and explicit paths. Hash-only publications may accept bytes from an
+already permitted candidate provider, subject to the same exact SHA-256 check.
+
+Validation: 13 core BCMR tests, 25 runtime metadata tests, eight native registry
+fetcher tests, the connected HD metadata/checkpoint/reopen test, strict core and
+runtime/native-chain Clippy, regenerated WASM/freshness check, and 21 existing
+WASM signing/connector tests passed. This is bounded protocol and integration
+evidence; retained React Assets migration, broader authchain discovery and live
+token metadata acceptance remain separate work.

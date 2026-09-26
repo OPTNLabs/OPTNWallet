@@ -174,7 +174,7 @@ pub fn resolve(
     publication: &RegistryPublication,
     attempts: &[(String, FetchAttempt)],
 ) -> IdentityMetadata {
-    if publication.uris.is_empty() {
+    if publication.uris.is_empty() && attempts.is_empty() {
         return IdentityMetadata::Unresolved {
             reason: UnresolvedReason::NoUriPublished,
         };
@@ -838,6 +838,54 @@ mod tests {
         );
         assert!(resolved.is_current());
         assert!(!resolved.needs_a_caveat());
+    }
+
+    #[test]
+    fn hash_only_publication_accepts_selected_candidate_bytes_but_not_another_hash() {
+        let body = registry_body("Bitcats", ALPHA);
+        let publication = publication(&body, &[]);
+        let uri = "https://indexer.example/registry".to_owned();
+        for (bytes, expected) in [
+            (body, IdentityStatus::Verified),
+            (b"wrong registry".to_vec(), IdentityStatus::Unresolved),
+        ] {
+            let mut state = wallet_with(vec![coin(
+                1,
+                1_000,
+                Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+            )]);
+            apply_owned_token_identities(
+                &mut state,
+                &BTreeMap::from([(
+                    ALPHA,
+                    OwnedCategoryIdentity::Observed {
+                        publication: publication.clone(),
+                        attempts: vec![(uri.clone(), Ok(bytes))],
+                    },
+                )]),
+            );
+            let assets = optn_app::assets_view_model(&state);
+            assert_eq!(
+                assets.categories[0].identity.as_ref().unwrap().status,
+                expected
+            );
+            assert_eq!(state.coins.len(), 1);
+        }
+    }
+
+    #[test]
+    fn malformed_first_publication_cannot_be_replaced_by_later_verified_bytes() {
+        let body = registry_body("Bitcats", ALPHA);
+        let input = collection(&body, "example.com", Ok(body.clone()), true, true);
+        let outputs = vec![
+            p2pkh(),
+            optn_core::bcmr::PUBLICATION_PREFIX.to_vec(),
+            publication_script(&body, "example.com"),
+        ];
+        assert_eq!(
+            identity_from_outputs(&outputs, &input),
+            OwnedCategoryIdentity::Unpublished
+        );
     }
 
     /// Whoever serves the file does not get to rename the token.
