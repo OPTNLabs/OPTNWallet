@@ -1,11 +1,27 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+// Git for Windows supplies Bash; derive its location from the installed Git.
+const bash =
+  process.env.BASH ||
+  (process.platform === 'win32'
+    ? resolve(
+        execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(),
+        '../../../bin/bash.exe'
+      )
+    : 'bash');
 const workflow = readFileSync(
   resolve(repoRoot, '.github', 'workflows', 'release.yml'),
   'utf8'
@@ -79,15 +95,6 @@ describe('release workflow', () => {
       /^ {12}run_instrumentation\(\) \{[\s\S]*?^ {12}\}/m
     )?.[0];
     const method = 'useAppContext';
-    // Git for Windows supplies Bash; derive its location from the installed Git.
-    const bash =
-      process.env.BASH ||
-      (process.platform === 'win32'
-        ? resolve(
-            execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(),
-            '../../../bin/bash.exe'
-          )
-        : 'bash');
     // Replay the AndroidJUnitRunner transcript from CI run 34218705281,
     // with only the GitHub step/timestamp prefix removed.
     const status = (code: number, total = 1) =>
@@ -202,6 +209,64 @@ describe('release workflow', () => {
         rmSync(directory, { recursive: true, force: true });
       }
     });
+  });
+
+  it('assembles signed updater artifacts for all five desktop targets', () => {
+    const assembly = workflow.match(
+      /^ {6}- name: Assemble release files\r?\n {8}run: \|\r?\n([\s\S]*?)(?=^ {6}\S)/m
+    )?.[1];
+    expect(assembly).toBeTruthy();
+    const artifacts = [
+      [
+        'desktop-windows/nsis/OPTN Wallet_1.7.4_x64-setup.exe',
+        'OPTNWallet-1.7.4-windows-x64-setup.exe',
+      ],
+      [
+        'desktop-macos-arm/macos/OPTN Wallet_1.7.4_aarch64.app.tar.gz',
+        'OPTNWallet-1.7.4-macos-arm64.app.tar.gz',
+      ],
+      [
+        'desktop-macos-intel/macos/OPTN Wallet_1.7.4_x64.app.tar.gz',
+        'OPTNWallet-1.7.4-macos-x64.app.tar.gz',
+      ],
+      [
+        'desktop-linux/appimage/OPTN Wallet_1.7.4_amd64.AppImage',
+        'OPTNWallet-1.7.4-linux-x64.AppImage',
+      ],
+      [
+        'desktop-linux-arm/appimage/OPTN Wallet_1.7.4_aarch64.AppImage',
+        'OPTNWallet-1.7.4-linux-arm64.AppImage',
+      ],
+    ].flatMap(([source, destination]) =>
+      ['', '.sig'].map((suffix) => [source + suffix, destination + suffix])
+    );
+    const directory = mkdtempSync(resolve(tmpdir(), 'optn-release-assembly-'));
+    try {
+      for (const [source, destination] of artifacts) {
+        const path = resolve(directory, 'artifacts', source);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, `fixture for ${destination}\n`);
+      }
+      const result = spawnSync(bash, ['-e', '-o', 'pipefail'], {
+        cwd: directory,
+        input: assembly!.replace(/\r\n/g, '\n').replace(/^ {10}/gm, ''),
+        encoding: 'utf8',
+        timeout: 5_000,
+        env: { ...process.env, RELEASE_TAG: 'v1.7.4' },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readdirSync(resolve(directory, 'release-files')).sort()).toEqual(
+        artifacts.map(([, destination]) => destination).sort()
+      );
+      for (const [, destination] of artifacts) {
+        expect(
+          readFileSync(resolve(directory, 'release-files', destination), 'utf8')
+        ).toBe(`fixture for ${destination}\n`);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('pins every external action to an immutable full commit SHA', () => {
@@ -351,7 +416,7 @@ describe('release workflow', () => {
   it('adds a locked Leptos macOS build without replacing legacy targets or Tor checks', () => {
     const matrix =
       desktopPreviewWorkflow.match(
-        /matrix:\s*\n([\s\S]*?)\n    runs-on:/
+        /matrix:\s*\n([\s\S]*?)\n {4}runs-on:/
       )?.[1] ?? '';
     const rows = matrix.split(/- platform: /).slice(1);
     expect(rows).toHaveLength(6);

@@ -1694,6 +1694,7 @@ jobs:
             -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
             -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
             -o -name '*.zip' -o -name '*.flatpak' \
+            -o -name '*.app.tar.gz' -o -name '*.sig' \
             -o \( -path 'artifacts/cli-*/*' -a -name 'optn-*' \) \
             -o -name 'OPTNWallet-*-linux-riscv64-unbundled' \
           \) -print0)
