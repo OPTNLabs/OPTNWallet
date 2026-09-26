@@ -33,6 +33,14 @@ import { useI18n } from '../../../i18n/useI18n';
 import { getBip39LanguageForLocale } from '../../../services/Bip39Service';
 
 type Step = 'loading' | 'reveal' | 'confirm' | 'path' | 'name';
+type CreationStage =
+  | 'idle'
+  | 'validation'
+  | 'wallet'
+  | 'addresses'
+  | 'runtime'
+  | 'navigation'
+  | 'rollback';
 
 const CONFIRM_WORD_COUNT = 3;
 
@@ -58,6 +66,7 @@ const DesktopCreateWalletPage = () => {
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [nameError, setNameError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [creationStage, setCreationStage] = useState<CreationStage>('idle');
 
   const dbService = useMemo(() => DatabaseService(), []);
   const hasInitialized = useRef(false);
@@ -133,6 +142,7 @@ const DesktopCreateWalletPage = () => {
   };
 
   const handleCreate = async () => {
+    setCreationStage('validation');
     if (!walletName.trim()) {
       setNameError(t('onboarding.nameRequired'));
       return;
@@ -151,6 +161,7 @@ const DesktopCreateWalletPage = () => {
     let walletId: number | null = null;
     try {
       const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
+      setCreationStage('wallet');
       walletId = await createWalletWithPassword({
         name: walletName.trim(),
         mnemonic,
@@ -169,6 +180,7 @@ const DesktopCreateWalletPage = () => {
       // One pair is enough to make the wallet usable. The desktop worker runs
       // the bounded discovery/top-up pass after navigation; waiting for all
       // 40 encrypted rows here makes creation unnecessarily slow and fragile.
+      setCreationStage('addresses');
       await KeyService.bootstrapInitialAddressBatch(walletId, 0, 1);
 
       dispatch(setWalletId(walletId));
@@ -185,6 +197,7 @@ const DesktopCreateWalletPage = () => {
       // wallet skips the password dialog, so without this the engine would
       // hold whichever wallet was opened before this one -- and synchronize
       // that account instead of the new one.
+      setCreationStage('runtime');
       const engine = await openWalletInEngine(
         walletId,
         password,
@@ -201,6 +214,7 @@ const DesktopCreateWalletPage = () => {
           // Feedback failure must not roll back the created wallet.
         }
       }
+      setCreationStage('navigation');
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       navigate(`/home/${walletId}`);
 
@@ -215,6 +229,7 @@ const DesktopCreateWalletPage = () => {
     } catch (error) {
       if (walletId !== null) {
         try {
+          setCreationStage('rollback');
           await rollbackCreatedWallet(walletId);
         } catch (rollbackError) {
           console.error(
@@ -424,6 +439,9 @@ const DesktopCreateWalletPage = () => {
         <button
           onClick={() => void handleCreate()}
           disabled={isSubmitting}
+          // Diagnostic labels only: never expose form values or raw errors.
+          data-create-stage={creationStage}
+          data-create-error={Boolean(nameError)}
           className="wallet-btn-primary w-full my-2 text-xl font-bold"
         >
           {t('onboarding.createWallet')}

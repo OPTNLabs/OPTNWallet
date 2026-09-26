@@ -2,7 +2,7 @@
 
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   generateMnemonic: vi.fn(),
   bootstrapInitialAddressBatch: vi.fn(),
   createWalletWithPassword: vi.fn(),
+  openWalletInEngine: vi.fn(),
 }));
 
 vi.mock('react-redux', () => ({
@@ -20,6 +21,7 @@ vi.mock('react-redux', () => ({
     selector({
       wallet_id: { currentWalletId: 0, networkType: 'mainnet' },
       network: { currentNetwork: 'mainnet' },
+      appLock: { autoLockMinutes: 30 },
     }),
 }));
 
@@ -49,6 +51,10 @@ vi.mock('../../../../platform/desktop/DesktopWalletManager', () => ({
   createWalletWithPassword: mocks.createWalletWithPassword,
 }));
 
+vi.mock('../../engineWalletBridge', () => ({
+  openWalletInEngine: mocks.openWalletInEngine,
+}));
+
 import DesktopCreateWalletPage from '../../onboarding/DesktopCreateWalletPage';
 
 const MNEMONIC =
@@ -65,9 +71,10 @@ describe('DesktopCreateWalletPage UI', () => {
     mocks.generateMnemonic.mockResolvedValue(MNEMONIC);
     mocks.bootstrapInitialAddressBatch.mockResolvedValue(undefined);
     mocks.createWalletWithPassword.mockResolvedValue(42);
+    mocks.openWalletInEngine.mockResolvedValue({ opened: true });
   });
 
-  it('requires seed confirmation and validates wallet details before creating', async () => {
+  it('validates onboarding and reports fixed stages while awaiting creation and runtime handoff', async () => {
     const user = userEvent.setup();
     vi.spyOn(Math, 'random')
       .mockReturnValueOnce(0.01)
@@ -115,6 +122,12 @@ describe('DesktopCreateWalletPage UI', () => {
       screen.getByRole('button', { name: 'onboarding.createWallet' })
     );
     expect(screen.getByText('onboarding.nameRequired')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'onboarding.createWallet' })
+    ).toHaveAttribute('data-create-stage', 'validation');
+    expect(
+      screen.getByRole('button', { name: 'onboarding.createWallet' })
+    ).toHaveAttribute('data-create-error', 'true');
 
     await user.type(
       screen.getByPlaceholderText('onboarding.walletNamePlaceholder'),
@@ -140,9 +153,48 @@ describe('DesktopCreateWalletPage UI', () => {
       screen.getByPlaceholderText('onboarding.confirmPasswordPlaceholder'),
       'first-password'
     );
-    await user.click(
-      screen.getByRole('button', { name: 'onboarding.createWallet' })
+    // Hold each asynchronous boundary so a stalled CI run can identify it
+    // without collecting the seed, password, wallet name, or error text.
+    let finishCreation!: (walletId: number) => void;
+    let finishAddresses!: () => void;
+    let finishRuntime!: (result: { opened: boolean }) => void;
+    mocks.createWalletWithPassword.mockReturnValueOnce(
+      new Promise<number>((resolve) => (finishCreation = resolve))
     );
+    mocks.bootstrapInitialAddressBatch.mockReturnValueOnce(
+      new Promise<void>((resolve) => (finishAddresses = resolve))
+    );
+    mocks.openWalletInEngine.mockReturnValueOnce(
+      new Promise<{ opened: boolean }>((resolve) => (finishRuntime = resolve))
+    );
+    const createButton = screen.getByRole('button', {
+      name: 'onboarding.createWallet',
+    });
+    await user.click(createButton);
+    expect(createButton).toHaveAttribute('data-create-stage', 'wallet');
+    expect(createButton).toHaveAttribute('data-create-error', 'false');
+    expect(createButton).toBeDisabled();
+    expect(mocks.bootstrapInitialAddressBatch).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+
+    await act(async () => finishCreation(42));
+    expect(createButton).toHaveAttribute('data-create-stage', 'addresses');
+    expect(mocks.openWalletInEngine).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+
+    await act(async () => finishAddresses());
+    expect(createButton).toHaveAttribute('data-create-stage', 'runtime');
+    expect(createButton).toBeDisabled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    const [walletId, , autoLockMinutes] =
+      mocks.openWalletInEngine.mock.calls[0];
+    expect({ walletId, autoLockMinutes }).toEqual({
+      walletId: 42,
+      autoLockMinutes: 30,
+    });
+    await act(async () => finishRuntime({ opened: true }));
+    expect(createButton).toHaveAttribute('data-create-stage', 'navigation');
+    expect(createButton).not.toBeDisabled();
 
     expect(mocks.createWalletWithPassword).toHaveBeenCalledWith(
       expect.objectContaining({
