@@ -228,6 +228,7 @@ it('browses without probes and sends explicit selection through the old UI', asy
   expect(
     screen.getByRole('button', { name: 'Existing Nostr relay pool' })
   ).toBeInTheDocument();
+  expect(screen.queryByText(/able to sync right now/)).not.toBeInTheDocument();
   act(() => backRef.current?.());
   expect(backRef.current).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: /Wallet birthday/ }));

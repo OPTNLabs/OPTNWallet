@@ -658,19 +658,21 @@ export function ChainSourcesSettings({
         <p className="text-sm font-semibold wallet-text-strong">
           {pageTitle(page)}
         </p>
-        <p className="mt-1 text-xs wallet-muted">
-          {page === 'metadata' ? (
-            view.network
-          ) : (
-            <>
-              {view.network} · {view.wallet_routes} route
-              {view.wallet_routes === 1 ? '' : 's'} able to sync right now
-              {view.verified_tip
-                ? ` · verified header ${view.verified_tip.height}`
-                : ' · no verified headers yet'}
-            </>
-          )}
-        </p>
+        {page !== 'nostr' && (
+          <p className="mt-1 text-xs wallet-muted">
+            {page === 'metadata' ? (
+              view.network
+            ) : (
+              <>
+                {view.network} · {view.wallet_routes} route
+                {view.wallet_routes === 1 ? '' : 's'} able to sync right now
+                {view.verified_tip
+                  ? ` · verified header ${view.verified_tip.height}`
+                  : ' · no verified headers yet'}
+              </>
+            )}
+          </p>
+        )}
       </div>
 
       {page === 'overview' && (

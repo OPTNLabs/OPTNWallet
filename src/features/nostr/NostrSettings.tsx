@@ -235,7 +235,9 @@ export const NostrSettings: React.FC<{ variant?: 'all' | 'relays' }> = ({
                   {t('nostr.relays')}
                 </p>
                 <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-                  {t('nostr.relaysDescription')}
+                  {variant === 'relays'
+                    ? 'Saved WSS relay endpoints for Nostr chat.'
+                    : t('nostr.relaysDescription')}
                 </p>
               </div>
               {variant === 'all' && (

@@ -49,6 +49,7 @@ it('edits the existing relay pool without probing, loading identity, or enabling
     </Provider>
   );
   expect(screen.queryByText('Nostr identity')).not.toBeInTheDocument();
+  expect(screen.queryByText(/P2P-fusion transport/)).not.toBeInTheDocument();
   expect(
     screen.queryByRole('button', { name: /Check relay/i })
   ).not.toBeInTheDocument();
