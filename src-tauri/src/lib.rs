@@ -896,8 +896,6 @@ async fn bip37_headers(
 
     // Tauri ignores surplus legacy IPC keys. A renderer cannot nominate a
     // SOCKS listener; routing is selected from native state below.
-    let runtime = app.state::<optn_runtime::AppRuntime>();
-    let network_settings = app.state::<crate::network_config::NetworkSettingsStore>();
     let network = network
         .parse::<optn_core::network::Network>()
         .map_err(|_| "invalid BIP37 network".to_string())?;
@@ -906,18 +904,14 @@ async fn bip37_headers(
         Some(h) => parse_block_hash(h)?,
         None => spv::genesis_hash(&network_name),
     };
+    // Reject missing/partial resume context before routing can probe a proxy.
+    let walk =
+        spv::HeaderWalk::from_optional_cursor(&network_name, start, locator_height, locator_time)?;
+    let runtime = app.state::<optn_runtime::AppRuntime>();
+    let network_settings = app.state::<crate::network_config::NetworkSettingsStore>();
     let transport =
         bip37_transport_for_active_network(&host, port, network, &runtime, &network_settings)
             .await?;
-    // Fallible on purpose: an unrecognised network name is refused here rather
-    // than walked against mainnet's genesis, which is what the string-keyed
-    // tables underneath would otherwise do. The `?` is the whole point.
-    let walk = spv::HeaderWalk::for_network(
-        &network_name,
-        start,
-        locator_height.unwrap_or(0),
-        locator_time.unwrap_or(0),
-    )?;
     spv::fetch_headers_after_from(&host, port, &network_name, transport, walk).await
 }
 

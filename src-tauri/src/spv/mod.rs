@@ -470,6 +470,46 @@ pub struct HeaderWalk {
 }
 
 impl HeaderWalk {
+    /// Validate an optional IPC cursor before any route lookup or connection.
+    /// Only genesis has a locally known predecessor height and timestamp.
+    pub fn from_optional_cursor(
+        network: &str,
+        locator: [u8; 32],
+        height: Option<u32>,
+        time: Option<i64>,
+    ) -> Result<Self, String> {
+        let parsed = network.parse::<Network>()?;
+        let cursor = match (height, time) {
+            (Some(height), Some(time)) => Some((height, time)),
+            (None, None) => None,
+            _ => return Err("BIP37 header cursor requires both saved height and time".into()),
+        };
+        let mut raw_genesis = [0u8; 80];
+        hex::decode_to_slice(
+            optn_runtime::header_verifier::genesis_header_hex(parsed),
+            &mut raw_genesis,
+        )
+        .map_err(|_| "invalid shipped genesis header".to_string())?;
+        let genesis = optn_core::header_pow::parse_header(&raw_genesis);
+        let genesis_time = i64::from(genesis.time);
+        let (height, time) = if locator == genesis.hash {
+            match cursor {
+                None => (0, genesis_time),
+                // The existing renderer sends (0, 0) for its first request.
+                Some((0, time)) if time == 0 || time == genesis_time => (0, genesis_time),
+                _ => return Err("BIP37 genesis cursor has incorrect height or time".into()),
+            }
+        } else {
+            let (height, time) =
+                cursor.ok_or("resuming BIP37 headers requires the saved height and time")?;
+            if height == 0 || u32::try_from(time).is_err() {
+                return Err("invalid BIP37 predecessor height or time".into());
+            }
+            (height, time)
+        };
+        Self::for_network(network, locator, height, time)
+    }
+
     pub fn for_network(
         network: &str,
         locator: [u8; 32],
@@ -559,7 +599,8 @@ where
     Ok(out)
 }
 
-/// Connect, handshake, and fetch one validated batch of headers after `locator`.
+/// Connect, handshake, and fetch one validated batch after the network genesis.
+/// A non-genesis locator requires [`fetch_headers_after_from`] and its cursor.
 pub async fn fetch_headers_after(
     host: &str,
     port: u16,
@@ -572,7 +613,7 @@ pub async fn fetch_headers_after(
         port,
         network,
         transport,
-        HeaderWalk::for_network(network, locator, 0, 0)?,
+        HeaderWalk::from_optional_cursor(network, locator, None, None)?,
     )
     .await
 }
@@ -1068,6 +1109,7 @@ mod tests {
                 HeaderWalk::for_network(refused, [0; 32], 0, 0).is_err(),
                 "{refused} must not resolve to a chain"
             );
+            assert!(HeaderWalk::from_optional_cursor(refused, [0; 32], None, None).is_err());
         }
         for network in [
             "mainnet", "chipnet", "testnet3", "testnet4", "testnet", "regtest",
@@ -1077,6 +1119,92 @@ mod tests {
                 "{network} must walk its own chain"
             );
         }
+    }
+
+    #[test]
+    fn header_walk_requires_complete_resume_cursor() {
+        for (height, time) in [
+            (None, None),
+            (Some(700_000), None),
+            (None, Some(1_700_000_000)),
+        ] {
+            let error =
+                HeaderWalk::from_optional_cursor("mainnet", [7; 32], height, time).unwrap_err();
+            assert!(error.contains("height and time"), "{error}");
+        }
+        for (height, time) in [(0, 1_700_000_000), (700_000, -1), (700_000, i64::MAX)] {
+            assert!(
+                HeaderWalk::from_optional_cursor("mainnet", [7; 32], Some(height), Some(time))
+                    .is_err()
+            );
+        }
+        let walk = HeaderWalk::from_optional_cursor(
+            "mainnet",
+            [7; 32],
+            Some(700_000),
+            Some(1_700_000_000),
+        )
+        .unwrap();
+        assert_eq!(walk.expected_prev, [7; 32]);
+        assert_eq!(walk.check().previous_height, 700_000);
+        assert_eq!(walk.check().previous_time, 1_700_000_000);
+        assert!(walk.check().applies(), "resume must retain ASERT checking");
+    }
+
+    #[test]
+    fn header_walk_uses_known_genesis_cursor() {
+        for network in Network::ALL {
+            let name = network.to_string();
+            let locator = genesis_hash(&name);
+            let genesis_time = i64::from(
+                optn_runtime::header_verifier::shipped_header_verifier(network)
+                    .unwrap()
+                    .last_time()
+                    .unwrap(),
+            );
+            for cursor in [
+                (None, None),
+                (Some(0), Some(0)),
+                (Some(0), Some(genesis_time)),
+            ] {
+                let walk =
+                    HeaderWalk::from_optional_cursor(&name, locator, cursor.0, cursor.1).unwrap();
+                assert_eq!(walk.expected_prev, locator);
+                assert_eq!(walk.locator_height, 0);
+                assert_eq!(walk.locator_time, genesis_time);
+            }
+            for cursor in [
+                (Some(0), None),
+                (None, Some(0)),
+                (Some(1), Some(genesis_time)),
+                (Some(0), Some(1)),
+            ] {
+                assert!(
+                    HeaderWalk::from_optional_cursor(&name, locator, cursor.0, cursor.1).is_err(),
+                    "{name} must reject a partial or contradictory genesis cursor"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn header_fetch_requires_resume_cursor_before_connecting() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let error = tokio::time::timeout(
+            Duration::from_millis(100),
+            fetch_headers_after("127.0.0.1", port, "mainnet", Transport::Direct, [7; 32]),
+        )
+        .await
+        .expect("missing cursor must fail before the handshake")
+        .unwrap_err();
+        assert!(error.contains("height and time"), "{error}");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), listener.accept())
+                .await
+                .is_err(),
+            "invalid cursor must not open a connection"
+        );
     }
 
     /// Live: filterload + request block 1 as a merkleblock from a public node,
@@ -1270,7 +1398,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn header_batch_rejects_linked_easy_target_past_asert_anchor() {
+    async fn header_batch_checks_expected_target_when_resumed_past_asert_anchor() {
         use optn_core::asert::{next_bits, AsertAnchor, AsertParams};
         use optn_core::header_pow::verify_declared_pow;
 
@@ -1289,34 +1417,38 @@ mod tests {
         let expected = next_bits(params, anchor, 10, 10).unwrap();
         assert_ne!(expected, params.max_bits);
 
-        let mut header = [0u8; 80];
-        header[0..4].copy_from_slice(&1u32.to_le_bytes());
-        header[4..36].copy_from_slice(&prev);
-        header[68..72].copy_from_slice(&610u32.to_le_bytes());
-        header[72..76].copy_from_slice(&params.max_bits.to_le_bytes());
-        let mut mined = false;
-        for nonce in 0u32..50_000 {
-            header[76..80].copy_from_slice(&nonce.to_le_bytes());
-            if verify_declared_pow(&header).is_ok() {
-                mined = true;
-                break;
+        let walk = HeaderWalk {
+            params,
+            anchor,
+            ..HeaderWalk::from_optional_cursor("mainnet", prev, Some(10), Some(10)).unwrap()
+        };
+        for bits in [expected, params.max_bits] {
+            let mut header = [0u8; 80];
+            header[0..4].copy_from_slice(&1u32.to_le_bytes());
+            header[4..36].copy_from_slice(&prev);
+            header[68..72].copy_from_slice(&610u32.to_le_bytes());
+            header[72..76].copy_from_slice(&bits.to_le_bytes());
+            let mut mined = false;
+            for nonce in 0u32..50_000 {
+                header[76..80].copy_from_slice(&nonce.to_le_bytes());
+                if verify_declared_pow(&header).is_ok() {
+                    mined = true;
+                    break;
+                }
+            }
+            assert!(mined, "test header must satisfy its own declared work");
+
+            let result = sync_one_header_from(header, walk).await;
+            if bits == expected {
+                let headers = result.unwrap();
+                assert_eq!(headers.len(), 1);
+                assert_eq!(headers[0].prev_hash, hex_be(&prev));
+                assert_eq!(headers[0].bits, expected);
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.contains("UnexpectedBits"), "{error}");
             }
         }
-        assert!(mined, "easy-target attack header must be nonce-valid");
-
-        let error = sync_one_header_from(
-            header,
-            HeaderWalk {
-                expected_prev: prev,
-                locator_height: 10,
-                locator_time: 10,
-                params,
-                anchor,
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(error.contains("UnexpectedBits"), "{error}");
     }
 
     #[test]
