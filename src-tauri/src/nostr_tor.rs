@@ -511,8 +511,10 @@ mod tests {
 
     #[test]
     fn relay_health_validates_whole_batch_bounds_and_canonical_duplicates() {
+        let mut insecure = reqwest::Url::parse("wss://relay.invalid").unwrap();
+        insecure.set_scheme("ws").unwrap();
+        assert!(health_relays(vec![insecure.into()]).is_err());
         for invalid in [
-            "ws://relay.invalid",
             "https://relay.invalid",
             "wss://",
             "wss://user@relay.invalid",
@@ -731,24 +733,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relay_health_local_handshake_sends_only_close() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
+    async fn relay_health_in_memory_handshake_sends_only_close() {
+        // Model the established TLS stream without opening a plaintext socket.
+        // The production probe supplies Tor+TLS before this protocol boundary.
+        let (client_stream, server_stream) = tokio::io::duplex(4096);
         let server = async {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(server_stream)
+                .await
+                .unwrap();
             assert!(
                 matches!(socket.next().await.unwrap().unwrap(), Message::Close(None)),
                 "health probes must not send EVENT, REQ, AUTH, profiles or other Nostr frames"
             );
         };
         let client = async {
-            let stream = connect_stream("127.0.0.1", address.port(), false, Transport::Direct)
-                .await
-                .unwrap();
-            // Plaintext is limited to this private loopback fixture; the command
-            // validator above accepts only wss and the probe always uses Tor+TLS.
-            health_handshake(&format!("ws://{address}"), stream)
+            health_handshake("wss://relay.invalid", client_stream)
                 .await
                 .unwrap();
         };

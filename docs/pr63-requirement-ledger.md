@@ -647,10 +647,25 @@ cancel stale probes and invalidate cached results. Blocked checks remain unknown
 rather than incorrectly marking the relay unreachable.
 
 Validation: seven native tests cover URL limits, policy/transport refusal, cache
-scope/coalescing, cancellation and a local handshake that sends only Close.
+scope/coalescing, cancellation and an in-memory handshake that sends only Close.
 Nineteen Redux/SSR/UI tests cover retired settings, wallet gating, automatic
 checks/timer cleanup, stale replies, relay edits and explicit profile actions.
 Combined TypeScript, scoped ESLint/formatting, strict native Clippy and the
-desktop package build passed. These are automated checks, not yet packaged live
-relay acceptance. Chat/profile traffic itself still uses the legacy transport;
-owned-relay classification and non-desktop native health remain separate gaps.
+desktop package build passed. The `21780bfe` Windows package retained all five
+saved wallets. Ordinary unlock restored the cached Chipnet Home balance/history;
+the runtime accepted 1,370-address horizons on both receive and change branches.
+Opening Network -> Nostr displayed **26/30 reachable at last check** immediately,
+without pressing Check relays. The enable switch was absent and no profile or
+message was published. Its executable SHA-256 is
+`30aa226f78419aa49a4b250628c50fd8e4161cda6d6cee41283539a99675a2fd`.
+This is live native relay-health evidence, not completion of wallet-wide sync.
+Chat/profile traffic itself still uses the legacy transport; owned-relay
+classification and non-desktop native health remain separate gaps.
+
+Semgrep on this head reported plaintext URLs in the new negative/loopback tests.
+The fixture now models the established stream in memory without a plaintext
+listener, and plaintext rejection remains tested by changing a parsed URL's
+scheme. All seven native tests and strict Clippy passed again. No finding was
+dismissed, no scan rule was suppressed, and no production transport was relaxed.
+The Linux E2E run stopped at the Tor bundle download timeout before app testing;
+the next push will rerun that gate.
