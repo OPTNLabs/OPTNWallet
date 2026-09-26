@@ -53,6 +53,35 @@ fn err(e: crate::error::CliError) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
+/// Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
+/// display order, matching the shared coin-hold record. This does not sign.
+#[wasm_bindgen(js_name = transactionOutpoints)]
+pub fn transaction_outpoints(raw_tx_hex: &str) -> Result<String, JsValue> {
+    if !raw_tx_hex.len().is_multiple_of(2)
+        || !raw_tx_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(JsValue::from_str("invalid transaction hex"));
+    }
+    let raw: Vec<u8> = (0..raw_tx_hex.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&raw_tx_hex[index..index + 2], 16))
+        .collect::<Result<_, _>>()
+        .map_err(|_| JsValue::from_str("invalid transaction hex"))?;
+    let transaction = crate::tx::decode(&raw).map_err(err)?;
+    if transaction.inputs.is_empty() {
+        return Err(JsValue::from_str("transaction has no inputs"));
+    }
+    let outpoints: Vec<_> = transaction
+        .inputs
+        .into_iter()
+        .map(|(mut txid, vout, _)| {
+            txid.reverse();
+            serde_json::json!({ "txid": crate::coins::hex_encode(&txid), "vout": vout })
+        })
+        .collect();
+    serde_json::to_string(&outpoints).map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
 /// `m/44'/<coin>'/<account>'/3/0` and `/3/1`, as a JSON object.
 #[wasm_bindgen(js_name = rpaKeyPaths)]
 pub fn rpa_key_paths(coin_type: u32, account: u32) -> String {
@@ -404,13 +433,13 @@ pub fn fusion_scalar_is_canonical(bytes: &[u8]) -> bool {
 /// Add packed 32-byte non-zero canonical scalars modulo the group order.
 #[wasm_bindgen(js_name = fusionScalarSum)]
 pub fn fusion_scalar_sum(packed: &[u8]) -> Result<Vec<u8>, JsValue> {
-    if packed.is_empty() || packed.len() % 32 != 0 {
+    if packed.is_empty() || !packed.len().is_multiple_of(32) {
         return Err(JsValue::from_str(
             "packed scalars must contain one or more 32-byte values",
         ));
     }
     let mut total = k256::Scalar::ZERO;
-    for chunk in packed.chunks_exact(32) {
+    for chunk in packed.as_chunks::<32>().0 {
         total += scalar_from(chunk, "scalar")?;
     }
     Ok(total.to_bytes().to_vec())
@@ -473,11 +502,11 @@ pub fn fusion_pedersen_balance_holds(
 ) -> Result<bool, JsValue> {
     use k256::ProjectivePoint;
 
-    if packed_commitments.is_empty() || packed_commitments.len() % 65 != 0 {
+    if packed_commitments.is_empty() || !packed_commitments.len().is_multiple_of(65) {
         return Ok(false);
     }
     let mut sum = ProjectivePoint::IDENTITY;
-    for encoded in packed_commitments.chunks_exact(65) {
+    for encoded in packed_commitments.as_chunks::<65>().0 {
         let point = match crate::fusion::schnorr::parse_point(encoded) {
             Ok(point) => point,
             Err(_) => return Ok(false),

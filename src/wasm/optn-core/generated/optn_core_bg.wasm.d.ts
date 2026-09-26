@@ -45,6 +45,7 @@ export const scanTransaction: (a: number, b: number, c: number, d: number, e: nu
 export const sendBlockReason: (a: number, b: number) => [number, number, number, number];
 export const sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const transactionOutpoints: (a: number, b: number) => [number, number, number, number];
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

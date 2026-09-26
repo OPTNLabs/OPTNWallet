@@ -93,13 +93,14 @@ fn spendable_coins(
 }
 
 /// Outpoints this wallet may not spend, read from the durable hold record.
-fn held_outpoints(app: &tauri::AppHandle, wallet_id: Option<u32>) -> BTreeSet<String> {
-    let Some(wallet_id) = wallet_id else {
-        return BTreeSet::new();
-    };
-    crate::coin_holds::optn_coin_holds(app.clone(), wallet_id)
-        .map(|holds| holds.into_iter().map(|hold| hold.outpoint).collect())
-        .unwrap_or_default()
+fn held_outpoints(
+    wallet_id: Option<u32>,
+    read: impl FnOnce(u32) -> Result<Vec<crate::coin_holds::CoinHoldView>, String>,
+) -> Result<BTreeSet<String>, String> {
+    let wallet_id = wallet_id
+        .filter(|id| *id > 0)
+        .ok_or("a wallet id is required to check coin holds")?;
+    read(wallet_id).map(|holds| holds.into_iter().map(|hold| hold.outpoint).collect())
 }
 
 async fn build(
@@ -141,7 +142,9 @@ async fn build(
         amount_sats: sats,
         fee_per_byte: fee_rate.max(1),
         change_script: change.script_pubkey(),
-        held: held_outpoints(app, wallet_id),
+        held: held_outpoints(wallet_id, |id| {
+            crate::coin_holds::optn_coin_holds(app.clone(), id)
+        })?,
     };
 
     // The unlocked wallet is borrowed for the signature and dropped with this
@@ -269,6 +272,26 @@ pub async fn optn_wallet_send(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn coin_holds_require_a_wallet_and_propagate_read_errors() {
+        for wallet_id in [None, Some(0)] {
+            assert!(
+                super::held_outpoints(wallet_id, |_| panic!("must not read without a wallet"))
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            super::held_outpoints(Some(42), |id| {
+                assert_eq!(id, 42);
+                Err("coin holds file is unreadable".into())
+            }),
+            Err("coin holds file is unreadable".into())
+        );
+        assert!(super::held_outpoints(Some(42), |_| Ok(Vec::new()))
+            .unwrap()
+            .is_empty());
+    }
+
     // No `use super::*`: the fixture below names every type it builds, and a
     // glob that imports nothing used is a warning under `-D warnings`.
     #[test]

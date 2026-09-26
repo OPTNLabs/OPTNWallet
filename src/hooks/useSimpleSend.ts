@@ -22,9 +22,11 @@ import UTXOService from '../services/UTXOService';
 import { outpointKey } from '../platform/desktop/CoinLabelService';
 import { applySpendOnlyFusedPolicy } from '../platform/desktop/fusionSpendPolicy';
 import {
-  heldOutpointSet,
+  assertCoinHoldScope,
+  assertCoinsNotHeld,
   holdKey,
-  readCoinHolds,
+  readScopedCoinHolds,
+  type CoinHoldScope,
 } from '../platform/desktop/coinHoldsBridge';
 import { selectSpendOnlyFusedCoins } from '../state/slices/experimentalSlice';
 import {
@@ -63,6 +65,18 @@ export default function useSimpleSend() {
   const walletType = useSelector(selectWalletType);
   const isHardwareWallet = walletType === 'hardware';
   const currentNetwork = useSelector((s: RootState) => selectCurrentNetwork(s));
+  const sessionGeneration = useSelector(
+    (s: RootState) => s.wallet_id.sessionGeneration
+  );
+  const holdScope = useMemo(
+    () => ({
+      walletId,
+      activeWalletId: walletId,
+      network: currentNetwork,
+      sessionGeneration,
+    }),
+    [walletId, currentNetwork, sessionGeneration]
+  );
   const feeMode = useSelector(selectFeeMode);
   const customFeeSatPerByte = useSelector(selectCustomFeeSatPerByte);
   const spendOnlyFusedCoins = useSelector(selectSpendOnlyFusedCoins);
@@ -136,34 +150,11 @@ export default function useSimpleSend() {
     []
   );
 
-  // Coins the shared hold record says are not free to spend. Read from the
-  // runtime rather than tracked here: the same record is what a pledge and a
-  // fusion round hold coins with.
-  const [heldOutpoints, setHeldOutpoints] = useState<ReadonlySet<string>>(
-    () => new Set<string>()
-  );
-  useEffect(() => {
-    let cancelled = false;
-    if (!walletId) {
-      setHeldOutpoints(new Set<string>());
-      return;
-    }
-    void readCoinHolds(walletId)
-      .then((holds) => {
-        if (!cancelled) setHeldOutpoints(heldOutpointSet(holds));
-      })
-      .catch((error) => {
-        // Failing open would spend a frozen coin. The send still refuses on an
-        // empty pool, and the reason is worth seeing.
-        console.error('[send] could not read coin holds:', error);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [walletId]);
-
   const applyCoinControl = useCallback(
-    (pool: UTXO[]): UTXO[] | { error: string } => {
+    (
+      pool: UTXO[],
+      heldOutpoints: ReadonlySet<string>
+    ): UTXO[] | { error: string } => {
       // Held coins leave the pool before anything else looks at it. A hold can
       // belong to a Flipstarter pledge or a running Fusion round, and spending
       // one of those double-spends that round's own inputs -- so this is a
@@ -184,7 +175,7 @@ export default function useSimpleSend() {
               'Coin control is on but no coins are selected. Check at least one coin, or turn Manual off.',
           };
         }
-        next = pool.filter((u) =>
+        next = next.filter((u) =>
           selectedCoinKeys.has(outpointKey(u.tx_hash, u.tx_pos))
         );
         if (next.length === 0) {
@@ -196,13 +187,7 @@ export default function useSimpleSend() {
       }
       return applySpendOnlyFusedPolicy(walletId, next, spendOnlyFusedCoins);
     },
-    [
-      coinControlEnabled,
-      selectedCoinKeys,
-      walletId,
-      spendOnlyFusedCoins,
-      heldOutpoints,
-    ]
+    [coinControlEnabled, selectedCoinKeys, walletId, spendOnlyFusedCoins]
   );
   useEffect(() => {
     if (!hydrated) return;
@@ -400,6 +385,7 @@ export default function useSimpleSend() {
   // Flow
   const [mode, setMode] = useState<SimpleSendMode>('idle');
   const [review, setReview] = useState<ReviewState | null>(null);
+  const [reviewScope, setReviewScope] = useState<CoinHoldScope | null>(null);
   const [selectedForTx, setSelectedForTx] = useState<UTXO[]>([]);
   const [txid, setTxid] = useState<string>('');
   const [broadcastState, setBroadcastState] =
@@ -518,6 +504,7 @@ export default function useSimpleSend() {
     setMode('idle');
     setError('');
     setReview(null);
+    setReviewScope(null);
     setSelectedForTx([]);
     setTxid('');
     setBroadcastState('broadcasted');
@@ -539,11 +526,15 @@ export default function useSimpleSend() {
     reviewInFlightRef.current = true;
     setReviewBusy(true);
     setError('');
+    setReview(null);
+    setSelectedForTx([]);
     // Yield so React can paint "Preparing…" before build work.
     await new Promise<void>((resolve) => {
       window.requestAnimationFrame(() => resolve());
     });
     try {
+      assertCoinHoldScope(holdScope);
+      setReviewScope(holdScope);
       const rpaBlockReason = getRpaSendBlockReason(recipient, currentNetwork);
       if (rpaBlockReason) {
         setError(rpaBlockReason);
@@ -606,7 +597,8 @@ export default function useSimpleSend() {
         // Local snapshot first (Max-style). Full Electrum refresh no longer
         // blocks this click — it runs in the background via loadSpendableBchUtxos.
         const freshDbUtxos = await loadSpendableBchUtxos();
-        const controlled = applyCoinControl(freshDbUtxos);
+        const heldOutpoints = await readScopedCoinHolds(holdScope);
+        const controlled = applyCoinControl(freshDbUtxos, heldOutpoints);
         if ('error' in controlled) {
           setError(controlled.error);
           setMode('error');
@@ -676,6 +668,7 @@ export default function useSimpleSend() {
           rpaStealthAddress = finalized.stealthAddress;
         }
 
+        assertCoinHoldScope(holdScope);
         setSelectedForTx(attempt.inputs);
         setReview({
           rawTx,
@@ -690,7 +683,8 @@ export default function useSimpleSend() {
 
       // From here: token sends also need BCH for fees
       const feePoolRaw = await loadSpendableBchUtxos();
-      const feePool = applyCoinControl(feePoolRaw);
+      const heldOutpoints = await readScopedCoinHolds(holdScope);
+      const feePool = applyCoinControl(feePoolRaw, heldOutpoints);
       if ('error' in feePool) {
         setError(feePool.error);
         setMode('error');
@@ -777,6 +771,7 @@ export default function useSimpleSend() {
           return;
         }
 
+        assertCoinHoldScope(holdScope);
         setSelectedForTx(built.inputs);
         setReview({
           rawTx: built.rawTx,
@@ -836,6 +831,7 @@ export default function useSimpleSend() {
           return;
         }
 
+        assertCoinHoldScope(holdScope);
         setSelectedForTx(built.inputs);
         setReview({
           rawTx: built.rawTx,
@@ -872,7 +868,7 @@ export default function useSimpleSend() {
     tokenChangeAddress,
     applyCoinControl,
     isHardwareWallet,
-    heldOutpoints,
+    holdScope,
   ]);
 
   // "Max": fills the BCH amount field with the full spendable balance minus
@@ -927,7 +923,8 @@ export default function useSimpleSend() {
       // so Max is responsive; doReview performs the authoritative refresh
       // immediately before transaction construction.
       const freshDbUtxos = await loadSpendableBchUtxos();
-      const controlled = applyCoinControl(freshDbUtxos);
+      const heldOutpoints = await readScopedCoinHolds(holdScope);
+      const controlled = applyCoinControl(freshDbUtxos, heldOutpoints);
       if ('error' in controlled) {
         setError(controlled.error);
         setMode('error');
@@ -959,6 +956,7 @@ export default function useSimpleSend() {
       if (!Number.isSafeInteger(maxSats) || maxSats <= 0) {
         throw new Error('The wallet returned an invalid maximum spend amount.');
       }
+      assertCoinHoldScope(holdScope);
       setAmountBch((maxSats / SATSINBITCOIN).toFixed(8));
       // setAmountBch already synchronizes the USD mirror. Switching through
       // setAmountDisplayMode here would convert from the stale USD state and
@@ -987,6 +985,7 @@ export default function useSimpleSend() {
     applyCoinControl,
     feeMode,
     customFeeSatPerByte,
+    holdScope,
   ]);
 
   const doSend = useCallback(async () => {
@@ -995,6 +994,8 @@ export default function useSimpleSend() {
     if (!isHardwareWallet && !review.rawTx) return;
     try {
       setMode('sending');
+      if (!reviewScope) throw new Error('Review the transaction again.');
+      await assertCoinsNotHeld(reviewScope, selectedForTx);
       setSendStatus(
         isHardwareWallet
           ? 'Preparing hardware sign… Look at your Ledger.'
@@ -1024,11 +1025,13 @@ export default function useSimpleSend() {
         setSendStatus('Broadcasting signed transaction…');
       }
 
+      assertCoinHoldScope(reviewScope);
       const {
         txid: sentId,
         errorMessage,
         broadcastState: sentState,
       } = await TransactionService.sendTransaction(rawHex, selectedForTx, {
+        walletId: reviewScope.walletId,
         source: 'simple-send',
         sourceLabel: isHardwareWallet ? 'Hardware Send' : 'Simple Send',
         recipientSummary: normalizedRecipient,
@@ -1056,6 +1059,7 @@ export default function useSimpleSend() {
     assetType,
     parsedRecipient.amountRaw,
     review,
+    reviewScope,
     normalizedRecipient,
     selectedForTx,
     isHardwareWallet,

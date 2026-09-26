@@ -1,4 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
+import { store } from '../../state/store';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
+import { toErrorMessage } from '../../utils/errorHandling';
 import { isDesktopPlatform } from '../../utils/platform';
 
 /**
@@ -34,7 +37,63 @@ export function holdKey(txid: string, vout: number): string {
 
 export async function readCoinHolds(walletId: number): Promise<CoinHold[]> {
   if (!isDesktopPlatform()) return [];
-  return invoke<CoinHold[]>('optn_coin_holds', { walletId });
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) {
+    throw new Error('Select a wallet before reading coin holds.');
+  }
+  try {
+    // On desktop, an unreadable persisted record is not an empty record.
+    return await invoke<CoinHold[]>('optn_coin_holds', { walletId });
+  } catch (error) {
+    throw new Error(
+      `Unable to read coin holds. Sending is blocked: ${toErrorMessage(error)}`
+    );
+  }
+}
+
+/** Bind an adapter operation to the wallet session/network that started it. */
+export function coinHoldScope(walletId?: number) {
+  const state = store.getState();
+  return {
+    walletId: walletId ?? state.wallet_id.currentWalletId,
+    activeWalletId: state.wallet_id.currentWalletId,
+    sessionGeneration: state.wallet_id.sessionGeneration,
+    network: selectCurrentNetwork(state),
+  };
+}
+
+export type CoinHoldScope = ReturnType<typeof coinHoldScope>;
+
+export function assertCoinHoldScope(scope: CoinHoldScope): void {
+  const current = coinHoldScope(scope.walletId);
+  if (
+    current.activeWalletId !== scope.activeWalletId ||
+    current.sessionGeneration !== scope.sessionGeneration ||
+    current.network !== scope.network
+  ) {
+    throw new Error('Wallet or network changed. Review the transaction again.');
+  }
+}
+
+export async function readScopedCoinHolds(
+  scope: CoinHoldScope
+): Promise<Set<string>> {
+  assertCoinHoldScope(scope);
+  const holds = heldOutpointSet(await readCoinHolds(scope.walletId));
+  assertCoinHoldScope(scope);
+  return holds;
+}
+
+/** Consume Rust's hold record; reasons and release policy remain in Rust. */
+export async function assertCoinsNotHeld(
+  scope: CoinHoldScope,
+  inputs: ReadonlyArray<{ tx_hash: string; tx_pos: number }>
+): Promise<void> {
+  const holds = await readScopedCoinHolds(scope);
+  if (inputs.some((input) => holds.has(holdKey(input.tx_hash, input.tx_pos)))) {
+    throw new Error(
+      'A selected coin is frozen or reserved. Review the transaction again.'
+    );
+  }
 }
 
 export async function freezeCoin(

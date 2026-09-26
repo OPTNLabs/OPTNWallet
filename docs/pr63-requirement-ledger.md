@@ -561,3 +561,31 @@ process occupied the integrated port. After closing that verified orphan and
 starting app-owned Tor, the unchanged policy exposed four eligible routes.
 Full public light-client authchain acceptance, policy-aware icons, global index
 queries and live token acceptance remain open.
+
+### 2026-09-26: Covered-address refresh and send holds
+
+The retained wallet refresh now replaces every returned address result, including
+empty results, while preserving omitted addresses. The former address-count
+heuristic discarded changed/empty results on a narrower refresh. Regression cases
+failed against that implementation; all 32 refresh/UTXO checks now pass.
+
+Retained desktop sends now read Rust's durable coin holds at review/Max and again
+before handoff. Manual coin selection cannot reintroduce held coins. The broadcast
+adapter decodes actual inputs through the existing Rust transaction decoder in
+WASM, so omitted caller input metadata cannot bypass the check. Wallet/network/
+session changes invalidate reviews, and unreadable hold records fail closed. The
+native spend builder also propagates hold-read errors and requires a wallet ID.
+This is a repair to the existing desktop hold capability; non-desktop support is
+unchanged, and this does not establish an atomic cross-process spend reservation.
+
+Validation: 45 send/binding/UI checks, 21 WASM connector/Fusion regressions, two
+native spend tests, TypeScript, formatting, ESLint, native and WASM strict Clippy,
+generated-WASM freshness and architecture checks passed. No funds were spent.
+
+Live Chipnet sync in the earlier `8399f9cc` desktop package reached tip 325177
+through the saved Tor/source policy and reported 15,529,363 confirmed sats. The
+retained Home showed 49,896,199 sats. These are different projections, not proof
+that either total covers the entire wallet: legacy issued-address horizons are not
+imported, RPA receipts and tracked contracts are not persisted in the shared HD
+checkpoint, and HD discovery rejects non-HD scripts. Whole-wallet balance
+replacement remains blocked on a union of those scopes with durable coverage.

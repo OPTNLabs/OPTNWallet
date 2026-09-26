@@ -1014,6 +1014,33 @@ export function spendingKey(spend_privkey, secret, index) {
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v3;
 }
+
+/**
+ * Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
+ * display order, matching the shared coin-hold record. This does not sign.
+ * @param {string} raw_tx_hex
+ * @returns {string}
+ */
+export function transactionOutpoints(raw_tx_hex) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(raw_tx_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.transactionOutpoints(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,

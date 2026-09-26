@@ -12,7 +12,13 @@ import ContractManager from '../apis/ContractManager/ContractManager';
 import type { ContractInstanceRow } from '../apis/ContractManager/ContractManager';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import { store } from '../state/store';
-import { logError } from '../utils/errorHandling';
+import { logError, toErrorMessage } from '../utils/errorHandling';
+import { isDesktopPlatform } from '../utils/platform';
+import {
+  assertCoinsNotHeld,
+  coinHoldScope,
+  type CoinHoldScope,
+} from '../platform/desktop/coinHoldsBridge';
 import { isDeterministicBroadcastError } from '../utils/broadcastErrors';
 import { reservedOutpoints as reservedFusionOutpoints } from '../platform/desktop/fusionRoundState';
 import OutboundTransactionTracker, {
@@ -26,7 +32,9 @@ import {
 } from './transaction/helpers';
 
 type UTXOWorkerServiceApi = {
-  optimisticRemoveSpentByOutpoints: (outpoints: Array<{ tx_hash: string; tx_pos: number }>) => void;
+  optimisticRemoveSpentByOutpoints: (
+    outpoints: Array<{ tx_hash: string; tx_pos: number }>
+  ) => void;
   requestUTXORefreshForMany: (addresses: string[], ms?: number) => void;
 };
 
@@ -139,6 +147,35 @@ export type BatchedTransactionRequest = {
   options?: SendTransactionOptions;
 };
 
+async function checkSendCoinHolds(
+  rawTX: string,
+  scope: CoinHoldScope
+): Promise<BroadcastResult | null> {
+  // Persisted coin holds currently belong to the desktop capability only.
+  if (!isDesktopPlatform()) return null;
+  try {
+    // Rust decodes the actual inputs; caller metadata is not authoritative.
+    const { transactionOutpoints } = await import('../wasm/optn-core');
+    const outpoints = JSON.parse(transactionOutpoints(rawTX)) as Array<{
+      txid: string;
+      vout: number;
+    }>;
+    await assertCoinsNotHeld(
+      scope,
+      outpoints.map((input) => ({
+        tx_hash: input.txid,
+        tx_pos: input.vout,
+      }))
+    );
+    return null;
+  } catch (error) {
+    return {
+      txid: null,
+      errorMessage: toErrorMessage(error, 'Unable to verify coin holds.'),
+    };
+  }
+}
+
 /**
  * TransactionService encapsulates all transaction-related business logic.
  */
@@ -148,7 +185,8 @@ class TransactionService {
   // (TransactionService → ContractManager → AddonsRegistry → …) and Vitest
   // throws TDZ on `__vite_ssr_import_*` during OptnKeyManager tests.
   private contractManager: ReturnType<typeof ContractManager> | null = null;
-  private transactionManager: ReturnType<typeof TransactionManager> | null = null;
+  private transactionManager: ReturnType<typeof TransactionManager> | null =
+    null;
 
   private getContractManager() {
     if (!this.contractManager) {
@@ -422,6 +460,16 @@ class TransactionService {
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> {
+    try {
+      await assertCoinsNotHeld(coinHoldScope(), selectedUtxos);
+    } catch (error) {
+      return {
+        bytecodeSize: 0,
+        finalTransaction: '',
+        finalOutputs: null,
+        errorMsg: toErrorMessage(error, 'Unable to verify coin holds.'),
+      };
+    }
     return await this.getTransactionManager().buildTransaction(
       outputs,
       contractFunctionInputs,
@@ -444,6 +492,7 @@ class TransactionService {
   ): Promise<BroadcastResult> {
     const currentWalletId =
       options?.walletId ?? store.getState().wallet_id.currentWalletId ?? null;
+    const holdScope = coinHoldScope(currentWalletId ?? undefined);
     const currentTxid = deriveTrackedTxid(rawTX);
     const activeOutbound = currentWalletId
       ? (await OutboundTransactionTracker.listActive(currentWalletId)).filter(
@@ -513,10 +562,13 @@ class TransactionService {
       }
     }
 
+    const holdError = await checkSendCoinHolds(rawTX, holdScope);
+    if (holdError) return holdError;
     const transactionManager = this.getTransactionManager();
-    const res: BroadcastResult = options?.multisig
-      ? await transactionManager.sendTransaction(rawTX, currentWalletId)
-      : await transactionManager.sendTransaction(rawTX);
+    const res: BroadcastResult =
+      options?.walletId !== undefined || options?.multisig
+        ? await transactionManager.sendTransaction(rawTX, currentWalletId)
+        : await transactionManager.sendTransaction(rawTX);
     const trackedTxid = deriveTrackedTxid(rawTX);
 
     if (res?.errorMessage || !res?.txid) {
@@ -534,7 +586,10 @@ class TransactionService {
     }
 
     if (res?.txid) {
-      await enrichTrackedAttempt(rawTX, spentInputs, options);
+      await enrichTrackedAttempt(rawTX, spentInputs, {
+        ...options,
+        walletId: holdScope.walletId,
+      });
       void WalletBackendSyncService.observeTransaction(
         currentWalletId ?? 0,
         res.txid,
@@ -579,12 +634,17 @@ class TransactionService {
     requests: BatchedTransactionRequest[]
   ): Promise<BroadcastResult[]> {
     const currentWalletId = store.getState().wallet_id.currentWalletId ?? null;
+    const holdScopes = requests.map((request) =>
+      coinHoldScope(request.options?.walletId)
+    );
     const activeOutbound = currentWalletId
       ? await OutboundTransactionTracker.listActive(currentWalletId)
       : [];
     const reserved = new Set(
       activeOutbound.flatMap((record) =>
-        record.spentOutpoints.map((outpoint) => `${outpoint.tx_hash}:${outpoint.tx_pos}`)
+        record.spentOutpoints.map(
+          (outpoint) => `${outpoint.tx_hash}:${outpoint.tx_pos}`
+        )
       )
     );
     if (currentWalletId) {
@@ -611,39 +671,57 @@ class TransactionService {
     }
 
     const results: BroadcastResult[] = [];
+    // Refuse a known-held batch before handing off any of its transactions.
+    for (const [index, request] of requests.entries()) {
+      const holdError = await checkSendCoinHolds(
+        request.rawTX,
+        holdScopes[index]
+      );
+      if (holdError) return [holdError];
+    }
     const refreshAddresses = new Set<string>();
     const { optimisticRemoveSpentByOutpoints, requestUTXORefreshForMany } =
       await getUTXOWorkerService();
 
-    for (const request of requests) {
+    for (const [index, request] of requests.entries()) {
+      const requestWalletId = holdScopes[index].walletId;
+      // Holds can change while an earlier batch item is being handed off.
+      const holdError = await checkSendCoinHolds(
+        request.rawTX,
+        holdScopes[index]
+      );
+      if (holdError) {
+        results.push(holdError);
+        break;
+      }
       const result = await this.getTransactionManager().sendTransaction(
-        request.rawTX
+        request.rawTX,
+        requestWalletId
       );
       results.push(result);
 
       const trackedTxid = deriveTrackedTxid(request.rawTX);
       if (result?.errorMessage || !result?.txid) {
         if (trackedTxid) {
-          await OutboundTransactionTracker.remove(
-            trackedTxid,
-            currentWalletId
-          );
+          await OutboundTransactionTracker.remove(trackedTxid, requestWalletId);
         }
         break;
       }
 
-      await enrichTrackedAttempt(
-        request.rawTX,
-        request.spentInputs,
-        request.options
-      );
+      await enrichTrackedAttempt(request.rawTX, request.spentInputs, {
+        ...request.options,
+        walletId: requestWalletId,
+      });
       void WalletBackendSyncService.observeTransaction(
-        currentWalletId ?? 0,
+        requestWalletId,
         result.txid ?? '',
         request.rawTX
       );
 
-      if (request.spentInputs?.length && result.broadcastState === 'broadcasted') {
+      if (
+        request.spentInputs?.length &&
+        result.broadcastState === 'broadcasted'
+      ) {
         optimisticRemoveSpentByOutpoints(
           request.spentInputs.map((u) => ({
             tx_hash: u.tx_hash,
@@ -652,7 +730,10 @@ class TransactionService {
         );
       }
 
-      const addresses = await collectRefreshAddresses(request.spentInputs);
+      const addresses = await collectRefreshAddresses(
+        request.spentInputs,
+        requestWalletId
+      );
       for (const address of addresses) {
         refreshAddresses.add(address);
       }

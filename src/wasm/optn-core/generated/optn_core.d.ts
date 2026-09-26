@@ -265,6 +265,12 @@ export function sharedSecret(privkey: Uint8Array, counterpart_pubkey: Uint8Array
  */
 export function spendingKey(spend_privkey: Uint8Array, secret: Uint8Array, index: number): Uint8Array;
 
+/**
+ * Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
+ * display order, matching the shared coin-hold record. This does not sign.
+ */
+export function transactionOutpoints(raw_tx_hex: string): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -313,6 +319,7 @@ export interface InitOutput {
     readonly sendBlockReason: (a: number, b: number) => [number, number, number, number];
     readonly sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly transactionOutpoints: (a: number, b: number) => [number, number, number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
