@@ -268,7 +268,22 @@ fn birthday_prompt(argument: &str) -> Result<optn_transport::security::WalletBir
     }
 }
 
-const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, assets, nfts, network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, network add <JSON>, network disposition <id> enabled|disabled|banned, network remove <id>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
+const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], inventory <account-path> <public-addresses JSON>, sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, assets, nfts, network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, network add <JSON>, network disposition <id> enabled|disabled|banned, network remove <id>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
+
+fn inventory_prompt(argument: &str, epoch: u64) -> Result<Request> {
+    let (path, addresses) = argument.split_once(' ').ok_or_else(|| {
+        CliError::Usage("Use inventory <account-path> followed by a public address array.".into())
+    })?;
+    Ok(Request::ImportHdInventory {
+        epoch,
+        account_path: path.into(),
+        addresses: serde_json::from_str(addresses).map_err(|_| {
+            CliError::Usage(
+                "Inventory must be an array of {branch, index, address} entries.".into(),
+            )
+        })?,
+    })
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -562,6 +577,13 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                     }
                     continue;
                 }
+                "inventory" => match inventory_prompt(argument, status.epoch) {
+                    Ok(request) => Some(request),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        continue;
+                    }
+                },
                 "receive" => match argument {
                     "" | "--acknowledge-gap" => Some(Request::NextReceive {
                         epoch: status.epoch,

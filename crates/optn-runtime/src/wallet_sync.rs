@@ -997,7 +997,7 @@ impl WalletSyncSession {
         &mut self,
         app: &AppState,
         xpub: String,
-        limits: HdSyncLimits,
+        mut limits: HdSyncLimits,
         view: Option<crate::header_view::VerifiedHeaderView>,
         generation: u64,
     ) -> Result<(WalletSyncLease, HdAccountScan), WalletSyncError> {
@@ -1018,11 +1018,19 @@ impl WalletSyncSession {
         }
         let account = optn_core::hd::parse_account_path(&wallet.account_path)
             .map_err(|error| WalletSyncError::InvalidScope(error.to_string()))?;
+        limits.validate().map_err(WalletSyncError::InvalidScope)?;
         let mut required = std::collections::BTreeSet::new();
         if let Some(allocation) = &app.hd_addresses {
             // Retain every issued/reserved branch horizon, even if no provider
             // has seen funds there yet. The scan covers all intervening indexes.
-            for (branch, next) in allocation.next_indexes().into_iter().enumerate() {
+            for (branch, next) in allocation.scan_horizons().into_iter().enumerate() {
+                // The normal discovery budget must not hide previously issued
+                // addresses. Leave room for an unused gap after that durable
+                // horizon, while retaining the shared hard bound.
+                limits.addresses_per_branch = limits.addresses_per_branch.max(
+                    next.saturating_add(limits.gap_limit)
+                        .min(optn_core::watch_only::MAX_HD_ADDRESSES_PER_BRANCH),
+                );
                 if let Some(index) = next.checked_sub(1) {
                     let address = optn_core::watch_only::address_under_account(
                         app.network,

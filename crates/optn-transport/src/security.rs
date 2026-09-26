@@ -46,6 +46,14 @@ pub enum WalletSecurityRequest {
         #[serde(default)]
         acknowledge_gap: bool,
     },
+    /// Public high-water marks from an existing wallet. The runtime verifies
+    /// ownership and saves them before widening the next scan; this is not
+    /// evidence of transaction history or a fresh balance.
+    ImportHdInventory {
+        epoch: u64,
+        account_path: String,
+        addresses: Vec<optn_app::HdInventoryAddress>,
+    },
     Create {
         name: String,
         mnemonic: SecretText,

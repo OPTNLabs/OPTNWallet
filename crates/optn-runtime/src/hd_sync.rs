@@ -19,6 +19,8 @@ pub(crate) use optn_core::watch_only::MAX_HD_ADDRESSES_PER_BRANCH as MAX_HD_BRAN
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HdSyncLimits {
     pub gap_limit: u32,
+    /// Discovery budget. A managed wallet may raise this to cover its durable
+    /// issued inventory plus a gap, never beyond MAX_HD_BRANCH_ADDRESSES.
     pub addresses_per_branch: u32,
 }
 
@@ -1372,6 +1374,230 @@ mod tests {
         assert_eq!(
             runtime.state().hd_addresses.unwrap().current_receive(),
             Some(3)
+        );
+    }
+
+    #[tokio::test]
+    async fn imported_hd_inventory_persists_and_extends_real_sync_without_inventing_history() {
+        use optn_app::{HdInventoryAddress, SecretText};
+        use optn_transport::WalletSecurityRequest as Request;
+
+        let storage = crate::wallet_security::tests::Storage::default();
+        let checkpoints = Checkpoints::default();
+        let runtime = private_runtime(storage.clone(), checkpoints.clone());
+        let path = "m/44'/145'/10'"; // Preserve a nondefault Chipnet origin.
+        let opened = runtime
+            .wallet_security(Request::Create {
+                name: "Public inventory fixture".into(),
+                mnemonic: SecretText::new(BIP39_TEST_VECTOR_MNEMONIC.into()),
+                bip39_passphrase: SecretText::default(),
+                password: SecretText::default(),
+                confirmation: SecretText::default(),
+                network: "chipnet".into(),
+                account_path: path.into(),
+            })
+            .await
+            .unwrap();
+        let handle = opened.active.unwrap();
+        let wallet = runtime.state().wallet.unwrap();
+        let xpub = wallet.account_xpub.clone().unwrap();
+        let inventory = |branch, index| HdInventoryAddress {
+            branch,
+            index,
+            address: address_under_account(Network::Chipnet, &xpub, branch, index)
+                .unwrap()
+                .address,
+        };
+        let addresses = vec![
+            inventory(0, 201),
+            inventory(1, 31),
+            inventory(7, 50),
+            inventory(2, 26),
+        ];
+        let import = |epoch, addresses| Request::ImportHdInventory {
+            epoch,
+            account_path: path.into(),
+            addresses,
+        };
+        let transactions = vec![transaction(
+            None,
+            vec![
+                (1000, script(&xpub, 0, 0)),
+                (8000, script(&xpub, 0, 201)),
+                (2000, script(&xpub, 2, 26)),
+            ],
+        )];
+        let (mut provider, _) = service(transactions.clone(), false);
+        let mut worker = ProgressiveSyncWorker::new(Default::default());
+        runtime
+            .sync_hd_wallet(
+                &mut provider,
+                &mut worker,
+                xpub.clone(),
+                HdSyncLimits::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(runtime.state().coins.spendable_sats(), 1000);
+
+        let before = runtime.state();
+        let committed = checkpoints.0.lock().unwrap().files.clone();
+        for request in [
+            import(opened.epoch + 1, addresses.clone()),
+            Request::ImportHdInventory {
+                epoch: opened.epoch,
+                account_path: "m/44'/1'/10'".into(),
+                addresses: addresses.clone(),
+            },
+            import(
+                opened.epoch,
+                vec![HdInventoryAddress {
+                    address: wallet.receive_address.clone(),
+                    ..inventory(0, 201)
+                }],
+            ),
+        ] {
+            assert!(runtime.wallet_security(request).await.is_err());
+            assert_eq!(runtime.state().hd_addresses, before.hd_addresses);
+            assert_eq!(checkpoints.0.lock().unwrap().files, committed);
+        }
+        checkpoints.0.lock().unwrap().fail = true;
+        assert!(runtime
+            .wallet_security(import(opened.epoch, addresses.clone()))
+            .await
+            .is_err());
+        assert_eq!(runtime.state().hd_addresses, before.hd_addresses);
+        assert_eq!(checkpoints.0.lock().unwrap().files, committed);
+        checkpoints.0.lock().unwrap().fail = false;
+        runtime
+            .wallet_security(import(opened.epoch, addresses.clone()))
+            .await
+            .unwrap();
+        let imported = runtime.state();
+        assert_eq!(
+            imported.hd_addresses.as_ref().unwrap().scan_horizons(),
+            [202, 32, 51, 27]
+        );
+        assert_eq!(
+            imported.hd_addresses.as_ref().unwrap().current_receive(),
+            before.hd_addresses.as_ref().unwrap().current_receive()
+        );
+        assert_eq!(imported.wallet, before.wallet);
+        assert_eq!(imported.coins, before.coins);
+        assert!(!runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        let writes = checkpoints.0.lock().unwrap().writes;
+        runtime
+            .wallet_security(import(opened.epoch, addresses))
+            .await
+            .unwrap();
+        assert_eq!(
+            checkpoints.0.lock().unwrap().writes,
+            writes,
+            "repeated migration is a no-op"
+        );
+
+        // Reopen before the first expanded scan: no new chain observation has
+        // been fabricated, yet the durable inventory must survive independently.
+        let restarted = private_runtime(storage.clone(), checkpoints.clone());
+        let reopened = restarted
+            .wallet_security(Request::Open {
+                handle: handle.clone(),
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(restarted.state().hd_addresses, imported.hd_addresses);
+        assert_eq!(restarted.state().coins.spendable_sats(), 1000);
+        assert!(!restarted.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        restarted
+            .sync_hd_wallet(
+                &mut provider,
+                &mut worker,
+                xpub.clone(),
+                HdSyncLimits::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(restarted.state().coins.spendable_sats(), 11_000);
+        assert!(restarted.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        let sync = restarted.subscribe_wallet_sync();
+        assert_eq!(
+            sync.borrow()
+                .authoritative
+                .as_ref()
+                .unwrap()
+                .value
+                .hd
+                .as_ref()
+                .unwrap()
+                .last_used,
+            [Some(201), None, None, Some(26)],
+            "prederived inventory is not observed usage"
+        );
+
+        let (mut held, backend) = service(transactions, true);
+        let scanning = restarted.clone();
+        let scanning_xpub = xpub.clone();
+        let mut task = tokio::spawn(async move {
+            scanning
+                .sync_hd_wallet(
+                    &mut held,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    scanning_xpub,
+                    HdSyncLimits::default(),
+                )
+                .await
+        });
+        tokio::select! {
+            _ = backend.entered.notified() => {},
+            result = &mut task => panic!("scan stopped before entering the provider: {result:?}"),
+            _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => panic!("provider not entered"),
+        }
+        restarted
+            .wallet_security(import(reopened.epoch, vec![inventory(0, 203)]))
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(WalletSyncError::Superseded)
+        );
+        assert_eq!(restarted.state().coins.spendable_sats(), 11_000);
+        assert!(!restarted.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+
+        let final_runtime = private_runtime(storage, checkpoints);
+        final_runtime
+            .wallet_security(Request::Open {
+                handle,
+                password: SecretText::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            final_runtime.state().hd_addresses.unwrap().scan_horizons(),
+            [204, 32, 51, 27]
+        );
+        assert_eq!(final_runtime.state().coins.spendable_sats(), 11_000);
+        assert!(
+            !final_runtime
+                .subscribe_wallet_sync()
+                .borrow()
+                .sync
+                .utxos_fresh
+        );
+        final_runtime
+            .sync_hd_wallet(&mut provider, &mut worker, xpub, HdSyncLimits::default())
+            .await
+            .unwrap();
+        assert_eq!(final_runtime.state().coins.spendable_sats(), 11_000);
+        assert!(
+            final_runtime
+                .subscribe_wallet_sync()
+                .borrow()
+                .sync
+                .utxos_fresh
         );
     }
 

@@ -60,6 +60,116 @@ export async function shareAutoLockChoice(minutes: number): Promise<void> {
   });
 }
 
+type EngineWalletSession = { active: string | null; epoch: number };
+
+/** Public high-water marks only. Rust proves ownership and persists them. */
+async function importLegacyHdInventory(
+  walletId: number,
+  handle: string,
+  opened: EngineWalletSession
+): Promise<void> {
+  if (
+    opened?.active !== handle ||
+    !Number.isSafeInteger(opened.epoch) ||
+    opened.epoch < 0
+  ) {
+    throw new Error('The engine did not open the selected wallet session.');
+  }
+
+  const [{ default: DatabaseService }, hd] = await Promise.all([
+    import('../../apis/DatabaseManager/DatabaseService'),
+    import('../../services/HdWalletService'),
+  ]);
+  // Unlock already started the database. Do not initialize/migrate secret
+  // storage merely to read this public inventory.
+  const db = DatabaseService().getDatabase();
+  if (!db) throw new Error('Public wallet database is unavailable.');
+  const readRow = (sql: string, params: number[]) => {
+    const query = db.prepare(sql);
+    try {
+      query.bind(params);
+      return query.step() ? query.getAsObject() : null;
+    } finally {
+      query.free();
+    }
+  };
+  const wallet = readRow(
+    'SELECT derivation_path FROM wallets WHERE id = ? LIMIT 1',
+    [walletId]
+  );
+  if (typeof wallet?.derivation_path !== 'string') {
+    throw new Error('Public wallet derivation path is unavailable.');
+  }
+  const accountPath = hd.normalizeBchAccountPath(wallet.derivation_path);
+  const { accountIndex } = hd.parseBchAccountPath(accountPath);
+  const unsupported = readRow(
+    `SELECT account_index FROM keys
+     WHERE wallet_id = ? AND change_index IN (0, 1, 7, 2)
+       AND (typeof(account_index) != 'integer' OR account_index != ?)
+     LIMIT 1`,
+    [walletId, accountIndex]
+  );
+  if (unsupported) {
+    throw new Error(
+      `Legacy inventory contains unsupported accounts; only ${accountPath} can be imported.`
+    );
+  }
+  const malformed = readRow(
+    `SELECT address, account_index, change_index, address_index FROM keys
+     WHERE wallet_id = ? AND (typeof(change_index) != 'integer'
+       OR (account_index = ? AND change_index IN (0, 1, 7, 2) AND (
+         typeof(address_index) != 'integer' OR address_index < 0 OR address_index > ?
+         OR typeof(address) != 'text' OR length(trim(address)) = 0 OR length(address) > 255)))
+     LIMIT 1`,
+    [walletId, accountIndex, hd.MAX_BIP44_INDEX]
+  );
+  if (malformed) {
+    throw new Error(
+      'Legacy inventory contains malformed or unsupported addresses.'
+    );
+  }
+  const addresses: Array<{ branch: number; index: number; address: string }> =
+    [];
+  // RPA keys and contract branches have separate inventory/ownership rules.
+  for (const branch of [0, 1, 7, 2]) {
+    const row = readRow(
+      `SELECT address, account_index, change_index, address_index FROM keys
+       WHERE wallet_id = ? AND account_index = ? AND change_index = ?
+       ORDER BY address_index DESC LIMIT 1`,
+      [walletId, accountIndex, branch]
+    );
+    if (row) {
+      addresses.push({
+        branch,
+        index: row.address_index as number,
+        address: row.address as string,
+      });
+    }
+  }
+  const current = await invoke<EngineWalletSession>('optn_wallet_security', {
+    request: { command: 'status' },
+  });
+  if (current?.active !== handle || current.epoch !== opened.epoch) {
+    throw new Error(
+      'The engine wallet changed before legacy inventory import.'
+    );
+  }
+  if (!addresses.length) return;
+  const imported = await invoke<EngineWalletSession>('optn_wallet_security', {
+    request: {
+      command: 'import_hd_inventory',
+      epoch: opened.epoch,
+      account_path: accountPath,
+      addresses,
+    },
+  });
+  if (imported?.active !== handle || imported.epoch !== opened.epoch) {
+    throw new Error(
+      'The engine wallet changed during legacy inventory import.'
+    );
+  }
+}
+
 export async function openWalletInEngine(
   walletId: number,
   password: string,
@@ -71,18 +181,23 @@ export async function openWalletInEngine(
     // Watch-only and hardware wallets may have no file mirror; nothing to open.
     return { opened: false, reason: 'no wallet file for this wallet' };
   }
+  let failureContext = 'Engine wallet open failed';
   try {
     if (typeof autoLockMinutes === 'number') {
       await shareAutoLockChoice(autoLockMinutes);
     }
-    await invoke('optn_wallet_security', {
+    const opened = await invoke<EngineWalletSession>('optn_wallet_security', {
       request: { command: 'open', handle, password },
     });
+    failureContext = 'Wallet opened, but legacy HD inventory migration failed';
+    await importLegacyHdInventory(walletId, handle, opened);
     return { opened: true };
   } catch (error) {
     return {
       opened: false,
-      reason: error instanceof Error ? error.message : String(error),
+      // Existing callers warn on !opened; never claim a completed handoff
+      // when the public database read, ownership check, or durable import failed.
+      reason: `${failureContext}: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }

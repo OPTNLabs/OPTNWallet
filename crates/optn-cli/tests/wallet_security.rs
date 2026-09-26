@@ -221,6 +221,54 @@ fn request(input: &mut ChildStdin, output: &mut BufReader<ChildStdout>, value: V
 }
 
 #[test]
+fn imported_hd_inventory_is_validated_and_survives_cli_restart() {
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 1);
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let wallet =
+        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
+            .unwrap();
+    let addresses: Vec<_> = [(0, 201), (2, 31)].into_iter().map(|(branch, index)| {
+        json!({"branch":branch,"index":index,"address":wallet.address(
+            optn_core::network::Network::Chipnet, &format!("m/44'/1'/1'/{branch}/{index}")).unwrap().encode()})
+    }).collect();
+    let inventory = json!({"request":{"command":"import_hd_inventory","epoch":1,
+        "account_path":"m/44'/1'/1'","addresses":addresses}});
+    let mut stale = inventory.clone();
+    stale["request"]["epoch"] = json!(0);
+    let mut wrong = inventory.clone();
+    wrong["request"]["addresses"][0]["address"] = json!(address(0));
+    let first = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n{stale}\n{wrong}\n{inventory}\n"),
+    );
+    assert!(first.status.success());
+    let replies = responses(&first);
+    assert_eq!(replies[1]["ok"], false);
+    assert_eq!(replies[2]["ok"], false);
+    assert_eq!(replies[3]["ok"], true, "{:?}", replies[3]);
+    assert_eq!(replies[3]["hd_addresses"]["next"], json!([202, 0, 0]));
+    assert_eq!(replies[3]["hd_addresses"]["compatibility_horizon"], 32);
+    assert_eq!(replies[3]["hd_addresses"]["current_receive"], 0);
+    assert_eq!(replies[3]["receive_address"], address(1));
+    assert_eq!(replies[3]["wallet_sync"]["utxos_fresh"], false);
+
+    let restarted = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n{inventory}\n"),
+    );
+    assert!(restarted.status.success());
+    let after = responses(&restarted);
+    assert_eq!(after[0]["ok"], true);
+    assert_eq!(after[0]["hd_addresses"], replies[3]["hd_addresses"]);
+    assert_eq!(after[1]["hd_addresses"], replies[3]["hd_addresses"]);
+    assert_eq!(after[0]["wallet_sync"]["utxos_fresh"], false);
+}
+
+#[test]
 fn issued_receive_addresses_survive_cli_restart_and_wrong_epochs_do_not_allocate() {
     let directory = test_directory();
     fixture(directory.path(), "public.optn", 1);

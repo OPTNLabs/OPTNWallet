@@ -600,3 +600,32 @@ No token categories were present. The executable's SHA-256 is
 An actual graceful-exit check verified that only this app's owned Tor child exited
 with the wallet and SOCKS port 9251 was released; the wallet was then reopened.
 This verifies the earlier Tor-exit fix in a running package, not just unit tests.
+
+### 2026-09-26: retained public HD inventory reaches shared discovery
+
+`ImportHdInventory` now accepts at most one public high-water address for each
+ordinary branch (0, 1, 7, 2). Rust checks the current session/account and derives
+each supplied address from that account before atomically reserving its range.
+The sealed allocation stores these ranges across restart; imported inventory
+does not assert transaction history, fresh balance, or a new current receive
+address. Discovery covers the retained range plus its gap within the existing
+10,000-address hard bound. Expanding the range cancels older sync/spend work.
+
+The retained desktop password-open/create bridge reads only public derivation
+columns and submits this request. Storage/ownership failures are visible and do
+not erase the already unlocked legacy wallet. CLI stdio accepts the same request;
+the prompt exposes `inventory <account-path> <public-addresses JSON>`.
+
+Evidence: the connected actor test finds funds beyond the default 200-address
+budget, persists/reopens before and after expanded sync, preserves cached funds
+as stale, rejects foreign/stale input and failed writes, and cancels older work.
+The actual CLI process verifies import and restart. Core watch-only (17), app
+(173), runtime (303), transport (23), and desktop bridge/metadata/UTXO (50) tests
+passed, as did TypeScript, strict core/runtime/CLI/native Clippy, architecture,
+WASM freshness and nine generated-WASM signing tests. These are automated
+integration checks, not yet a packaged/live legacy-wallet migration result.
+
+Biometric/file/seed import sibling handoffs still require integration. RPA
+receipts, tracked contracts and multiple-account inventory remain outside this
+HD-only migration. Whole-wallet scalar replacement remains blocked on their
+durable union; this change does not close #75.

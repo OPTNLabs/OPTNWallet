@@ -27,6 +27,7 @@ import {
 } from '../DesktopWalletManager';
 import { validateNewWalletPassword } from '../passwordPolicy';
 import { openWalletInEngine } from '../engineWalletBridge';
+import { Toast } from '../toast';
 import { defaultDesktopAccountPath } from '../desktopDerivationDefaults';
 import { useI18n } from '../../../i18n/useI18n';
 import { getBip39LanguageForLocale } from '../../../services/Bip39Service';
@@ -194,6 +195,11 @@ const DesktopCreateWalletPage = () => {
           '[DesktopCreateWalletPage] engine wallet not opened:',
           engine.reason
         );
+        try {
+          await Toast.show({ text: engine.reason, duration: 'long' });
+        } catch {
+          // Feedback failure must not roll back the created wallet.
+        }
       }
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       navigate(`/home/${walletId}`);

@@ -38,6 +38,7 @@ import {
 import type { WalletFileV1 } from '../walletFile';
 import { resolveBiometricEnrollment } from '../biometricEnrollment';
 import { openWalletInEngine } from '../engineWalletBridge';
+import { Toast } from '../toast';
 import { DesktopWalletPickerActions } from './DesktopWalletPickerActions';
 import { WatchOnlyWalletPreview } from './WatchOnlyWalletPreview';
 import { HardwareWalletWizard } from './HardwareWalletWizard';
@@ -499,6 +500,11 @@ const DesktopLandingPage = () => {
           '[DesktopLandingPage] engine wallet not opened:',
           engine.reason
         );
+        try {
+          await Toast.show({ text: engine.reason, duration: 'long' });
+        } catch {
+          // Feedback failure must not undo the completed unlock.
+        }
       }
       finishOpen(openingId, attempt.value);
     } catch (err) {

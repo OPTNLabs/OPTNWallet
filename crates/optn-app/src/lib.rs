@@ -63,7 +63,7 @@ pub use optn_core::spend::{
     sign_seed_spend, SpendKind, SpendPlan, SpendingCapability, SIGHASH_ALL_FORKID,
 };
 pub use optn_core::token::TokenData;
-pub use optn_core::watch_only::{HdAddressAllocation, HdBranch};
+pub use optn_core::watch_only::{HdAddressAllocation, HdBranch, HdInventoryAddress};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {

@@ -605,6 +605,46 @@ impl WalletSecurity {
                     self.checkpoint_published();
                 }
             }
+            Request::ImportHdInventory {
+                epoch,
+                account_path,
+                addresses,
+            } => {
+                self.bound(state, epoch)?;
+                if self.checkpoints.is_none() {
+                    return Err(failure("Durable HD address storage is unavailable."));
+                }
+                let mut candidate = state.clone();
+                let wallet = candidate
+                    .wallet
+                    .as_ref()
+                    .ok_or_else(|| failure("Unlock the wallet first."))?;
+                if wallet.multisig_policy.is_some()
+                    || hd::parse_account_path(&account_path).map_err(crypto)?
+                        != hd::parse_account_path(&wallet.account_path).map_err(crypto)?
+                {
+                    return Err(failure("HD inventory belongs to another wallet account."));
+                }
+                let xpub = wallet
+                    .account_xpub
+                    .as_deref()
+                    .ok_or_else(|| failure("HD inventory requires an account xPub."))?;
+                candidate
+                    .hd_addresses
+                    .as_mut()
+                    .ok_or_else(|| failure("Reopen the wallet to restore HD allocation."))?
+                    .import_inventory(candidate.network, xpub, &addresses)
+                    .map_err(crypto)?;
+                if candidate.hd_addresses != state.hd_addresses {
+                    let restore_state = self
+                        .restore_state()
+                        .cloned()
+                        .ok_or_else(|| failure("Unlock the wallet first."))?;
+                    self.persist_checkpoint(&candidate, history, &restore_state, header_progress)?;
+                    *state = candidate;
+                    self.checkpoint_published();
+                }
+            }
             Request::NextReceive {
                 epoch,
                 acknowledge_gap,
