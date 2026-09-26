@@ -957,6 +957,7 @@ export function ChainSourcesSettings({
                 data-testid="start-tor-for-chain"
                 className="wallet-btn-secondary mt-2 px-3 py-1.5 text-xs"
                 onClick={() => {
+                  setError('');
                   setTorStarting(true);
                   setTorProgress(0);
                   // Bootstrap can take a minute on a slow or filtered network, so

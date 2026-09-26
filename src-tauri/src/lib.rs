@@ -1505,8 +1505,17 @@ pub fn run() {
             // flash a stale menu before the frontend replaces it via setAsAppMenu().
             Ok(())
         })
-        .run(context)
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application")
+        .run(|_, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                // Static process handles are not dropped when Tauri exits.
+                // Reap only our child; never adopt or stop an external proxy.
+                if let Err(error) = tauri::async_runtime::block_on(fusion::tor_manager::stop()) {
+                    log::error!("could not stop managed Tor on exit: {error}");
+                }
+            }
+        });
 }
 
 #[cfg(test)]

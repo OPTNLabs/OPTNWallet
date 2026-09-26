@@ -100,6 +100,8 @@ pub async fn start(
                 .map_err(|e| format!("could not create tor data dir: {e}"))?;
 
             let mut cmd = Command::new(&paths.binary);
+            #[cfg(windows)]
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW for the background client.
             cmd.arg("--SocksPort")
                 .arg(socks_port.to_string())
                 .arg("--DataDirectory")
@@ -177,7 +179,10 @@ pub async fn stop() -> Result<(), String> {
     BOOTSTRAP.store(0, Ordering::SeqCst);
     SOCKS_PORT.store(0, Ordering::SeqCst);
     if let Some(mut child) = CHILD.lock().await.take() {
-        let _ = child.kill().await;
+        child
+            .kill()
+            .await
+            .map_err(|error| format!("could not stop managed Tor: {error}"))?;
     }
     Ok(())
 }
