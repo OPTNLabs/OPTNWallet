@@ -168,7 +168,8 @@ pub struct ChainSourcesView {
 /// the wrong one half the time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorProxyView {
-    /// `verified` | `unverified` | `absent` | `not_needed`.
+    /// Last stack observation: `verified` | `unverified` | `absent` | `not_needed` | `unknown`.
+    /// Reading this snapshot does not probe the network or grant execution permission.
     pub status: String,
     /// The port a proxy answered on, whether or not it is trusted.
     pub socks_port: Option<u16>,

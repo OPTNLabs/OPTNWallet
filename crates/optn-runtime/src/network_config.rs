@@ -941,7 +941,7 @@ pub fn promote_legacy_policy(envelope: &mut NetworkConfigEnvelope) {
 }
 
 /// Marker for envelopes whose policy field means exactly what it says.
-pub const SHIPPED_CATALOG_VERSION: &str = "optn-shipped-v2-ec-bb67161b";
+pub const SHIPPED_CATALOG_VERSION: &str = "optn-shipped-v3-metadata-20260926";
 
 /// Apply a named policy to the overlay.
 ///
@@ -1573,6 +1573,7 @@ mod tests {
             build_selection_plan(&catalog, &policy).primary.len(),
             crate::bootstrap::shipped_source_catalog(Network::Chipnet)
                 .iter()
+                .filter(|source| source.endpoints[0].kind == EndpointKind::ElectrumTls)
                 .count()
                 + 1
         );
@@ -1586,6 +1587,7 @@ mod tests {
             defaults.primary.len(),
             crate::bootstrap::shipped_source_catalog(Network::Chipnet)
                 .iter()
+                .filter(|source| source.endpoints[0].kind == EndpointKind::ElectrumTls)
                 .count()
         );
         assert!(catalog.get(&defaults.primary[0]).unwrap().is_public());
@@ -1635,7 +1637,14 @@ mod tests {
                 .expect("reviewed network default");
             assert_eq!(default.endpoints[0].host, network.default_host());
             let eligible = build_selection_plan(&catalog, &policy).primary;
-            assert_eq!(eligible.len(), catalog.iter().count());
+            // Metadata entries belong in the catalog, not the chain sync pool.
+            assert_eq!(
+                eligible.len(),
+                catalog
+                    .iter()
+                    .filter(|source| source.endpoints[0].kind == EndpointKind::ElectrumTls)
+                    .count()
+            );
             assert!(eligible.contains(&default.id));
 
             let mut overlay = UserNetworkOverlay::default();

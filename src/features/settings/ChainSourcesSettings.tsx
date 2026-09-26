@@ -754,7 +754,7 @@ export function ChainSourcesSettings({
                   Privacy &amp; Transport
                 </span>
                 <span className="block text-[11px] wallet-muted">
-                  Tor: {view.tor.status.replace('_', ' ')}
+                  Tor (last checked): {view.tor.status.replace('_', ' ')}
                 </span>
               </span>
               <span className="text-xs wallet-muted">Open</span>
@@ -1334,34 +1334,15 @@ export function ChainSourcesSettings({
             within your routing and privacy choices. Opening this page contacts
             no providers.
           </p>
-          {(view.unavailable_services ?? []).map((service) => (
-            <div
-              key={service.id}
-              className="rounded-xl border border-[var(--wallet-border)] p-3"
-            >
-              <button
-                type="button"
-                disabled
-                className="wallet-muted text-sm"
-                aria-describedby={`metadata-${service.id}`}
-              >
-                {service.label} — unavailable
-              </button>
-              <p id={`metadata-${service.id}`} className="text-xs wallet-muted">
-                {service.reason}
-              </p>
-            </div>
-          ))}
           <div className="rounded-xl border border-[var(--wallet-border)] p-3 space-y-2">
             <p className="text-sm font-semibold wallet-text-strong">
               BCMR indexers
             </p>
             <p className="text-xs wallet-muted">
-              Add a Paytaca-compatible HTTPS service, such as bcmr.paytaca.com
-              for Mainnet, or your own indexer for this network. Requires
-              verified Tor. Registry bytes must match the locally verified
-              publication; an indexer cannot establish ownership or replace
-              missing chain evidence.
+              Maintained services for {view.network} appear below. You can also
+              add your own indexer. Requires verified Tor. Registry bytes must
+              match the locally verified publication; an indexer cannot
+              establish ownership or replace missing chain evidence.
             </p>
             {view.sources
               .filter((source) =>
@@ -1376,7 +1357,7 @@ export function ChainSourcesSettings({
                   className="wallet-btn-secondary block px-3 py-2"
                   onClick={() => openDetails(source)}
                 >
-                  {source.label}
+                  {source.label} · {source.disposition}
                 </button>
               ))}
             <button
@@ -1396,7 +1377,7 @@ export function ChainSourcesSettings({
               IPFS gateways
             </p>
             <p className="text-xs wallet-muted">
-              Configure an HTTPS gateway on a source. Requires verified Tor;
+              Maintained and custom HTTPS gateways. Requires verified Tor;
               registry bytes are hash-checked by Rust.
             </p>
             {view.sources
@@ -1430,6 +1411,24 @@ export function ChainSourcesSettings({
               My infrastructure
             </button>
           </div>
+          {(view.unavailable_services ?? []).map((service) => (
+            <div
+              key={service.id}
+              className="rounded-xl border border-[var(--wallet-border)] p-3"
+            >
+              <button
+                type="button"
+                disabled
+                className="wallet-muted text-sm"
+                aria-describedby={`metadata-${service.id}`}
+              >
+                {service.label} — unavailable
+              </button>
+              <p id={`metadata-${service.id}`} className="text-xs wallet-muted">
+                {service.reason}
+              </p>
+            </div>
+          ))}
         </section>
       )}
 

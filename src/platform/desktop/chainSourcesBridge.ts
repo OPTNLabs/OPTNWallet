@@ -109,7 +109,7 @@ export type ChainSelection = {
  * guessing — and until they say, routes that need Tor refuse.
  */
 export type TorProxyView = {
-  status: 'verified' | 'unverified' | 'absent' | 'not_needed';
+  status: 'verified' | 'unverified' | 'absent' | 'not_needed' | 'unknown';
   socks_port: number | null;
   trusted_ports: number[];
 };
