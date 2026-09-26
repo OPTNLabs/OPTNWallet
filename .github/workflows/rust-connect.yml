@@ -46,6 +46,8 @@ jobs:
           cargo test --locked
       - name: Check committed WASM against the connector and BCH VM tests
         run: npx --no-install vitest run src/services/connect/__tests__/ConnectSigningCore.test.ts src/services/wizardconnect/__tests__/signing.test.ts src/services/cashconnect/__tests__/cashconnectLibauth.test.ts src/redux/walletconnect/__tests__/signing.rust.test.ts
+      - name: Verify CashTokens PSBTs with the independent BCH VM
+        run: npx --no-install vitest run src/services/psbt/__tests__/cashTokensRust.test.ts
       - name: Install matching binding generator
         run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
       - name: Rebuild WASM from Rust
@@ -54,3 +56,4 @@ jobs:
         run: |
           npx --no-install tsx scripts/build-optn-core-wasm.mts --check
           npx --no-install vitest run src/services/connect/__tests__/ConnectSigningCore.test.ts src/services/wizardconnect/__tests__/signing.test.ts src/services/cashconnect/__tests__/cashconnectLibauth.test.ts src/redux/walletconnect/__tests__/signing.rust.test.ts
+          npx --no-install vitest run src/services/psbt/__tests__/cashTokensRust.test.ts
