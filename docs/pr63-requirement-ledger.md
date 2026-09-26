@@ -535,3 +535,29 @@ missing terminal evidence remains unresolved. These are integration/component
 checks, not live token acceptance. ISO8601 snapshot-time selection, full public
 light-client authchain acceptance, policy-aware icons, global index queries and
 packaged live token rendering remain open.
+
+### 2026-09-26: Current BCMR snapshots and packaged inspection
+
+Core now validates BCMR's exact UTC/calendar timestamps and selects the latest
+reached snapshot, or the earliest when all timestamps are in the future, using
+the runtime's supplied wall clock. Selection is confined to the authenticated
+category's identity history and precedes token-field validation. A withdrawn or
+invalid current token definition cannot revive an older definition or another
+identity's claims. Fresh hash-verified registry bytes supersede cached names;
+fetch/hash failures still retain explicitly stale metadata. The earlier ISO8601
+gap is closed. Validation: 22 core BCMR and 302 runtime tests, strict Clippy,
+formatting, architecture, native host check, regenerated WASM/freshness and 21
+WASM connector tests passed. This also fixes the discovery-block formatting
+failure reported by CI at `8399f9cc`.
+
+The Windows desktop package at `8399f9cc` used the desktop frontend configuration
+and normal wallet profile. Its picker retained all five saved wallets. Normal
+unlock of Chipnet wallet #2 displayed the cached balance/history; Assets had zero
+token categories, so this is not live token-metadata evidence. Network -> Nostr
+contained profile/name/publish/relay-check controls, no duplicate top-level
+Nostr settings entry, and Back returned to Network. No profile was published.
+Live shared sync initially had no route because an orphaned inspection Tor
+process occupied the integrated port. After closing that verified orphan and
+starting app-owned Tor, the unchanged policy exposed four eligible routes.
+Full public light-client authchain acceptance, policy-aware icons, global index
+queries and live token acceptance remain open.

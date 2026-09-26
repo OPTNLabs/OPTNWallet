@@ -234,10 +234,24 @@ fn category_hex(bytes: &[u8; 32]) -> String {
 /// Renderers never call this. The hash check already happened in [`resolve`];
 /// this only names the category and marks how far the identity got.
 pub fn observe_identity(category: [u8; 32], metadata: IdentityMetadata) -> AppAction {
+    let now_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok());
+    observe_identity_at(category, metadata, now_unix_ms)
+}
+
+fn observe_identity_at(
+    category: [u8; 32],
+    metadata: IdentityMetadata,
+    now_unix_ms: Option<i64>,
+) -> AppAction {
     let category_hex = category_hex(&category);
-    let parsed = metadata
-        .verified_contents()
-        .and_then(|bytes| optn_core::bcmr::names_for_category(bytes, &category_hex));
+    let parsed = now_unix_ms.and_then(|now| {
+        metadata
+            .verified_contents()
+            .and_then(|bytes| optn_core::bcmr::names_for_category(bytes, &category_hex, now))
+    });
     let identity = match (&metadata, parsed) {
         (IdentityMetadata::Current { .. }, Some(names)) => TokenIdentity {
             name: names.name,
@@ -479,26 +493,38 @@ pub(crate) async fn resolve_selected_identities(
                         let Some(output) = decoded.outputs.first() else {
                             break;
                         };
-                        for discovery in service.routes_for_operation(ChainOperation::OutpointSpender) {
-                            let Ok(candidate) = service.execute_on_route(
-                                &discovery,
-                                &ChainRequest::OutpointSpender {
-                                    txid,
-                                    vout: 0,
-                                    script_pubkey: output.script_pubkey.clone(),
-                                    from_height: current.block_height,
-                                },
-                            ).await else {
+                        for discovery in
+                            service.routes_for_operation(ChainOperation::OutpointSpender)
+                        {
+                            let Ok(candidate) = service
+                                .execute_on_route(
+                                    &discovery,
+                                    &ChainRequest::OutpointSpender {
+                                        txid,
+                                        vout: 0,
+                                        script_pubkey: output.script_pubkey.clone(),
+                                        from_height: current.block_height,
+                                    },
+                                )
+                                .await
+                            else {
                                 continue;
                             };
-                            let ChainPayload::OutpointSpender { spender: Some(spender), .. } = candidate.value else {
+                            let ChainPayload::OutpointSpender {
+                                spender: Some(spender),
+                                ..
+                            } = candidate.value
+                            else {
                                 continue;
                             };
                             let discovered = IdentityCollection::from_observed(
-                                &[spender], vec![], candidate.evidence,
+                                &[spender],
+                                vec![],
+                                candidate.evidence,
                             );
                             if let Some(successor) = discovered.transactions.first() {
-                                step = walk.accept(authchain::IdentityStatus::SpentBy(successor.clone()));
+                                step = walk
+                                    .accept(authchain::IdentityStatus::SpentBy(successor.clone()));
                                 break;
                             }
                         }
@@ -719,27 +745,26 @@ pub fn apply_owned_token_identities(
     observations: &BTreeMap<[u8; 32], OwnedCategoryIdentity>,
 ) {
     for category in owned_token_categories(app) {
-        let mut action = match observations.get(&category) {
+        let metadata = match observations.get(&category) {
             Some(OwnedCategoryIdentity::Observed {
                 publication,
                 attempts,
-            }) => observe_publication(category, publication, attempts),
-            Some(OwnedCategoryIdentity::Unpublished) => {
-                observe_identity(category, IdentityMetadata::Unpublished)
-            }
-            Some(OwnedCategoryIdentity::Unresolved) | None => observe_identity(
-                category,
-                IdentityMetadata::Unresolved {
-                    reason: UnresolvedReason::AuthchainIncomplete,
-                },
-            ),
+            }) => resolve(publication, attempts),
+            Some(OwnedCategoryIdentity::Unpublished) => IdentityMetadata::Unpublished,
+            Some(OwnedCategoryIdentity::Unresolved) | None => IdentityMetadata::Unresolved {
+                reason: UnresolvedReason::AuthchainIncomplete,
+            },
         };
+        // Fresh authenticated bytes supersede cached claims, including token
+        // removal or an invalid current snapshot. Neither may revive old data.
+        let allow_cached = !metadata.is_current();
+        let mut action = observe_identity(category, metadata);
         if let AppAction::SetTokenIdentity {
             category_hex,
             identity,
         } = &mut action
         {
-            if identity.status == IdentityStatus::Unresolved {
+            if allow_cached && identity.status == IdentityStatus::Unresolved {
                 if let Some(cached) = app.token_identities.get(category_hex).filter(|cached| {
                     matches!(
                         cached.status,
@@ -1121,10 +1146,50 @@ mod tests {
     fn registry_body(name: &str, category: [u8; 32]) -> Vec<u8> {
         let hex = category_hex(&category);
         format!(
-            r#"{{"identities":{{"{}":{{"1700000000":{{"name":"{name}","token":{{"category":"{hex}","symbol":"BCAT","decimals":2}}}}}}}}}}"#,
-            "00".repeat(32)
+            r#"{{"identities":{{"{hex}":{{"2023-11-14T22:13:20.000Z":{{"name":"{name}","token":{{"category":"{hex}","symbol":"BCAT","decimals":2}}}}}}}}}}"#
         )
         .into_bytes()
+    }
+
+    #[test]
+    fn identity_projection_uses_supplied_wall_clock_and_fails_closed_without_it() {
+        let category = category_hex(&ALPHA);
+        let body = serde_json::to_vec(&serde_json::json!({"identities": {&category: {
+            "2023-11-14T22:13:20.000Z": {"name": "Old", "token": {"category": category}},
+            "2023-11-14T22:13:20.001Z": {"name": "New", "token": {"category": category}}
+        }}}))
+        .unwrap();
+        let metadata = resolve(
+            &publication(&body, &["example.com"]),
+            &[("example.com".into(), Ok(body.clone()))],
+        );
+        for (now, expected, status) in [
+            (Some(0), "Old", IdentityStatus::Verified),
+            (Some(1_700_000_000_000), "Old", IdentityStatus::Verified),
+            (Some(1_700_000_000_001), "New", IdentityStatus::Verified),
+            (None, category.as_str(), IdentityStatus::Unresolved),
+        ] {
+            let AppAction::SetTokenIdentity { identity, .. } =
+                observe_identity_at(ALPHA, metadata.clone(), now)
+            else {
+                panic!("identity observation");
+            };
+            assert_eq!(identity.name, expected);
+            assert_eq!(identity.status, status);
+        }
+        let AppAction::SetTokenIdentity { identity, .. } = observe_identity_at(
+            ALPHA,
+            IdentityMetadata::LastKnown {
+                contents: body,
+                authhead: [3; 32],
+                reason: StaleReason::AuthheadAdvanced,
+            },
+            Some(1_700_000_000_001),
+        ) else {
+            panic!("identity observation");
+        };
+        assert_eq!(identity.name, "New");
+        assert_eq!(identity.status, IdentityStatus::Stale);
     }
 
     fn coin(seed: u8, sats: u64, token: Option<optn_core::token::TokenData>) -> optn_app::Coin {
@@ -1335,6 +1400,54 @@ mod tests {
             IdentityStatus::Unresolved
         );
         assert_eq!(state.coins.len(), 1);
+    }
+
+    #[test]
+    fn fresh_registry_withdrawal_clears_cached_names_but_fetch_failures_keep_them_stale() {
+        let key = category_hex(&ALPHA);
+        let original = registry_body("Bitcats", ALPHA);
+        let observe = |body: &[u8], attempt: FetchAttempt| {
+            BTreeMap::from([(
+                ALPHA,
+                OwnedCategoryIdentity::Observed {
+                    publication: publication(body, &["example.com"]),
+                    attempts: vec![("example.com".into(), attempt)],
+                },
+            )])
+        };
+        let mut initial = wallet_with(vec![coin(
+            1,
+            1000,
+            Some(optn_core::token::TokenData::fungible(ALPHA, 10)),
+        )]);
+        apply_owned_token_identities(&mut initial, &observe(&original, Ok(original.clone())));
+        assert_eq!(
+            initial.token_identities[&key].status,
+            IdentityStatus::Verified
+        );
+        for attempt in [Err(FetchError::Timeout), Ok(b"hash mismatch".to_vec())] {
+            let mut state = initial.clone();
+            apply_owned_token_identities(&mut state, &observe(&original, attempt));
+            assert_eq!(state.token_identities[&key].name, "Bitcats");
+            assert_eq!(state.token_identities[&key].status, IdentityStatus::Stale);
+        }
+        let mut removed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        removed["identities"][&key]["2023-11-14T22:13:20.001Z"] =
+            serde_json::json!({"name": "Removed"});
+        for body in [
+            serde_json::to_vec(&removed).unwrap(),
+            br#"{"identities":{}}"#.to_vec(),
+            b"malformed authenticated registry".to_vec(),
+        ] {
+            let mut state = initial.clone();
+            apply_owned_token_identities(&mut state, &observe(&body, Ok(body.clone())));
+            let identity = &state.token_identities[&key];
+            assert_eq!(identity.name, key);
+            assert_eq!(identity.status, IdentityStatus::Unresolved);
+            assert!(identity.ticker.is_none());
+            assert_eq!(identity.presentation, Default::default());
+            assert_eq!(state.coins.len(), 1);
+        }
     }
 
     fn p2pkh() -> Vec<u8> {

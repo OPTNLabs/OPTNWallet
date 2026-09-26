@@ -2110,8 +2110,7 @@ mod tests {
     fn registry_body(name: &str, category: [u8; 32]) -> Vec<u8> {
         let hex: String = category.iter().map(|byte| format!("{byte:02x}")).collect();
         format!(
-            r#"{{"identities":{{"{}":{{"1700000000":{{"name":"{name}","token":{{"category":"{hex}","symbol":"BCAT","decimals":2}}}}}}}}}}"#,
-            "00".repeat(32)
+            r#"{{"identities":{{"{hex}":{{"2023-11-14T22:13:20.000Z":{{"name":"{name}","token":{{"category":"{hex}","symbol":"BCAT","decimals":2}}}}}}}}}}"#
         )
         .into_bytes()
     }

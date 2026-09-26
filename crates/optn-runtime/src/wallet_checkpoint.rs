@@ -1011,10 +1011,12 @@ mod tests {
             "description": "Authenticated tickets", "uris": {"icon": "ipfs://bafy/ticket.png"},
             "nfts": {"parse": {"types": {"01": {"name": "Ticket", "description": "Admission"}}}}
         });
-        let body = serde_json::to_vec(&serde_json::json!({"identities": {"authbase": {"1": {
-            "name": "Tickets", "description": rich["description"], "uris": rich["uris"],
-            "token": {"category": category_hex, "symbol": "TKT", "nfts": rich["nfts"]}
-        }}}}))
+        let body = serde_json::to_vec(
+            &serde_json::json!({"identities": {&category_hex: {"2023-11-14T22:13:20.000Z": {
+                "name": "Tickets", "description": rich["description"], "uris": rich["uris"],
+                "token": {"category": category_hex, "symbol": "TKT", "nfts": rich["nfts"]}
+            }}}}),
+        )
         .unwrap();
         let publication =
             RegistryPublication::committing_to(&body, vec!["https://example.test".into()]);

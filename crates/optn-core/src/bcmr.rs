@@ -441,69 +441,143 @@ pub struct RegistryNames {
 /// Parse the identity fields for `category_hex` from verified registry bytes.
 ///
 /// Only call this on contents whose hash already matched a publication. A
-/// registry that cannot name this category is not a name.
-pub fn names_for_category(contents: &[u8], category_hex: &str) -> Option<RegistryNames> {
+/// registry that cannot name this category is not a name. `now_unix_ms` is the
+/// caller's UTC clock, never a block timestamp or elapsed session time.
+/// Select the latest reached snapshot, or the earliest if all are future-dated.
+/// Invalid history timestamps reject the identity rather than revive old data.
+pub fn names_for_category(
+    contents: &[u8],
+    category_hex: &str,
+    now_unix_ms: i64,
+) -> Option<RegistryNames> {
+    if category_hex.len() != 64 || !bounded_hex(category_hex, 64) {
+        return None;
+    }
     let json: serde_json::Value = serde_json::from_slice(contents).ok()?;
     let identities = json.get("identities")?.as_object()?;
-    let wanted = category_hex.to_ascii_lowercase();
-    let mut best: Option<(u64, RegistryNames)> = None;
-    for snapshots in identities.values() {
-        let Some(obj) = snapshots.as_object() else {
-            continue;
-        };
-        for (timestamp, snapshot) in obj {
-            let token = match snapshot.get("token") {
-                Some(token) => token,
-                None => continue,
-            };
-            let category = match token.get("category").and_then(|value| value.as_str()) {
-                Some(category) => category,
-                None => continue,
-            };
-            if category.to_ascii_lowercase() != wanted {
-                continue;
-            }
-            let name = match snapshot.get("name").and_then(|value| value.as_str()) {
-                Some(name) if !name.is_empty() && bounded_text(name, 512) => name.to_owned(),
-                _ => return None,
-            };
-            let ticker = match token.get("symbol") {
-                None => None,
-                Some(value) => match value.as_str() {
-                    Some(symbol) if !symbol.is_empty() && bounded_text(symbol, 64) => {
-                        Some(symbol.to_owned())
-                    }
-                    _ => return None,
-                },
-            };
-            let decimals = match token.get("decimals") {
-                None => 0,
-                Some(value) => match value.as_u64() {
-                    Some(decimals) if decimals <= 18 => decimals as u8,
-                    _ => return None,
-                },
-            };
-            let stamp = timestamp.parse::<u64>().unwrap_or(0);
-            if best.as_ref().is_none_or(|(known, _)| *known <= stamp) {
-                let presentation = serde_json::from_value(serde_json::json!({
-                    "description": snapshot.get("description"),
-                    "uris": snapshot.get("uris").cloned().unwrap_or_else(|| serde_json::json!({})),
-                    "nfts": token.get("nfts"),
-                }))
-                .ok()?;
-                best = Some((
-                    stamp,
-                    RegistryNames {
-                        name,
-                        ticker,
-                        decimals,
-                        presentation,
-                    },
-                ));
-            }
+    // The authenticated category's history is authoritative, not another
+    // identity in the same registry that happens to claim this token.
+    let mut matching = identities
+        .iter()
+        .filter(|(authbase, _)| authbase.eq_ignore_ascii_case(category_hex));
+    let snapshots = matching.next()?.1.as_object()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    let mut earliest = None;
+    let mut current = None;
+    for (timestamp, snapshot) in snapshots {
+        let stamp = registry_timestamp_ms(timestamp)?;
+        if earliest.is_none_or(|(known, _)| stamp < known) {
+            earliest = Some((stamp, snapshot));
+        }
+        if stamp <= now_unix_ms && current.is_none_or(|(known, _)| stamp > known) {
+            current = Some((stamp, snapshot));
         }
     }
-    best.map(|(_, names)| names)
+    // Select first: removing/changing the token or malformed current metadata
+    // must never roll back to a previously matching snapshot.
+    let (_, snapshot) = current.or(earliest)?;
+    let token = snapshot.get("token")?;
+    if !token
+        .get("category")?
+        .as_str()?
+        .eq_ignore_ascii_case(category_hex)
+    {
+        return None;
+    }
+    let name = match snapshot.get("name").and_then(|value| value.as_str()) {
+        Some(name) if !name.is_empty() && bounded_text(name, 512) => name.to_owned(),
+        _ => return None,
+    };
+    let ticker = match token.get("symbol") {
+        None => None,
+        Some(value) => match value.as_str() {
+            Some(symbol) if !symbol.is_empty() && bounded_text(symbol, 64) => {
+                Some(symbol.to_owned())
+            }
+            _ => return None,
+        },
+    };
+    let decimals = match token.get("decimals") {
+        None => 0,
+        Some(value) => match value.as_u64() {
+            Some(decimals) if decimals <= 18 => decimals as u8,
+            _ => return None,
+        },
+    };
+    let presentation = serde_json::from_value(serde_json::json!({
+        "description": snapshot.get("description"),
+        "uris": snapshot.get("uris").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "nfts": token.get("nfts"),
+    }))
+    .ok()?;
+    Some(RegistryNames {
+        name,
+        ticker,
+        decimals,
+        presentation,
+    })
+}
+
+/// BCMR's exact 24-byte UTC format; no offsets, leap seconds or normalization.
+fn registry_timestamp_ms(timestamp: &str) -> Option<i64> {
+    let bytes = timestamp.as_bytes();
+    if bytes.len() != 24
+        || !bytes.iter().enumerate().all(|(i, byte)| match i {
+            4 | 7 => *byte == b'-',
+            10 => *byte == b'T',
+            13 | 16 => *byte == b':',
+            19 => *byte == b'.',
+            23 => *byte == b'Z',
+            _ => byte.is_ascii_digit(),
+        })
+    {
+        return None;
+    }
+    let number = |range: std::ops::Range<usize>| {
+        bytes[range]
+            .iter()
+            .fold(0_i64, |n, b| n * 10 + i64::from(b - b'0'))
+    };
+    let year = number(0..4);
+    let month = number(5..7);
+    let day = number(8..10);
+    let hour = number(11..13);
+    let minute = number(14..16);
+    let second = number(17..19);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let months = [
+        31,
+        28 + i64::from(leap),
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if !(1..=12).contains(&month)
+        || !(1..=months[(month - 1) as usize]).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    // Gregorian days before this date minus days before 1970-01-01. The
+    // four-digit year bounds every intermediate, including year zero.
+    let days = 365 * year + (year + 3) / 4 - (year + 99) / 100
+        + (year + 399) / 400
+        + months[..(month - 1) as usize].iter().sum::<i64>()
+        + day
+        - 1
+        - 719_528;
+    Some(((days * 24 + hour) * 60 * 60 + minute * 60 + second) * 1000 + number(20..23))
 }
 
 /// One data push, or `None` if the script is malformed or truncated.
@@ -747,15 +821,154 @@ mod tests {
     fn a_registry_names_the_category_it_commits_to() {
         let category = "aa".repeat(32);
         let body = format!(
-            r#"{{"identities":{{"{}":{{"1700000000":{{"name":"Bitcats","token":{{"category":"{category}","symbol":"BCAT","decimals":2}}}}}}}}}}"#,
-            "00".repeat(32)
+            r#"{{"identities":{{"{category}":{{"2023-11-14T22:13:20.000Z":{{"name":"Bitcats","token":{{"category":"{category}","symbol":"BCAT","decimals":2}}}}}}}}}}"#
         );
-        let names = names_for_category(body.as_bytes(), &category).expect("named");
+        let names =
+            names_for_category(body.as_bytes(), &category, 1_700_000_000_000).expect("named");
         assert_eq!(names.name, "Bitcats");
         assert_eq!(names.ticker.as_deref(), Some("BCAT"));
         assert_eq!(names.decimals, 2);
-        assert_eq!(names_for_category(body.as_bytes(), &"bb".repeat(32)), None);
-        assert_eq!(names_for_category(b"not json", &category), None);
+        assert_eq!(
+            names_for_category(body.as_bytes(), &"bb".repeat(32), 0),
+            None
+        );
+        assert_eq!(names_for_category(b"not json", &category, 0), None);
+    }
+
+    #[test]
+    fn iso_snapshots_select_latest_reached_or_earliest_future_at_millisecond_precision() {
+        let category = "aa".repeat(32);
+        let body = serde_json::to_vec(&serde_json::json!({"identities": {&category: {
+            "2023-11-14T22:13:21.000Z": {"name": "Third", "token": {"category": category}},
+            "2023-11-14T22:13:20.001Z": {"name": "First", "token": {"category": category}},
+            "2023-11-14T22:13:20.999Z": {"name": "Second", "token": {"category": category}}
+        }}}))
+        .unwrap();
+        for (now, expected) in [
+            (i64::MIN, "First"),
+            (1_700_000_000_000, "First"),
+            (1_700_000_000_001, "First"),
+            (1_700_000_000_998, "First"),
+            (1_700_000_000_999, "Second"),
+            (1_700_000_001_000, "Third"),
+            (i64::MAX, "Third"),
+        ] {
+            assert_eq!(
+                names_for_category(&body, &category, now).unwrap().name,
+                expected,
+                "{now}"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_timestamps_validate_exact_format_calendar_and_time_boundaries() {
+        for (timestamp, expected) in [
+            ("0000-01-01T00:00:00.000Z", -62_167_219_200_000),
+            ("1969-12-31T23:59:59.999Z", -1),
+            ("1970-01-01T00:00:00.000Z", 0),
+            ("2000-02-29T00:00:00.123Z", 951_782_400_123),
+            ("2023-11-14T22:13:20.000Z", 1_700_000_000_000),
+            ("2024-02-29T23:59:59.999Z", 1_709_251_199_999),
+            ("2024-03-01T00:00:00.000Z", 1_709_251_200_000),
+            ("9999-12-31T23:59:59.999Z", 253_402_300_799_999),
+        ] {
+            assert_eq!(
+                registry_timestamp_ms(timestamp),
+                Some(expected),
+                "{timestamp}"
+            );
+        }
+        let category = "aa".repeat(32);
+        for timestamp in [
+            "",
+            "1700000000",
+            "2024-02-29T00:00:00Z",
+            "2024-02-29T00:00:00.00Z",
+            "2024-02-29T00:00:00.0000Z",
+            "2024-02-29T00:00:00.000+00:00",
+            "2024-02-29t00:00:00.000Z",
+            "2024-02-29T00:00:00.000z",
+            "2024-02-29 00:00:00.000Z",
+            "2024/02/29T00:00:00.000Z",
+            "2024-02-29T00-00:00.000Z",
+            "2024-02-29T00:00:00,000Z",
+            "2024-02-29T00:00:00.00xZ",
+            "２０24-02-29T00:00:00.000Z",
+            "+010000-01-01T00:00:00.000Z",
+            "2024-00-01T00:00:00.000Z",
+            "2024-13-01T00:00:00.000Z",
+            "2024-01-00T00:00:00.000Z",
+            "2024-01-32T00:00:00.000Z",
+            "2024-04-31T00:00:00.000Z",
+            "1900-02-29T00:00:00.000Z",
+            "2100-02-29T00:00:00.000Z",
+            "2023-02-29T00:00:00.000Z",
+            "2024-02-30T00:00:00.000Z",
+            "2024-02-29T24:00:00.000Z",
+            "2024-02-29T00:60:00.000Z",
+            "2024-02-29T00:00:60.000Z",
+            "2024-02-29T00:00:00.000Z ",
+        ] {
+            assert_eq!(registry_timestamp_ms(timestamp), None, "{timestamp}");
+            let body = serde_json::to_vec(&serde_json::json!({"identities": {&category: {
+                "2023-01-01T00:00:00.000Z": {"name": "Old", "token": {"category": category}},
+                timestamp: {"name": "Invalid", "token": {"category": category}}
+            }}}))
+            .unwrap();
+            assert!(
+                names_for_category(&body, &category, i64::MAX).is_none(),
+                "{timestamp}"
+            );
+        }
+    }
+
+    #[test]
+    fn current_snapshot_cannot_borrow_old_or_sibling_token_metadata() {
+        let category = "aa".repeat(32);
+        let sibling = "bb".repeat(32);
+        let mut registry = serde_json::json!({"identities": {
+            &category: {"2023-01-01T00:00:00.000Z": {"name": "Original", "token": {"category": category}}},
+            &sibling: {"2024-01-01T00:00:00.000Z": {"name": "Sibling", "token": {"category": category}}}
+        }});
+        let extract = |registry: &serde_json::Value| {
+            names_for_category(&serde_json::to_vec(registry).unwrap(), &category, i64::MAX)
+        };
+        assert_eq!(extract(&registry).unwrap().name, "Original");
+        for newest in [
+            serde_json::json!({"name": "Removed"}),
+            serde_json::json!({"name": "Migrated", "token": {"category": sibling}}),
+            serde_json::json!({"name": "Malformed", "token": {"category": category, "decimals": 19}}),
+        ] {
+            registry["identities"][&category]["2025-01-01T00:00:00.000Z"] = newest;
+            assert!(extract(&registry).is_none());
+        }
+        registry["identities"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&category);
+        assert!(extract(&registry).is_none());
+    }
+
+    #[test]
+    fn only_selected_snapshot_fields_are_projected_and_identity_keys_must_be_unambiguous() {
+        let category = "aa".repeat(32);
+        let mut registry = serde_json::json!({"identities": {category.to_ascii_uppercase(): {
+            "2023-01-01T00:00:00.000Z": {"name": 42, "token": {"category": category}},
+            "2024-01-01T00:00:00.000Z": {"name": "Current", "token": {"category": category.to_ascii_uppercase()}},
+            "2025-01-01T00:00:00.000Z": {"token": null}
+        }}});
+        let extract = |registry: &serde_json::Value| {
+            names_for_category(
+                &serde_json::to_vec(registry).unwrap(),
+                &category,
+                1_704_067_200_000,
+            )
+        };
+        assert_eq!(extract(&registry).unwrap().name, "Current");
+        registry["identities"][&category] =
+            registry["identities"][category.to_ascii_uppercase()].clone();
+        assert!(extract(&registry).is_none());
     }
 
     fn rich_presentation() -> serde_json::Value {
@@ -786,11 +999,16 @@ mod tests {
         assert!(presentation.is_valid());
         assert_eq!(serde_json::to_value(&presentation).unwrap(), value);
         let category = "aa".repeat(32);
-        let registry = serde_json::json!({"identities": {"authbase": {"1": {
+        let registry = serde_json::json!({"identities": {&category: {"2023-11-14T22:13:20.000Z": {
             "name": "Tickets", "description": value["description"], "uris": value["uris"],
             "token": {"category": category, "symbol": "TKT", "nfts": value["nfts"]}
         }}}});
-        let names = names_for_category(&serde_json::to_vec(&registry).unwrap(), &category).unwrap();
+        let names = names_for_category(
+            &serde_json::to_vec(&registry).unwrap(),
+            &category,
+            1_700_000_000_000,
+        )
+        .unwrap();
         assert_eq!(names.presentation, presentation);
 
         // Sequential types use the commitment itself, including empty commitment.
@@ -910,11 +1128,16 @@ mod tests {
     #[test]
     fn malformed_selected_presentation_cannot_fall_back_to_an_older_identity() {
         let category = "aa".repeat(32);
-        let registry = serde_json::json!({"identities": {"authbase": {
-            "1": {"name": "Old", "token": {"category": category}},
-            "2": {"name": "New", "description": "x".repeat(4097), "token": {"category": category}}
+        let registry = serde_json::json!({"identities": {&category: {
+            "2023-11-14T22:13:20.000Z": {"name": "Old", "token": {"category": category}},
+            "2023-11-14T22:13:20.001Z": {"name": "New", "description": "x".repeat(4097), "token": {"category": category}}
         }}});
-        assert!(names_for_category(&serde_json::to_vec(&registry).unwrap(), &category).is_none());
+        assert!(names_for_category(
+            &serde_json::to_vec(&registry).unwrap(),
+            &category,
+            1_700_000_000_001
+        )
+        .is_none());
     }
 
     #[test]
@@ -926,10 +1149,11 @@ mod tests {
         let extract = |snapshot: &serde_json::Value| {
             names_for_category(
                 &serde_json::to_vec(
-                    &serde_json::json!({"identities": {"authbase": {"1": snapshot}}}),
+                    &serde_json::json!({"identities": {&category: {"2023-11-14T22:13:20.000Z": snapshot}}}),
                 )
                 .unwrap(),
                 &category,
+                1_700_000_000_000,
             )
         };
         assert_eq!(extract(&snapshot).unwrap().decimals, 18);
