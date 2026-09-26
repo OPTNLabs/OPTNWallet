@@ -650,11 +650,17 @@ export function ChainSourcesSettings({
           {pageTitle(page)}
         </p>
         <p className="mt-1 text-xs wallet-muted">
-          {view.network} · {view.wallet_routes} route
-          {view.wallet_routes === 1 ? '' : 's'} able to sync right now
-          {view.verified_tip
-            ? ` · verified header ${view.verified_tip.height}`
-            : ' · no verified headers yet'}
+          {page === 'metadata' ? (
+            view.network
+          ) : (
+            <>
+              {view.network} · {view.wallet_routes} route
+              {view.wallet_routes === 1 ? '' : 's'} able to sync right now
+              {view.verified_tip
+                ? ` · verified header ${view.verified_tip.height}`
+                : ' · no verified headers yet'}
+            </>
+          )}
         </p>
       </div>
 
@@ -1334,7 +1340,7 @@ export function ChainSourcesSettings({
                 className="wallet-muted text-sm"
                 aria-describedby={`metadata-${service.id}`}
               >
-                {service.label} � unavailable
+                {service.label} — unavailable
               </button>
               <p id={`metadata-${service.id}`} className="text-xs wallet-muted">
                 {service.reason}
