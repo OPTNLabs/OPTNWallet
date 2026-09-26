@@ -106,6 +106,10 @@ it('browses without probes and sends explicit selection through the old UI', asy
   ).toBeDisabled();
   expect(screen.getByText('IPFS gateways')).toBeInTheDocument();
   expect(
+    screen.getByRole('button', { name: 'External BCMR indexer — unavailable' })
+  ).toBeDisabled();
+  expect(screen.queryByText(/able to sync right now/)).not.toBeInTheDocument();
+  expect(
     mock.invoke.mock.calls.every(
       ([command]) => command === 'optn_chain_sources'
     )
