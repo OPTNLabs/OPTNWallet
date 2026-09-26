@@ -591,7 +591,24 @@ mod tests {
         assert_eq!(selection.policy, policy);
         assert!(!directory.0.join(file_name(Network::Chipnet)).exists());
 
-        let id = expected.iter().next().unwrap().id.clone();
+        let indexer = expected
+            .iter()
+            .find(|source| source.endpoints[0].kind == EndpointKind::BcmrIndexerHttps)
+            .unwrap();
+        assert!(select_source(
+            Network::Chipnet,
+            Some(&directory.0),
+            indexer.id.as_str(),
+            ProtocolFamily::Electrum
+        )
+        .is_err());
+        assert!(!directory.0.join(file_name(Network::Chipnet)).exists());
+        let id = expected
+            .iter()
+            .find(|source| source.endpoints[0].kind == EndpointKind::ElectrumTls)
+            .unwrap()
+            .id
+            .clone();
         select_source(
             Network::Chipnet,
             Some(&directory.0),
