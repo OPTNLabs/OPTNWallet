@@ -147,6 +147,8 @@ pub struct NativeChainProbeFailure {
 }
 
 pub struct NativeChainStack {
+    /// Last proxy observation used to build this stack, not a new connectivity check.
+    pub tor_status: Option<TorStatus>,
     /// The accepted block headers every provider in this stack reads.
     ///
     /// Owned here rather than by any provider: the runtime writes verified
@@ -167,6 +169,7 @@ impl NativeChainStack {
     pub fn unavailable(error: impl Into<String>) -> Self {
         let service = ChainService::new(SourceCatalog::default(), ConnectionPolicy::auto());
         Self {
+            tor_status: None,
             // Empty rather than seeded: no provider is registered in this
             // state, so nothing should be able to read a header from it.
             headers: Arc::new(optn_runtime::header_store::SharedHeaders::default()),
@@ -751,6 +754,7 @@ async fn build_native_chain_stack_with_tor_status(
     }
 
     NativeChainStack {
+        tor_status: Some(tor_status),
         headers,
         revocation: service.revocation(),
         service: Arc::new(Mutex::new(service)),

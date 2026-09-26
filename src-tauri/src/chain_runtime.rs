@@ -873,6 +873,19 @@ impl NativeChainRuntime {
             .unwrap_or_default()
     }
 
+    /// Passive display only. Opening settings must not probe proxy ports or wait
+    /// for provider work; route construction still performs its own verification.
+    pub async fn observed_tor_status(&self, network: Network) -> Option<optn_core::tor::TorStatus> {
+        let stack = self.stack.read().await;
+        if self.owner.state().network != network {
+            return None;
+        }
+        stack
+            .as_ref()
+            .filter(|stack| !stack.revocation.is_revoked())
+            .and_then(|stack| stack.tor_status)
+    }
+
     /// Return the installed stack's configuration error, if any. An absent
     /// stack returns `None` even though a replacement may still be pending.
     pub async fn configuration_error(&self) -> Option<String> {
@@ -1404,6 +1417,7 @@ mod tests {
         let revocation = service.revocation();
         let service = Arc::new(Mutex::new(service));
         native.stack.write().await.replace(NativeChainStack {
+            tor_status: Some(optn_core::tor::TorStatus::Absent),
             revocation,
             service: service.clone(),
             event_sources: Vec::new(),
@@ -1431,6 +1445,16 @@ mod tests {
             .await
             .expect("shared HD refresh reached the pending provider");
         assert!(service.try_lock().is_err(), "refresh must hold old service");
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                native.observed_tor_status(Network::Chipnet)
+            )
+            .await
+            .expect("settings must not wait for network work"),
+            Some(optn_core::tor::TorStatus::Absent)
+        );
+        assert!(native.observed_tor_status(Network::Mainnet).await.is_none());
 
         PendingHdRefresh {
             native,

@@ -455,3 +455,29 @@ accepts matching indexer bytes into Assets and restores them stale after restart
 rejects wrong hashes and refuses to query when spentness cannot be established.
 These are synthetic integration tests, not a claim of live Paytaca token acceptance.
 SHV/MMR implementation and its existing reference/live proof evidence are unchanged.
+
+### 2026-09-26: metadata bootstrap and passive Network directory
+
+The maintained Rust catalog now supplies `bcmr.paytaca.com` for Mainnet and
+`bcmr-chipnet.paytaca.com` for Chipnet, using Paytaca's pinned deployment examples
+as provenance. Both origins responded to bounded HTTPS checks. `ipfs.io` supplies
+an optional content gateway on both networks; it is network-independent and
+returned bytes still require the chain publication commitment. These entries are
+unverified hints, with stable IDs, shared by GUI and CLI. Catalog updates preserve
+saved bans, exact selections and own-infrastructure boundaries. Unsupported
+networks do not inherit Mainnet metadata services. No user overlay is rewritten.
+
+`optn_chain_sources` no longer waits for Tor SOCKS probing on every open/poll.
+It projects the installed stack's last observation, or unknown while unavailable
+or revoked. Active readiness checks and route construction still verify Tor.
+The old UI shows BCMR/IPFS entries before unavailable adapters, with source details
+and the usual bootstrap enable/disable/ban controls. Opening this directory
+does not contact providers. The previous packaged read took 4.6 seconds locally.
+
+Validation: bootstrap/persistence policy regressions, 19 native runtime tests
+(including reading status during blocked sync), four source-view tests, 25 native
+chain tests, retained UI interaction test, TypeScript, strict Rust Clippy and
+architecture gate. Two existing catalog tests were updated to count chain routes
+separately from metadata entries. General TokenIndex/Chaingraph query adapters and
+metadata proxy/cache remain unavailable; adding a hostname would not implement
+those APIs. No live Paytaca token-identity acceptance is claimed.

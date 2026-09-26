@@ -339,6 +339,8 @@ pub enum BootstrapProject {
     Knuth,
     ElectronCash,
     FulcrumPeerNetwork,
+    Paytaca,
+    Ipfs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

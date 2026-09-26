@@ -154,7 +154,11 @@ pub async fn optn_chain_sources(
                     hash: hex::encode(display),
                 }
             }),
-        tor: tor_view(&catalog, &policy, &trusted_ports).await,
+        tor: tor_snapshot(
+            optn_chain_native::requires_tor_proxy(&catalog, &policy),
+            native.observed_tor_status(network).await,
+            &trusted_ports,
+        ),
     };
     if runtime.state().network != observed_network {
         return Err("Network changed while reading chain sources; retry.".into());
@@ -182,12 +186,25 @@ async fn tor_view(
         },
     )
     .await;
-    let needed = optn_chain_native::requires_tor_proxy(catalog, policy);
+    tor_snapshot(
+        optn_chain_native::requires_tor_proxy(catalog, policy),
+        Some(status),
+        trusted,
+    )
+}
+
+fn tor_snapshot(
+    needed: bool,
+    status: Option<optn_core::tor::TorStatus>,
+    trusted: &[u16],
+) -> TorProxyView {
+    use optn_core::tor::TorStatus;
     let (label, socks_port) = match status {
-        optn_core::tor::TorStatus::Verified { socks_port } => ("verified", Some(socks_port)),
-        optn_core::tor::TorStatus::Unverified { socks_port } => ("unverified", Some(socks_port)),
-        optn_core::tor::TorStatus::Absent if needed => ("absent", None),
-        optn_core::tor::TorStatus::Absent => ("not_needed", None),
+        _ if !needed => ("not_needed", None),
+        Some(TorStatus::Verified { socks_port }) => ("verified", Some(socks_port)),
+        Some(TorStatus::Unverified { socks_port }) => ("unverified", Some(socks_port)),
+        Some(TorStatus::Absent) => ("absent", None),
+        None => ("unknown", None),
     };
     TorProxyView {
         status: label.to_owned(),
@@ -486,6 +503,23 @@ mod tests {
         chain_service::RegisteredCapabilityObservation,
     };
     use optn_transport_native::disposition_label;
+
+    #[test]
+    fn tor_snapshot_does_not_confuse_unobserved_with_absent_or_verified() {
+        assert_eq!(tor_snapshot(true, None, &[]).status, "unknown");
+        assert_eq!(tor_snapshot(false, None, &[]).status, "not_needed");
+        assert_eq!(
+            tor_snapshot(true, Some(optn_core::tor::TorStatus::Absent), &[]).status,
+            "absent"
+        );
+        let view = tor_snapshot(
+            true,
+            Some(optn_core::tor::TorStatus::Verified { socks_port: 9150 }),
+            &[9150],
+        );
+        assert_eq!(view.status, "verified");
+        assert_eq!(view.socks_port, Some(9150));
+    }
 
     #[test]
     fn dispositions_round_trip_and_reject_anything_else() {
