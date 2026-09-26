@@ -3,6 +3,7 @@ use optn_core::network::Network;
 use optn_platform::{PlatformError, SecureStorage};
 use optn_runtime::chain::{ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceId};
 use optn_runtime::rpc_credentials::*;
+use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 
 use optn_runtime::chain::{
     CapabilitySet, ChainSource, ProtocolFamily, SourceDisposition, SourceOrigin,
@@ -56,6 +57,15 @@ impl SecureStorage for FailingStorage {
     }
 }
 
+// These tests check binding and storage, not fixed cryptographic vectors.
+fn test_password() -> String {
+    OsRng
+        .sample_iter(Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect()
+}
+
 fn endpoint(port: u16) -> Endpoint {
     Endpoint {
         kind: EndpointKind::BchnRpc,
@@ -93,7 +103,7 @@ async fn stored_auth_survives_reopen_for_the_same_endpoint() {
         &catalog,
         source.as_str(),
         "operator",
-        "correct-horse",
+        &test_password(),
     )
     .await
     .unwrap();
@@ -120,7 +130,7 @@ async fn changed_endpoint_never_loads_old_authentication() {
         &original_catalog,
         source.as_str(),
         "operator",
-        "correct-horse",
+        &test_password(),
     )
     .await
     .unwrap();
@@ -165,7 +175,7 @@ async fn remote_targets_are_rejected_and_never_loaded() {
             &catalog,
             source.as_str(),
             "operator",
-            "password",
+            &test_password(),
         )
         .await,
         Err(RpcCredentialError::InvalidTarget)
@@ -184,7 +194,7 @@ async fn removing_a_credential_does_not_leave_a_reusable_record() {
         &catalog,
         source.as_str(),
         "operator",
-        "correct-horse",
+        &test_password(),
     )
     .await
     .unwrap();
@@ -203,6 +213,15 @@ async fn loaded_credentials_reach_the_selected_native_rpc_provider() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(false).unwrap();
     let port = listener.local_addr().unwrap().port();
+    let password = test_password();
+    let expected = reqwest::Client::new()
+        .get("http://127.0.0.1/")
+        .basic_auth("operator", Some(&password))
+        .build()
+        .unwrap()
+        .headers()[reqwest::header::AUTHORIZATION]
+        .as_bytes()
+        .to_vec();
     let (authenticated, receiver) = mpsc::channel();
     thread::spawn(move || {
         for result in [
@@ -227,8 +246,7 @@ async fn loaded_credentials_reach_the_selected_native_rpc_provider() {
                         return false;
                     };
                     line[..colon].eq_ignore_ascii_case(b"authorization")
-                        && line[colon + 1..].trim_ascii_start()
-                            == b"Basic b3BlcmF0b3I6Y29ycmVjdC1ob3JzZQ=="
+                        && line[colon + 1..].trim_ascii_start() == expected.as_slice()
                 }))
                 .unwrap();
             let response = format!(
@@ -248,7 +266,7 @@ async fn loaded_credentials_reach_the_selected_native_rpc_provider() {
         &catalog,
         source.as_str(),
         "operator",
-        "correct-horse",
+        &password,
     )
     .await
     .unwrap();
@@ -283,13 +301,14 @@ async fn portable_configuration_has_no_secure_store_contents() {
     let storage = MemoryStorage::default();
     let endpoint = endpoint(8332);
     let (catalog, source) = catalog(endpoint);
+    let password = test_password();
     set(
         &storage,
         Network::Chipnet,
         &catalog,
         source.as_str(),
         "operator",
-        "correct-horse",
+        &password,
     )
     .await
     .unwrap();
@@ -297,7 +316,7 @@ async fn portable_configuration_has_no_secure_store_contents() {
         std::env::temp_dir().join(format!("optn-rpc-credential-export-{}", std::process::id())),
     );
     let export = portable.export_portable(Network::Chipnet).unwrap();
-    assert!(!export.contains("correct-horse"));
+    assert!(!export.contains(&password));
     assert!(!export.contains("rpc-"));
 }
 
@@ -313,13 +332,13 @@ async fn invalid_auth_is_refused_and_escaped_passwords_round_trip() {
                 &catalog,
                 source.as_str(),
                 username,
-                "test"
+                &test_password()
             )
             .await,
             Err(RpcCredentialError::InvalidCredentials)
         );
     }
-    let password = "\u{0001}".repeat(4096);
+    let password = format!("{}{}", test_password(), "\u{0001}".repeat(4096 - 32));
     set(
         &storage,
         Network::Chipnet,
