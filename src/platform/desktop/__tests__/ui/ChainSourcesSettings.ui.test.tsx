@@ -28,9 +28,13 @@ vi.mock('../../FusionStatusService', () => ({
 vi.mock('../../../../state/slices/preferencesSlice', () => ({
   setChainPolicy: (policy: string) => ({ type: 'policy', policy }),
 }));
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 it('browses without probes and sends explicit selection through the old UI', async () => {
+  const polling = vi.spyOn(globalThis, 'setInterval');
   const endpoint = { kind: 'p2p', host: 'public.example', port: 48333 };
   const view: ChainSourcesView = {
     unavailable_services: [
@@ -233,7 +237,10 @@ it('browses without probes and sends explicit selection through the old UI', asy
       command: string,
       args?: { request: { services: { kind: string; port: number }[] } }
     ) => {
-      if (command === 'optn_chain_add_source') {
+      if (
+        command === 'optn_chain_add_source' &&
+        !view.sources.some((source) => source.id === 'host:node.home')
+      ) {
         view.sources.push({
           ...view.sources[0],
           id: 'host:node.home',
@@ -299,4 +306,30 @@ it('browses without probes and sends explicit selection through the old UI', asy
       infrastructure_group: 'mine',
     },
   });
+  fireEvent.click(await screen.findByRole('button', { name: 'Add services' }));
+  fireEvent.click(
+    screen.getByRole('checkbox', { name: 'Electrum / Fulcrum (TLS)' })
+  );
+  mock.invoke.mockImplementation(async (command: string) => {
+    if (command === 'optn_chain_add_source')
+      throw new Error('Source could not be saved');
+    return command === 'optn_chain_sources' ? view : undefined;
+  });
+  fireEvent.change(screen.getByLabelText('Electrum / Fulcrum (TLS) port'), {
+    target: { value: '50002' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Save services' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Source could not be saved'
+  );
+  const refreshPoll = polling.mock.calls.find(
+    ([, delay]) => delay === 4000
+  )?.[0];
+  expect(typeof refreshPoll).toBe('function');
+  await act(async () => {
+    (refreshPoll as () => void)();
+  });
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'Source could not be saved'
+  );
 });

@@ -261,6 +261,7 @@ export function ChainSourcesSettings({
   const [search, setSearch] = useState('');
   const [serviceFilter, setServiceFilter] = useState('');
   const [error, setError] = useState('');
+  const [refreshError, setRefreshError] = useState('');
   const [busy, setBusy] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [host, setHost] = useState('');
@@ -292,9 +293,11 @@ export function ChainSourcesSettings({
       // rather than briefly reading as Auto.
       dispatch(rememberChainPolicy(current.policy));
       setEngineSync(await readEngineWalletSync());
-      setError('');
+      setRefreshError('');
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      setRefreshError(
+        failure instanceof Error ? failure.message : String(failure)
+      );
     }
   }, [dispatch]);
 
@@ -628,7 +631,7 @@ export function ChainSourcesSettings({
     return (
       <SectionCard className="p-4">
         <p className="text-sm wallet-muted">
-          {error || 'Reading chain sources…'}
+          {refreshError || 'Reading chain sources…'}
         </p>
       </SectionCard>
     );
@@ -1739,7 +1742,16 @@ export function ChainSourcesSettings({
         </div>
       )}
 
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && (
+        <p role="alert" className="text-xs text-red-400">
+          {error}
+        </p>
+      )}
+      {refreshError && (
+        <p role="alert" className="text-xs text-red-400">
+          {refreshError}
+        </p>
+      )}
     </SectionCard>
   );
 }
