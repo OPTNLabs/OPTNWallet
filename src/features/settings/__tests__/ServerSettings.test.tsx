@@ -66,17 +66,25 @@ vi.mock('../CashFusionSettings', () => ({
     <div>CashFusion {variant}</div>
   ),
 }));
+vi.mock('../../nostr/NostrSettings', () => ({
+  NostrSettings: ({ variant }: { variant: string }) => (
+    <div>Nostr {variant}</div>
+  ),
+}));
 vi.mock('../ChainSourcesSettings', () => ({
   ChainSourcesSettings: ({
     feeSettings,
     fusionSettings,
+    nostrSettings,
   }: {
     feeSettings: React.ReactNode;
     fusionSettings: React.ReactNode;
+    nostrSettings: React.ReactNode;
   }) => (
     <div>
       Sources destination{feeSettings}
       {fusionSettings}
+      {nostrSettings}
     </div>
   ),
 }));
@@ -91,6 +99,7 @@ it('uses one desktop routing destination, retaining fees and the mobile controls
   expect(screen.getByText('server.transactionFee')).toBeInTheDocument();
   expect(mock.adapter).not.toHaveBeenCalled();
   expect(screen.getByText('CashFusion servers')).toBeInTheDocument();
+  expect(screen.getByText('Nostr relays')).toBeInTheDocument();
   expect(screen.getByText('Sources destination')).toBeInTheDocument();
   cleanup();
   mock.desktop = false;

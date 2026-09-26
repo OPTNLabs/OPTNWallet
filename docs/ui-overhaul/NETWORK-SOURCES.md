@@ -43,6 +43,7 @@ Network overview
   My Custom Sources -> source details
   Routing           -> primary scope, chain access, preference, fallback
   Privacy & Transport
+  Nostr relays      -> existing relay pool and custom endpoints
   Explorer
   Network backup
 ```
@@ -55,6 +56,17 @@ preset; operation-aware routing remains active within every valid policy.
 Source selection, transport/privacy and explorer policy are separate dimensions.
 A UI must not offer a transport choice that the host cannot actually enforce.
 ZMQ belongs under event sources, not alongside mutually competing sync modes.
+
+The retained desktop UI also exposes Nostr relays as a Network destination.
+It reuses the existing saved relay editor; identity and messaging remain under
+Nostr & Chat. Listing/editing relays does not load wallet identity, fetch profiles,
+probe connections or enable chat. Back returns one level to Network. Relays are
+application-message infrastructure, not BCH chain-validation or metadata sources;
+the current saved pool spans Mainnet and Chipnet. This navigation change does not
+complete Nostr's migration to shared Rust networking: the legacy relay pool and
+Chat transport still exist, and legacy direct-WSS diagnostics must not be shown
+as evidence of the chain-source Tor policy. Unified Rust relay persistence,
+disable/ban semantics and privacy enforcement remain separate backend work.
 
 ## Source lifecycle
 

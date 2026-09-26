@@ -47,6 +47,7 @@ type SourcePage =
   | 'own'
   | 'custom'
   | 'metadata'
+  | 'nostr'
   | 'details'
   | 'routing'
   | 'privacy'
@@ -113,6 +114,7 @@ function pageTitle(page: SourcePage): string {
   return {
     overview: 'Network',
     metadata: 'Metadata & indexing',
+    nostr: 'Nostr relays',
     details: 'Source details',
     routing: 'Routing',
     privacy: 'Privacy & Transport',
@@ -245,6 +247,7 @@ type ChainSourcesSettingsProps = {
   explorerSettings?: ReactNode;
   feeSettings?: ReactNode;
   fusionSettings?: ReactNode;
+  nostrSettings?: ReactNode;
   birthdaySettings?: ReactNode;
   backRef?: MutableRefObject<(() => void) | null>;
 };
@@ -253,6 +256,7 @@ export function ChainSourcesSettings({
   explorerSettings,
   feeSettings,
   fusionSettings,
+  nostrSettings,
   birthdaySettings,
   backRef,
 }: ChainSourcesSettingsProps) {
@@ -774,6 +778,23 @@ export function ChainSourcesSettings({
               </span>
               <span className="text-xs wallet-muted">Open</span>
             </button>
+            {nostrSettings && (
+              <button
+                type="button"
+                className="wallet-surface-strong flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--wallet-border)] p-3 text-left"
+                onClick={() => navigate('nostr')}
+              >
+                <span>
+                  <span className="block text-sm font-semibold wallet-text-strong">
+                    Nostr relays
+                  </span>
+                  <span className="block text-[11px] wallet-muted">
+                    Saved relay pool and custom endpoints
+                  </span>
+                </span>
+                <span className="text-xs wallet-muted">Open</span>
+              </button>
+            )}
             {birthdaySettings && (
               <button
                 type="button"
@@ -841,6 +862,7 @@ export function ChainSourcesSettings({
 
       {page === 'fees' && feeSettings}
       {page === 'fusion' && fusionSettings}
+      {page === 'nostr' && nostrSettings}
       {page === 'birthday' && birthdaySettings}
 
       {page === 'privacy' && (
