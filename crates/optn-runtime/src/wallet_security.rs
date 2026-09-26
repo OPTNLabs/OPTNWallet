@@ -44,6 +44,28 @@ enum StoredWalletFile {
 }
 
 impl StoredWalletFile {
+    fn legacy_source_id(&self) -> Result<Option<u32>, TransportError> {
+        let Self::Seed(file) = self else {
+            return Ok(None);
+        };
+        let migrated = file
+            .extra
+            .get("legacySourceId")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .filter(|id| *id > 0)
+                    .ok_or_else(|| failure("Invalid legacy wallet ownership."))
+            })
+            .transpose()?;
+        if file.source_id > 0 && migrated.is_some_and(|id| id != file.source_id) {
+            return Err(failure("Conflicting legacy wallet ownership."));
+        }
+        let id = (file.source_id > 0).then_some(file.source_id).or(migrated);
+        id.map(|id| u32::try_from(id).map_err(|_| failure("Invalid legacy wallet ownership.")))
+            .transpose()
+    }
+
     fn parse(bytes: &[u8]) -> optn_core::error::Result<Self> {
         WalletFile::parse(bytes)
             .map(Self::Seed)
@@ -346,6 +368,10 @@ impl WalletSecurity {
             available: true,
             wallets,
             active: active.map(|session| session.handle.clone()),
+            legacy_source_id: active
+                .map(|session| session.file.legacy_source_id())
+                .transpose()?
+                .flatten(),
             has_password: active.map(|session| !session.password.expose().is_empty()),
             biometric_available,
             biometric_enabled,
@@ -1075,6 +1101,75 @@ pub(crate) mod tests {
             network: "chipnet".into(),
             account_path: "m/44'/1'/0'".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn legacy_hold_owner_follows_the_authenticated_wallet_and_survives_migration() {
+        let original = WalletFile::parse(include_bytes!(
+            "../../optn-core/tests/fixtures/legacy-wallet-v1.json"
+        ))
+        .unwrap();
+        let mut direct = original.clone();
+        direct.source_id = 7;
+        direct.extra.remove("legacySourceId");
+        assert_eq!(
+            StoredWalletFile::Seed(direct.clone())
+                .legacy_source_id()
+                .unwrap(),
+            Some(7)
+        );
+        direct.extra.insert("legacySourceId".into(), 8.into());
+        assert!(StoredWalletFile::Seed(direct).legacy_source_id().is_err());
+        let storage = Storage::default();
+        for (handle, id) in [("first.optn", 7u64), ("second.optn", 8)] {
+            let mut file = original.clone();
+            // Rust password migration preserves this owner while severing the
+            // old renderer's authority to overwrite the current ciphertext.
+            file.source_id = 0;
+            file.extra.insert("legacySourceId".into(), id.into());
+            storage.save(handle, None, &file.encode().unwrap()).unwrap();
+        }
+        for value in [
+            serde_json::json!(0),
+            serde_json::json!(u64::MAX),
+            serde_json::json!("7"),
+        ] {
+            let mut malformed = original.clone();
+            malformed.source_id = 0;
+            malformed.extra.insert("legacySourceId".into(), value);
+            assert!(StoredWalletFile::Seed(malformed)
+                .legacy_source_id()
+                .is_err());
+        }
+        let security = WalletSecurity::new(Box::new(storage), None);
+        let (runtime, driver) =
+            crate::AppRuntime::new_with_security(AppState::default(), security).unwrap();
+        tokio::spawn(driver.run());
+        let mut epoch = None;
+        for (handle, id) in [("first.optn", 7), ("second.optn", 8)] {
+            let status = runtime
+                .wallet_security(Request::Open {
+                    handle: handle.into(),
+                    password: secret("old-password"),
+                })
+                .await
+                .unwrap();
+            assert_eq!(status.legacy_source_id, Some(id));
+            assert_ne!(epoch, Some(status.epoch));
+            epoch = Some(status.epoch);
+            assert_eq!(
+                runtime
+                    .wallet_security(Request::Status)
+                    .await
+                    .unwrap()
+                    .legacy_source_id,
+                Some(id)
+            );
+        }
+        runtime.dispatch(AppAction::LockWallet).await.unwrap();
+        let locked = runtime.wallet_security(Request::Status).await.unwrap();
+        assert_eq!(locked.active, None);
+        assert_eq!(locked.legacy_source_id, None);
     }
 
     #[test]

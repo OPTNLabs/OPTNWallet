@@ -103,6 +103,10 @@ pub struct WalletSecurityStatus {
     pub available: bool,
     pub wallets: Vec<StoredWallet>,
     pub active: Option<String>,
+    /// Legacy hold-file owner from the authenticated wallet record, never a
+    /// renderer-selected identifier. Native wallets may have no legacy mirror.
+    #[serde(default)]
+    pub legacy_source_id: Option<u32>,
     pub has_password: Option<bool>,
     pub biometric_available: bool,
     pub biometric_enabled: bool,

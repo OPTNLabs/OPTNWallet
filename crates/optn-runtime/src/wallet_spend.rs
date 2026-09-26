@@ -13,7 +13,7 @@
 
 use optn_core::{
     error::{CliError, Result},
-    hd::{self, Wallet},
+    hd::Wallet,
     tx::{self, Output, Transaction, Utxo},
     watch_only::HdAddressBook,
 };
@@ -68,21 +68,11 @@ const DUST_LIMIT: u64 = 546;
 /// The address book is the runtime's own derivation, never a provider's claim,
 /// which is what makes it safe to sign against.
 pub fn spendable_paths(book: &HdAddressBook) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for (branch, previews) in book.branches.iter().enumerate() {
-        for (index, preview) in previews.iter().enumerate() {
-            out.push((
-                preview.address.clone(),
-                hd::address_path(
-                    book.account.coin_type(),
-                    book.account.account(),
-                    branch == 1,
-                    index as u32,
-                ),
-            ));
-        }
-    }
-    out
+    book.branches
+        .iter()
+        .flatten()
+        .map(|preview| (preview.address.clone(), preview.path.clone()))
+        .collect()
 }
 
 /// Build and sign a spend.
@@ -188,6 +178,8 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hd_sync::{HdAccountScan, HdSyncLimits};
+    use optn_core::hd::AccountPath;
     use optn_core::network::Network;
 
     const MNEMONIC: &str =
@@ -195,6 +187,37 @@ mod tests {
 
     fn wallet() -> Wallet {
         Wallet::from_mnemonic(MNEMONIC, "").unwrap()
+    }
+
+    #[test]
+    fn spendable_paths_derive_the_scanned_addresses_on_all_four_branches() {
+        let wallet = wallet();
+        // Nondefault coin type and account must survive the public scan too.
+        let account = AccountPath::new(145, 3).unwrap();
+        let scan = HdAccountScan::new(
+            Network::Chipnet,
+            wallet.account_xpub_at(account).unwrap(),
+            account,
+            HdSyncLimits {
+                gap_limit: 2,
+                addresses_per_branch: 2,
+            },
+            BTreeSet::new(),
+        )
+        .unwrap();
+        let paths = spendable_paths(&scan.address_book());
+        assert_eq!(paths.len(), 8);
+        let expected = [0, 1, 7, 2]
+            .into_iter()
+            .flat_map(|branch| (0..2).map(move |index| (branch, index)));
+        for ((address, path), (branch, index)) in paths.iter().zip(expected) {
+            assert_eq!(path, &format!("m/44'/145'/3'/{branch}/{index}"));
+            assert_eq!(
+                wallet.address(Network::Chipnet, path).unwrap().encode(),
+                *address,
+                "advertised signing path must derive its scanned address"
+            );
+        }
     }
 
     fn coin(seed: u8, value: u64, path: &str, wallet: &Wallet) -> SpendableCoin {

@@ -103,16 +103,55 @@ fn held_outpoints(
     read(wallet_id).map(|holds| holds.into_iter().map(|hold| hold.outpoint).collect())
 }
 
+fn hold_owner(status: &optn_transport::WalletSecurityStatus, epoch: u64) -> Result<u32, String> {
+    if status.epoch != epoch || status.active.is_none() {
+        return Err("Wallet changed. Review the transaction again.".into());
+    }
+    status
+        .legacy_source_id
+        .filter(|id| *id > 0)
+        .ok_or_else(|| "This wallet has no verified legacy hold-file owner.".into())
+}
+
+async fn session_holds(
+    app: &tauri::AppHandle,
+    runtime: &optn_runtime::AppRuntime,
+    epoch: u64,
+) -> Result<BTreeSet<String>, String> {
+    let status = runtime
+        .wallet_security(optn_transport::WalletSecurityRequest::Status)
+        .await
+        .map_err(|_| "Wallet session is unavailable. Reopen it.")?;
+    let mut held = held_outpoints(Some(hold_owner(&status, epoch)?), |id| {
+        crate::coin_holds::optn_coin_holds(app.clone(), id)
+    })?;
+    let state = runtime.state();
+    if state.lock.unlock_epoch != epoch
+        || state.wallet.is_none()
+        || !state.wallet_sync.utxos_fresh
+        || !state.wallet_sync.history_fresh
+    {
+        return Err("Wallet changed or needs a refresh. Review the transaction again.".into());
+    }
+    held.extend(
+        state
+            .coins
+            .iter()
+            .filter(|coin| coin.freeze().is_some())
+            .map(|coin| coin.outpoint().to_string()),
+    );
+    Ok(held)
+}
+
 async fn build(
     app: &tauri::AppHandle,
     runtime: &optn_runtime::AppRuntime,
-    native: &Arc<NativeChainRuntime>,
     to: &str,
     sats: u64,
     fee_rate: u64,
-    wallet_id: Option<u32>,
-) -> Result<optn_runtime::wallet_spend::PreparedSpend, String> {
+) -> Result<(optn_runtime::wallet_spend::PreparedSpend, u64), String> {
     let state = runtime.state();
+    let epoch = state.lock.unlock_epoch;
     let network = state.network;
     let destination = Address::decode(to).map_err(|error| error.to_string())?;
     if destination.prefix != network.prefix() {
@@ -127,6 +166,14 @@ async fn build(
         .ok_or("synchronize this wallet before sending")?
         .value;
     let coins = spendable_coins(&snapshot, network)?;
+    if snapshot.hd.as_ref().map(|book| &book.account_xpub)
+        != state
+            .wallet
+            .as_ref()
+            .and_then(|wallet| wallet.account_xpub.as_ref())
+    {
+        return Err("Synchronized account does not match the open wallet.".into());
+    }
 
     // Change goes to this account's own change branch, never to the
     // destination: paying the recipient twice is not a rounding error.
@@ -137,14 +184,12 @@ async fn build(
         .ok_or("this wallet has no change address yet")?;
     let change = Address::decode(&change_address).map_err(|error| error.to_string())?;
 
-    let request = SpendRequest {
+    let mut request = SpendRequest {
         destination_script: destination.script_pubkey(),
         amount_sats: sats,
         fee_per_byte: fee_rate.max(1),
         change_script: change.script_pubkey(),
-        held: held_outpoints(wallet_id, |id| {
-            crate::coin_holds::optn_coin_holds(app.clone(), id)
-        })?,
+        held: session_holds(app, runtime, epoch).await?,
     };
 
     // The unlocked wallet is borrowed for the signature and dropped with this
@@ -161,8 +206,21 @@ async fn build(
             }
             other => format!("{other:?}"),
         })?;
-    let _ = native;
-    prepare_spend(&wallet, &coins, &request).map_err(|error| error.to_string())
+    // Authorization can yield while a lock, wallet switch or hold is applied.
+    // Re-read the bound record before any signature is created.
+    request.held = session_holds(app, runtime, epoch).await?;
+    let current = runtime.subscribe_wallet_sync().borrow().clone();
+    if current
+        .authoritative
+        .as_ref()
+        .map(|accepted| &accepted.value)
+        != Some(&snapshot)
+    {
+        return Err("Wallet history changed. Review the transaction again.".into());
+    }
+    prepare_spend(&wallet, &coins, &request)
+        .map(|prepared| (prepared, epoch))
+        .map_err(|error| error.to_string())
 }
 
 /// Build and sign, without sending. Nothing leaves the device.
@@ -170,22 +228,11 @@ async fn build(
 pub async fn optn_wallet_prepare_spend(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
-    native: tauri::State<'_, Arc<NativeChainRuntime>>,
     to: String,
     sats: u64,
     fee_rate: Option<u64>,
-    wallet_id: Option<u32>,
 ) -> Result<PreparedSpendView, String> {
-    let prepared = build(
-        &app,
-        &runtime,
-        &native,
-        &to,
-        sats,
-        fee_rate.unwrap_or(1),
-        wallet_id,
-    )
-    .await?;
+    let (prepared, _) = build(&app, &runtime, &to, sats, fee_rate.unwrap_or(1)).await?;
     Ok(PreparedSpendView {
         txid: prepared.txid,
         raw_hex: prepared.raw_hex,
@@ -211,18 +258,8 @@ pub async fn optn_wallet_send(
     to: String,
     sats: u64,
     fee_rate: Option<u64>,
-    wallet_id: Option<u32>,
 ) -> Result<PreparedSpendView, String> {
-    let prepared = build(
-        &app,
-        &runtime,
-        &native,
-        &to,
-        sats,
-        fee_rate.unwrap_or(1),
-        wallet_id,
-    )
-    .await?;
+    let (prepared, epoch) = build(&app, &runtime, &to, sats, fee_rate.unwrap_or(1)).await?;
 
     let raw = hex::decode(&prepared.raw_hex).map_err(|error| error.to_string())?;
     let txid = Outpoint::parse(&prepared.txid, 0)
@@ -251,6 +288,12 @@ pub async fn optn_wallet_send(
     };
     let mut last = String::from("no route accepted the transaction");
     for route in routes {
+        let held = session_holds(&app, &runtime, epoch).await?;
+        if prepared.inputs.iter().any(|input| held.contains(input)) {
+            return Err(
+                "A selected coin is frozen or reserved. Review the transaction again.".into(),
+            );
+        }
         match service.execute_on_route(&route, &request).await {
             Ok(_) => {
                 return Ok(PreparedSpendView {
@@ -272,6 +315,36 @@ pub async fn optn_wallet_send(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hold_owner_requires_the_authoritative_open_session() {
+        let status = optn_transport::WalletSecurityStatus {
+            active: Some("bound-wallet.optn".into()),
+            epoch: 7,
+            legacy_source_id: Some(42),
+            ..Default::default()
+        };
+        assert_eq!(super::hold_owner(&status, 7), Ok(42));
+        assert!(super::hold_owner(&status, 6).is_err());
+        assert!(super::hold_owner(
+            &optn_transport::WalletSecurityStatus {
+                active: None,
+                ..status.clone()
+            },
+            7
+        )
+        .is_err());
+        for legacy_source_id in [None, Some(0)] {
+            assert!(super::hold_owner(
+                &optn_transport::WalletSecurityStatus {
+                    legacy_source_id,
+                    ..status.clone()
+                },
+                7
+            )
+            .is_err());
+        }
+    }
+
     #[test]
     fn coin_holds_require_a_wallet_and_propagate_read_errors() {
         for wallet_id in [None, Some(0)] {
