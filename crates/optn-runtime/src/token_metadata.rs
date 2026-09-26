@@ -147,6 +147,12 @@ pub type FetchAttempt = Result<Vec<u8>, FetchError>;
 /// Native hosts execute the selected privacy route, while a restricted host
 /// may omit this port entirely. No wallet material crosses it.
 pub trait RegistryFetcher: Send + Sync {
+    /// Selected metadata services may offer alternate registry byte locations.
+    /// These are untrusted candidates, never authchain or token ownership evidence.
+    fn registry_candidates(&self, _category: [u8; 32]) -> Vec<String> {
+        Vec::new()
+    }
+
     fn fetch<'a>(
         &'a self,
         uri: &'a str,
@@ -482,7 +488,13 @@ pub(crate) async fn resolve_selected_identities(
                         publication_in(head.outputs.iter().map(Vec::as_slice)),
                         fetcher.as_ref(),
                     ) {
-                        for uri in publication.uris.iter().take(3) {
+                        let candidates = fetcher.registry_candidates(category);
+                        for uri in publication
+                            .uris
+                            .iter()
+                            .take(3)
+                            .chain(candidates.iter().take(3))
+                        {
                             if bytes_left == 0 {
                                 break;
                             }
@@ -513,8 +525,15 @@ pub(crate) async fn resolve_selected_identities(
                                 break;
                             }
                         }
+                        // An indexer's bytes are accepted by the same publication hash
+                        // gate as publisher bytes. Keep the actual source URI for evidence.
+                        identity = OwnedCategoryIdentity::Observed {
+                            publication,
+                            attempts: resolved.fetch_attempts,
+                        };
+                    } else {
+                        identity = identity_from_step(AuthchainStep::Resolved(head), &resolved);
                     }
-                    identity = identity_from_step(AuthchainStep::Resolved(head), &resolved);
                     break;
                 }
             }

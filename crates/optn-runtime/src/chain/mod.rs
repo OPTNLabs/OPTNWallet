@@ -288,6 +288,7 @@ pub enum EndpointKind {
     ExplorerHttp,
     ExplorerHttps,
     IpfsGatewayHttps,
+    BcmrIndexerHttps,
 }
 
 impl EndpointKind {
@@ -297,7 +298,10 @@ impl EndpointKind {
             Self::ElectrumTls | Self::ElectrumTcp => Some(ProtocolFamily::Electrum),
             Self::BchnRpc => Some(ProtocolFamily::BchnRpc),
             Self::BchnZmq => Some(ProtocolFamily::BchnZmq),
-            Self::ExplorerHttp | Self::ExplorerHttps | Self::IpfsGatewayHttps => None,
+            Self::ExplorerHttp
+            | Self::ExplorerHttps
+            | Self::IpfsGatewayHttps
+            | Self::BcmrIndexerHttps => None,
         }
     }
 
@@ -312,7 +316,10 @@ impl EndpointKind {
             Self::ElectrumTls | Self::ElectrumTcp => matches!(protocol, ProtocolFamily::Electrum),
             Self::BchnRpc => matches!(protocol, ProtocolFamily::BchnRpc),
             Self::BchnZmq => matches!(protocol, ProtocolFamily::BchnZmq),
-            Self::ExplorerHttp | Self::ExplorerHttps | Self::IpfsGatewayHttps => false,
+            Self::ExplorerHttp
+            | Self::ExplorerHttps
+            | Self::IpfsGatewayHttps
+            | Self::BcmrIndexerHttps => false,
         }
     }
 }

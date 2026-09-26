@@ -2385,6 +2385,7 @@ mod tests {
 
     struct FixtureRegistryFetcher {
         body: Vec<u8>,
+        candidate_only: bool,
         calls: Arc<AtomicUsize>,
         entered: Option<Arc<tokio::sync::Notify>>,
         hold: Option<Arc<tokio::sync::Notify>>,
@@ -2400,9 +2401,23 @@ mod tests {
     }
 
     impl crate::token_metadata::RegistryFetcher for FixtureRegistryFetcher {
+        fn registry_candidates(&self, category: [u8; 32]) -> Vec<String> {
+            if self.candidate_only {
+                vec![format!(
+                    "https://indexer.example/api/registries/{}/latest/",
+                    category
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                )]
+            } else {
+                vec![]
+            }
+        }
+
         fn fetch<'a>(
             &'a self,
-            _: &'a str,
+            uri: &'a str,
             _: crate::token_metadata::FetchLimits,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = crate::token_metadata::FetchAttempt> + Send + 'a>,
@@ -2414,6 +2429,11 @@ mod tests {
             let cancelled = self.cancelled.clone();
             Box::pin(async move {
                 calls.fetch_add(1, Ordering::SeqCst);
+                if self.candidate_only && !uri.starts_with("https://indexer.example/") {
+                    return Err(crate::token_metadata::FetchError::PolicyRefused {
+                        detail: "publisher outside selected source scope".into(),
+                    });
+                }
                 if let Some(entered) = entered {
                     entered.notify_one();
                 }
@@ -2465,6 +2485,33 @@ mod tests {
             expected,
             fetch_calls,
         ) in [
+            (
+                "indexer accepted",
+                true,
+                true,
+                true,
+                true,
+                IdentityStatus::Verified,
+                2,
+            ),
+            (
+                "indexer hash mismatch",
+                true,
+                true,
+                false,
+                true,
+                IdentityStatus::Unresolved,
+                2,
+            ),
+            (
+                "indexer cannot replace spentness",
+                false,
+                true,
+                true,
+                true,
+                IdentityStatus::Unresolved,
+                0,
+            ),
             (
                 "accepted",
                 true,
@@ -2548,6 +2595,7 @@ mod tests {
             let calls = Arc::new(AtomicUsize::new(0));
             if install_fetcher {
                 service.set_registry_fetcher(Arc::new(FixtureRegistryFetcher {
+                    candidate_only: name.starts_with("indexer"),
                     body: if return_matching_body {
                         body
                     } else {
@@ -2685,6 +2733,7 @@ mod tests {
         let hold = Arc::new(tokio::sync::Notify::new());
         let cancelled = Arc::new(AtomicBool::new(false));
         service.set_registry_fetcher(Arc::new(FixtureRegistryFetcher {
+            candidate_only: false,
             body,
             calls: calls.clone(),
             entered: Some(entered.clone()),

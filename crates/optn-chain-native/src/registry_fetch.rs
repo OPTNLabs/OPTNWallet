@@ -36,20 +36,44 @@ impl RegistryFetcher for VerifiedRegistryTor {
 pub struct ConfiguredRegistryFetcher {
     tor: VerifiedRegistryTor,
     gateways: Vec<Url>,
+    indexers: Vec<Url>,
     allow_publisher_https: bool,
 }
 
 impl ConfiguredRegistryFetcher {
-    pub fn new(tor: VerifiedRegistryTor, gateways: Vec<Url>, allow_publisher_https: bool) -> Self {
+    pub fn new(
+        tor: VerifiedRegistryTor,
+        gateways: Vec<Url>,
+        indexers: Vec<Url>,
+        allow_publisher_https: bool,
+    ) -> Self {
         Self {
             tor,
             gateways: gateways.into_iter().take(16).collect(),
+            indexers: indexers.into_iter().take(16).collect(),
             allow_publisher_https,
         }
     }
 }
 
 impl RegistryFetcher for ConfiguredRegistryFetcher {
+    fn registry_candidates(&self, category: [u8; 32]) -> Vec<String> {
+        self.indexers
+            .iter()
+            .filter_map(|origin| {
+                let mut target = registry_url(origin.as_str()).ok()?;
+                if target.path() != "/" || target.query().is_some() {
+                    return None;
+                }
+                target.set_path(&format!(
+                    "/api/registries/{}/latest/",
+                    hex::encode(category)
+                ));
+                Some(target.into())
+            })
+            .collect()
+    }
+
     fn fetch<'a>(
         &'a self,
         uri: &'a str,
@@ -57,6 +81,21 @@ impl RegistryFetcher for ConfiguredRegistryFetcher {
     ) -> std::pin::Pin<Box<dyn Future<Output = FetchAttempt> + Send + 'a>> {
         Box::pin(async move {
             if !uri.starts_with("ipfs://") {
+                let target = registry_url(&RegistryPublication::resolve_uri(uri))?;
+                if self
+                    .indexers
+                    .iter()
+                    .any(|base| base.origin() == target.origin())
+                {
+                    // Stay on the configured service, including redirects. Its response
+                    // is merely candidate bytes; the runtime authenticates the hash.
+                    let client = registry_client(self.tor, limits)?;
+                    return within_deadline(
+                        limits.deadline,
+                        fetch_url_scoped(&client, target, limits, true),
+                    )
+                    .await;
+                }
                 if !self.allow_publisher_https {
                     return Err(refused(
                         "source policy does not permit public registry retrieval",
@@ -298,6 +337,28 @@ fn fetch_error(error: reqwest::Error) -> FetchError {
 mod tests {
     use super::*;
 
+    #[test]
+    fn indexer_candidates_preserve_category_and_only_use_configured_https_origins() {
+        let category = [0xab; 32];
+        let fetcher = ConfiguredRegistryFetcher::new(
+            VerifiedRegistryTor { socks_port: 9050 },
+            vec![],
+            vec![
+                Url::parse("https://bcmr.example:8443/").unwrap(),
+                Url::parse("http://bad.example/").unwrap(),
+                Url::parse("https://bad.example/path").unwrap(),
+            ],
+            false,
+        );
+        assert_eq!(
+            fetcher.registry_candidates(category),
+            vec![format!(
+                "https://bcmr.example:8443/api/registries/{}/latest/",
+                hex::encode(category)
+            )]
+        );
+    }
+
     #[tokio::test]
     async fn configured_gateway_preserves_cid_and_refuses_unselected_routes() {
         let cid = "QmYwAPJzv5CZsnAzt8auVZRnGkD8ZKC6NAkbwfEfEbKxQv";
@@ -315,8 +376,12 @@ mod tests {
         ] {
             assert!(ipfs_path(&format!("ipfs://{cid}{suffix}")).is_err());
         }
-        let fetcher =
-            ConfiguredRegistryFetcher::new(VerifiedRegistryTor { socks_port: 0 }, vec![], false);
+        let fetcher = ConfiguredRegistryFetcher::new(
+            VerifiedRegistryTor { socks_port: 0 },
+            vec![],
+            vec![],
+            false,
+        );
         for uri in [
             format!("ipfs://{cid}"),
             "https://publisher.example/file".into(),

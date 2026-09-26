@@ -202,6 +202,7 @@ const fn endpoint_kind_code(kind: EndpointKind) -> u8 {
         EndpointKind::ExplorerHttp => 5,
         EndpointKind::ExplorerHttps => 6,
         EndpointKind::IpfsGatewayHttps => 7,
+        EndpointKind::BcmrIndexerHttps => 8,
     }
 }
 
@@ -215,6 +216,7 @@ const fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::ExplorerHttp => "explorer-http",
         EndpointKind::ExplorerHttps => "explorer-https",
         EndpointKind::IpfsGatewayHttps => "ipfs-gateway",
+        EndpointKind::BcmrIndexerHttps => "bcmr-indexer",
     }
 }
 

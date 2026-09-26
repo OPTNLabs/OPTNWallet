@@ -264,6 +264,7 @@ export const ENDPOINT_KINDS: { value: string; label: string }[] = [
   { value: 'node-rpc', label: 'Node RPC' },
   { value: 'node-zmq', label: 'Node ZMQ' },
   { value: 'ipfs-gateway', label: 'IPFS gateway (HTTPS)' },
+  { value: 'bcmr-indexer', label: 'BCMR indexer (Paytaca-compatible HTTPS)' },
 ];
 
 export const DEFAULT_PORTS: Record<string, number> = {

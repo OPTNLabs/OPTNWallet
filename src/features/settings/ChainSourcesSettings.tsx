@@ -90,6 +90,7 @@ const SERVICE_FILTERS = [
   { value: 'node-rpc', label: 'Node RPC' },
   { value: 'node-zmq', label: 'Notifications' },
   { value: 'ipfs-gateway', label: 'IPFS gateway' },
+  { value: 'bcmr-indexer', label: 'BCMR indexer' },
 ];
 
 const ROUTING_PROTOCOLS: {
@@ -135,6 +136,7 @@ function serviceBadgeText(kind: string): string {
   if (kind === 'node-rpc') return 'RPC';
   if (kind === 'node-zmq') return 'ZMQ';
   if (kind === 'ipfs-gateway') return 'IPFS';
+  if (kind === 'bcmr-indexer') return 'BCMR';
   return kind;
 }
 
@@ -1350,6 +1352,45 @@ export function ChainSourcesSettings({
               </p>
             </div>
           ))}
+          <div className="rounded-xl border border-[var(--wallet-border)] p-3 space-y-2">
+            <p className="text-sm font-semibold wallet-text-strong">
+              BCMR indexers
+            </p>
+            <p className="text-xs wallet-muted">
+              Add a Paytaca-compatible HTTPS service, such as bcmr.paytaca.com
+              for Mainnet, or your own indexer for this network. Requires
+              verified Tor. Registry bytes must match the locally verified
+              publication; an indexer cannot establish ownership or replace
+              missing chain evidence.
+            </p>
+            {view.sources
+              .filter((source) =>
+                source.endpoints.some(
+                  (endpoint) => endpoint.kind === 'bcmr-indexer'
+                )
+              )
+              .map((source) => (
+                <button
+                  key={source.id}
+                  type="button"
+                  className="wallet-btn-secondary block px-3 py-2"
+                  onClick={() => openDetails(source)}
+                >
+                  {source.label}
+                </button>
+              ))}
+            <button
+              type="button"
+              className="wallet-btn-secondary px-3 py-2"
+              onClick={() => {
+                openDirectory('custom');
+                openAdd();
+                setServices({ 'bcmr-indexer': '443' });
+              }}
+            >
+              Add BCMR indexer
+            </button>
+          </div>
           <div className="rounded-xl border border-[var(--wallet-border)] p-3 space-y-2">
             <p className="text-sm font-semibold wallet-text-strong">
               IPFS gateways
