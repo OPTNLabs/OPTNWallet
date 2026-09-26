@@ -495,6 +495,7 @@ impl AppRuntimeDriver {
                             now_ms,
                             self.wallet_sync.reconciliation(),
                             self.wallet_sync.header_progress(),
+                            self.wallet_sync.bcmr_cache(),
                         )
                     } else {
                         Err(TransportError::Unsupported)
@@ -666,8 +667,14 @@ impl AppRuntimeDriver {
                                 &mut self.state,
                                 previous,
                                 &annotation_restore_state,
-                                |app, sync, restore_state, progress| {
-                                    security.persist_checkpoint(app, sync, restore_state, progress)
+                                |app, sync, restore_state, progress, cache| {
+                                    security.persist_checkpoint(
+                                        app,
+                                        sync,
+                                        restore_state,
+                                        progress,
+                                        cache,
+                                    )
                                 },
                                 |app| guard.allows(app, applied.is_closed()),
                             ));

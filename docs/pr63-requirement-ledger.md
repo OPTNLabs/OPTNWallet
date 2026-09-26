@@ -703,5 +703,33 @@ The fixture now models the established stream in memory without a plaintext
 listener, and plaintext rejection remains tested by changing a parsed URL's
 scheme. All seven native tests and strict Clippy passed again. No finding was
 dismissed, no scan rule was suppressed, and no production transport was relaxed.
-The Linux E2E run stopped at the Tor bundle download timeout before app testing;
-the next push will rerun that gate.
+An earlier Linux E2E attempt stopped during Tor bundle download. The later
+exact-head `86f8407b` run passed Tor setup and both desktop E2E stages above.
+
+### 2026-09-26: durable BCMR authhead hints and managed-wallet reopen
+
+The shared runtime now stores bounded authbase-to-head raw links and committed
+registry bytes inside the existing encrypted wallet checkpoint. Limits remain
+32 owned categories, 64 chain entries and a 2 MiB aggregate payload budget.
+Records bind to network, selected source and endpoint. They confer no current
+authority: resume fetches the head through the selected node and checks current
+full-node terminal unspent evidence, exact outpoint/value/script and accepted
+tip before using committed registry bytes. Registry snapshots are reparsed at
+the current checked wall clock. Old checkpoint versions remain readable.
+
+Transient failure retains only stale hints; invalid evidence, burned identity,
+revocation and publication withdrawal cannot resurrect an old publication.
+Saving receive allocation, birthday, annotations or air-gap reservations preserves
+the private cache. The connected managed-wallet test also exposed and fixed
+`WalletSecurity::open` discarding saved token presentation while recapturing a
+checkpoint: names now reopen as stale alongside the coins.
+
+Evidence: all 319 runtime tests, strict runtime/CLI Clippy, CLI/native checks,
+architecture, formatting and a native desktop build passed. The actual managed
+storage test syncs a token identity, freezes a coin, allocates receive, locks,
+opens through a new runtime/storage instance, then revalidates with a fresh
+provider service that has no registry fetcher. This proves persisted reuse and
+current-authority checks through the shared wallet path. It is synthetic-node
+integration evidence, not live public-token or packaged token-rendering proof.
+Electrum assertions and transaction inclusion proofs alone still cannot establish
+terminal unspentness; the existing full-node evidence requirement remains.

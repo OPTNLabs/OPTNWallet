@@ -197,6 +197,7 @@ impl WalletSecurity {
         state: &WalletReconciliation,
         restore_state: &WalletRestoreState,
         header_progress: Option<&crate::wallet_checkpoint::StoredHeaderProgress>,
+        bcmr_cache: &crate::token_metadata::BcmrIdentityCache,
     ) -> Result<(), TransportError> {
         let Some(storage) = &self.checkpoints else {
             return Ok(());
@@ -206,8 +207,9 @@ impl WalletSecurity {
             .checkpoint
             .as_ref()
             .ok_or_else(|| failure("Wallet checkpoint session is unavailable."))?;
-        let mut checkpoint =
-            WalletCheckpoint::capture(app, state, restore_state).map_err(failure)?;
+        let mut checkpoint = WalletCheckpoint::capture(app, state, restore_state)
+            .and_then(|checkpoint| checkpoint.with_bcmr_cache(bcmr_cache.clone()))
+            .map_err(failure)?;
         // Sealed with the record, because a commitment a file asserts about
         // itself proves nothing; the AEAD is what makes it trustworthy.
         if let Some(progress) = header_progress {
@@ -499,6 +501,7 @@ impl WalletSecurity {
                 .unwrap_or_default();
             if let Some(restored) = &binding.restored {
                 candidate.coins = restored.coins.clone();
+                candidate.token_identities = restored.restored_token_identities();
                 candidate.wallet_sync.rescan_requested = restored.rescan_requested;
                 candidate.wallet_sync.scan_coverage = restored.scan_coverage;
             }
@@ -511,6 +514,11 @@ impl WalletSecurity {
                 .map_err(failure)?;
             let mut restored =
                 WalletCheckpoint::capture(&candidate, &history, &restore_state).map_err(failure)?;
+            if let Some(saved) = binding.restored.as_ref() {
+                restored = restored
+                    .with_bcmr_cache(saved.bcmr_cache().clone())
+                    .map_err(failure)?;
+            }
             if let Some(progress) = binding
                 .restored
                 .as_ref()
@@ -550,13 +558,14 @@ impl WalletSecurity {
     }
 
     /// Runs on the runtime actor. A host-supplied clock is used for approval, never the renderer's.
-    pub fn handle(
+    pub(crate) fn handle(
         &mut self,
         state: &mut AppState,
         request: Request,
         now_ms: u64,
         history: &WalletReconciliation,
         header_progress: Option<&crate::wallet_checkpoint::StoredHeaderProgress>,
+        bcmr_cache: &crate::token_metadata::BcmrIdentityCache,
     ) -> Result<WalletSecurityStatus, TransportError> {
         self.reconcile(state);
         if state.wallet.is_some() && state.lock.idle_should_lock(now_ms) {
@@ -600,7 +609,13 @@ impl WalletSecurity {
                     candidate.wallet_sync.scan_coverage = None;
                     candidate.wallet_sync.rescan_requested =
                         next.manual_rescan.map(|rescan| rescan.from_height);
-                    self.persist_checkpoint(&candidate, history, &next, header_progress)?;
+                    self.persist_checkpoint(
+                        &candidate,
+                        history,
+                        &next,
+                        header_progress,
+                        bcmr_cache,
+                    )?;
                     *state = candidate;
                     self.checkpoint_published();
                 }
@@ -640,7 +655,13 @@ impl WalletSecurity {
                         .restore_state()
                         .cloned()
                         .ok_or_else(|| failure("Unlock the wallet first."))?;
-                    self.persist_checkpoint(&candidate, history, &restore_state, header_progress)?;
+                    self.persist_checkpoint(
+                        &candidate,
+                        history,
+                        &restore_state,
+                        header_progress,
+                        bcmr_cache,
+                    )?;
                     *state = candidate;
                     self.checkpoint_published();
                 }
@@ -668,7 +689,13 @@ impl WalletSecurity {
                     .restore_state()
                     .cloned()
                     .ok_or_else(|| failure("Unlock the wallet first."))?;
-                self.persist_checkpoint(&candidate, history, &restore_state, header_progress)?;
+                self.persist_checkpoint(
+                    &candidate,
+                    history,
+                    &restore_state,
+                    header_progress,
+                    bcmr_cache,
+                )?;
                 *state = candidate;
                 self.checkpoint_published();
             }
@@ -948,7 +975,7 @@ pub(crate) mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct TestCheckpoints {
+    pub(crate) struct TestCheckpoints {
         files: Arc<Mutex<BTreeMap<[u8; 32], Vec<u8>>>>,
         writes: Arc<AtomicU8>,
     }
@@ -1057,7 +1084,14 @@ pub(crate) mod tests {
         let mut state = AppState::default();
         let history = WalletReconciliation::default();
         let opened = security
-            .handle(&mut state, create_request(), 1, &history, None)
+            .handle(
+                &mut state,
+                create_request(),
+                1,
+                &history,
+                None,
+                &Default::default(),
+            )
             .unwrap();
         let before = state.clone();
 
@@ -1071,6 +1105,7 @@ pub(crate) mod tests {
                 2,
                 &history,
                 None,
+                &Default::default(),
             )
             .expect_err("a birthday must not be acknowledged without durable storage");
         assert!(matches!(
@@ -1093,7 +1128,14 @@ pub(crate) mod tests {
         let mut state = AppState::default();
         let history = WalletReconciliation::default();
         let opened = security
-            .handle(&mut state, create_request(), 1, &history, None)
+            .handle(
+                &mut state,
+                create_request(),
+                1,
+                &history,
+                None,
+                &Default::default(),
+            )
             .unwrap();
         security
             .handle(
@@ -1105,6 +1147,7 @@ pub(crate) mod tests {
                 2,
                 &history,
                 None,
+                &Default::default(),
             )
             .unwrap();
         state.wallet_sync.scan_coverage = Some(optn_app::ScanCoverageView {
@@ -1128,6 +1171,7 @@ pub(crate) mod tests {
                 3,
                 &history,
                 None,
+                &Default::default(),
             )
             .expect_err("a failed checkpoint save must not publish the hint");
         assert!(matches!(
@@ -1153,7 +1197,14 @@ pub(crate) mod tests {
         let mut state = AppState::default();
         let history = WalletReconciliation::default();
         let opened = security
-            .handle(&mut state, create_request(), 1, &history, None)
+            .handle(
+                &mut state,
+                create_request(),
+                1,
+                &history,
+                None,
+                &Default::default(),
+            )
             .unwrap();
         security
             .handle(
@@ -1165,6 +1216,7 @@ pub(crate) mod tests {
                 2,
                 &history,
                 None,
+                &Default::default(),
             )
             .unwrap();
         security
@@ -1191,6 +1243,7 @@ pub(crate) mod tests {
                 3,
                 &history,
                 None,
+                &Default::default(),
             )
             .expect("a user supplied birthday remains correctable");
         assert_eq!(
@@ -1214,6 +1267,7 @@ pub(crate) mod tests {
                 4,
                 &history,
                 None,
+                &Default::default(),
             )
             .expect("corrected birthday reopens");
         assert_eq!(reopened.restore_birthday, corrected.restore_birthday);
@@ -1243,12 +1297,26 @@ pub(crate) mod tests {
         };
         storage.fail_next_entropy();
         assert!(security
-            .handle(&mut state, request(), 1, &history, None)
+            .handle(
+                &mut state,
+                request(),
+                1,
+                &history,
+                None,
+                &Default::default()
+            )
             .is_err());
         assert!(storage.list().unwrap().is_empty());
         assert!(state.wallet.is_none());
         let status = security
-            .handle(&mut state, request(), 2, &history, None)
+            .handle(
+                &mut state,
+                request(),
+                2,
+                &history,
+                None,
+                &Default::default(),
+            )
             .unwrap();
         let handle = status.active.unwrap();
         let scopes = [
@@ -1281,6 +1349,7 @@ pub(crate) mod tests {
                 4,
                 &history,
                 None,
+                &Default::default(),
             )
             .unwrap();
         assert!(
@@ -1298,6 +1367,7 @@ pub(crate) mod tests {
                 5,
                 &history,
                 None,
+                &Default::default(),
             )
             .unwrap();
         state.reduce(AppAction::LockWallet);
@@ -1308,6 +1378,7 @@ pub(crate) mod tests {
                 6,
                 &history,
                 None,
+                &Default::default(),
             )
             .unwrap();
         assert_eq!(state.wallet.as_ref().unwrap().kind, WalletKind::WatchOnly);
@@ -1356,7 +1427,7 @@ pub(crate) mod tests {
         let closed = state.clone();
         storage.fail_next_entropy();
         assert_eq!(
-            security.handle(&mut state, create(), 1, &history, None),
+            security.handle(&mut state, create(), 1, &history, None, &Default::default()),
             Err(platform(PlatformError::Unavailable))
         );
         assert_eq!(state, closed);
@@ -1364,7 +1435,7 @@ pub(crate) mod tests {
         assert!(security.session.is_none());
 
         let opened = security
-            .handle(&mut state, create(), 2, &history, None)
+            .handle(&mut state, create(), 2, &history, None, &Default::default())
             .unwrap();
         let before = state.clone();
         let files = storage.0.lock().unwrap().clone();
@@ -1381,7 +1452,7 @@ pub(crate) mod tests {
         ] {
             storage.fail_next_entropy();
             assert_eq!(
-                security.handle(&mut state, request, 3, &history, None),
+                security.handle(&mut state, request, 3, &history, None, &Default::default()),
                 Err(platform(PlatformError::Unavailable))
             );
             assert_eq!(state, before);
@@ -1416,6 +1487,7 @@ pub(crate) mod tests {
                 1,
                 &WalletReconciliation::default(),
                 None,
+                &Default::default(),
             )
             .unwrap();
         // Model an existing spend prompt when its chain observations go stale.

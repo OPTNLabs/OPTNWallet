@@ -7,6 +7,7 @@ use crate::{
     chain_service::{ChainTip, ObservedTransaction},
     hd_sync::{HdAccountScan, HdSyncLimits, MAX_HD_BRANCH_ADDRESSES},
     sync_worker::WalletNetworkSnapshot,
+    token_metadata::BcmrIdentityCache,
     wallet_birthday::{WalletBirthday, WalletRestoreState},
     wallet_sync::WalletReconciliation,
 };
@@ -73,6 +74,7 @@ pub struct WalletCheckpoint {
     /// Cached chain-authenticated presentation only. It is deliberately
     /// downgraded before a restored checkpoint reaches application state.
     token_identities: BTreeMap<String, TokenIdentity>,
+    bcmr_cache: BcmrIdentityCache,
     pub(crate) header_progress: Option<StoredHeaderProgress>,
 }
 
@@ -161,6 +163,10 @@ struct StoredCheckpoint {
     /// Older authenticated checkpoints did not carry token presentation.
     #[serde(default)]
     token_identities: BTreeMap<String, StoredTokenIdentity>,
+    /// Only restart hints; absent in older checkpoints of every supported
+    /// version. They confer no freshness and carry no restored proof status.
+    #[serde(default)]
+    bcmr_cache: BcmrIdentityCache,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -407,6 +413,7 @@ impl WalletCheckpoint {
             state: state.clone(),
             coins: app.coins.clone(),
             token_identities: cacheable_token_identities(&app.token_identities),
+            bcmr_cache: BcmrIdentityCache::default(),
             // The view lives on the sync worker, which the host owns; it is
             // attached with `with_header_progress` rather than read from
             // application state, which never holds it.
@@ -422,6 +429,20 @@ impl WalletCheckpoint {
         }
         checkpoint.validate_wallet(app)?;
         Ok(checkpoint)
+    }
+
+    /// Attach the resolver's bounded hints before sealing. Keeping this out of
+    /// AppState prevents persisted registry bytes from becoming UI authority.
+    pub(crate) fn with_bcmr_cache(mut self, cache: BcmrIdentityCache) -> Result<Self, String> {
+        cache.validate(self.network)?;
+        self.bcmr_cache = cache;
+        Ok(self)
+    }
+
+    /// Stale hints only: pass these through live resolution before projecting
+    /// any identity. Opening a checkpoint never authenticates its old authhead.
+    pub(crate) fn bcmr_cache(&self) -> &BcmrIdentityCache {
+        &self.bcmr_cache
     }
 
     /// Attach verified header progress to a checkpoint about to be sealed.
@@ -567,6 +588,7 @@ impl WalletCheckpoint {
     /// Nonces must be unique under this key. Native storage generates a fresh
     /// nonce with OS randomness for each write; UI/transport never chooses one.
     pub fn seal(&self, key: &PackKey, nonce: &[u8; NONCE_LEN]) -> Result<Vec<u8>, String> {
+        self.bcmr_cache.validate(self.network)?;
         let snapshot = self.state.authoritative.as_ref();
         validate_scan_coverage(
             self.scan_coverage,
@@ -626,6 +648,7 @@ impl WalletCheckpoint {
             }),
             rescan_requested: self.rescan_requested,
             restore_state: self.restore_state.clone(),
+            bcmr_cache: self.bcmr_cache.clone(),
             token_identities: self
                 .token_identities
                 .iter()
@@ -726,6 +749,7 @@ impl WalletCheckpoint {
                 _ => return Err("invalid checkpoint branch layout".into()),
             };
         let network = stored.network.parse::<Network>()?;
+        stored.bcmr_cache.validate(network)?;
         let account =
             parse_account_path(&stored.account_path).map_err(|error| error.to_string())?;
         let account_xpub = stored.account_xpub;
@@ -766,6 +790,7 @@ impl WalletCheckpoint {
                     state: WalletReconciliation::default(),
                     coins: CoinSet::new(),
                     token_identities: BTreeMap::new(),
+                    bcmr_cache: stored.bcmr_cache,
                     header_progress,
                 });
             }
@@ -844,6 +869,7 @@ impl WalletCheckpoint {
             state,
             coins,
             token_identities,
+            bcmr_cache: stored.bcmr_cache,
             header_progress,
         })
     }
@@ -887,6 +913,7 @@ mod tests {
                 restore_state: WalletRestoreState::default(),
                 allocation: Some(HdAddressAllocation::default()),
                 token_identities: BTreeMap::new(),
+                bcmr_cache: BcmrIdentityCache::default(),
             },
         )
     }
@@ -901,6 +928,125 @@ mod tests {
         let mut bytes = nonce.to_vec();
         bytes.extend(wallet_pack::seal(key, &nonce, &serde_json::to_vec(value).unwrap()).unwrap());
         bytes
+    }
+
+    #[tokio::test]
+    async fn sealed_bcmr_cache_reopens_as_hints_with_stale_presentation() {
+        let (category, cache) = crate::token_metadata::tests::resolved_cache_fixture().await;
+        let category: String = category.iter().map(|byte| format!("{byte:02x}")).collect();
+        let (key, mut stored) = fixture();
+        stored.source = Some("cache-node".into());
+        stored.evidence = Some(Evidence::FullNodeValidated {
+            source: "cache-node".into(),
+        });
+        stored.tip = Some((100, [7; 32]));
+        stored.branch_lengths = vec![1; 4];
+        stored.token_identities.insert(
+            category.clone(),
+            StoredTokenIdentity {
+                name: "Cached".into(),
+                ticker: Some("BCAT".into()),
+                decimals: 2,
+                status: StoredIdentityStatus::Verified,
+                presentation: Default::default(),
+            },
+        );
+        let checkpoint = WalletCheckpoint::open(&key, &encoded(&key, &stored, 210))
+            .unwrap()
+            .with_bcmr_cache(cache.clone())
+            .unwrap();
+        let sealed = checkpoint.seal(&key, &fixture_nonce(212)).unwrap();
+        let reopened = WalletCheckpoint::open(&key, &sealed).unwrap();
+        assert_eq!(
+            serde_json::to_value(reopened.bcmr_cache()).unwrap(),
+            serde_json::to_value(&cache).unwrap()
+        );
+        assert_eq!(
+            reopened.restored_token_identities()[&category].status,
+            IdentityStatus::Stale
+        );
+        assert!(!reopened.state.sync.utxos_fresh);
+        assert!(!reopened.state.sync.history_fresh);
+        // This transport has only the current head and its live UTXO, with no
+        // ancestor lookup or registry transport available. Only revalidation
+        // produces a current identity after the encrypted restart.
+        let revalidated =
+            crate::token_metadata::tests::revalidate_cache_fixture(reopened.bcmr_cache()).await;
+        assert_eq!(revalidated.name, "Cached");
+        assert_eq!(revalidated.status, IdentityStatus::Verified);
+        assert_eq!(
+            reopened.restored_token_identities()[&category].status,
+            IdentityStatus::Stale
+        );
+        let resealed = reopened.seal(&key, &fixture_nonce(213)).unwrap();
+        let twice = WalletCheckpoint::open(&key, &resealed).unwrap();
+        assert_eq!(
+            twice.restored_token_identities(),
+            reopened.restored_token_identities()
+        );
+        assert_eq!(
+            serde_json::to_value(twice.bcmr_cache()).unwrap(),
+            serde_json::to_value(&cache).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_but_malformed_bcmr_cache_is_refused_on_open_and_attach() {
+        let (category, cache) = crate::token_metadata::tests::resolved_cache_fixture().await;
+        let category: String = category.iter().map(|byte| format!("{byte:02x}")).collect();
+        let (key, mut stored) = fixture();
+        stored.bcmr_cache = cache;
+        for case in 0..4 {
+            let mut value = serde_json::to_value(&stored).unwrap();
+            let record = &mut value["bcmr_cache"][&category];
+            match case {
+                0 => record["network"] = "mainnet".into(),
+                1 => record["registry"]["contents"] = serde_json::json!([0]),
+                2 => record["chain"] = serde_json::json!([]),
+                3 => {
+                    record["registry"]["contents"] = serde_json::json!(vec![
+                        0u8;
+                        crate::token_metadata::FetchLimits::default().max_bytes
+                            + 1
+                    ])
+                }
+                _ => unreachable!(),
+            }
+            // Valid AEAD alone cannot make a malformed hint acceptable.
+            assert!(
+                WalletCheckpoint::open(&key, &encoded_value(&key, &value, 220 + case)).is_err()
+            );
+            let malformed = serde_json::from_value(value["bcmr_cache"].clone()).unwrap();
+            let checkpoint =
+                WalletCheckpoint::open(&key, &encoded(&key, &fixture().1, 230 + case)).unwrap();
+            assert!(checkpoint.with_bcmr_cache(malformed).is_err());
+        }
+    }
+
+    #[test]
+    fn old_checkpoint_versions_without_bcmr_cache_still_open() {
+        for (index, format) in [LEGACY_FORMAT, ALLOCATION_FORMAT, FORMAT]
+            .into_iter()
+            .enumerate()
+        {
+            let (key, mut stored) = fixture();
+            stored.format = format.into();
+            if format == LEGACY_FORMAT {
+                stored.allocation = None;
+                stored.source = Some("legacy-node".into());
+                stored.evidence = Some(Evidence::ServerAssertion);
+                stored.branch_lengths = vec![1; 3];
+            }
+            let mut value = serde_json::to_value(&stored).unwrap();
+            value.as_object_mut().unwrap().remove("bcmr_cache");
+            let reopened =
+                WalletCheckpoint::open(&key, &encoded_value(&key, &value, 240 + index as u8))
+                    .unwrap();
+            assert_eq!(
+                serde_json::to_value(reopened.bcmr_cache()).unwrap(),
+                serde_json::json!({})
+            );
+        }
     }
 
     /// Header progress survives the seal, and resumes above genesis.

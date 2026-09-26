@@ -1,6 +1,9 @@
 //! Provider work runs outside the reducer; publication runs inside it. A result
 //! is usable only by its issuing runtime, wallet/network session, and request.
 
+use crate::token_metadata::{
+    BcmrIdentityCache, IdentityResolutionContext, SelectedIdentityResolution,
+};
 use crate::wallet_birthday::{JustifiedLowerBound, ScanFloor, WalletRestoreState};
 use crate::wallet_checkpoint::WalletCheckpoint;
 use crate::{
@@ -75,8 +78,8 @@ pub(super) struct WalletSyncLease {
     cancelled: watch::Receiver<()>,
     source_lifetime: Option<crate::chain_service::ChainRevocation>,
     header_progress: Option<crate::wallet_checkpoint::StoredHeaderProgress>,
-    identities:
-        Option<std::collections::BTreeMap<[u8; 32], crate::token_metadata::OwnedCategoryIdentity>>,
+    bcmr_cache: BcmrIdentityCache,
+    identities: Option<SelectedIdentityResolution>,
     // Closing this sender also covers caller timeouts and aborted tasks. The
     // driver observes it directly, so cleanup cannot be lost to a full queue.
     _completion: oneshot::Sender<()>,
@@ -363,11 +366,18 @@ impl AppRuntime {
                             .iter()
                             .filter_map(|coin| coin.token().map(|token| token.category))
                             .collect();
+                        let now_unix_ms = crate::token_metadata::checked_unix_ms();
                         lease.identities = Some(tokio::select! {
                             biased;
                             _ = lease.cancelled.changed() => return Err(WalletSyncError::Superseded),
-                            result = crate::token_metadata::resolve_selected_identities(
+                            result = crate::token_metadata::resolve_selected_identities_with_cache(
                                 service, categories, &snapshot.transactions,
+                                IdentityResolutionContext {
+                                    network: lease.network,
+                                    tip: snapshot.tip.as_ref().map(|tip| (tip.height, tip.hash)),
+                                    now_unix_ms,
+                                    cache: &lease.bcmr_cache,
+                                },
                             ) => result,
                         });
                     }
@@ -511,6 +521,8 @@ pub(super) struct WalletSyncSession {
     /// Registry fetch attempts for this session. Transport results only; the
     /// authchain walk still decides whether they may become Current.
     registry_fetches: Vec<(String, crate::token_metadata::FetchAttempt)>,
+    /// Private restart hints; every use requires new source-bound evidence.
+    bcmr_cache: BcmrIdentityCache,
     /// The most recent verified header progress, awaiting a seal.
     header_progress: Option<crate::wallet_checkpoint::StoredHeaderProgress>,
     /// Private durable wallet-origin state. The app view only carries
@@ -592,6 +604,7 @@ impl WalletSyncSession {
                 state: WalletReconciliation::default(),
                 state_tx,
                 registry_fetches: Vec::new(),
+                bcmr_cache: BcmrIdentityCache::default(),
                 header_progress: None,
                 restore_state: WalletRestoreState::default(),
             },
@@ -615,6 +628,7 @@ impl WalletSyncSession {
                 self.abandoned = None;
                 self.state = WalletReconciliation::default();
                 self.registry_fetches.clear();
+                self.bcmr_cache = BcmrIdentityCache::default();
                 self.header_progress = None;
                 self.restore_state = WalletRestoreState::default();
                 self.publish_status();
@@ -691,6 +705,10 @@ impl WalletSyncSession {
         &self.state
     }
 
+    pub(super) fn bcmr_cache(&self) -> &BcmrIdentityCache {
+        &self.bcmr_cache
+    }
+
     fn invalidate(&mut self, reason: String) {
         self.active = None;
         self.cancellation_tx = None;
@@ -708,6 +726,7 @@ impl WalletSyncSession {
         // pass never publishes, the seal that follows should preserve what
         // was already durable rather than drop back to nothing.
         self.header_progress = checkpoint.header_progress().cloned();
+        self.bcmr_cache = checkpoint.bcmr_cache().clone();
         self.restore_state = checkpoint.restore_state().clone();
         app.wallet_sync = checkpoint
             .state
@@ -751,6 +770,7 @@ impl WalletSyncSession {
             &WalletReconciliation,
             &WalletRestoreState,
             Option<&crate::wallet_checkpoint::StoredHeaderProgress>,
+            &BcmrIdentityCache,
         ) -> Result<(), optn_transport::TransportError>,
         may_publish: impl Fn(&AppState) -> bool,
     ) -> AppEvent {
@@ -760,6 +780,7 @@ impl WalletSyncSession {
                 &self.state,
                 restore_state,
                 self.header_progress.as_ref(),
+                &self.bcmr_cache,
             )
             .is_err()
             || !may_publish(app)
@@ -807,6 +828,7 @@ impl WalletSyncSession {
             }
             WalletSyncRequest::Checkpoint(reply) => {
                 let captured = WalletCheckpoint::capture(app, &self.state, &self.restore_state)
+                    .and_then(|checkpoint| checkpoint.with_bcmr_cache(self.bcmr_cache.clone()))
                     .map_err(WalletSyncError::InvalidSnapshot)
                     .and_then(|checkpoint| match self.header_progress.as_ref() {
                         None => Ok(checkpoint),
@@ -889,12 +911,13 @@ impl WalletSyncSession {
                     app,
                     lease,
                     *result,
-                    |app, state, restore_state| match security.as_deref_mut() {
+                    |app, state, restore_state, cache| match security.as_deref_mut() {
                         Some(security) => security.persist_checkpoint(
                             app,
                             state,
                             restore_state,
                             progress.as_ref(),
+                            cache,
                         ),
                         None => Ok(()),
                     },
@@ -980,6 +1003,7 @@ impl WalletSyncSession {
             cancelled,
             source_lifetime: None,
             header_progress: None,
+            bcmr_cache: self.bcmr_cache.clone(),
             identities: None,
             _completion: completion,
         };
@@ -1132,6 +1156,7 @@ impl WalletSyncSession {
             &AppState,
             &WalletReconciliation,
             &WalletRestoreState,
+            &BcmrIdentityCache,
         ) -> Result<(), optn_transport::TransportError>,
         may_publish: impl Fn(&AppState) -> bool,
     ) -> Result<ReconciliationDecision, WalletSyncError> {
@@ -1248,13 +1273,23 @@ impl WalletSyncSession {
                 self.registry_fetches.clone(),
                 evidence,
             );
-            let observations = lease.identities.unwrap_or_else(|| {
-                crate::token_metadata::collect_owned_token_identities(
-                    crate::token_metadata::owned_token_categories(&candidate_app),
-                    &collection,
-                )
-            });
-            crate::token_metadata::apply_owned_token_identities(&mut candidate_app, &observations);
+            let candidate_cache = match lease.identities {
+                Some(resolved) => {
+                    resolved.apply(&mut candidate_app);
+                    resolved.cache
+                }
+                None => {
+                    let observations = crate::token_metadata::collect_owned_token_identities(
+                        crate::token_metadata::owned_token_categories(&candidate_app),
+                        &collection,
+                    );
+                    crate::token_metadata::apply_owned_token_identities(
+                        &mut candidate_app,
+                        &observations,
+                    );
+                    BcmrIdentityCache::default()
+                }
+            };
             candidate_app.wallet_sync = match snapshot.wallet_view() {
                 Ok(view) => view,
                 Err(error) => {
@@ -1269,7 +1304,9 @@ impl WalletSyncSession {
                 self.invalidate("wallet refresh cancelled before persistence".into());
                 return Err(WalletSyncError::Superseded);
             }
-            if let Err(error) = persist(&candidate_app, &next, &next_restore_state) {
+            if let Err(error) =
+                persist(&candidate_app, &next, &next_restore_state, &candidate_cache)
+            {
                 let reason = match error {
                     optn_transport::TransportError::Other(reason) => reason,
                     _ => "wallet state could not be saved".into(),
@@ -1289,6 +1326,7 @@ impl WalletSyncSession {
             app.wallet = candidate_app.wallet;
             app.wallet_sync = candidate_app.wallet_sync;
             app.token_identities = candidate_app.token_identities;
+            self.bcmr_cache = candidate_cache;
             // A prepared spend may refer to outputs removed by this refresh.
             app.spend = None;
             self.restore_state = next_restore_state;
@@ -1496,7 +1534,7 @@ mod tests {
                 &mut app,
                 lease,
                 candidate(Evidence::ServerAssertion),
-                |_, _, _| panic!("cancelled work must not write"),
+                |_, _, _, _| panic!("cancelled work must not write"),
                 |app| guard.allows(app, reply.is_closed()),
             ),
             Err(WalletSyncError::Superseded)
@@ -1528,7 +1566,7 @@ mod tests {
             &mut app,
             lease,
             candidate(Evidence::ServerAssertion),
-            |candidate, _, _| {
+            |candidate, _, _, _| {
                 assert_eq!(candidate.coins.len(), 1);
                 committed_revision.set(1);
                 drop(received);
@@ -1567,7 +1605,7 @@ mod tests {
             &mut app,
             lease,
             candidate(Evidence::ServerAssertion),
-            |_, _, _| {
+            |_, _, _, _| {
                 now.set(900_001);
                 Ok(())
             },
@@ -1599,7 +1637,7 @@ mod tests {
                     &mut app,
                     lease,
                     candidate(Evidence::ServerAssertion),
-                    |_, _, _| Ok(()),
+                    |_, _, _, _| Ok(()),
                     |_| true,
                 )
                 .unwrap();
@@ -1624,7 +1662,7 @@ mod tests {
                 &mut app,
                 previous.clone(),
                 &session.restore_state().clone(),
-                |app, _, _, _| {
+                |app, _, _, _, _| {
                     assert_eq!(
                         app.coins.get(outpoint).unwrap().freeze(),
                         Some(FreezeReason::User)
@@ -2043,7 +2081,7 @@ mod tests {
         });
         candidate.authoritative.as_mut().unwrap().chain_tip = Some((0, [0; 32]));
         assert_eq!(
-            session.finish(&mut app, lease, candidate, |_, _, _| Ok(()), |_| true),
+            session.finish(&mut app, lease, candidate, |_, _, _, _| Ok(()), |_| true),
             Ok(ReconciliationDecision::Accepted)
         );
         let category_hex: String = category.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -2671,7 +2709,7 @@ mod tests {
                         output.value.saturating_add(1)
                     },
                     script_pubkey: output.script_pubkey,
-                    best_block: [9; 32],
+                    best_block: [7; 32],
                 }
             } else {
                 OutpointSpentness::Unknown {
@@ -2772,6 +2810,11 @@ mod tests {
                 );
                 assert!(refreshed.wallet_sync.history_fresh && refreshed.wallet_sync.utxos_fresh);
                 assert_eq!(refreshed.coins, runtime.state().coins);
+                assert_eq!(
+                    calls.load(Ordering::SeqCst),
+                    fetch_calls,
+                    "{name}: reopening revalidates the saved registry without downloading it again"
+                );
                 runtime
                     .invalidate_wallet_sync("fixture source changed".into())
                     .await
@@ -2786,6 +2829,166 @@ mod tests {
                 assert_ne!(identity.name, "Bitcats");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn managed_wallet_preserves_bcmr_hints_through_annotation_receive_and_reopen() {
+        use crate::wallet_security::{
+            tests::{Storage, TestCheckpoints},
+            WalletSecurity,
+        };
+        use optn_app::SecretText;
+        use optn_transport::WalletSecurityRequest as Request;
+
+        let account = AccountPath::new(145, 1).unwrap();
+        let xpub = Wallet::from_mnemonic(BIP39_TEST_VECTOR_MNEMONIC, "")
+            .unwrap()
+            .account_xpub_at(account)
+            .unwrap();
+        let storage = Storage::default();
+        let checkpoints = TestCheckpoints::default();
+        let security = WalletSecurity::new(Box::new(storage.clone()), None)
+            .with_checkpoints(Box::new(checkpoints.clone()));
+        let (runtime, driver) =
+            AppRuntime::new_with_security(AppState::default(), security).unwrap();
+        tokio::spawn(driver.run());
+        let status = runtime
+            .wallet_security(Request::ImportWatchOnly {
+                name: "Public managed BCMR fixture".into(),
+                account_xpub: SecretText::new(xpub.clone()),
+                master_fingerprint: String::new(),
+                password: SecretText::new(String::new()),
+                confirmation: SecretText::new(String::new()),
+                network: "chipnet".into(),
+                account_path: account.to_string(),
+            })
+            .await
+            .unwrap();
+        let script = Address::decode(
+            &address_under_account(Network::Chipnet, &xpub, 0, 0)
+                .unwrap()
+                .address,
+        )
+        .unwrap()
+        .script_pubkey();
+        let (candidate, _, body) =
+            identity_candidate_for_script(script, true, true, false, |category| {
+                registry_body("Saved identity", category)
+            });
+        let transactions = candidate.authoritative.unwrap().value.transactions;
+        let head = transactions.last().unwrap();
+        let output = optn_core::tx::decode(&head.raw).unwrap().outputs.remove(0);
+        let spentness = OutpointSpentness::Unspent {
+            txid: head.txid,
+            vout: 0,
+            value_sats: output.value,
+            script_pubkey: output.script_pubkey,
+            best_block: [7; 32],
+        };
+        let mut service = identity_service(transactions.clone(), spentness.clone());
+        let calls = Arc::new(AtomicUsize::new(0));
+        service.set_registry_fetcher(Arc::new(FixtureRegistryFetcher {
+            candidate_only: false,
+            body,
+            calls: calls.clone(),
+            entered: None,
+            hold: None,
+            cancelled: None,
+        }));
+        let limits = HdSyncLimits {
+            gap_limit: 2,
+            addresses_per_branch: 6,
+        };
+        assert_eq!(
+            runtime
+                .sync_hd_wallet(
+                    &mut service,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    xpub.clone(),
+                    limits
+                )
+                .await,
+            Ok(ReconciliationDecision::Accepted)
+        );
+        let saved = runtime.wallet_checkpoint().await.unwrap();
+        let hints = serde_json::to_value(saved.bcmr_cache()).unwrap();
+        assert_ne!(hints, serde_json::json!({}));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Both paths reseal the wallet's checkpoint; neither may silently erase
+        // resolver state while persisting an unrelated wallet change.
+        let outpoint = runtime.state().coins.iter().next().unwrap().outpoint();
+        runtime
+            .dispatch(AppAction::FreezeCoin(outpoint))
+            .await
+            .unwrap();
+        runtime
+            .wallet_security(Request::NextReceive {
+                epoch: status.epoch,
+                acknowledge_gap: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(runtime.wallet_checkpoint().await.unwrap().bcmr_cache()).unwrap(),
+            hints
+        );
+        runtime.dispatch(AppAction::LockWallet).await.unwrap();
+
+        let security =
+            WalletSecurity::new(Box::new(storage), None).with_checkpoints(Box::new(checkpoints));
+        let (reopened, driver) =
+            AppRuntime::new_with_security(AppState::default(), security).unwrap();
+        tokio::spawn(driver.run());
+        reopened
+            .wallet_security(Request::Open {
+                handle: status.active.unwrap(),
+                password: SecretText::new(String::new()),
+            })
+            .await
+            .unwrap();
+        let state = reopened.state();
+        let identity = &optn_app::assets_view_model(&state).categories[0].identity;
+        assert_eq!(identity.as_ref().unwrap().name, "Saved identity");
+        assert_eq!(identity.as_ref().unwrap().status, IdentityStatus::Stale);
+        assert!(!state.wallet_sync.history_fresh && !state.wallet_sync.utxos_fresh);
+        assert_eq!(
+            state.coins.get(outpoint).unwrap().freeze(),
+            Some(FreezeReason::User)
+        );
+        assert_eq!(
+            serde_json::to_value(reopened.wallet_checkpoint().await.unwrap().bcmr_cache()).unwrap(),
+            hints
+        );
+
+        // A fresh service has no registry fetcher. Only the persisted committed
+        // bytes plus a new live node observation can restore verification.
+        let mut resumed_service = identity_service(transactions, spentness);
+        assert_eq!(
+            reopened
+                .sync_hd_wallet(
+                    &mut resumed_service,
+                    &mut ProgressiveSyncWorker::new(Default::default()),
+                    xpub,
+                    limits
+                )
+                .await,
+            Ok(ReconciliationDecision::Accepted)
+        );
+        let refreshed = reopened.state();
+        assert_eq!(
+            optn_app::assets_view_model(&refreshed).categories[0]
+                .identity
+                .as_ref()
+                .unwrap()
+                .status,
+            IdentityStatus::Verified
+        );
+        assert!(refreshed.wallet_sync.history_fresh && refreshed.wallet_sync.utxos_fresh);
+        assert_eq!(
+            refreshed.coins.get(outpoint).unwrap().freeze(),
+            Some(FreezeReason::User)
+        );
     }
 
     #[tokio::test]
@@ -2816,7 +3019,7 @@ mod tests {
                 vout: 0,
                 value_sats: output.value,
                 script_pubkey: output.script_pubkey,
-                best_block: [9; 32],
+                best_block: [7; 32],
             },
         );
         let source_lifetime = service.revocation();
@@ -2875,7 +3078,7 @@ mod tests {
         )]);
         let lease = session.begin(&app, vec![address()], 0).unwrap();
         assert_eq!(
-            session.finish(&mut app, lease, candidate, |_, _, _| Ok(()), |_| true),
+            session.finish(&mut app, lease, candidate, |_, _, _, _| Ok(()), |_| true),
             Ok(ReconciliationDecision::Accepted)
         );
         app
@@ -2896,7 +3099,7 @@ mod tests {
         )]);
         let lease = session.begin(&app, vec![address()], 0).unwrap();
         assert_eq!(
-            session.finish(&mut app, lease, candidate, |_, _, _| Ok(()), |_| true),
+            session.finish(&mut app, lease, candidate, |_, _, _, _| Ok(()), |_| true),
             Ok(ReconciliationDecision::Accepted)
         );
         let assets = optn_app::assets_view_model(&app);

@@ -226,8 +226,8 @@ impl AppRuntimeDriver {
                     &mut candidate,
                     self.state.clone(),
                     &restore_state,
-                    |app, sync, restore_state, progress| {
-                        security.persist_checkpoint(app, sync, restore_state, progress)
+                    |app, sync, restore_state, progress, cache| {
+                        security.persist_checkpoint(app, sync, restore_state, progress, cache)
                     },
                     |app| guard.allows(app, reply.is_closed()),
                 );
