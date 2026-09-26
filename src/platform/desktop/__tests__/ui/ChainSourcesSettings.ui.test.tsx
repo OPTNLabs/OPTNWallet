@@ -94,6 +94,7 @@ it('browses without probes and sends explicit selection through the old UI', asy
       backRef={backRef}
       birthdaySettings={<button>Existing birthday control</button>}
       fusionSettings={<button>Automatic Fusion server selection</button>}
+      nostrSettings={<button>Existing Nostr relay pool</button>}
       feeSettings={<button>Existing fee control</button>}
       explorerSettings={<button>Existing explorer control</button>}
     />
@@ -220,6 +221,12 @@ it('browses without probes and sends explicit selection through the old UI', asy
   fireEvent.click(screen.getByRole('button', { name: /CashFusion/ }));
   expect(
     screen.getByRole('button', { name: 'Automatic Fusion server selection' })
+  ).toBeInTheDocument();
+  act(() => backRef.current?.());
+  expect(backRef.current).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Nostr relays/ }));
+  expect(
+    screen.getByRole('button', { name: 'Existing Nostr relay pool' })
   ).toBeInTheDocument();
   act(() => backRef.current?.());
   expect(backRef.current).toBeNull();
