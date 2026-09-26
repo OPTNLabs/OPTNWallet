@@ -643,8 +643,32 @@ It does not extend from the previous scan length or infer used addresses from
 the imported inventory. The regression proves a single expanded query after
 reopen and stable scope on later refreshes, including normal receive allocation.
 All 303 runtime tests, strict Clippy, formatting, architecture and native build
-passed. Live completion with this fix is still being checked; timeout evidence
-alone does not establish current balance or whole-wallet parity.
+passed. The retained Windows UI then completed a live Chipnet scan with
+49,896,199 sats and 121 history entries, both freshness flags true, no error and
+tip 325188. After a full process restart, normal saved-wallet unlock restored
+the same balance/history as stale. A second live refresh restored freshness at
+tip 325189 with unchanged totals. Both completed within the existing 300-second
+deadline through Auto routing and the existing Tor policy; no transaction was
+signed or broadcast. The selected Electrum route was
+`bootstrap:electrum-tls:blackie.c3-soft.com:64002` with **Server assertion** evidence,
+not SHV/MMR proof.
+
+Build provenance: `fee6bff3` plus the production gap fix committed as `cf16e8c5`,
+without tracing; executable SHA-256
+`f892f9de91a6b7a30c3ea91c86c39c8200308c4a6b6a168c3a802ca96d88e0e4`.
+Local evidence: `hd-gap-live-cf16e8c5.json`, `hd-reopen-cf16e8c5.json` and
+`hd-resume-cf16e8c5.json` under the outside-Git `old-ui-network-20260919` artifacts.
+This closes the measured saved-wallet HD timeout/reopen/resume gap. Matching
+this wallet's legacy total does not prove the outstanding RPA/contract or
+multiple-account union, every platform, or all of #75.
+
+Linux Desktop E2E run `36267842277` passed on exact head `86f8407b`, including
+the isolated create/lock/reopen case. CLI CI exposed a stale four-address
+expectation after the HD fix: receive index zero was already issued, so the
+initial query also needs receive index one. The real CLI process test now checks
+the exact five script hashes across receive, change, DeFi and compatibility
+branches. All 20 ordinary CLI wallet-security tests pass; the existing real-OS
+credential-store test remains explicitly opt-in.
 
 ### 2026-09-26: default-on Chat and automatic native relay health
 

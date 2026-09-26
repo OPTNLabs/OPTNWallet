@@ -776,7 +776,7 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
     let stopped = Arc::new(AtomicBool::new(false));
     let stop = stopped.clone();
     let server = std::thread::spawn(move || {
-        let mut histories = 0;
+        let mut histories = Vec::new();
         while !stop.load(Ordering::SeqCst) {
             let stream = match listener.accept() {
                 Ok((stream, _)) => stream,
@@ -805,7 +805,7 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
                     }
                     "server.peers.subscribe" | "blockchain.scripthash.get_mempool" => json!([]),
                     "blockchain.scripthash.get_history" => {
-                        histories += 1;
+                        histories.push(request["params"][0].as_str().unwrap().to_owned());
                         json!([])
                     }
                     "blockchain.headers.subscribe" => {
@@ -842,10 +842,34 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
         port,
     );
     stopped.store(true, Ordering::SeqCst);
+    let mut queried = server.join().unwrap();
+    let account = optn_core::hd::AccountPath::new(1, 1).unwrap();
+    let wallet =
+        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
+            .unwrap();
+    let xpub = wallet.account_xpub_at(account).unwrap();
+    // Receive zero was already issued at unlock. Include its trailing unused
+    // gap in the first pass, alongside change, DeFi and compatibility branches.
+    let mut expected: Vec<_> = [(0, 0), (0, 1), (1, 0), (7, 0), (2, 0)]
+        .into_iter()
+        .map(|(branch, index)| {
+            let address = optn_core::watch_only::address_under_account(
+                optn_app::Network::Chipnet,
+                &xpub,
+                branch,
+                index,
+            )
+            .unwrap();
+            optn_core::cashaddr::Address::decode(&address.address)
+                .unwrap()
+                .electrum_scripthash()
+        })
+        .collect();
+    queried.sort();
+    expected.sort();
     assert_eq!(
-        server.join().unwrap(),
-        4,
-        "all ordinary HD branches must be queried"
+        queried, expected,
+        "query each required HD address exactly once"
     );
     assert!(
         output.status.success(),
@@ -856,13 +880,10 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
     assert_eq!(value["account_path"], "m/44'/1'/1'");
     assert_eq!(value["complete"], true);
     assert_eq!(value["wallet_sync"]["scan_coverage"]["from_height"], 0);
-    assert_eq!(value["scanned_addresses"], 4);
-    let account = optn_core::hd::AccountPath::new(1, 1).unwrap();
-    let key =
-        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
-            .unwrap()
-            .checkpoint_key(optn_app::Network::Chipnet, account)
-            .unwrap();
+    assert_eq!(value["scanned_addresses"], 5);
+    let key = wallet
+        .checkpoint_key(optn_app::Network::Chipnet, account)
+        .unwrap();
     let id = optn_core::header_hash::sha256d(b"public.optn\0chipnet\0m/44'/1'/1'");
     let disk = optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(
         directory.path().join(".state"),
