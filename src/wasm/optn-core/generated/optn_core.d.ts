@@ -236,6 +236,16 @@ export function looksLikeRpa(candidate: string): boolean;
 export function paymentAddress(spend_pubkey: Uint8Array, secret: Uint8Array, network: string, index: number): string;
 
 /**
+ * Verify the signed return against the exact reviewed bytes. Never broadcasts.
+ */
+export function psbtFinalizeCashTokensP2pkh(original: Uint8Array, signed: Uint8Array, network: string): Uint8Array;
+
+/**
+ * Pure offline review. Does not authorize a spend or establish unspentness.
+ */
+export function psbtReviewP2pkh(raw: Uint8Array, network: string): string;
+
+/**
  * `m/44'/<coin>'/<account>'/3/0` and `/3/1`, as a JSON object.
  */
 export function rpaKeyPaths(coin_type: number, account: number): string;
@@ -314,6 +324,8 @@ export interface InitOutput {
     readonly legacyPaycodeRejection: () => [number, number];
     readonly looksLikeRpa: (a: number, b: number) => number;
     readonly paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly psbtFinalizeCashTokensP2pkh: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly psbtReviewP2pkh: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly rpaKeyPaths: (a: number, b: number) => [number, number];
     readonly scanTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly sendBlockReason: (a: number, b: number) => [number, number, number, number];

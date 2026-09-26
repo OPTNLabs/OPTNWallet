@@ -136,6 +136,12 @@ enum Command {
         #[arg(long)]
         verbose: bool,
     },
+    /// Review a local hex PSBT; optionally verify a signed return. Offline, Chipnet only.
+    Psbt {
+        original: PathBuf,
+        #[arg(long, value_name = "SIGNED_HEX_FILE")]
+        signed: Option<PathBuf>,
+    },
     /// Broadcast a signed, hex-encoded transaction.
     Broadcast { hex: String },
     /// Generate a new BIP39 recovery phrase.
@@ -738,6 +744,7 @@ async fn main() {
 /// The command as it appears in the skill manifest.
 fn command_name(command: &Command) -> &'static str {
     match command {
+        Command::Psbt { .. } => "psbt",
         Command::Wallet { .. } => "wallet",
         Command::Network {
             action: NetworkCommand::Export,
@@ -1798,6 +1805,11 @@ fn authorize_command(cli: &Cli) -> Result<()> {
     // Before anything else, including opening a connection. A refusal should
     // cost nothing and reveal nothing about the wallet.
     skills::enforce(skills::Policy::from_env()?, command_name(&cli.command))?;
+    if matches!(cli.command, Command::Psbt { .. })
+        && SERVING.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(CliError::Usage("PSBT files require the local CLI.".into()));
+    }
     if cli.wallet.is_some()
         && (matches!(cli.command, Command::Serve { .. })
             || SERVING.load(std::sync::atomic::Ordering::SeqCst))
@@ -1832,6 +1844,37 @@ fn authorize_command(cli: &Cli) -> Result<()> {
 async fn run(cli: &Cli) -> Result<Value> {
     authorize_command(cli)?;
     match &cli.command {
+        Command::Psbt { original, signed } => {
+            let read = |path: &Path| -> Result<Vec<u8>> {
+                use std::io::Read;
+                let mut raw = String::new();
+                std::fs::File::open(path)
+                    .map_err(|_| CliError::Usage("Cannot open PSBT hex file.".into()))?
+                    .take(2 * 1024 * 1024 + 1)
+                    .read_to_string(&mut raw)
+                    .map_err(|_| CliError::Usage("Cannot read PSBT hex file.".into()))?;
+                if raw.len() > 2 * 1024 * 1024 {
+                    return Err(CliError::Usage("PSBT hex file exceeds 2 MiB.".into()));
+                }
+                decode_hex(raw.trim())
+            };
+            let original = read(original)?;
+            let review = optn_core::psbt::review_p2pkh(&original, cli.network)?;
+            let raw = signed
+                .as_ref()
+                .map(|path| {
+                    optn_core::psbt::finalize_cash_tokens_p2pkh(
+                        &original,
+                        &read(path)?,
+                        cli.network,
+                    )
+                })
+                .transpose()?;
+            return Ok(
+                json!({"ok":true, "network":cli.network.to_string(), "review":review,
+                "raw_transaction_hex":raw.as_ref().map(|bytes| hex(bytes)), "sent":false}),
+            );
+        }
         Command::Wallet { .. } => unreachable!("handled before network setup"),
         Command::Network {
             action: NetworkCommand::Status,
@@ -1952,6 +1995,7 @@ async fn run(cli: &Cli) -> Result<Value> {
     match &cli.command {
         Command::Wallet { .. } => unreachable!("handled before network setup"),
         Command::Ping
+        | Command::Psbt { .. }
         | Command::Network { .. }
         | Command::Tx { .. }
         | Command::Broadcast { .. } => {

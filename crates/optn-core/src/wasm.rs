@@ -53,6 +53,23 @@ fn err(e: crate::error::CliError) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
+/// Pure offline review. Does not authorize a spend or establish unspentness.
+#[wasm_bindgen(js_name = psbtReviewP2pkh)]
+pub fn psbt_review_p2pkh(raw: &[u8], network: &str) -> Result<String, JsValue> {
+    let review = crate::psbt::review_p2pkh(raw, network_from(network)?).map_err(err)?;
+    serde_json::to_string(&review).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Verify the signed return against the exact reviewed bytes. Never broadcasts.
+#[wasm_bindgen(js_name = psbtFinalizeCashTokensP2pkh)]
+pub fn psbt_finalize_cash_tokens_p2pkh(
+    original: &[u8],
+    signed: &[u8],
+    network: &str,
+) -> Result<Vec<u8>, JsValue> {
+    crate::psbt::finalize_cash_tokens_p2pkh(original, signed, network_from(network)?).map_err(err)
+}
+
 /// Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
 /// display order, matching the shared coin-hold record. This does not sign.
 #[wasm_bindgen(js_name = transactionOutpoints)]
