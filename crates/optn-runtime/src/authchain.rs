@@ -185,9 +185,9 @@ pub struct AuthchainResolution {
 impl AuthchainResolution {
     /// Begin at the authbase.
     ///
-    /// For a token this is the transaction that created the category, which
-    /// the wallet already knows from the category id rather than from any
-    /// source's say-so.
+    /// `authbase` uses internal transaction-hash byte order, like transaction
+    /// inputs and chain-provider requests. Token categories use display order;
+    /// callers holding a token category must use [`Self::for_token_category`].
     pub fn begin(authbase: Hash32, budget: AuthchainBudget) -> Self {
         Self {
             current: authbase,
@@ -199,6 +199,13 @@ impl AuthchainResolution {
             agreements: 0,
             finished: false,
         }
+    }
+
+    /// Start with the category carried by `optn_core::token::TokenData`.
+    /// Its display-order bytes are the reverse of the outpoint hash on wire.
+    pub fn for_token_category(mut category: [u8; 32], budget: AuthchainBudget) -> Self {
+        category.reverse();
+        Self::begin(category, budget)
     }
 
     /// The transaction whose identity output needs an answer.
@@ -377,6 +384,18 @@ mod tests {
 
     fn txid(byte: u8) -> Hash32 {
         [byte; 32]
+    }
+
+    #[test]
+    fn token_category_is_converted_to_internal_transaction_hash_order() {
+        let category = std::array::from_fn(|index| index as u8);
+        let expected = std::array::from_fn(|index| 31 - index as u8);
+        let walk = AuthchainResolution::for_token_category(category, AuthchainBudget::default());
+        assert_eq!(walk.next_step(), AuthchainStep::Query { txid: expected });
+        assert_eq!(
+            AuthchainResolution::begin(expected, AuthchainBudget::default()).current(),
+            expected
+        );
     }
 
     fn p2pkh() -> Vec<u8> {

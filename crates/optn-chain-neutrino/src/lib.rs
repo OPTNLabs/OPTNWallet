@@ -599,6 +599,7 @@ impl ChainBackend for NeutrinoBackend {
             ChainOperation::TransactionLookup
             | ChainOperation::Broadcast
             | ChainOperation::OutpointSpentness
+            | ChainOperation::OutpointSpender
             | ChainOperation::HistoricalHeaderProof => false,
         }
     }

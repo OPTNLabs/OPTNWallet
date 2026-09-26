@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { isDesktopPlatform } from '../../utils/platform';
 import { findWalletFileRelForSourceId } from './walletFile';
+import type { NftCategory } from '@bitauth/libauth';
+import type { BcmrTokenMetadataState } from '../../types/bcmr';
 
 /**
  * Open the wallet that is already open in this renderer in the Rust runtime too.
@@ -122,6 +124,106 @@ export async function readEngineWalletSync(): Promise<EngineWalletSync | null> {
       pendingSats: sync.pending_sats ?? 0,
       error: sync.error ?? null,
     };
+  } catch {
+    return null;
+  }
+}
+
+/** Mirrors WireTokenIdentity; Rust validates and authenticates presentation. */
+export type EngineTokenIdentity = {
+  name: string;
+  ticker: string | null;
+  decimals: number;
+  status: string;
+  presentation?: {
+    description: string | null;
+    uris: Record<string, string>;
+    nfts: NftCategory | null;
+  };
+};
+
+export function projectEngineTokenMetadata(
+  category: string,
+  identity?: EngineTokenIdentity
+): BcmrTokenMetadataState {
+  const identityStatus =
+    identity?.status === 'verified' ||
+    identity?.status === 'stale' ||
+    identity?.status === 'unpublished'
+      ? identity.status
+      : 'unresolved';
+  const known = identityStatus === 'verified' || identityStatus === 'stale';
+  return {
+    identityStatus,
+    status: 'ready',
+    freshness:
+      identityStatus === 'verified'
+        ? 'fresh'
+        : known
+          ? 'cached'
+          : 'unavailable',
+    name: known ? identity!.name : category,
+    symbol: known ? identity!.ticker ?? '' : '',
+    decimals: known ? identity!.decimals : 0,
+    // A registry URI is not fetched image bytes. No privacy-safe image port yet.
+    iconUri: null,
+    snapshot: known
+      ? {
+          name: identity!.name,
+          description: identity!.presentation?.description ?? undefined,
+          uris: identity!.presentation?.uris ?? {},
+          token: {
+            category,
+            symbol: identity!.ticker ?? '',
+            decimals: identity!.decimals,
+            nfts: identity!.presentation?.nfts ?? undefined,
+          },
+        }
+      : null,
+    isRefreshing: false,
+  };
+}
+
+/** Read only: never starts sync, opens a wallet, or falls back to an indexer. */
+export async function readEngineTokenMetadata(
+  walletId: number,
+  network: string,
+  categories: string[]
+): Promise<Record<string, BcmrTokenMetadataState> | null> {
+  if (!isDesktopPlatform() || walletId <= 0) return null;
+  try {
+    const handle = await engineHandleFor(walletId);
+    if (!handle) return null;
+    const snapshot = await invoke<{
+      version: number;
+      network: string;
+      wallet: unknown;
+      unlock_epoch: number;
+      token_identities?: Record<string, EngineTokenIdentity>;
+    }>('optn_app_snapshot');
+    // Read status after the snapshot: an intervening lock/open changes epoch.
+    const session = await invoke<{ active: string | null; epoch: number }>(
+      'optn_wallet_security',
+      { request: { command: 'status' } }
+    );
+    if (
+      snapshot.version !== 1 ||
+      !snapshot.wallet ||
+      snapshot.network !== network ||
+      session.active !== handle ||
+      !Number.isSafeInteger(snapshot.unlock_epoch) ||
+      snapshot.unlock_epoch !== session.epoch
+    )
+      return null;
+    return Object.fromEntries(
+      categories.map((category) => [
+        category,
+        projectEngineTokenMetadata(
+          category,
+          snapshot.token_identities?.[category]
+        ),
+      ])
+    );
   } catch {
     return null;
   }

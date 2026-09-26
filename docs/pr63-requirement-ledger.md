@@ -499,3 +499,39 @@ runtime/native-chain Clippy, regenerated WASM/freshness check, and 21 existing
 WASM signing/connector tests passed. This is bounded protocol and integration
 evidence; retained React Assets migration, broader authchain discovery and live
 token metadata acceptance remain separate work.
+
+### 2026-09-26: BCMR discovery and retained Assets projection
+
+Token categories are display-order identifiers; chain requests and transaction
+inputs use internal hash order. The runtime now converts at the authchain entry
+boundary. The HD integration fixture uses a non-palindromic, correctly encoded
+category, correcting a fixture that had repeated the original byte-order bug.
+
+The shared router executes `OutpointSpenderLookup`. Electrum derives candidates
+from UTXO creators, then height-filtered history/mempool, deduplicating downloads
+and checking raw transaction hashes and exact inputs. Work is capped at 128
+transactions, 2 MiB of raw transactions and 20 seconds. An empty, incomplete or
+timed-out search is unknown, never an unspent authhead. Existing scopes, protocol
+restrictions, fallback and transport policy still govern every route. The runtime
+refetches discovered successors from the selected validating node and still
+requires source-bound full-node terminal unspent evidence. This closes discovery
+outside wallet history; it does not establish Electrum-only identity acceptance.
+
+Authenticated descriptions, URI references and bounded NFT schema data now cross
+core, application state, encrypted checkpoint/reopen and typed transport. The old
+desktop Assets and token details consume wallet/network/epoch-bound runtime
+snapshots and preserve verified/stale/unpublished/unresolved labels. Legacy cached
+names cannot override these statuses. Opening token details no longer directly
+queries Chaingraph on desktop. URI references do not grant network permission:
+images remain placeholders pending a policy-aware image-byte adapter. Non-desktop
+legacy metadata behavior is retained, so cross-platform migration is not complete.
+
+Evidence: 18 core BCMR, 173 app, 300 runtime, 23 transport and 22 Electrum adapter
+tests; 74 focused TypeScript and 25 desktop UI tests; TypeScript, strict Rust
+Clippy, architecture, native host check, regenerated WASM/freshness and 21 WASM
+connector tests passed. The connected HD actor test discovers transactions absent
+from wallet history, publishes identity, seals/reopens it stale, then refreshes it;
+missing terminal evidence remains unresolved. These are integration/component
+checks, not live token acceptance. ISO8601 snapshot-time selection, full public
+light-client authchain acceptance, policy-aware icons, global index queries and
+packaged live token rendering remain open.

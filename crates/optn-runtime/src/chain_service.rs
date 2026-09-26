@@ -62,6 +62,9 @@ pub enum ChainOperation {
     /// may return `Unknown`, but this contract has no `Spent` result because a
     /// missing UTXO does not identify a spender or prove finality.
     OutpointSpentness,
+    /// Discover a transaction spending an exact outpoint. An absent candidate
+    /// is unknown, never evidence that the output remains unspent.
+    OutpointSpender,
     Broadcast,
     HeaderSync,
     HistoricalHeaderProof,
@@ -85,6 +88,12 @@ pub enum ChainRequest {
     OutpointSpentness {
         txid: Hash32,
         vout: u32,
+    },
+    OutpointSpender {
+        txid: Hash32,
+        vout: u32,
+        script_pubkey: Vec<u8>,
+        from_height: Option<u32>,
     },
     Broadcast {
         raw_tx: Vec<u8>,
@@ -117,6 +126,7 @@ impl ChainRequest {
             Self::WalletRefresh { .. } => ChainOperation::WalletRefresh,
             Self::TransactionLookup { .. } => ChainOperation::TransactionLookup,
             Self::OutpointSpentness { .. } => ChainOperation::OutpointSpentness,
+            Self::OutpointSpender { .. } => ChainOperation::OutpointSpender,
             Self::Broadcast { .. } => ChainOperation::Broadcast,
             Self::HeaderSync { .. } | Self::HeaderSyncFromLocator { .. } => {
                 ChainOperation::HeaderSync
@@ -169,6 +179,11 @@ pub enum ChainPayload {
     },
     Transaction(ObservedTransaction),
     OutpointSpentness(OutpointSpentness),
+    OutpointSpender {
+        txid: Hash32,
+        vout: u32,
+        spender: Option<ObservedTransaction>,
+    },
     BroadcastObserved {
         txid: Hash32,
     },
@@ -682,6 +697,26 @@ impl ChainService {
                     )),
                 }
             }
+            if let ChainRequest::OutpointSpender { txid, vout, .. } = request {
+                match &observation.payload {
+                    ChainPayload::OutpointSpender {
+                        txid: observed_txid,
+                        vout: observed_vout,
+                        spender,
+                    } if observed_txid == txid && observed_vout == vout
+                        && spender.as_ref().is_none_or(|transaction| {
+                            optn_core::header_hash::sha256d(&transaction.raw) == transaction.txid
+                                && optn_core::tx::decode(&transaction.raw).is_ok_and(|decoded| {
+                                    decoded.inputs.iter().any(|(parent, index, _)| {
+                                        parent == txid && index == vout
+                                    })
+                                })
+                        }) => {}
+                    _ => return Err(ChainBackendError::InvalidResponse(
+                        "spender response does not bind to the requested outpoint".into(),
+                    )),
+                }
+            }
             Ok(observation)
         });
         match response {
@@ -763,6 +798,7 @@ pub const fn operation_capability(operation: ChainOperation) -> Capability {
         ChainOperation::WalletRefresh => Capability::UtxoQuery,
         ChainOperation::TransactionLookup => Capability::TransactionQuery,
         ChainOperation::OutpointSpentness => Capability::OutpointUnspentLookup,
+        ChainOperation::OutpointSpender => Capability::OutpointSpenderLookup,
         ChainOperation::Broadcast => Capability::Broadcast,
         ChainOperation::HeaderSync => Capability::HeaderStream,
         ChainOperation::HistoricalHeaderProof => Capability::HeaderMerkleProof,
@@ -787,6 +823,7 @@ mod tests {
         hold: AtomicBool,
         entered: tokio::sync::Notify,
         spentness: OutpointSpentness,
+        spender_response: std::sync::Mutex<ChainPayload>,
     }
 
     impl ChainBackend for CountingBackend {
@@ -815,6 +852,7 @@ mod tests {
                 ChainOperation::HeaderSync
                     | ChainOperation::Broadcast
                     | ChainOperation::OutpointSpentness
+                    | ChainOperation::OutpointSpender
             )
         }
         fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
@@ -825,6 +863,9 @@ mod tests {
                     std::future::pending::<()>().await;
                 }
                 let payload = match request {
+                    ChainRequest::OutpointSpender { .. } => {
+                        self.spender_response.lock().unwrap().clone()
+                    }
                     ChainRequest::OutpointSpentness { .. } => {
                         ChainPayload::OutpointSpentness(self.spentness.clone())
                     }
@@ -864,6 +905,11 @@ mod tests {
             CapabilityConfidence::Verified,
             CapabilityDiscovery::ActiveProbe,
         );
+        capabilities.record(
+            Capability::OutpointSpenderLookup,
+            CapabilityConfidence::Advertised,
+            CapabilityDiscovery::ElectrumServerVersion,
+        );
         let backend = Arc::new(CountingBackend {
             source: SourceId::new("server"),
             endpoint: Endpoint {
@@ -880,6 +926,11 @@ mod tests {
                 txid: [1; 32],
                 vout: 0,
             },
+            spender_response: std::sync::Mutex::new(ChainPayload::OutpointSpender {
+                txid: [1; 32],
+                vout: 0,
+                spender: None,
+            }),
         });
         let mut catalog = SourceCatalog::default();
         catalog
@@ -943,6 +994,62 @@ mod tests {
                 }])
         ));
         assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn spender_discovery_checks_raw_hash_exact_input_and_current_policy() {
+        let request = ChainRequest::OutpointSpender {
+            txid: [1; 32],
+            vout: 0,
+            script_pubkey: vec![0x51],
+            from_height: None,
+        };
+        let mut raw = vec![2, 0, 0, 0, 1];
+        raw.extend([1; 32]);
+        raw.extend(0u32.to_le_bytes());
+        raw.extend([0, 255, 255, 255, 255, 1]);
+        raw.extend(546u64.to_le_bytes());
+        raw.extend([1, 0x51, 0, 0, 0, 0]);
+        let transaction = ObservedTransaction {
+            txid: optn_core::header_hash::sha256d(&raw),
+            raw,
+            block_height: None,
+        };
+        for case in 0..5 {
+            let (mut service, backend, _) = routed_service();
+            let mut candidate = transaction.clone();
+            match case {
+                2 => candidate.txid = [9; 32],
+                3 => {
+                    candidate.raw[5] = 2;
+                    candidate.txid = optn_core::header_hash::sha256d(&candidate.raw);
+                }
+                _ => {}
+            }
+            *backend.spender_response.lock().unwrap() = ChainPayload::OutpointSpender {
+                txid: if case == 4 { [2; 32] } else { [1; 32] },
+                vout: 0,
+                spender: (case != 0).then_some(candidate),
+            };
+            let result = service.execute(&request).await;
+            assert_eq!(result.is_ok(), case < 2, "case {case}: {result:?}");
+        }
+        for policy in [
+            ConnectionPolicy::own_infrastructure(),
+            ConnectionPolicy::exact(SourceId::new("other"), ProtocolFamily::Electrum),
+            ConnectionPolicy::exact(SourceId::new("server"), ProtocolFamily::Bip37),
+        ] {
+            let (mut service, backend, _) = routed_service();
+            let route = service
+                .routes_for_operation(ChainOperation::OutpointSpender)
+                .remove(0);
+            service.set_policy(policy);
+            assert_eq!(
+                service.execute_on_route(&route, &request).await,
+                Err(ChainServiceError::RouteUnavailable)
+            );
+            assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[test]

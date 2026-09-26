@@ -244,24 +244,28 @@ pub fn observe_identity(category: [u8; 32], metadata: IdentityMetadata) -> AppAc
             ticker: names.ticker,
             decimals: names.decimals,
             status: IdentityStatus::Verified,
+            presentation: names.presentation,
         },
         (IdentityMetadata::LastKnown { .. }, Some(names)) => TokenIdentity {
             name: names.name,
             ticker: names.ticker,
             decimals: names.decimals,
             status: IdentityStatus::Stale,
+            presentation: names.presentation,
         },
         (IdentityMetadata::Unpublished, _) => TokenIdentity {
             name: category_hex.clone(),
             ticker: None,
             decimals: 0,
             status: IdentityStatus::Unpublished,
+            presentation: Default::default(),
         },
         (IdentityMetadata::Unresolved { .. }, _) | (_, None) => TokenIdentity {
             name: category_hex.clone(),
             ticker: None,
             decimals: 0,
             status: IdentityStatus::Unresolved,
+            presentation: Default::default(),
         },
     };
     AppAction::SetTokenIdentity {
@@ -366,8 +370,9 @@ impl IdentityCollection {
 }
 
 /// Resolve owned identities through the selected capability routes. Wallet
-/// history may nominate a successor, but the same node must supply its bytes
-/// and explicitly establish the terminal output's unspent status.
+/// history or a permitted spender-discovery route may nominate a successor,
+/// but the selected validating node must supply its bytes and explicitly
+/// establish the terminal output's unspent status.
 pub(crate) async fn resolve_selected_identities(
     service: &mut crate::chain_service::ChainService,
     categories: BTreeSet<[u8; 32]>,
@@ -391,7 +396,7 @@ pub(crate) async fn resolve_selected_identities(
                 else {
                     continue;
                 };
-                let mut walk = AuthchainResolution::begin(
+                let mut walk = AuthchainResolution::for_token_category(
                     category,
                     AuthchainBudget {
                         max_hops: 64,
@@ -467,6 +472,39 @@ pub(crate) async fn resolve_selected_identities(
                         ..
                     }) = unspent.value
                     else {
+                        // An absent UTXO is not a terminal authhead. Discovery may
+                        // nominate the exact spender, including outside this wallet's
+                        // history. It must then be fetched from the validating node
+                        // on the next iteration, before any of its claims are used.
+                        let Some(output) = decoded.outputs.first() else {
+                            break;
+                        };
+                        for discovery in service.routes_for_operation(ChainOperation::OutpointSpender) {
+                            let Ok(candidate) = service.execute_on_route(
+                                &discovery,
+                                &ChainRequest::OutpointSpender {
+                                    txid,
+                                    vout: 0,
+                                    script_pubkey: output.script_pubkey.clone(),
+                                    from_height: current.block_height,
+                                },
+                            ).await else {
+                                continue;
+                            };
+                            let ChainPayload::OutpointSpender { spender: Some(spender), .. } = candidate.value else {
+                                continue;
+                            };
+                            let discovered = IdentityCollection::from_observed(
+                                &[spender], vec![], candidate.evidence,
+                            );
+                            if let Some(successor) = discovered.transactions.first() {
+                                step = walk.accept(authchain::IdentityStatus::SpentBy(successor.clone()));
+                                break;
+                            }
+                        }
+                        if matches!(step, AuthchainStep::Query { txid: next } if next != txid) {
+                            continue;
+                        }
                         break;
                     };
                     if !decoded.outputs.first().is_some_and(|output| {
@@ -589,7 +627,7 @@ fn resolve_owned_category(
     spender: &BTreeMap<[u8; 32], &ChainTransaction>,
     collection: &IdentityCollection,
 ) -> OwnedCategoryIdentity {
-    let mut walk = AuthchainResolution::begin(category, AuthchainBudget::default());
+    let mut walk = AuthchainResolution::for_token_category(category, AuthchainBudget::default());
     let mut pending = walk.next_step();
     let step = loop {
         match pending {
@@ -1480,6 +1518,7 @@ mod tests {
                 ticker: None,
                 decimals: 0,
                 status: IdentityStatus::Verified,
+                presentation: Default::default(),
             },
         });
         let assets = optn_app::assets_view_model(&state);

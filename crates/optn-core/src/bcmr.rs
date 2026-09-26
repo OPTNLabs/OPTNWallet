@@ -28,6 +28,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 /// `OP_RETURN` followed by a 4-byte push of `BCMR`.
 ///
@@ -178,12 +179,263 @@ pub fn publication_in<'a>(
         .and_then(parse_publication)
 }
 
-/// Name, ticker and decimals taken from a hash-verified BCMR registry.
+/// Bounded display data from authenticated registry bytes. URI strings are
+/// references only, never permission to contact a remote service.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "serde_json::Value")]
+pub struct TokenPresentation {
+    pub description: Option<String>,
+    pub uris: BTreeMap<String, String>,
+    pub nfts: Option<NftCategory>,
+}
+
+/// BCMR's NFT schema, carried without interpreting its bytecode or commitments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NftCategory {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<BTreeMap<String, NftField>>,
+    pub parse: NftCollection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NftCollection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytecode: Option<String>,
+    pub types: BTreeMap<String, NftType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NftType {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uris: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<BTreeMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NftField {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub encoding: NftFieldEncoding,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uris: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<BTreeMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum NftFieldEncoding {
+    Binary,
+    Boolean,
+    Hex,
+    HttpsUrl,
+    IpfsCid,
+    Utf8,
+    Locktime,
+    Number {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        aggregate: Option<NftAggregate>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        decimals: Option<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NftAggregate {
+    Add,
+}
+
+// ponytail: bounded schema projection only; add shared Rust VM evaluation when
+// commitment-specific NFT rendering is implemented. Never evaluate in adapters.
+const MAX_PRESENTATION_BYTES: usize = 64 * 1024;
+const MAX_DESCRIPTION_BYTES: usize = 4096;
+const MAX_PRESENTATION_NODES: usize = 4096;
+
+fn bounded_text(value: &str, limit: usize) -> bool {
+    value.len() <= limit
+        && value
+            .chars()
+            .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+}
+
+fn bounded_description(value: Option<&str>) -> bool {
+    value.is_none_or(|text| bounded_text(text, MAX_DESCRIPTION_BYTES))
+}
+
+fn bounded_uris(uris: &BTreeMap<String, String>) -> bool {
+    uris.len() <= 16
+        && uris.iter().all(|(key, uri)| {
+            !key.is_empty()
+                && key.len() <= 64
+                && key
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && uri.len() <= 2048
+                && !uri.chars().any(|c| {
+                    c.is_control() || c.is_whitespace() || matches!(c, '\\' | '<' | '>' | '"')
+                })
+                && uri.split_once("://").is_some_and(|(scheme, rest)| {
+                    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+                    (scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("ipfs"))
+                        && !authority.is_empty()
+                        && authority.bytes().any(|b| b.is_ascii_alphanumeric())
+                        && authority.bytes().all(|b| {
+                            b.is_ascii_alphanumeric()
+                                || matches!(b, b'.' | b'-' | b':' | b'[' | b']')
+                        })
+                })
+        })
+}
+
+fn bounded_hex(value: &str, limit: usize) -> bool {
+    value.len() <= limit
+        && value.len().is_multiple_of(2)
+        && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Also bounds ignored/extension fields before typed decoding. No recursive
+/// data from a registry or checkpoint can evade the depth/node/size budget.
+fn bounded_presentation_json(value: &serde_json::Value) -> bool {
+    fn visit(
+        value: &serde_json::Value,
+        depth: usize,
+        nodes: &mut usize,
+        bytes: &mut usize,
+    ) -> bool {
+        *nodes += 1;
+        if depth > 12 || *nodes > MAX_PRESENTATION_NODES {
+            return false;
+        }
+        let valid = match value {
+            serde_json::Value::String(text) => {
+                *bytes += text.len();
+                true
+            }
+            serde_json::Value::Array(items) => {
+                items.len() <= 256 && items.iter().all(|v| visit(v, depth + 1, nodes, bytes))
+            }
+            serde_json::Value::Object(items) => {
+                items.len() <= 256
+                    && items.iter().all(|(key, v)| {
+                        *bytes += key.len();
+                        key.len() <= 256 && visit(v, depth + 1, nodes, bytes)
+                    })
+            }
+            _ => true,
+        };
+        valid && *bytes <= MAX_PRESENTATION_BYTES
+    }
+    visit(value, 0, &mut 0, &mut 0)
+        && serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= MAX_PRESENTATION_BYTES)
+}
+
+impl TokenPresentation {
+    /// Rechecked for in-process values as well as serde's untrusted inputs.
+    pub fn is_valid(&self) -> bool {
+        bounded_description(self.description.as_deref())
+            && bounded_uris(&self.uris)
+            && self.nfts.as_ref().is_none_or(NftCategory::is_valid)
+            && serde_json::to_value(self).is_ok_and(|value| bounded_presentation_json(&value))
+    }
+}
+
+impl TryFrom<serde_json::Value> for TokenPresentation {
+    type Error = &'static str;
+
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        #[derive(Default, Deserialize)]
+        #[serde(default)]
+        struct Fields {
+            description: Option<String>,
+            uris: BTreeMap<String, String>,
+            nfts: Option<NftCategory>,
+        }
+        if !value.is_object() || !bounded_presentation_json(&value) {
+            return Err("token presentation exceeds structural or resource bounds");
+        }
+        let fields: Fields =
+            serde_json::from_value(value).map_err(|_| "invalid token presentation schema")?;
+        let presentation = Self {
+            description: fields.description,
+            uris: fields.uris,
+            nfts: fields.nfts,
+        };
+        if !presentation.is_valid() {
+            return Err("invalid or oversized token presentation");
+        }
+        Ok(presentation)
+    }
+}
+
+impl NftCategory {
+    fn is_valid(&self) -> bool {
+        bounded_description(self.description.as_deref())
+            && self
+                .parse
+                .bytecode
+                .as_ref()
+                .is_none_or(|code| bounded_hex(code, 20_000))
+            && self.fields.as_ref().is_none_or(|fields| {
+                fields.len() <= 64
+                    && fields.iter().all(|(id, field)| {
+                        !id.is_empty()
+                            && bounded_text(id, 128)
+                            && field
+                                .name
+                                .as_deref()
+                                .is_none_or(|name| bounded_text(name, 512))
+                            && bounded_description(field.description.as_deref())
+                            && field.uris.as_ref().is_none_or(bounded_uris)
+                            && match &field.encoding {
+                                NftFieldEncoding::Number { decimals, unit, .. } => {
+                                    decimals.is_none_or(|d| d <= 18)
+                                        && unit.as_deref().is_none_or(|s| bounded_text(s, 64))
+                                }
+                                _ => true,
+                            }
+                    })
+            })
+            && self.parse.types.len() <= 256
+            && self.parse.types.iter().all(|(id, nft)| {
+                bounded_hex(id, 256)
+                    && !nft.name.is_empty()
+                    && bounded_text(&nft.name, 512)
+                    && bounded_description(nft.description.as_deref())
+                    && nft.uris.as_ref().is_none_or(bounded_uris)
+                    && nft.fields.as_ref().is_none_or(|ids| {
+                        ids.len() <= 64
+                            && ids.iter().all(|id| {
+                                self.parse.bytecode.is_some()
+                                    && self
+                                        .fields
+                                        .as_ref()
+                                        .is_some_and(|fields| fields.contains_key(id))
+                            })
+                    })
+            })
+    }
+}
+
+/// Name, ticker, decimals and display data taken from a hash-verified registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryNames {
     pub name: String,
     pub ticker: Option<String>,
     pub decimals: u8,
+    pub presentation: TokenPresentation,
 }
 
 /// Parse the identity fields for `category_hex` from verified registry bytes.
@@ -212,27 +464,40 @@ pub fn names_for_category(contents: &[u8], category_hex: &str) -> Option<Registr
                 continue;
             }
             let name = match snapshot.get("name").and_then(|value| value.as_str()) {
-                Some(name) if !name.is_empty() => name.to_owned(),
-                _ => continue,
+                Some(name) if !name.is_empty() && bounded_text(name, 512) => name.to_owned(),
+                _ => return None,
             };
-            let ticker = token
-                .get("symbol")
-                .and_then(|value| value.as_str())
-                .filter(|symbol| !symbol.is_empty())
-                .map(str::to_owned);
-            let decimals = token
-                .get("decimals")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(0)
-                .min(u64::from(u8::MAX)) as u8;
+            let ticker = match token.get("symbol") {
+                None => None,
+                Some(value) => match value.as_str() {
+                    Some(symbol) if !symbol.is_empty() && bounded_text(symbol, 64) => {
+                        Some(symbol.to_owned())
+                    }
+                    _ => return None,
+                },
+            };
+            let decimals = match token.get("decimals") {
+                None => 0,
+                Some(value) => match value.as_u64() {
+                    Some(decimals) if decimals <= 18 => decimals as u8,
+                    _ => return None,
+                },
+            };
             let stamp = timestamp.parse::<u64>().unwrap_or(0);
             if best.as_ref().is_none_or(|(known, _)| *known <= stamp) {
+                let presentation = serde_json::from_value(serde_json::json!({
+                    "description": snapshot.get("description"),
+                    "uris": snapshot.get("uris").cloned().unwrap_or_else(|| serde_json::json!({})),
+                    "nfts": token.get("nfts"),
+                }))
+                .ok()?;
                 best = Some((
                     stamp,
                     RegistryNames {
                         name,
                         ticker,
                         decimals,
+                        presentation,
                     },
                 ));
             }
@@ -491,5 +756,201 @@ mod tests {
         assert_eq!(names.decimals, 2);
         assert_eq!(names_for_category(body.as_bytes(), &"bb".repeat(32)), None);
         assert_eq!(names_for_category(b"not json", &category), None);
+    }
+
+    fn rich_presentation() -> serde_json::Value {
+        serde_json::json!({
+            "description": "Authenticated collection\nDetails",
+            "uris": {"web": "https://example.test/collection", "icon": "ipfs://bafy/icon.png"},
+            "nfts": {
+                "description": "Tickets",
+                "fields": {"seat": {
+                    "name": "Seat", "description": "Seat number",
+                    "encoding": {"type": "number", "decimals": 0, "aggregate": "add", "unit": "seats"},
+                    "uris": {"web": "https://example.test/seats"},
+                    "extensions": {"test": {"version": 1}}
+                }},
+                "parse": {"bytecode": "00d2517f7c6b", "types": {"01": {
+                    "name": "Ticket", "description": "Admission", "fields": ["seat"],
+                    "uris": {"icon": "ipfs://bafy/ticket.png"},
+                    "extensions": {"test": [1, 2]}
+                }}}
+            }
+        })
+    }
+
+    #[test]
+    fn authenticated_presentation_preserves_bcmr_schema_without_interpreting_it() {
+        let value = rich_presentation();
+        let presentation: TokenPresentation = serde_json::from_value(value.clone()).unwrap();
+        assert!(presentation.is_valid());
+        assert_eq!(serde_json::to_value(&presentation).unwrap(), value);
+        let category = "aa".repeat(32);
+        let registry = serde_json::json!({"identities": {"authbase": {"1": {
+            "name": "Tickets", "description": value["description"], "uris": value["uris"],
+            "token": {"category": category, "symbol": "TKT", "nfts": value["nfts"]}
+        }}}});
+        let names = names_for_category(&serde_json::to_vec(&registry).unwrap(), &category).unwrap();
+        assert_eq!(names.presentation, presentation);
+
+        // Sequential types use the commitment itself, including empty commitment.
+        let sequential = serde_json::json!({"nfts": {"parse": {"types": {"": {"name": "Zero"}}}}});
+        let parsed: TokenPresentation = serde_json::from_value(sequential).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["nfts"],
+            serde_json::json!({"parse": {"types": {"": {"name": "Zero"}}}})
+        );
+        assert_eq!(
+            serde_json::from_str::<TokenPresentation>("{}").unwrap(),
+            TokenPresentation::default()
+        );
+    }
+
+    #[test]
+    fn presentation_rejects_malformed_fields_and_unsafe_uri_references() {
+        let invalid = [
+            serde_json::json!({"description": 7}),
+            serde_json::json!({"description": "bad\u{0000}text"}),
+            serde_json::json!({"uris": {"Icon": "https://example.test/a"}}),
+            serde_json::json!({"uris": {"icon": "javascript:alert(1)"}}),
+            serde_json::json!({"uris": {"icon": "data:image/png;base64,AAAA"}}),
+            serde_json::json!({"uris": {"icon": "http://example.test/a"}}),
+            serde_json::json!({"uris": {"web": "https://user@example.test/a"}}),
+            serde_json::json!({"uris": {"web": "https://example.test\\a"}}),
+            serde_json::json!({"uris": {"web": "https:///a"}}),
+            serde_json::json!({"uris": {"web": "https://example.test/\n"}}),
+            serde_json::json!({"uris": {"web": 3}}),
+            serde_json::json!({"nfts": []}),
+            serde_json::json!({"nfts": {"parse": {}}}),
+            serde_json::json!({"nfts": {"parse": {"bytecode": "zz", "types": {}}}}),
+            serde_json::json!({"nfts": {"parse": {"types": {"0": {"name": "Odd hex"}}}}}),
+        ];
+        for value in invalid {
+            assert!(
+                serde_json::from_value::<TokenPresentation>(value.clone()).is_err(),
+                "accepted {value}"
+            );
+        }
+        for (pointer, invalid) in [
+            ("/nfts/parse/types/01/name", serde_json::json!(null)),
+            (
+                "/nfts/parse/types/01/fields",
+                serde_json::json!(["undefined-field"]),
+            ),
+            (
+                "/nfts/parse/types/01/uris/icon",
+                serde_json::json!("file:///private"),
+            ),
+            (
+                "/nfts/fields/seat/uris/web",
+                serde_json::json!("javascript:alert(1)"),
+            ),
+            (
+                "/nfts/fields/seat/encoding/type",
+                serde_json::json!("unknown"),
+            ),
+            ("/nfts/fields/seat/encoding/decimals", serde_json::json!(19)),
+            (
+                "/nfts/fields/seat/encoding/aggregate",
+                serde_json::json!("multiply"),
+            ),
+        ] {
+            let mut value = rich_presentation();
+            *value.pointer_mut(pointer).unwrap() = invalid;
+            assert!(
+                serde_json::from_value::<TokenPresentation>(value).is_err(),
+                "accepted {pointer}"
+            );
+        }
+    }
+
+    #[test]
+    fn presentation_bounds_apply_to_schema_extensions_and_ignored_fields() {
+        let mut deep = serde_json::json!(0);
+        for _ in 0..14 {
+            deep = serde_json::json!({"nested": deep});
+        }
+        let uris: BTreeMap<_, _> = (0..17)
+            .map(|n| (format!("uri-{n}"), "https://example.test"))
+            .collect();
+        let types: BTreeMap<_, _> = (0..257)
+            .map(|n| (format!("{n:04x}"), serde_json::json!({"name": "NFT"})))
+            .collect();
+        let fields: BTreeMap<_, _> = (0..65)
+            .map(|n| {
+                (
+                    format!("field-{n}"),
+                    serde_json::json!({"encoding": {"type": "hex"}}),
+                )
+            })
+            .collect();
+        // Each individual array fits; the aggregate node budget does not.
+        let nodes = vec![vec![0; 256]; 17];
+        for value in [
+            serde_json::json!({"description": "x".repeat(4097)}),
+            serde_json::json!({"uris": uris}),
+            serde_json::json!({"uris": {"x".repeat(65): "https://example.test"}}),
+            serde_json::json!({"uris": {"web": format!("https://example.test/{}", "x".repeat(2048))}}),
+            serde_json::json!({"nfts": {"parse": {"types": types}}}),
+            serde_json::json!({"nfts": {"fields": fields, "parse": {"types": {}}}}),
+            serde_json::json!({"nfts": {"parse": {"bytecode": "00".repeat(10_001), "types": {}}}}),
+            serde_json::json!({"ignored": deep}),
+            serde_json::json!({"ignored": nodes}),
+            serde_json::json!({"nfts": {"parse": {"types": {"": {
+                "name": "NFT", "extensions": {"large": "x".repeat(65_536)}
+            }}}}}),
+        ] {
+            assert!(serde_json::from_value::<TokenPresentation>(value).is_err());
+        }
+        let boundary: TokenPresentation =
+            serde_json::from_value(serde_json::json!({"description": "x".repeat(4096)})).unwrap();
+        assert!(boundary.is_valid());
+    }
+
+    #[test]
+    fn malformed_selected_presentation_cannot_fall_back_to_an_older_identity() {
+        let category = "aa".repeat(32);
+        let registry = serde_json::json!({"identities": {"authbase": {
+            "1": {"name": "Old", "token": {"category": category}},
+            "2": {"name": "New", "description": "x".repeat(4097), "token": {"category": category}}
+        }}});
+        assert!(names_for_category(&serde_json::to_vec(&registry).unwrap(), &category).is_none());
+    }
+
+    #[test]
+    fn registry_labels_and_decimals_are_bounded_before_projection() {
+        let category = "aa".repeat(32);
+        let mut snapshot = serde_json::json!({"name": "x".repeat(512), "token": {
+            "category": category, "symbol": "X".repeat(64), "decimals": 18
+        }});
+        let extract = |snapshot: &serde_json::Value| {
+            names_for_category(
+                &serde_json::to_vec(
+                    &serde_json::json!({"identities": {"authbase": {"1": snapshot}}}),
+                )
+                .unwrap(),
+                &category,
+            )
+        };
+        assert_eq!(extract(&snapshot).unwrap().decimals, 18);
+        for (pointer, value) in [
+            ("/name", serde_json::json!("x".repeat(513))),
+            ("/name", serde_json::json!("bad\u{0000}name")),
+            ("/token/symbol", serde_json::json!("X".repeat(65))),
+            ("/token/symbol", serde_json::json!(42)),
+            ("/token/decimals", serde_json::json!(19)),
+            ("/token/decimals", serde_json::json!(-1)),
+            ("/token/decimals", serde_json::json!(1.5)),
+            ("/token/decimals", serde_json::json!("2")),
+        ] {
+            let mut invalid = snapshot.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(extract(&invalid).is_none(), "accepted {pointer}");
+        }
+        snapshot["token"]
+            .as_object_mut()
+            .unwrap()
+            .remove("decimals");
+        assert_eq!(extract(&snapshot).unwrap().decimals, 0);
     }
 }

@@ -403,7 +403,9 @@ impl ChainBackend for BchnRpcBackend {
             ChainOperation::TransactionLookup => self.config.txindex,
             ChainOperation::OutpointSpentness => true,
             ChainOperation::Broadcast | ChainOperation::HeaderSync => true,
-            ChainOperation::WalletRefresh | ChainOperation::HistoricalHeaderProof => false,
+            ChainOperation::WalletRefresh
+            | ChainOperation::OutpointSpender
+            | ChainOperation::HistoricalHeaderProof => false,
         }
     }
 
@@ -421,9 +423,9 @@ impl ChainBackend for BchnRpcBackend {
                     count,
                 } => self.header_sync(*start_height, *count).await,
                 ChainRequest::HeaderSyncFromLocator { .. } => Err(ChainBackendError::Unsupported),
-                ChainRequest::WalletRefresh { .. } | ChainRequest::HistoricalHeaderProof { .. } => {
-                    Err(ChainBackendError::Unsupported)
-                }
+                ChainRequest::WalletRefresh { .. }
+                | ChainRequest::OutpointSpender { .. }
+                | ChainRequest::HistoricalHeaderProof { .. } => Err(ChainBackendError::Unsupported),
             }
         })
     }

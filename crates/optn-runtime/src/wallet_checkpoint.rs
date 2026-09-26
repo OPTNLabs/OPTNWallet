@@ -10,7 +10,7 @@ use crate::{
     wallet_birthday::{WalletBirthday, WalletRestoreState},
     wallet_sync::WalletReconciliation,
 };
-use optn_app::{AppState, IdentityStatus, TokenIdentity};
+use optn_app::{AppState, IdentityStatus, TokenIdentity, TokenPresentation};
 use optn_core::{
     cashaddr::Address,
     coins::{CoinSet, FreezeReason, Outpoint},
@@ -170,6 +170,8 @@ struct StoredTokenIdentity {
     ticker: Option<String>,
     decimals: u8,
     status: StoredIdentityStatus,
+    #[serde(default)]
+    presentation: TokenPresentation,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -178,6 +180,7 @@ enum StoredIdentityStatus {
     Verified,
     Stale,
     Unpublished,
+    #[serde(other)]
     Unresolved,
 }
 
@@ -247,6 +250,7 @@ fn category_key_is_valid(category: &str) -> bool {
 
 fn identity_is_cacheable(category: &str, identity: &TokenIdentity) -> bool {
     category_key_is_valid(category)
+        && identity.presentation.is_valid()
         && !identity.name.is_empty()
         && identity.name.len() <= MAX_TOKEN_IDENTITY_NAME_BYTES
         && identity
@@ -257,6 +261,7 @@ fn identity_is_cacheable(category: &str, identity: &TokenIdentity) -> bool {
 
 fn stored_identity_is_cacheable(category: &str, identity: &StoredTokenIdentity) -> bool {
     category_key_is_valid(category)
+        && identity.presentation.is_valid()
         && !identity.name.is_empty()
         && identity.name.len() <= MAX_TOKEN_IDENTITY_NAME_BYTES
         && identity
@@ -272,7 +277,11 @@ fn cacheable_token_identities(
         .iter()
         .filter(|(category, identity)| identity_is_cacheable(category, identity))
         .take(MAX_CACHED_TOKEN_IDENTITIES)
-        .map(|(category, identity)| (category.clone(), identity.clone()))
+        .map(|(category, identity)| {
+            let mut identity = identity.clone();
+            identity.presentation = identity.authenticated_presentation();
+            (category.clone(), identity)
+        })
         .collect()
 }
 
@@ -288,15 +297,15 @@ fn decode_token_identities(
             if !stored_identity_is_cacheable(category, identity) {
                 return Err("invalid cached token identity in wallet checkpoint".into());
             }
-            Ok((
-                category.clone(),
-                TokenIdentity {
-                    name: identity.name.clone(),
-                    ticker: identity.ticker.clone(),
-                    decimals: identity.decimals,
-                    status: identity.status.into(),
-                },
-            ))
+            let mut decoded = TokenIdentity {
+                name: identity.name.clone(),
+                ticker: identity.ticker.clone(),
+                decimals: identity.decimals,
+                status: identity.status.into(),
+                presentation: identity.presentation.clone(),
+            };
+            decoded.presentation = decoded.authenticated_presentation();
+            Ok((category.clone(), decoded))
         })
         .collect()
 }
@@ -470,6 +479,7 @@ impl WalletCheckpoint {
                         IdentityStatus::Unresolved
                     }
                 };
+                identity.presentation = identity.authenticated_presentation();
                 (category.clone(), identity)
             })
             .collect()
@@ -627,6 +637,7 @@ impl WalletCheckpoint {
                             ticker: identity.ticker.clone(),
                             decimals: identity.decimals,
                             status: identity.status.into(),
+                            presentation: identity.authenticated_presentation(),
                         },
                     )
                 })
@@ -980,9 +991,172 @@ mod tests {
                     ticker: Some("BCAT".into()),
                     decimals: 2,
                     status: StoredIdentityStatus::Verified,
+                    presentation: Default::default(),
                 },
             );
             assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, 91)).is_err());
+        }
+    }
+
+    #[test]
+    fn authenticated_presentation_projects_seals_and_reopens_as_stale() {
+        use crate::token_metadata::{
+            observe_identity, resolve, IdentityMetadata, StaleReason, UnresolvedReason,
+        };
+        use optn_core::bcmr::RegistryPublication;
+        // Non-palindromic display-order category catches accidental txid reversal.
+        let category: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let category_hex: String = category.iter().map(|b| format!("{b:02x}")).collect();
+        let rich = serde_json::json!({
+            "description": "Authenticated tickets", "uris": {"icon": "ipfs://bafy/ticket.png"},
+            "nfts": {"parse": {"types": {"01": {"name": "Ticket", "description": "Admission"}}}}
+        });
+        let body = serde_json::to_vec(&serde_json::json!({"identities": {"authbase": {"1": {
+            "name": "Tickets", "description": rich["description"], "uris": rich["uris"],
+            "token": {"category": category_hex, "symbol": "TKT", "nfts": rich["nfts"]}
+        }}}}))
+        .unwrap();
+        let publication =
+            RegistryPublication::committing_to(&body, vec!["https://example.test".into()]);
+        let current = resolve(
+            &publication,
+            &[("https://example.test".into(), Ok(body.clone()))],
+        );
+        for (metadata, expected) in [
+            (current, IdentityStatus::Verified),
+            (
+                IdentityMetadata::LastKnown {
+                    contents: body.clone(),
+                    authhead: [3; 32],
+                    reason: StaleReason::AuthheadAdvanced,
+                },
+                IdentityStatus::Stale,
+            ),
+            (IdentityMetadata::Unpublished, IdentityStatus::Unpublished),
+            (
+                IdentityMetadata::Unresolved {
+                    reason: UnresolvedReason::AuthchainIncomplete,
+                },
+                IdentityStatus::Unresolved,
+            ),
+            (
+                resolve(
+                    &publication,
+                    &[("https://example.test".into(), Ok(b"tampered".to_vec()))],
+                ),
+                IdentityStatus::Unresolved,
+            ),
+        ] {
+            let optn_app::AppAction::SetTokenIdentity {
+                category_hex: projected_category,
+                identity,
+            } = observe_identity(category, metadata)
+            else {
+                panic!("identity observation")
+            };
+            assert_eq!(projected_category, category_hex);
+            assert_eq!(identity.status, expected);
+            let authenticated =
+                matches!(expected, IdentityStatus::Verified | IdentityStatus::Stale);
+            assert_eq!(identity.presentation.description.is_some(), authenticated);
+            if authenticated {
+                assert_eq!(serde_json::to_value(&identity.presentation).unwrap(), rich);
+            }
+
+            let (key, mut stored) = fixture();
+            stored.source = Some(SourceId::new("presentation-fixture"));
+            stored.evidence = Some(Evidence::ServerAssertion);
+            stored.tip = Some((100, [3; 32]));
+            stored.branch_lengths = vec![1; 4];
+            stored.token_identities.insert(
+                category_hex.clone(),
+                StoredTokenIdentity {
+                    name: identity.name,
+                    ticker: identity.ticker,
+                    decimals: identity.decimals,
+                    status: identity.status.into(),
+                    presentation: identity.presentation.clone(),
+                },
+            );
+            let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 92)).unwrap();
+            assert_eq!(reopened.network, Network::Chipnet);
+            assert_eq!(reopened.account_xpub, stored.account_xpub);
+            let identities = reopened.restored_token_identities();
+            assert_eq!(
+                identities[&category_hex].status,
+                if authenticated {
+                    IdentityStatus::Stale
+                } else {
+                    IdentityStatus::Unresolved
+                }
+            );
+            assert_eq!(
+                identities[&category_hex].presentation,
+                identity.presentation
+            );
+            let resealed = reopened.seal(&key, &fixture_nonce(200)).unwrap();
+            let twice = WalletCheckpoint::open(&key, &resealed).unwrap();
+            assert_eq!(twice.restored_token_identities(), identities);
+        }
+    }
+
+    #[test]
+    fn checkpoint_presentation_defaults_rejects_invalid_and_cannot_promote_unknown_status() {
+        let (key, mut stored) = fixture();
+        let category = "aa".repeat(32);
+        stored.source = Some(SourceId::new("presentation-fixture"));
+        stored.evidence = Some(Evidence::ServerAssertion);
+        stored.tip = Some((100, [3; 32]));
+        stored.branch_lengths = vec![1; 4];
+        stored.token_identities.insert(
+            category.clone(),
+            StoredTokenIdentity {
+                name: "Tickets".into(),
+                ticker: None,
+                decimals: 0,
+                status: StoredIdentityStatus::Verified,
+                presentation: Default::default(),
+            },
+        );
+        let mut legacy = serde_json::to_value(&stored).unwrap();
+        legacy["token_identities"][&category]
+            .as_object_mut()
+            .unwrap()
+            .remove("presentation");
+        let reopened = WalletCheckpoint::open(&key, &encoded_value(&key, &legacy, 93)).unwrap();
+        assert_eq!(
+            reopened.restored_token_identities()[&category].presentation,
+            TokenPresentation::default()
+        );
+        assert_eq!(
+            reopened.restored_token_identities()[&category].status,
+            IdentityStatus::Stale
+        );
+
+        for invalid in [
+            serde_json::json!({"description": "x".repeat(4097)}),
+            serde_json::json!({"uris": {"icon": "file:///private"}}),
+            serde_json::json!({"nfts": {"parse": {"types": []}}}),
+            serde_json::json!({"nfts": {"parse": {"types": {"": {"name": "NFT", "extensions": {"huge": "x".repeat(65536)}}}}}}),
+        ] {
+            let mut value = legacy.clone();
+            value["token_identities"][&category]["presentation"] = invalid;
+            assert!(WalletCheckpoint::open(&key, &encoded_value(&key, &value, 94)).is_err());
+        }
+        for status in ["unpublished", "unresolved", "future-status"] {
+            let mut value = legacy.clone();
+            value["token_identities"][&category]["status"] = status.into();
+            value["token_identities"][&category]["presentation"] =
+                serde_json::json!({"description": "Cannot confer authority"});
+            let reopened = WalletCheckpoint::open(&key, &encoded_value(&key, &value, 95)).unwrap();
+            assert_eq!(
+                reopened.restored_token_identities()[&category].status,
+                IdentityStatus::Unresolved
+            );
+            assert_eq!(
+                reopened.restored_token_identities()[&category].presentation,
+                TokenPresentation::default()
+            );
         }
     }
 

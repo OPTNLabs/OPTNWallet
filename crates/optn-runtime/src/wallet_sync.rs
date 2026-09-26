@@ -2051,6 +2051,7 @@ mod tests {
                 ticker: None,
                 decimals: 0,
                 status: IdentityStatus::Unpublished,
+                presentation: Default::default(),
             },
         );
         // A registry can legitimately return a label beyond the restart-cache
@@ -2063,6 +2064,7 @@ mod tests {
                 ticker: None,
                 decimals: 0,
                 status: IdentityStatus::Verified,
+                presentation: Default::default(),
             },
         );
         let (app_tx, _) = watch::channel(app.clone());
@@ -2204,7 +2206,13 @@ mod tests {
         body_for: impl Fn([u8; 32]) -> Vec<u8>,
     ) -> (WalletReconciliation, [u8; 32], Vec<u8>) {
         let genesis = genesis_raw();
-        let category = optn_core::header_hash::sha256d(&genesis);
+        let authbase = optn_core::header_hash::sha256d(&genesis);
+        let mut category = authbase;
+        category.reverse();
+        assert_ne!(
+            category, authbase,
+            "fixture must expose byte-order mistakes"
+        );
         let body = body_for(category);
         let mut tokens = vec![optn_core::token::TokenData::fungible(category, 10)];
         if extra_nft {
@@ -2224,9 +2232,9 @@ mod tests {
             block_height: None,
         }];
         if include_authchain {
-            let head = authhead_raw(category, &body, "example.com", publishes);
+            let head = authhead_raw(authbase, &body, "example.com", publishes);
             transactions.push(ObservedTransaction {
-                txid: category,
+                txid: authbase,
                 raw: genesis,
                 block_height: None,
             });
@@ -2258,6 +2266,7 @@ mod tests {
         capabilities: CapabilitySet,
         transactions: BTreeMap<[u8; 32], ObservedTransaction>,
         spentness: OutpointSpentness,
+        wallet_history: Option<Vec<ObservedTransaction>>,
     }
 
     impl ChainBackend for IdentityBackend {
@@ -2287,6 +2296,7 @@ mod tests {
                 ChainOperation::WalletRefresh
                     | ChainOperation::TransactionLookup
                     | ChainOperation::OutpointSpentness
+                    | ChainOperation::OutpointSpender
             )
         }
 
@@ -2295,7 +2305,10 @@ mod tests {
                 let response = match request {
                     ChainRequest::WalletRefresh { .. } => BackendObservation {
                         payload: ChainPayload::WalletRefresh {
-                            transactions: self.transactions.values().cloned().collect(),
+                            transactions: self
+                                .wallet_history
+                                .clone()
+                                .unwrap_or_else(|| self.transactions.values().cloned().collect()),
                             tip: Some(ChainTip {
                                 height: 100,
                                 hash: [7; 32],
@@ -2320,11 +2333,44 @@ mod tests {
                         },
                         chain_tip: Some((100, [7; 32])),
                     },
-                    ChainRequest::OutpointSpentness { .. } => BackendObservation {
-                        payload: ChainPayload::OutpointSpentness(self.spentness.clone()),
+                    ChainRequest::OutpointSpentness { txid, vout } => BackendObservation {
+                        payload: ChainPayload::OutpointSpentness(match &self.spentness {
+                            OutpointSpentness::Unspent {
+                                txid: known,
+                                vout: index,
+                                ..
+                            }
+                            | OutpointSpentness::Unknown {
+                                txid: known,
+                                vout: index,
+                            } if known == txid && index == vout => self.spentness.clone(),
+                            _ => OutpointSpentness::Unknown {
+                                txid: *txid,
+                                vout: *vout,
+                            },
+                        }),
                         evidence: Evidence::FullNodeValidated {
                             source: self.id.clone(),
                         },
+                        chain_tip: None,
+                    },
+                    ChainRequest::OutpointSpender { txid, vout, .. } => BackendObservation {
+                        payload: ChainPayload::OutpointSpender {
+                            txid: *txid,
+                            vout: *vout,
+                            spender: self
+                                .transactions
+                                .values()
+                                .find(|transaction| {
+                                    optn_core::tx::decode(&transaction.raw)
+                                        .unwrap()
+                                        .inputs
+                                        .iter()
+                                        .any(|(parent, index, _)| parent == txid && index == vout)
+                                })
+                                .cloned(),
+                        },
+                        evidence: Evidence::ServerAssertion,
                         chain_tip: None,
                     },
                     _ => return Err(ChainBackendError::Unsupported),
@@ -2337,6 +2383,14 @@ mod tests {
     fn identity_service(
         transactions: Vec<ObservedTransaction>,
         spentness: OutpointSpentness,
+    ) -> ChainService {
+        identity_service_with_wallet_history(transactions, spentness, None)
+    }
+
+    fn identity_service_with_wallet_history(
+        transactions: Vec<ObservedTransaction>,
+        spentness: OutpointSpentness,
+        wallet_history: Option<Vec<ObservedTransaction>>,
     ) -> ChainService {
         let id = SourceId::new("identity-fixture");
         let endpoint = Endpoint {
@@ -2356,12 +2410,20 @@ mod tests {
                 CapabilityDiscovery::ActiveProbe,
             );
         }
+        if wallet_history.is_some() {
+            capabilities.record(
+                Capability::OutpointSpenderLookup,
+                CapabilityConfidence::Advertised,
+                CapabilityDiscovery::ElectrumServerVersion,
+            );
+        }
         let backend = Arc::new(IdentityBackend {
             id: id.clone(),
             endpoint: endpoint.clone(),
             capabilities,
             transactions: transactions.into_iter().map(|tx| (tx.txid, tx)).collect(),
             spentness,
+            wallet_history,
         });
         let mut catalog = SourceCatalog::default();
         catalog
@@ -2486,6 +2548,24 @@ mod tests {
             fetch_calls,
         ) in [
             (
+                "discovery indexer accepted",
+                true,
+                true,
+                true,
+                true,
+                IdentityStatus::Verified,
+                2,
+            ),
+            (
+                "discovery without terminal unspent",
+                false,
+                true,
+                true,
+                true,
+                IdentityStatus::Unresolved,
+                0,
+            ),
+            (
                 "indexer accepted",
                 true,
                 true,
@@ -2591,11 +2671,15 @@ mod tests {
                     vout: 0,
                 }
             };
-            let mut service = identity_service(transactions, spentness);
+            let wallet_history = name
+                .starts_with("discovery")
+                .then(|| vec![transactions[0].clone()]);
+            let mut service =
+                identity_service_with_wallet_history(transactions, spentness, wallet_history);
             let calls = Arc::new(AtomicUsize::new(0));
             if install_fetcher {
                 service.set_registry_fetcher(Arc::new(FixtureRegistryFetcher {
-                    candidate_only: name.starts_with("indexer"),
+                    candidate_only: name.contains("indexer"),
                     body: if return_matching_body {
                         body
                     } else {
@@ -2831,6 +2915,7 @@ mod tests {
                 ticker: None,
                 decimals: 0,
                 status: IdentityStatus::Verified,
+                presentation: Default::default(),
             },
         });
         assert_eq!(

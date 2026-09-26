@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+pub use optn_core::bcmr::{NftCategory, TokenPresentation};
 pub use optn_core::wallet_file::SecretText;
 pub mod connect;
 mod flow;
@@ -1171,8 +1172,9 @@ impl AppState {
             }
             AppAction::SetTokenIdentity {
                 category_hex,
-                identity,
+                mut identity,
             } => {
+                identity.presentation = identity.authenticated_presentation();
                 if self.token_identities.get(&category_hex) == Some(&identity) {
                     return None;
                 }
@@ -2032,6 +2034,23 @@ pub struct TokenIdentity {
     pub ticker: Option<String>,
     pub decimals: u8,
     pub status: IdentityStatus,
+    pub presentation: TokenPresentation,
+}
+
+impl TokenIdentity {
+    /// Presentation is not identity evidence. Only known authenticated states
+    /// may carry it across a persistence or renderer boundary.
+    pub fn authenticated_presentation(&self) -> TokenPresentation {
+        if matches!(
+            self.status,
+            IdentityStatus::Verified | IdentityStatus::Stale
+        ) && self.presentation.is_valid()
+        {
+            self.presentation.clone()
+        } else {
+            TokenPresentation::default()
+        }
+    }
 }
 
 /// One CashToken category this wallet holds something of.
@@ -3142,6 +3161,7 @@ mod tests {
                 ticker: Some("BCAT".into()),
                 decimals: 2,
                 status,
+                presentation: Default::default(),
             }
         }
 
@@ -3169,6 +3189,41 @@ mod tests {
             assert_eq!(
                 nfts.nfts[0].identity.as_ref().map(|i| i.name.as_str()),
                 Some("Bitcats")
+            );
+        }
+
+        #[test]
+        fn presentation_reaches_owned_assets_only_with_authenticated_status() {
+            let mut state = wallet_with(vec![coin(1, 1_000, Some(TokenData::fungible(ALPHA, 10)))]);
+            for status in [
+                IdentityStatus::Verified,
+                IdentityStatus::Stale,
+                IdentityStatus::Unpublished,
+                IdentityStatus::Unresolved,
+            ] {
+                let mut observed = identity("Bitcats", status);
+                observed.presentation.description = Some("Authenticated description".into());
+                state.reduce(AppAction::SetTokenIdentity {
+                    category_hex: "aa".repeat(32),
+                    identity: observed,
+                });
+                let assets = assets_view_model(&state);
+                let projected = assets.categories[0].identity.as_ref().unwrap();
+                assert_eq!(projected.status, status);
+                assert_eq!(
+                    projected.presentation.description.is_some(),
+                    matches!(status, IdentityStatus::Verified | IdentityStatus::Stale)
+                );
+            }
+            let mut observed = identity("Bitcats", IdentityStatus::Verified);
+            observed.presentation.description = Some("x".repeat(4097));
+            state.reduce(AppAction::SetTokenIdentity {
+                category_hex: "aa".repeat(32),
+                identity: observed,
+            });
+            assert_eq!(
+                state.token_identities[&"aa".repeat(32)].presentation,
+                TokenPresentation::default()
             );
         }
 

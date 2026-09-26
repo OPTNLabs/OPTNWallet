@@ -761,7 +761,9 @@ impl ChainBackend for Bip37Backend {
             ChainOperation::WalletRefresh => self.capabilities.is_usable(Capability::UtxoQuery),
             ChainOperation::Broadcast | ChainOperation::HeaderSync => true,
             ChainOperation::HistoricalHeaderProof => self.probe.serves_shv,
-            ChainOperation::TransactionLookup | ChainOperation::OutpointSpentness => false,
+            ChainOperation::TransactionLookup
+            | ChainOperation::OutpointSpender
+            | ChainOperation::OutpointSpentness => false,
         }
     }
     fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
@@ -803,7 +805,9 @@ impl ChainBackend for Bip37Backend {
                         .await
                 }
                 ChainRequest::TransactionLookup { .. } => Err(ChainBackendError::Unsupported),
-                ChainRequest::OutpointSpentness { .. } => Err(ChainBackendError::Unsupported),
+                ChainRequest::OutpointSpentness { .. } | ChainRequest::OutpointSpender { .. } => {
+                    Err(ChainBackendError::Unsupported)
+                }
             }
         })
     }

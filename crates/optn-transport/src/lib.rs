@@ -16,8 +16,9 @@ use optn_app::{
     HardwareSessionState, HardwareSetupPreview, HardwareVendor, HistoryEntry, HistoryKind,
     IdentityStatus, ImportStep, LedgerLink, MultisigSetupPreview, MultisigStep, Network,
     NetworkServers, OpenedWallet, Outpoint, PledgeStatus, ScanCoverageView, ServerKind,
-    ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, TokenIdentity, UiSkin,
-    WalletKind, WalletSyncView, WatchOnlyKind, WatchOnlySetupPreview, RELAY_MINIMUM_FEE_RATE,
+    ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, TokenIdentity,
+    TokenPresentation, UiSkin, WalletKind, WalletSyncView, WatchOnlyKind, WatchOnlySetupPreview,
+    RELAY_MINIMUM_FEE_RATE,
 };
 use std::collections::BTreeMap;
 pub mod airgap;
@@ -769,6 +770,7 @@ pub struct WireTokenIdentity {
     /// status shows the caveat it cannot interpret rather than silently
     /// treating it as current.
     pub status: String,
+    pub presentation: TokenPresentation,
 }
 
 fn identity_status_name(status: IdentityStatus) -> &'static str {
@@ -798,18 +800,22 @@ impl From<&TokenIdentity> for WireTokenIdentity {
             ticker: value.ticker.clone(),
             decimals: value.decimals,
             status: identity_status_name(value.status).to_owned(),
+            presentation: value.authenticated_presentation(),
         }
     }
 }
 
 impl From<WireTokenIdentity> for TokenIdentity {
     fn from(value: WireTokenIdentity) -> Self {
-        Self {
+        let mut identity = Self {
             name: value.name,
             ticker: value.ticker,
             decimals: value.decimals,
             status: parse_identity_status(&value.status),
-        }
+            presentation: value.presentation,
+        };
+        identity.presentation = identity.authenticated_presentation();
+        identity
     }
 }
 
@@ -2989,6 +2995,7 @@ mod tests {
                 ticker: Some("BCAT".into()),
                 decimals: 2,
                 status,
+                presentation: Default::default(),
             };
             let decoded = TokenIdentity::from(WireTokenIdentity::from(&identity));
             assert_eq!(decoded, identity);
@@ -3006,8 +3013,88 @@ mod tests {
             ticker: None,
             decimals: 0,
             status: "something-newer".into(),
+            presentation: Default::default(),
         };
         assert_eq!(TokenIdentity::from(wire).status, IdentityStatus::Unresolved);
+    }
+
+    #[test]
+    fn presentation_wire_shape_defaults_and_status_do_not_grant_identity_authority() {
+        let rich = serde_json::json!({
+            "description": "Tickets", "uris": {"icon": "ipfs://bafy/ticket.png"},
+            "nfts": {"parse": {"types": {"01": {"name": "Ticket", "uris": {"web": "https://example.test"}}}}}
+        });
+        for status in [
+            "verified",
+            "stale",
+            "unpublished",
+            "unresolved",
+            "future-status",
+        ] {
+            let wire: WireTokenIdentity = serde_json::from_value(serde_json::json!({
+                "name": "Tickets", "ticker": "TKT", "decimals": 0,
+                "status": status, "presentation": rich
+            }))
+            .unwrap();
+            let identity = TokenIdentity::from(wire);
+            assert_eq!(identity.status, parse_identity_status(status));
+            let encoded = serde_json::to_value(WireTokenIdentity::from(&identity)).unwrap();
+            assert_eq!(
+                encoded["presentation"],
+                if matches!(status, "verified" | "stale") {
+                    rich.clone()
+                } else {
+                    serde_json::json!({"description": null, "uris": {}, "nfts": null})
+                }
+            );
+            let mut injected = identity.clone();
+            injected.presentation = serde_json::from_value(rich.clone()).unwrap();
+            assert_eq!(
+                WireTokenIdentity::from(&injected).presentation,
+                identity.presentation
+            );
+        }
+        let old: WireTokenIdentity =
+            serde_json::from_str(r#"{"name":"Old","status":"verified"}"#).unwrap();
+        assert_eq!(old.presentation, TokenPresentation::default());
+        assert_eq!(TokenIdentity::from(old).status, IdentityStatus::Verified);
+    }
+
+    #[test]
+    fn presentation_is_validated_on_wire_decode_and_in_process_crossing() {
+        for invalid in [
+            serde_json::json!({"description": "x".repeat(4097)}),
+            serde_json::json!({"uris": {"icon": "data:image/svg+xml,unsafe"}}),
+            serde_json::json!({"nfts": {"parse": {"types": []}}}),
+            serde_json::json!({"nfts": {"parse": {"types": {"": {"name": "NFT", "extensions": {"huge": "x".repeat(65536)}}}}}}),
+        ] {
+            assert!(
+                serde_json::from_value::<WireTokenIdentity>(serde_json::json!({
+                    "status": "verified", "presentation": invalid
+                }))
+                .is_err()
+            );
+        }
+        let wire = WireTokenIdentity {
+            status: "verified".into(),
+            presentation: TokenPresentation {
+                description: Some("x".repeat(4097)),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let identity = TokenIdentity::from(wire);
+        assert_eq!(identity.presentation, TokenPresentation::default());
+        assert_eq!(identity.status, IdentityStatus::Verified);
+        let mut invalid = identity;
+        invalid
+            .presentation
+            .uris
+            .insert("icon".into(), "file:///private".into());
+        assert_eq!(
+            WireTokenIdentity::from(&invalid).presentation,
+            TokenPresentation::default()
+        );
     }
 
     /// Every fusion phase survives the wire, including the ones carrying data.

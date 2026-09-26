@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Capacitor } from '@capacitor/core';
 import BcmrService from '../services/BcmrService';
 import { resolveIpfsGatewayUrl } from '../utils/ipfs';
+import { isDesktopPlatform } from '../utils/platform';
+import { store } from '../state/store';
 import type {
   BcmrSnapshot,
   BcmrTokenMetadataState,
@@ -20,12 +22,47 @@ const inflightMetadata = new Map<string, Promise<SharedTokenMetadata | null>>();
 export const METADATA_FAILURE_TTL_MS = 5_000;
 export const METADATA_REFRESH_TTL_MS = 5 * 60_000;
 
+function desktopScope(): string {
+  if (!isDesktopPlatform()) return '';
+  const state = store.getState();
+  return `${state.wallet_id.currentWalletId}:${state.wallet_id.sessionGeneration}:${state.network.currentNetwork}:${state.appLock.isLocked}`;
+}
+
+function subscribeDesktopScope(listener: () => void): () => void {
+  return isDesktopPlatform() ? store.subscribe(listener) : () => {};
+}
+
+function unresolvedDesktopMetadata(category: string): SharedTokenMetadata {
+  return {
+    ...buildLoadingMetadata(category),
+    status: 'ready',
+    identityStatus: 'unresolved',
+  };
+}
+
+async function readDesktopMetadata(categories: string[]) {
+  const scope = desktopScope();
+  const state = store.getState();
+  if (!state.wallet_id.currentWalletId || state.appLock.isLocked) return null;
+  const { readEngineTokenMetadata } = await import(
+    '../platform/desktop/engineWalletBridge'
+  );
+  const metadata = await readEngineTokenMetadata(
+    state.wallet_id.currentWalletId,
+    state.network.currentNetwork,
+    categories
+  );
+  return scope === desktopScope() ? metadata : null;
+}
+
 function isWebRuntime(): boolean {
   return Capacitor.getPlatform() === 'web';
 }
 
 function normalizeCategory(category: string): string {
-  return String(category ?? '').trim().toLowerCase();
+  return String(category ?? '')
+    .trim()
+    .toLowerCase();
 }
 
 function getBrowserOnlineState(): boolean | null {
@@ -210,9 +247,8 @@ async function loadFreshTokenMetadata(
   try {
     snapshot = bcmr.extractIdentityByCategory(normalized, registry.registry);
   } catch {
-    const fallbackRegistry = await bcmr.resolveCategorySpecificRegistry(
-      normalized
-    );
+    const fallbackRegistry =
+      await bcmr.resolveCategorySpecificRegistry(normalized);
     if (!fallbackRegistry) {
       throw new Error(`No identity history for token category ${normalized}`);
     }
@@ -245,6 +281,12 @@ export async function resolveTokenMetadata(
 ): Promise<SharedTokenMetadata | null> {
   const normalized = normalizeCategory(category);
   if (!normalized) return null;
+  if (isDesktopPlatform()) {
+    return (
+      (await readDesktopMetadata([normalized]))?.[normalized] ??
+      unresolvedDesktopMetadata(normalized)
+    );
+  }
 
   const cached = metadataCache.get(normalized);
   if (cached && !options?.forceRefresh) {
@@ -301,9 +343,13 @@ export async function resolveTokenMetadata(
 export function getCachedTokenMetadata(
   category: string
 ): SharedTokenMetadata | undefined {
+  // The category-only legacy cache cannot carry wallet/session-bound identities.
+  if (isDesktopPlatform()) return undefined;
   const normalized = normalizeCategory(category);
   if (!normalized) return undefined;
-  return metadataCache.get(normalized) ?? metadataFailureCache.get(normalized)?.state;
+  return (
+    metadataCache.get(normalized) ?? metadataFailureCache.get(normalized)?.state
+  );
 }
 
 export function isTokenMetadataRefreshDue(
@@ -321,7 +367,11 @@ export function isTokenMetadataRefreshDue(
   return now - lastFetchMs >= METADATA_REFRESH_TTL_MS;
 }
 
-export async function preloadTokenMetadata(categories: string[]): Promise<void> {
+export async function preloadTokenMetadata(
+  categories: string[]
+): Promise<void> {
+  // Metadata refresh belongs to the shared runtime's wallet sync on desktop.
+  if (isDesktopPlatform()) return;
   const unique = normalizeSharedTokenCategories(categories);
 
   if (isWebRuntime()) {
@@ -345,6 +395,11 @@ export async function preloadTokenMetadata(categories: string[]): Promise<void> 
 }
 
 export default function useSharedTokenMetadata(categories: string[]) {
+  const scope = useSyncExternalStore(
+    subscribeDesktopScope,
+    desktopScope,
+    desktopScope
+  );
   const normalizedCategoryKey = useMemo(
     () => buildSharedTokenCategoriesKey(categories),
     [categories]
@@ -355,6 +410,46 @@ export default function useSharedTokenMetadata(categories: string[]) {
   );
   const [retryNonce, setRetryNonce] = useState(0);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [desktopMetadata, setDesktopMetadata] = useState<{
+    key: string;
+    values: Record<string, SharedTokenMetadata>;
+  } | null>(null);
+  const desktopKey = `${scope}\u0001${normalizedCategoryKey}`;
+  const desktopFallback = useMemo(
+    () =>
+      Object.fromEntries(
+        (normalizedCategoryKey
+          ? normalizedCategoryKey.split('\u0000')
+          : []
+        ).map((category) => [category, unresolvedDesktopMetadata(category)])
+      ),
+    [normalizedCategoryKey]
+  );
+
+  useEffect(() => {
+    if (!scope || !normalizedCategoryKey) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = async () => {
+      const values = await readDesktopMetadata(
+        normalizedCategoryKey.split('\u0000')
+      );
+      if (cancelled) return;
+      setDesktopMetadata({
+        key: desktopKey,
+        values: values ?? desktopFallback,
+      });
+      // ponytail: runtime changes may lag five seconds; use host events when exposed.
+      timer = setTimeout(() => {
+        void refresh();
+      }, 5_000);
+    };
+    void refresh();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [scope, desktopKey, normalizedCategoryKey, desktopFallback, refreshNonce]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -380,6 +475,7 @@ export default function useSharedTokenMetadata(categories: string[]) {
   }, []);
 
   useEffect(() => {
+    if (isDesktopPlatform()) return;
     let cancelled = false;
     const next: Record<string, SharedTokenMetadata> = {};
     let retryAfterMs: number | undefined;
@@ -407,7 +503,9 @@ export default function useSharedTokenMetadata(categories: string[]) {
           const delay = getFailureRetryDelayMs(category);
           if (delay !== undefined) {
             retryAfterMs =
-            retryAfterMs === undefined ? delay : Math.min(retryAfterMs, delay);
+              retryAfterMs === undefined
+                ? delay
+                : Math.min(retryAfterMs, delay);
           }
         }
         continue;
@@ -481,5 +579,10 @@ export default function useSharedTokenMetadata(categories: string[]) {
     };
   }, [normalizedCategoryKey, refreshNonce, retryNonce]);
 
+  if (scope) {
+    return desktopMetadata?.key === desktopKey
+      ? desktopMetadata.values
+      : desktopFallback;
+  }
   return metadata;
 }
