@@ -589,3 +589,14 @@ that either total covers the entire wallet: legacy issued-address horizons are n
 imported, RPA receipts and tracked contracts are not persisted in the shared HD
 checkpoint, and HD discovery rejects non-HD scripts. Whole-wallet balance
 replacement remains blocked on a union of those scopes with durable coverage.
+
+The `4f76c047` Windows desktop package was built with `vite.desktop.config.ts`
+and the normal `com.optilabs.wallet` profile. Both launches retained all five
+saved wallets; ordinary empty-password unlock of the previously tested Chipnet
+wallet restored its cached Home history/balance. Diagnostics also retained the
+shared 15,529,363-sat checkpoint and marked it stale after route reconstruction.
+No token categories were present. The executable's SHA-256 is
+`0cbafee7f45b8a4b8fa06d2faa28ef5f651f1d2f365335d9c5db0f8b1e8c4e9e`.
+An actual graceful-exit check verified that only this app's owned Tor child exited
+with the wallet and SOCKS port 9251 was released; the wallet was then reopened.
+This verifies the earlier Tor-exit fix in a running package, not just unit tests.
