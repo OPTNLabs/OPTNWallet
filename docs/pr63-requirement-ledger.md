@@ -472,12 +472,15 @@ It projects the installed stack's last observation, or unknown while unavailable
 or revoked. Active readiness checks and route construction still verify Tor.
 The old UI shows BCMR/IPFS entries before unavailable adapters, with source details
 and the usual bootstrap enable/disable/ban controls. Opening this directory
-does not contact providers. The previous packaged read took 4.6 seconds locally.
+does not contact providers. Packaged Windows measurements changed from 4.6 seconds
+to 10 ms for Mainnet and 5 ms for Chipnet. Both catalogs returned their correct
+BCMR origin and non-removable bootstrap status. All five saved wallets remained
+visible after the normal-profile relaunch.
 
-Validation: bootstrap/persistence policy regressions, 19 native runtime tests
+Validation: all 294 runtime tests, 19 native runtime tests
 (including reading status during blocked sync), four source-view tests, 25 native
 chain tests, retained UI interaction test, TypeScript, strict Rust Clippy and
-architecture gate. Two existing catalog tests were updated to count chain routes
+architecture gate, CLI native check and Leptos WASM check. Two existing catalog tests were updated to count chain routes
 separately from metadata entries. General TokenIndex/Chaingraph query adapters and
 metadata proxy/cache remain unavailable; adding a hostname would not implement
 those APIs. No live Paytaca token-identity acceptance is claimed.
