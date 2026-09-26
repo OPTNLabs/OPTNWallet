@@ -1024,19 +1024,20 @@ impl WalletSyncSession {
             // Retain every issued/reserved branch horizon, even if no provider
             // has seen funds there yet. The scan covers all intervening indexes.
             for (branch, next) in allocation.scan_horizons().into_iter().enumerate() {
-                // The normal discovery budget must not hide previously issued
-                // addresses. Leave room for an unused gap after that durable
-                // horizon, while retaining the shared hard bound.
-                limits.addresses_per_branch = limits.addresses_per_branch.max(
-                    next.saturating_add(limits.gap_limit)
-                        .min(optn_core::watch_only::MAX_HD_ADDRESSES_PER_BRANCH),
-                );
-                if let Some(index) = next.checked_sub(1) {
+                // Include the trailing gap in the first query, not just its
+                // budget: otherwise a used last-issued address repeats the
+                // whole inventory in a second provider pass. Use issued scope,
+                // not the previous scan length, so refreshes do not grow it.
+                let horizon = next
+                    .saturating_add(limits.gap_limit)
+                    .min(optn_core::watch_only::MAX_HD_ADDRESSES_PER_BRANCH);
+                limits.addresses_per_branch = limits.addresses_per_branch.max(horizon);
+                if next > 0 {
                     let address = optn_core::watch_only::address_under_account(
                         app.network,
                         &xpub,
                         optn_core::watch_only::HD_SCAN_BRANCHES[branch],
-                        index,
+                        horizon - 1,
                     )
                     .map_err(|error| WalletSyncError::InvalidScope(error.to_string()))?;
                     required.insert(

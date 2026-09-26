@@ -634,6 +634,18 @@ contracts and multiple-account inventory remain outside this HD-only migration.
 Whole-wallet scalar replacement remains blocked on their durable union; this
 change does not close #75.
 
+The subsequent live scan traced the timeout to repeated HD inventory queries:
+2,780 interests took about 175 seconds on the permitted Electrum route, then a
+second complete query was needed for the trailing gap and exceeded the native
+300-second deadline. Initial derivation took 14 seconds and headers 4 seconds.
+Rust now includes that gap in the first query after each durable issued horizon.
+It does not extend from the previous scan length or infer used addresses from
+the imported inventory. The regression proves a single expanded query after
+reopen and stable scope on later refreshes, including normal receive allocation.
+All 303 runtime tests, strict Clippy, formatting, architecture and native build
+passed. Live completion with this fix is still being checked; timeout evidence
+alone does not establish current balance or whole-wallet parity.
+
 ### 2026-09-26: default-on Chat and automatic native relay health
 
 The retained UI no longer has a Chat enable switch or persisted enable flag.

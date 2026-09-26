@@ -1030,7 +1030,8 @@ mod tests {
                 .await,
             Err(WalletSyncError::Persistence(_))
         ));
-        assert_eq!(*backend.calls.lock().unwrap(), [8, 14, 16]);
+        // Include the managed wallet's issued receive address and its gap.
+        assert_eq!(*backend.calls.lock().unwrap(), [9, 14, 16]);
         assert_eq!(*backend.floors.lock().unwrap(), [Some(1); 3]);
         assert_eq!(restarted.state().wallet_sync.rescan_requested, Some(1));
         assert!(restarted.state().coins.is_empty());
@@ -1049,7 +1050,7 @@ mod tests {
             skipped_below: Some(1),
             chosen_by_holder: true,
         });
-        assert_eq!(*backend.calls.lock().unwrap(), [8, 14, 16, 8, 14, 16]);
+        assert_eq!(*backend.calls.lock().unwrap(), [9, 14, 16, 9, 14, 16]);
         assert_eq!(*backend.floors.lock().unwrap(), [Some(1); 6]);
         assert_eq!(restarted.state().wallet_sync.rescan_requested, None);
         assert_eq!(restarted.state().wallet_sync.scan_coverage, coverage);
@@ -1082,7 +1083,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(*future_backend.calls.lock().unwrap(), [16]);
+        // The newly allocated receive address extends its checked gap by one.
+        assert_eq!(*future_backend.calls.lock().unwrap(), [17]);
         assert_eq!(*future_backend.floors.lock().unwrap(), [Some(1)]);
         assert_eq!(resumed.state().wallet_sync.scan_coverage, coverage);
 
@@ -1427,7 +1429,7 @@ mod tests {
                 (2000, script(&xpub, 2, 26)),
             ],
         )];
-        let (mut provider, _) = service(transactions.clone(), false);
+        let (mut provider, inventory_backend) = service(transactions.clone(), false);
         let mut worker = ProgressiveSyncWorker::new(Default::default());
         runtime
             .sync_hd_wallet(
@@ -1509,6 +1511,7 @@ mod tests {
         assert_eq!(restarted.state().hd_addresses, imported.hd_addresses);
         assert_eq!(restarted.state().coins.spendable_sats(), 1000);
         assert!(!restarted.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        inventory_backend.calls.lock().unwrap().clear();
         restarted
             .sync_hd_wallet(
                 &mut provider,
@@ -1520,6 +1523,11 @@ mod tests {
             .unwrap();
         assert_eq!(restarted.state().coins.spendable_sats(), 11_000);
         assert!(restarted.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        assert_eq!(
+            *inventory_backend.calls.lock().unwrap(),
+            [392],
+            "scan the issued inventory and its trailing gaps in one provider pass"
+        );
         let sync = restarted.subscribe_wallet_sync();
         assert_eq!(
             sync.borrow()
@@ -1534,6 +1542,41 @@ mod tests {
             [Some(201), None, None, Some(26)],
             "prederived inventory is not observed usage"
         );
+        let branch_lengths = || {
+            sync.borrow()
+                .authoritative
+                .as_ref()
+                .unwrap()
+                .value
+                .hd
+                .as_ref()
+                .unwrap()
+                .branches
+                .each_ref()
+                .map(Vec::len)
+        };
+        assert_eq!(branch_lengths(), [222, 52, 71, 47]);
+        // Discovering receive index 201 allocates 202 for the holder. Its one
+        // new address is covered next time; an observed gap is never issued.
+        let observed_allocation = restarted.state().hd_addresses;
+        assert_eq!(
+            observed_allocation.as_ref().unwrap().scan_horizons(),
+            [203, 32, 51, 27]
+        );
+        for _ in 0..2 {
+            restarted
+                .sync_hd_wallet(
+                    &mut provider,
+                    &mut worker,
+                    xpub.clone(),
+                    HdSyncLimits::default(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(branch_lengths(), [223, 52, 71, 47]);
+            assert_eq!(restarted.state().hd_addresses, observed_allocation);
+        }
+        assert_eq!(*inventory_backend.calls.lock().unwrap(), [392, 393, 393]);
 
         let (mut held, backend) = service(transactions, true);
         let scanning = restarted.clone();
