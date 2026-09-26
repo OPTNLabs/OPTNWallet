@@ -310,7 +310,7 @@ const DesktopLandingPage = () => {
       const attempt = await runExclusiveWalletOpen(
         id,
         getCurrentWebviewWindow().label,
-        () => unlockWalletWithBiometric(id),
+        () => unlockWalletWithBiometric(id, autoLockMinutes),
         isWalletWindowOpen
       );
       if (attempt.status === 'held') {
@@ -321,6 +321,16 @@ const DesktopLandingPage = () => {
       if (attempt.status === 'rejected') {
         setError('Biometric unlock was not accepted.');
         return;
+      }
+      if (attempt.value.engineWarning) {
+        try {
+          await Toast.show({
+            text: attempt.value.engineWarning,
+            duration: 'long',
+          });
+        } catch {
+          // Feedback failure must not undo the completed unlock.
+        }
       }
       finishOpen(id, attempt.value);
     } catch (err) {
@@ -426,6 +436,21 @@ const DesktopLandingPage = () => {
               ? `Wallet keys imported, but data file failed: ${coldErr.message}`
               : t('desktopWallet.importFailed')
           );
+        }
+      }
+      const engine = await openWalletInEngine(
+        result.walletId,
+        password,
+        autoLockMinutes
+      ).catch(() => ({
+        opened: false,
+        reason: 'Wallet opened, but the shared engine is unavailable.',
+      }));
+      if (!engine.opened && engine.reason) {
+        try {
+          await Toast.show({ text: engine.reason, duration: 'long' });
+        } catch {
+          // Feedback failure must not undo the completed file import.
         }
       }
       dispatch(setWalletId(result.walletId));
