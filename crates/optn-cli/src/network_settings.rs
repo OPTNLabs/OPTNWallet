@@ -298,6 +298,7 @@ fn parse_endpoint_kind(value: &str) -> Result<EndpointKind, String> {
         "node-rpc" => Ok(EndpointKind::BchnRpc),
         "node-zmq" => Ok(EndpointKind::BchnZmq),
         "ipfs-gateway" => Ok(EndpointKind::IpfsGatewayHttps),
+        "bcmr-indexer" => Ok(EndpointKind::BcmrIndexerHttps),
         "explorer-https" => Ok(EndpointKind::ExplorerHttps),
         "explorer-http" => Ok(EndpointKind::ExplorerHttp),
         other => Err(format!("unknown endpoint kind '{other}'")),

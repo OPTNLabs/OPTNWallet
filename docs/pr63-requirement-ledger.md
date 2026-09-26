@@ -427,3 +427,31 @@ Bridge/hint tests (7), component test (1), full TypeScript check and targeted li
 pass. These are adapter tests, not packaged React wallet end-to-end evidence.
 The user rejected the replacement Leptos visual shell; interaction checks above
 do not satisfy visual parity with the pinned main-release design.
+
+### 2026-09-26: selected BCMR indexer byte adapter
+
+`BcmrIndexerHttps` is a persisted metadata endpoint, not a wallet sync protocol.
+The native stack shared by CLI and GUI derives permitted indexer origins from the
+same scope, fallback, ordering and bans as other configured metadata endpoints.
+The retained UI exposes **Network sources → Metadata & indexing → Add BCMR
+indexer**; Leptos and CLI accept `bcmr-indexer` through their existing add-source
+contracts. Opening the directory performs no provider probes. No public indexer
+is injected into the user's settings automatically.
+
+After local authchain resolution, publisher URIs are tried first, followed by up
+to three selected indexer candidates at `/api/registries/<category>/latest/`.
+This uses the [Paytaca-compatible API](https://github.com/paytaca/bcmr-indexer#api-endpoints).
+Verified Tor with remote DNS, HTTPS, same-origin indexer redirects, the existing
+20-second work deadline and aggregate 2 MiB accepted-body budget remain enforced.
+An indexer supplies untrusted bytes only: missing chain evidence remains unresolved,
+and the exact response bytes must match the locally established publication hash.
+Reserialized/normalized JSON can fail that hash even if the fields look identical;
+this adapter deliberately does not bypass the commitment. Arbitrary base paths,
+cleartext/LAN indexers, external authchain truth and general token-index queries
+are not implemented by this endpoint.
+
+Evidence: selected-source persistence/reopen and boundary tests; connected HD sync
+accepts matching indexer bytes into Assets and restores them stale after restart,
+rejects wrong hashes and refuses to query when spentness cannot be established.
+These are synthetic integration tests, not a claim of live Paytaca token acceptance.
+SHV/MMR implementation and its existing reference/live proof evidence are unchanged.

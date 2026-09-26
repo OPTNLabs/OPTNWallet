@@ -207,18 +207,18 @@ fn policy_allows_public_registry(policy: &ConnectionPolicy) -> bool {
         || policy.fallback_scope.as_ref().is_some_and(allows_public)
 }
 
-fn configured_ipfs_gateways(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> Vec<url::Url> {
-    let plan = optn_runtime::chain::build_endpoint_selection_plan(
-        catalog,
-        policy,
-        EndpointKind::IpfsGatewayHttps,
-    );
+fn configured_metadata_origins(
+    catalog: &SourceCatalog,
+    policy: &ConnectionPolicy,
+    kind: EndpointKind,
+) -> Vec<url::Url> {
+    let plan = optn_runtime::chain::build_endpoint_selection_plan(catalog, policy, kind);
     plan.primary
         .iter()
         .chain(&plan.fallback)
         .filter_map(|id| catalog.get(id))
         .flat_map(|source| &source.endpoints)
-        .filter(|endpoint| endpoint.kind == EndpointKind::IpfsGatewayHttps)
+        .filter(|endpoint| endpoint.kind == kind)
         .filter_map(|endpoint| {
             let mut url = url::Url::parse("https://gateway.invalid/").ok()?;
             url.set_host(Some(&endpoint.host)).ok()?;
@@ -243,12 +243,13 @@ fn endpoint_can_use_native_tor(endpoint: &Endpoint, policy: &ConnectionPolicy) -
 }
 
 fn needs_default_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> bool {
-    let gateways = optn_runtime::chain::build_endpoint_selection_plan(
-        catalog,
-        policy,
+    if [
         EndpointKind::IpfsGatewayHttps,
-    );
-    if !gateways.primary.is_empty() || !gateways.fallback.is_empty() {
+        EndpointKind::BcmrIndexerHttps,
+    ]
+    .into_iter()
+    .any(|kind| !configured_metadata_origins(catalog, policy, kind).is_empty())
+    {
         // The bounded metadata HTTP adapter currently requires verified Tor,
         // including when the configured gateway is owned by the user.
         return true;
@@ -588,12 +589,16 @@ async fn build_native_chain_stack_with_tor_status(
     let sources = catalog.iter().cloned().collect::<Vec<_>>();
     let mut service = ChainService::new(catalog, policy.clone());
     if let TorStatus::Verified { socks_port } = tor_status {
-        let gateways = configured_ipfs_gateways(service.catalog(), &policy);
+        let gateways =
+            configured_metadata_origins(service.catalog(), &policy, EndpointKind::IpfsGatewayHttps);
+        let indexers =
+            configured_metadata_origins(service.catalog(), &policy, EndpointKind::BcmrIndexerHttps);
         let allow_publisher = policy_allows_public_registry(&policy);
-        if allow_publisher || !gateways.is_empty() {
+        if allow_publisher || !gateways.is_empty() || !indexers.is_empty() {
             service.set_registry_fetcher(Arc::new(registry_fetch::ConfiguredRegistryFetcher::new(
                 registry_fetch::VerifiedRegistryTor { socks_port },
                 gateways,
+                indexers,
                 allow_publisher,
             )));
         }
@@ -775,81 +780,89 @@ mod tests {
     use optn_runtime::chain::ProtocolSet;
 
     #[tokio::test]
-    async fn configured_gateway_uses_source_policy_without_becoming_chain_provider() {
-        use optn_runtime::chain::{build_endpoint_selection_plan, SourceDisposition};
-        use optn_runtime::network_config::{add_user_source_services, UserNetworkOverlay};
-        let mut overlay = UserNetworkOverlay::default();
-        let own = add_user_source_services(
-            &mut overlay,
-            "My gateway",
-            vec![Endpoint {
-                kind: EndpointKind::IpfsGatewayHttps,
-                host: "gateway.example".into(),
-                port: Some(443),
-            }],
-            Some("home"),
-        )
-        .unwrap();
-        let public = add_user_source_services(
-            &mut overlay,
-            "Other gateway",
-            vec![Endpoint {
-                kind: EndpointKind::IpfsGatewayHttps,
-                host: "public.example".into(),
-                port: Some(8443),
-            }],
-            None,
-        )
-        .unwrap();
-        let mut catalog = SourceCatalog::default();
-        for source in overlay.user_sources {
-            catalog.insert(source).unwrap();
+    async fn configured_metadata_uses_source_policy_without_becoming_chain_provider() {
+        for kind in [
+            EndpointKind::IpfsGatewayHttps,
+            EndpointKind::BcmrIndexerHttps,
+        ] {
+            use optn_runtime::chain::{build_endpoint_selection_plan, SourceDisposition};
+            use optn_runtime::network_config::{add_user_source_services, UserNetworkOverlay};
+            let mut overlay = UserNetworkOverlay::default();
+            let own = add_user_source_services(
+                &mut overlay,
+                "My gateway",
+                vec![Endpoint {
+                    kind,
+                    host: "gateway.example".into(),
+                    port: Some(443),
+                }],
+                Some("home"),
+            )
+            .unwrap();
+            let public = add_user_source_services(
+                &mut overlay,
+                "Other gateway",
+                vec![Endpoint {
+                    kind,
+                    host: "public.example".into(),
+                    port: Some(8443),
+                }],
+                None,
+            )
+            .unwrap();
+            let mut catalog = SourceCatalog::default();
+            for source in overlay.user_sources {
+                catalog.insert(source).unwrap();
+            }
+            let mut policy = ConnectionPolicy::own_infrastructure();
+            policy.preferred = vec![public.clone()];
+            assert_eq!(
+                configured_metadata_origins(&catalog, &policy, kind)
+                    .iter()
+                    .map(url::Url::as_str)
+                    .collect::<Vec<_>>(),
+                vec!["https://gateway.example/"]
+            );
+            assert!(build_selection_plan(&catalog, &policy).primary.is_empty());
+            assert!(requires_tor_proxy(&catalog, &policy));
+            policy.fallback_scope = Some(SourceScope::PublicEnabled);
+            let plan = build_endpoint_selection_plan(&catalog, &policy, kind);
+            assert_eq!(plan.primary, vec![own.clone()]);
+            assert_eq!(plan.fallback, vec![public.clone()]);
+            catalog.get_mut(&public).unwrap().disposition = SourceDisposition::Banned;
+            assert_eq!(
+                configured_metadata_origins(&catalog, &policy, kind).len(),
+                1
+            );
+            policy.fallback_scope = None;
+            let stack = build_native_chain_stack_with_tor_status(
+                catalog.clone(),
+                policy.clone(),
+                "chipnet",
+                &NativeChainSecrets::default(),
+                TorStatus::Verified { socks_port: 9050 },
+                None,
+            )
+            .await;
+            let service = stack.service.lock().await;
+            let fetcher = service
+                .registry_fetcher()
+                .expect("own gateway installs metadata transport");
+            assert!(
+                fetcher
+                    .fetch(
+                        "https://publisher.example/registry.json",
+                        Default::default()
+                    )
+                    .await
+                    .is_err(),
+                "own-only must not dial arbitrary publishers"
+            );
+            drop(service);
+            catalog.get_mut(&own).unwrap().disposition = SourceDisposition::Disabled;
+            assert!(configured_metadata_origins(&catalog, &policy, kind).is_empty());
+            assert!(!requires_tor_proxy(&catalog, &policy));
         }
-        let mut policy = ConnectionPolicy::own_infrastructure();
-        policy.preferred = vec![public.clone()];
-        assert_eq!(
-            configured_ipfs_gateways(&catalog, &policy)
-                .iter()
-                .map(url::Url::as_str)
-                .collect::<Vec<_>>(),
-            vec!["https://gateway.example/"]
-        );
-        assert!(build_selection_plan(&catalog, &policy).primary.is_empty());
-        assert!(requires_tor_proxy(&catalog, &policy));
-        policy.fallback_scope = Some(SourceScope::PublicEnabled);
-        let plan = build_endpoint_selection_plan(&catalog, &policy, EndpointKind::IpfsGatewayHttps);
-        assert_eq!(plan.primary, vec![own.clone()]);
-        assert_eq!(plan.fallback, vec![public.clone()]);
-        catalog.get_mut(&public).unwrap().disposition = SourceDisposition::Banned;
-        assert_eq!(configured_ipfs_gateways(&catalog, &policy).len(), 1);
-        policy.fallback_scope = None;
-        let stack = build_native_chain_stack_with_tor_status(
-            catalog.clone(),
-            policy.clone(),
-            "chipnet",
-            &NativeChainSecrets::default(),
-            TorStatus::Verified { socks_port: 9050 },
-            None,
-        )
-        .await;
-        let service = stack.service.lock().await;
-        let fetcher = service
-            .registry_fetcher()
-            .expect("own gateway installs metadata transport");
-        assert!(
-            fetcher
-                .fetch(
-                    "https://publisher.example/registry.json",
-                    Default::default()
-                )
-                .await
-                .is_err(),
-            "own-only must not dial arbitrary publishers"
-        );
-        drop(service);
-        catalog.get_mut(&own).unwrap().disposition = SourceDisposition::Disabled;
-        assert!(configured_ipfs_gateways(&catalog, &policy).is_empty());
-        assert!(!requires_tor_proxy(&catalog, &policy));
     }
 
     #[tokio::test]

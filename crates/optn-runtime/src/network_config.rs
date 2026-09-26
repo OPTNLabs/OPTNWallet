@@ -428,6 +428,7 @@ enum StoredEndpointKind {
     ExplorerHttp,
     ExplorerHttps,
     IpfsGatewayHttps,
+    BcmrIndexerHttps,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -686,6 +687,7 @@ impl StoredEndpoint {
                 | StoredEndpointKind::BchnRpc
                 | StoredEndpointKind::BchnZmq
                 | StoredEndpointKind::IpfsGatewayHttps
+                | StoredEndpointKind::BcmrIndexerHttps
         ) && self.port.is_none()
         {
             return Err(NetworkConfigCodecError::InvalidEndpoint(
@@ -797,6 +799,7 @@ impl From<EndpointKind> for StoredEndpointKind {
             EndpointKind::ExplorerHttp => Self::ExplorerHttp,
             EndpointKind::ExplorerHttps => Self::ExplorerHttps,
             EndpointKind::IpfsGatewayHttps => Self::IpfsGatewayHttps,
+            EndpointKind::BcmrIndexerHttps => Self::BcmrIndexerHttps,
         }
     }
 }
@@ -812,6 +815,7 @@ impl From<StoredEndpointKind> for EndpointKind {
             StoredEndpointKind::ExplorerHttp => Self::ExplorerHttp,
             StoredEndpointKind::ExplorerHttps => Self::ExplorerHttps,
             StoredEndpointKind::IpfsGatewayHttps => Self::IpfsGatewayHttps,
+            StoredEndpointKind::BcmrIndexerHttps => Self::BcmrIndexerHttps,
         }
     }
 }

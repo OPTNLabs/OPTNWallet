@@ -39,11 +39,6 @@ it('browses without probes and sends explicit selection through the old UI', asy
   const view: ChainSourcesView = {
     unavailable_services: [
       {
-        id: 'bcmr-indexer',
-        label: 'External BCMR indexer',
-        reason: 'Provider adapter unavailable',
-      },
-      {
         id: 'token-indexer',
         label: 'Token indexer',
         reason: 'Provider adapter unavailable',
@@ -106,11 +101,11 @@ it('browses without probes and sends explicit selection through the old UI', asy
   await screen.findByTestId('chain-sources-public');
   fireEvent.click(screen.getByRole('button', { name: /Metadata & indexing/ }));
   expect(
-    screen.getByRole('button', { name: /External BCMR indexer.*unavailable/ })
+    screen.getByRole('button', { name: /Token indexer.*unavailable/ })
   ).toBeDisabled();
   expect(screen.getByText('IPFS gateways')).toBeInTheDocument();
   expect(
-    screen.getByRole('button', { name: 'External BCMR indexer — unavailable' })
+    screen.getByRole('button', { name: 'Token indexer — unavailable' })
   ).toBeDisabled();
   expect(screen.queryByText(/able to sync right now/)).not.toBeInTheDocument();
   expect(
@@ -118,6 +113,34 @@ it('browses without probes and sends explicit selection through the old UI', asy
       ([command]) => command === 'optn_chain_sources'
     )
   ).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Add BCMR indexer' }));
+  fireEvent.change(screen.getByLabelText('Host or IP address'), {
+    target: { value: 'bcmr.example' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  expect(
+    screen.getByRole('checkbox', {
+      name: 'BCMR indexer (Paytaca-compatible HTTPS)',
+    })
+  ).toBeChecked();
+  fireEvent.click(screen.getByRole('button', { name: 'Save source' }));
+  await waitFor(() =>
+    expect(mock.invoke).toHaveBeenCalledWith('optn_chain_add_source', {
+      request: {
+        label: 'bcmr.example',
+        host: 'bcmr.example',
+        kind: 'bcmr-indexer',
+        port: 443,
+        network: 'chipnet',
+        infrastructure_group: null,
+        services: [],
+      },
+    })
+  );
+  await screen.findByRole('button', { name: 'Add a source' });
+  mock.invoke.mockClear(); // Subsequent directory navigation must remain read-only.
+  act(() => backRef.current?.());
+  expect(screen.getByText('BCMR indexers')).toBeInTheDocument();
   act(() => backRef.current?.());
   expect(backRef.current).toBeNull();
   expect(

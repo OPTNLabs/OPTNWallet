@@ -201,6 +201,7 @@ pub const fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::ExplorerHttp => "explorer-http",
         EndpointKind::ExplorerHttps => "explorer-https",
         EndpointKind::IpfsGatewayHttps => "ipfs-gateway",
+        EndpointKind::BcmrIndexerHttps => "bcmr-indexer",
     }
 }
 
@@ -214,6 +215,7 @@ fn parse_endpoint_kind(value: &str) -> Result<EndpointKind, String> {
         "explorer-https" => EndpointKind::ExplorerHttps,
         "explorer-http" => EndpointKind::ExplorerHttp,
         "ipfs-gateway" => EndpointKind::IpfsGatewayHttps,
+        "bcmr-indexer" => EndpointKind::BcmrIndexerHttps,
         other => return Err(format!("unknown endpoint kind '{other}'")),
     })
 }
@@ -471,6 +473,7 @@ mod tests {
             EndpointKind::ExplorerHttp,
             EndpointKind::ExplorerHttps,
             EndpointKind::IpfsGatewayHttps,
+            EndpointKind::BcmrIndexerHttps,
         ] {
             assert_eq!(parse_endpoint_kind(endpoint_kind_label(kind)), Ok(kind));
         }
@@ -500,6 +503,10 @@ mod tests {
                 kind: "ipfs-gateway".into(),
                 port: Some(443),
             },
+            optn_transport::chain_sources::SourceService {
+                kind: "bcmr-indexer".into(),
+                port: Some(443),
+            },
         ];
         settings
             .edit(ChainSourceEdit::Add(request.clone()))
@@ -513,7 +520,7 @@ mod tests {
             .filter(|source| source.origin == "own-infrastructure")
             .collect();
         assert_eq!(own.len(), 1);
-        assert_eq!(own[0].endpoints.len(), 5);
+        assert_eq!(own[0].endpoints.len(), 6);
         let before = std::fs::read(&path).unwrap();
         request.kind = "p2p".into();
         request.port = Some(48334);
