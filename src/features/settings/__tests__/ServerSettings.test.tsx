@@ -67,9 +67,7 @@ vi.mock('../CashFusionSettings', () => ({
   ),
 }));
 vi.mock('../../nostr/NostrSettings', () => ({
-  NostrSettings: ({ variant }: { variant: string }) => (
-    <div>Nostr {variant}</div>
-  ),
+  NostrSettings: () => <div>Complete Nostr settings</div>,
 }));
 vi.mock('../ChainSourcesSettings', () => ({
   ChainSourcesSettings: ({
@@ -99,7 +97,7 @@ it('uses one desktop routing destination, retaining fees and the mobile controls
   expect(screen.getByText('server.transactionFee')).toBeInTheDocument();
   expect(mock.adapter).not.toHaveBeenCalled();
   expect(screen.getByText('CashFusion servers')).toBeInTheDocument();
-  expect(screen.getByText('Nostr relays')).toBeInTheDocument();
+  expect(screen.getByText('Complete Nostr settings')).toBeInTheDocument();
   expect(screen.getByText('Sources destination')).toBeInTheDocument();
   cleanup();
   mock.desktop = false;

@@ -293,7 +293,11 @@ const Settings: React.FC = () => {
       case 'cashfusion':
         return cashFusionEnabled ? <CashFusionSettings /> : null;
       case 'nostr':
-        return <NostrSettings />;
+        return desktop ? (
+          <ServerSettings initialPage="nostr" backRef={serverBack} />
+        ) : (
+          <NostrSettings key={currentWalletId} />
+        );
       case 'addons':
         return <AddonsSettings />;
       default:
@@ -336,7 +340,7 @@ const Settings: React.FC = () => {
       case 'cashfusion':
         return t('settingsPanels.cashfusion');
       case 'nostr':
-        return t('settingsPanels.nostr');
+        return desktop ? 'Network' : t('settingsPanels.nostr');
       case 'addons':
         return t('settingsPanels.addons');
       case 'walletconnect':
@@ -359,7 +363,11 @@ const Settings: React.FC = () => {
   };
 
   const handleBack = () => {
-    if (selectedOption === 'server' && serverBack.current) {
+    if (
+      (selectedOption === 'server' ||
+        (desktop && selectedOption === 'nostr')) &&
+      serverBack.current
+    ) {
       serverBack.current();
       return;
     }

@@ -43,7 +43,7 @@ Network overview
   My Custom Sources -> source details
   Routing           -> primary scope, chain access, preference, fallback
   Privacy & Transport
-  Nostr relays      -> existing relay pool and custom endpoints
+  Nostr             -> chat enablement, identity/profile, relay pool and checks
   Explorer
   Network backup
 ```
@@ -57,15 +57,21 @@ Source selection, transport/privacy and explorer policy are separate dimensions.
 A UI must not offer a transport choice that the host cannot actually enforce.
 ZMQ belongs under event sources, not alongside mutually competing sync modes.
 
-The retained desktop UI also exposes Nostr relays as a Network destination.
-It reuses the existing saved relay editor; identity and messaging remain under
-Nostr & Chat. Listing/editing relays does not load wallet identity, fetch profiles,
-probe connections or enable chat. Back returns one level to Network. Relays are
+The retained desktop UI has one complete Nostr destination inside Network;
+the duplicate Nostr & Chat settings row is removed on desktop. Legacy Nostr
+settings links enter this destination, and Back returns one level to Network.
+It reuses chat enablement, local identity, name/profile publishing, extra-device
+controls and the saved relay editor. Relays stay editable while chat is off.
+Opening settings may read local identity but never automatically fetches profiles,
+probes relays, publishes or enables chat. Profile loading, publishing and relay
+reachability checks require explicit actions. Reachability is labelled as a last
+check, not a currently connected or capability-verified state. Relays are
 application-message infrastructure, not BCH chain-validation or metadata sources;
 the current saved pool spans Mainnet and Chipnet. This navigation change does not
 complete Nostr's migration to shared Rust networking: the legacy relay pool and
-Chat transport still exist, and legacy direct-WSS diagnostics must not be shown
-as evidence of the chain-source Tor policy. Unified Rust relay persistence,
+Chat transport still exist; the UI states that these actions do not yet follow
+the Network Tor setting. Legacy direct-WSS diagnostics must not be shown as
+evidence of the chain-source Tor policy. Unified Rust relay persistence,
 disable/ban semantics and privacy enforcement remain separate backend work.
 
 ### Nostr ownership follows the same source pattern

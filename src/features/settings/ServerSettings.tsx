@@ -69,8 +69,9 @@ function readLastHealthy(): string {
 }
 
 export const ServerSettings: React.FC<{
+  initialPage?: 'overview' | 'nostr';
   backRef?: React.MutableRefObject<(() => void) | null>;
-}> = ({ backRef }) => {
+}> = ({ backRef, initialPage }) => {
   const dispatch = useDispatch();
   const { t } = useI18n();
   const desktop = isDesktopPlatform();
@@ -369,10 +370,11 @@ export const ServerSettings: React.FC<{
   if (desktop) {
     return (
       <ChainSourcesSettings
+        initialPage={initialPage}
         explorerSettings={explorerSettings}
         feeSettings={feeSettings}
         fusionSettings={<CashFusionSettings variant="servers" />}
-        nostrSettings={<NostrSettings variant="relays" />}
+        nostrSettings={<NostrSettings key={walletId} />}
         birthdaySettings={
           <WalletBirthdaySettings key={walletId} walletId={walletId} />
         }

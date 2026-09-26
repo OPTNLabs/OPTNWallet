@@ -8,6 +8,21 @@ import {
 import { Network } from '../../../state/slices/networkSlice';
 
 describe('settingsConfig', () => {
+  it('removes the duplicate desktop Nostr row while keeping mobile access and old-link parent navigation', () => {
+    expect(
+      getSettingsGroupRows('features', true, Network.CHIPNET).map(
+        (row) => row.key
+      )
+    ).not.toContain('nostr');
+    expect(
+      getSettingsGroupRows('features', false, Network.CHIPNET).map(
+        (row) => row.key
+      )
+    ).toContain('nostr');
+    expect(getParentSettingsGroup('nostr', true, Network.CHIPNET)).toBe(
+      'features'
+    );
+  });
   it('exposes wallet settings including the pending tx lock screen link', () => {
     const row = WALLET_ROWS.find((entry) => entry.key === 'pending-outbox');
 

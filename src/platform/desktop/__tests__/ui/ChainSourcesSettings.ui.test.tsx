@@ -224,7 +224,7 @@ it('browses without probes and sends explicit selection through the old UI', asy
   ).toBeInTheDocument();
   act(() => backRef.current?.());
   expect(backRef.current).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /Nostr relays/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Nostr' }));
   expect(
     screen.getByRole('button', { name: 'Existing Nostr relay pool' })
   ).toBeInTheDocument();
@@ -363,4 +363,17 @@ it('browses without probes and sends explicit selection through the old UI', asy
   expect(screen.getByRole('alert')).toHaveTextContent(
     'Source could not be saved'
   );
+  cleanup();
+  render(
+    <ChainSourcesSettings
+      initialPage="nostr"
+      backRef={backRef}
+      nostrSettings={<button>Complete Nostr settings</button>}
+    />
+  );
+  await screen.findByRole('button', { name: 'Complete Nostr settings' });
+  act(() => backRef.current?.());
+  expect(
+    screen.getByRole('navigation', { name: 'Network source settings' })
+  ).toBeInTheDocument();
 });

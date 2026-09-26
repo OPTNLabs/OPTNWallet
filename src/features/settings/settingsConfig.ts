@@ -220,6 +220,8 @@ export function getSettingsGroupRows(
   };
 
   return rowsByGroup[group].filter((row) => {
+    // Desktop has one complete Nostr destination inside Network.
+    if (isDesktop && row.key === 'nostr') return false;
     if (row.key === 'faucet' && currentNetwork !== Network.CHIPNET)
       return false;
     if (
@@ -248,6 +250,7 @@ export function getParentSettingsGroup(
   currentNetwork: Network
 ): SettingsGroupKey | null {
   if (!panel || panel.startsWith('group:')) return null;
+  if (isDesktop && panel === 'nostr') panel = 'server';
   for (const group of SETTINGS_GROUPS) {
     const rows = getSettingsGroupRows(group.key, isDesktop, currentNetwork);
     if (rows.some((row) => row.target === panel || row.key === panel)) {

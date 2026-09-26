@@ -114,7 +114,7 @@ function pageTitle(page: SourcePage): string {
   return {
     overview: 'Network',
     metadata: 'Metadata & indexing',
-    nostr: 'Nostr relays',
+    nostr: 'Nostr',
     details: 'Source details',
     routing: 'Routing',
     privacy: 'Privacy & Transport',
@@ -244,6 +244,7 @@ function statusLine(source: ChainSource): { text: string; tone: string } {
 }
 
 type ChainSourcesSettingsProps = {
+  initialPage?: 'overview' | 'nostr';
   explorerSettings?: ReactNode;
   feeSettings?: ReactNode;
   fusionSettings?: ReactNode;
@@ -253,6 +254,7 @@ type ChainSourcesSettingsProps = {
 };
 
 export function ChainSourcesSettings({
+  initialPage = 'overview',
   explorerSettings,
   feeSettings,
   fusionSettings,
@@ -261,8 +263,10 @@ export function ChainSourcesSettings({
   backRef,
 }: ChainSourcesSettingsProps) {
   const [view, setView] = useState<ChainSourcesView | null>(null);
-  const [page, setPage] = useState<SourcePage>('overview');
-  const [history, setHistory] = useState<SourcePage[]>([]);
+  const [page, setPage] = useState<SourcePage>(initialPage);
+  const [history, setHistory] = useState<SourcePage[]>(
+    initialPage === 'overview' ? [] : ['overview']
+  );
   const [selectedSourceId, setSelectedSourceId] = useState('');
   const [search, setSearch] = useState('');
   const [serviceFilter, setServiceFilter] = useState('');
@@ -785,13 +789,14 @@ export function ChainSourcesSettings({
                 type="button"
                 className="wallet-surface-strong flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--wallet-border)] p-3 text-left"
                 onClick={() => navigate('nostr')}
+                aria-label="Nostr"
               >
                 <span>
                   <span className="block text-sm font-semibold wallet-text-strong">
-                    Nostr relays
+                    Nostr
                   </span>
                   <span className="block text-[11px] wallet-muted">
-                    Saved relay pool and custom endpoints
+                    Chat, identity, publishing and relays
                   </span>
                 </span>
                 <span className="text-xs wallet-muted">Open</span>

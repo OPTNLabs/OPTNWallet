@@ -1,5 +1,5 @@
 // Default-on Nostr chat settings: the wallet's separate Nostr identity and the
-// relay pool used for chat plus the P2P-fusion transport.
+// relay pool used for chat. P2P Fusion has separate relay selection.
 import React, { useCallback, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { MdAdd, MdKey, MdRefresh, MdRouter } from 'react-icons/md';
@@ -31,9 +31,7 @@ import { useWalletConfirm } from '../../components/WalletConfirmDialog';
 import { isDefaultNostrRelay } from '../../platform/desktop/nostr/defaultRelays';
 import { useI18n } from '../../i18n/useI18n';
 
-export const NostrSettings: React.FC<{ variant?: 'all' | 'relays' }> = ({
-  variant = 'all',
-}) => {
+export const NostrSettings: React.FC = () => {
   const dispatch = useDispatch();
   const { t } = useI18n();
   const confirm = useWalletConfirm();
@@ -51,33 +49,43 @@ export const NostrSettings: React.FC<{ variant?: 'all' | 'relays' }> = ({
   const [draftError, setDraftError] = useState('');
   const [relayStatus, setRelayStatus] = useState<Record<string, boolean>>({});
   const [checking, setChecking] = useState(false);
+  const [loadingProfile, setLoadingProfile] = useState(false);
 
   useEffect(() => {
-    if (variant === 'relays' || !enabled || walletId <= 0) return;
+    let cancelled = false;
+    setNpub(null);
+    setPubkey(null);
+    setIdErr(null);
+    setDisplayName('');
+    setProfileMsg(null);
+    if (!enabled || walletId <= 0) return;
     myIdentity(walletId)
       .then(async (id) => {
+        const slot = await loadMlsDeviceIndex(id.pubkey);
+        if (cancelled) return;
         setNpub(id.npub);
         setPubkey(id.pubkey);
-        const slot = await loadMlsDeviceIndex(id.pubkey);
         setMlsDeviceIndex(slot);
-        const [mine, publishedName] = await Promise.all([
-          fetchProfile(id.pubkey, relays),
-          fetchPublishedDisplayName(relays, id.pubkey),
-        ]);
-        setDisplayName(publishedName || mine.name || '');
       })
-      .catch((e) => setIdErr(e instanceof Error ? e.message : String(e)));
-  }, [variant, enabled, walletId, relays]);
+      .catch((e) => {
+        if (!cancelled) setIdErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, walletId]);
 
-  // Legacy Chat diagnostics remain explicit. The Network directory only edits
-  // saved relay settings; it must not use this direct-WSS probe as Tor evidence.
+  // Legacy Chat diagnostics remain explicit; opening settings is passive.
+  // This direct-WSS probe is not evidence of the chain-source Tor policy.
   const refreshRelays = useCallback(() => {
     if (relays.length === 0) return;
     setChecking(true);
+    setRelayStatus({});
     checkRelayStatus(relays, 8_000, (url, online) => {
       setRelayStatus((prev) => ({ ...prev, [url]: online }));
     })
       .then(setRelayStatus)
+      .catch((e) => setDraftError(e instanceof Error ? e.message : String(e)))
       .finally(() => setChecking(false));
   }, [relays]);
 
@@ -97,79 +105,131 @@ export const NostrSettings: React.FC<{ variant?: 'all' | 'relays' }> = ({
   return (
     <div className="flex flex-col gap-4">
       {/* Enable toggle */}
-      {variant === 'all' && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3">
-          <div>
-            <p className="text-sm font-semibold wallet-text-strong">
-              {t('nostr.chat')}
-            </p>
-            <p className="mt-0.5 text-[11px] wallet-muted">
-              {t('nostr.dmDescription')}
-            </p>
-          </div>
-          <button
-            onClick={() => dispatch(setNostrChatEnabled(!enabled))}
-            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
-              enabled
-                ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
-                : 'wallet-surface-strong border-[var(--wallet-border)]'
-            }`}
-            aria-label={`${enabled ? t('nostr.disable') : t('nostr.enable')} ${t('nostr.chat')}`}
-          >
-            <span
-              className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`}
-            />
-          </button>
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3">
+        <div>
+          <p className="text-sm font-semibold wallet-text-strong">
+            {t('nostr.chat')}
+          </p>
+          <p className="mt-0.5 text-[11px] wallet-muted">
+            {t('nostr.dmDescription')}
+          </p>
         </div>
-      )}
+        <button
+          onClick={() => dispatch(setNostrChatEnabled(!enabled))}
+          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+            enabled
+              ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
+              : 'wallet-surface-strong border-[var(--wallet-border)]'
+          }`}
+          aria-label={`${enabled ? t('nostr.disable') : t('nostr.enable')} ${t('nostr.chat')}`}
+        >
+          <span
+            className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`}
+          />
+        </button>
+      </div>
 
-      {(enabled || variant === 'relays') && (
-        <>
-          {/* Identity */}
-          {variant === 'all' && (
-            <section className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
-              <div className="flex items-start gap-3">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--wallet-accent)]/15 text-[var(--wallet-accent)]">
-                  <MdKey className="text-xl" aria-hidden="true" />
+      <>
+        {/* Identity */}
+        {enabled && (
+          <section className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
+            <div className="flex items-start gap-3">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--wallet-accent)]/15 text-[var(--wallet-accent)]">
+                <MdKey className="text-xl" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold wallet-text-strong">
+                  {t('nostr.identity')}
+                </p>
+                <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
+                  {t('nostr.identityDescription')}
+                </p>
+                <div className="mt-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2 font-mono text-[10px] break-all wallet-text-strong">
+                  {npub ?? idErr ?? t('nostr.deriving')}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold wallet-text-strong">
-                    {t('nostr.identity')}
-                  </p>
-                  <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-                    {t('nostr.identityDescription')}
-                  </p>
-                  <div className="mt-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2 font-mono text-[10px] break-all wallet-text-strong">
-                    {npub ?? idErr ?? t('nostr.deriving')}
-                  </div>
-                  <input
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder={t('chat.displayName')}
-                    className="wallet-input mt-3 w-full text-xs"
-                  />
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  aria-label={t('chat.displayName')}
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder={t('chat.displayName')}
+                  className="wallet-input mt-3 w-full text-xs"
+                />
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={!pubkey || loadingProfile}
+                    className="wallet-btn-secondary px-3 py-1 text-xs"
+                    onClick={async () => {
+                      if (!pubkey) return;
+                      setLoadingProfile(true);
+                      setProfileMsg(null);
+                      try {
+                        const [mine, publishedName] = await Promise.all([
+                          fetchProfile(pubkey, relays),
+                          fetchPublishedDisplayName(relays, pubkey),
+                        ]);
+                        setDisplayName(publishedName || mine.name || '');
+                      } catch (e) {
+                        setProfileMsg(
+                          e instanceof Error ? e.message : String(e)
+                        );
+                      } finally {
+                        setLoadingProfile(false);
+                      }
+                    }}
+                  >
+                    {loadingProfile
+                      ? 'Loading profile…'
+                      : 'Load published profile'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!pubkey || loadingProfile}
+                    onClick={() => {
+                      void (async () => {
+                        setProfileMsg(null);
+                        try {
+                          await Promise.all([
+                            publishMyProfile(
+                              walletId,
+                              { name: displayName || undefined },
+                              relays
+                            ),
+                            displayName
+                              ? publishDisplayName(
+                                  walletId,
+                                  displayName,
+                                  relays
+                                )
+                              : Promise.resolve(),
+                          ]);
+                          setProfileMsg(t('chat.profilePublished'));
+                        } catch (e) {
+                          setProfileMsg(
+                            e instanceof Error ? e.message : String(e)
+                          );
+                        }
+                      })();
+                    }}
+                    className="wallet-btn-primary px-3 py-1 text-xs"
+                  >
+                    {t('chat.publishProfile')}
+                  </button>
+                  {mlsDeviceIndex === 0 ? (
                     <button
                       type="button"
+                      className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
                       onClick={() => {
+                        if (!pubkey) return;
                         void (async () => {
-                          setProfileMsg(null);
+                          const ok = await confirm(
+                            'Only on the new install. This device becomes a separate MLS leaf (slot 1). Do not tap this on your first device.'
+                          );
+                          if (!ok) return;
                           try {
-                            await Promise.all([
-                              publishMyProfile(
-                                walletId,
-                                { name: displayName || undefined },
-                                relays
-                              ),
-                              displayName
-                                ? publishDisplayName(
-                                    walletId,
-                                    displayName,
-                                    relays
-                                  )
-                                : Promise.resolve(),
-                            ]);
-                            setProfileMsg(t('chat.profilePublished'));
+                            const slot = await claimExtraMlsDeviceSlot(pubkey);
+                            setMlsDeviceIndex(slot);
+                            await publishMlsKeyPackage(walletId, relays);
                           } catch (e) {
                             setProfileMsg(
                               e instanceof Error ? e.message : String(e)
@@ -177,178 +237,149 @@ export const NostrSettings: React.FC<{ variant?: 'all' | 'relays' }> = ({
                           }
                         })();
                       }}
-                      className="wallet-btn-primary px-3 py-1 text-xs"
                     >
-                      {t('chat.publishProfile')}
+                      Extra device
                     </button>
-                    {mlsDeviceIndex === 0 ? (
-                      <button
-                        type="button"
-                        className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
-                        onClick={() => {
-                          if (!pubkey) return;
-                          void (async () => {
-                            const ok = await confirm(
-                              'Only on the new install. This device becomes a separate MLS leaf (slot 1). Do not tap this on your first device.'
-                            );
-                            if (!ok) return;
-                            try {
-                              const slot =
-                                await claimExtraMlsDeviceSlot(pubkey);
-                              setMlsDeviceIndex(slot);
-                              await publishMlsKeyPackage(walletId, relays);
-                            } catch (e) {
-                              setProfileMsg(
-                                e instanceof Error ? e.message : String(e)
-                              );
-                            }
-                          })();
-                        }}
-                      >
-                        Extra device
-                      </button>
-                    ) : (
-                      <span className="text-[10px] wallet-muted">
-                        Device {mlsDeviceIndex}
-                      </span>
-                    )}
-                  </div>
-                  {profileMsg ? (
-                    <p className="mt-2 text-[10px] wallet-muted">
-                      {profileMsg}
-                    </p>
-                  ) : null}
+                  ) : (
+                    <span className="text-[10px] wallet-muted">
+                      Device {mlsDeviceIndex}
+                    </span>
+                  )}
                 </div>
+                {profileMsg ? (
+                  <p className="mt-2 text-[10px] wallet-muted">{profileMsg}</p>
+                ) : null}
               </div>
-            </section>
-          )}
+            </div>
+          </section>
+        )}
 
-          {/* Relays */}
-          <section className="space-y-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
-            <div className="flex items-start gap-3">
-              <MdRouter
-                className="mt-0.5 shrink-0 text-xl text-[var(--wallet-accent)]"
+        {/* Relays */}
+        <section className="space-y-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
+          <div className="flex items-start gap-3">
+            <MdRouter
+              className="mt-0.5 shrink-0 text-xl text-[var(--wallet-accent)]"
+              aria-hidden="true"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold wallet-text-strong">
+                {t('nostr.relays')}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
+                Saved WSS relay endpoints for Nostr chat.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={refreshRelays}
+              disabled={checking}
+              className="flex shrink-0 items-center gap-1 rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
+              aria-label={t('nostr.checkRelayStatus')}
+              title={t('nostr.checkRelayStatus')}
+            >
+              <MdRefresh
+                className={checking ? 'animate-spin' : ''}
                 aria-hidden="true"
               />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold wallet-text-strong">
-                  {t('nostr.relays')}
-                </p>
-                <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-                  {variant === 'relays'
-                    ? 'Saved WSS relay endpoints for Nostr chat.'
-                    : t('nostr.relaysDescription')}
-                </p>
-              </div>
-              {variant === 'all' && (
-                <button
-                  type="button"
-                  onClick={refreshRelays}
-                  disabled={checking}
-                  className="flex shrink-0 items-center gap-1 rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
-                  aria-label={t('nostr.checkRelayStatus')}
-                  title={t('nostr.checkRelayStatus')}
-                >
-                  <MdRefresh
-                    className={checking ? 'animate-spin' : ''}
-                    aria-hidden="true"
-                  />
-                  {checking
-                    ? t('nostr.checking')
-                    : t('nostr.active', {
-                        active: activeCount,
-                        total: relays.length,
-                      })}
-                </button>
-              )}
-            </div>
+              {checking ? t('nostr.checking') : 'Check relays'}
+            </button>
+          </div>
 
-            {variant === 'relays' && (
-              <p className="text-xs wallet-muted">
-                Saved relay endpoints for Nostr chat. This pool is shared across
-                Mainnet and Chipnet. Opening this page does not connect to
-                relays. Identity and messaging controls remain in Nostr &amp;
-                Chat.
-              </p>
-            )}
-
-            <div className="space-y-2">
-              {relays.map((url) => {
-                const online = relayStatus[url];
-                return (
-                  <div
-                    key={url}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2"
-                  >
-                    <span
-                      className={`h-2 w-2 shrink-0 rounded-full ${
-                        online === undefined
-                          ? 'bg-[var(--wallet-border)]'
-                          : online
-                            ? 'bg-green-400'
-                            : 'bg-red-400/70'
-                      }`}
-                      title={
-                        online === undefined
-                          ? t('nostr.unknown')
-                          : online
-                            ? t('nostr.connected')
-                            : t('nostr.unreachable')
-                      }
-                    />
-                    <p className="min-w-0 flex-1 truncate font-mono text-[10px] wallet-text-strong">
-                      {url}
-                    </p>
-                    {/* Bootstrap relays match Fulcrum seed servers: no Remove.
-                        Only user-added relays can be deleted. */}
-                    {!isDefaultNostrRelay(url) && (
-                      <button
-                        type="button"
-                        onClick={() => dispatch(removeNostrRelay(url))}
-                        className="shrink-0 px-1 text-[10px] text-red-400/70 hover:text-red-400"
-                        aria-label={`${t('nostr.remove')} ${url}`}
-                      >
-                        {t('nostr.remove')}
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="border-t border-[var(--wallet-border)] pt-3">
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  aria-label="Relay URL"
-                  value={relayDraft}
-                  onChange={(e) => setRelayDraft(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && addRelay()}
-                  placeholder="wss://relay.example.com"
-                  className="wallet-input min-w-0 flex-1 font-mono text-xs"
-                />
-                <button
-                  type="button"
-                  onClick={addRelay}
-                  className="flex items-center gap-1 rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-2 text-xs font-semibold text-[var(--wallet-accent)]"
-                >
-                  <MdAdd aria-hidden="true" />
-                  {t('nostr.add')}
-                </button>
-              </div>
-              {draftError ? (
-                <p className="mt-2 text-[10px] text-red-400">{draftError}</p>
-              ) : null}
-            </div>
-          </section>
-
-          <section className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3 py-2.5">
-            <p className="text-[10px] leading-relaxed text-yellow-400/90">
-              {t('nostr.privacyWarning')}
+          <p className="text-xs wallet-muted">
+            This pool is shared across Mainnet and Chipnet. Opening this page
+            does not contact relays. Checks and profile actions use the existing
+            Nostr connection; the Network Tor setting is not applied to them
+            yet.
+          </p>
+          {Object.keys(relayStatus).length > 0 && (
+            <p role="status" className="text-xs wallet-muted">
+              {activeCount}/{relays.length} reachable at last check
             </p>
-          </section>
-        </>
-      )}
+          )}
+
+          <div className="space-y-2">
+            {relays.map((url) => {
+              const online = relayStatus[url];
+              return (
+                <div
+                  key={url}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2"
+                >
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      online === undefined
+                        ? 'bg-[var(--wallet-border)]'
+                        : online
+                          ? 'bg-green-400'
+                          : 'bg-red-400/70'
+                    }`}
+                    title={
+                      online === undefined
+                        ? t('nostr.unknown')
+                        : online
+                          ? 'Reachable at last check'
+                          : 'Unreachable at last check'
+                    }
+                  />
+                  <p className="min-w-0 flex-1 truncate font-mono text-[10px] wallet-text-strong">
+                    {url}
+                  </p>
+                  <span className="text-[10px] wallet-muted">
+                    {online === undefined
+                      ? 'Not checked'
+                      : online
+                        ? 'Reachable'
+                        : 'Unreachable'}
+                  </span>
+                  {/* Bootstrap relays match Fulcrum seed servers: no Remove.
+                        Only user-added relays can be deleted. */}
+                  {!isDefaultNostrRelay(url) && (
+                    <button
+                      type="button"
+                      onClick={() => dispatch(removeNostrRelay(url))}
+                      className="shrink-0 px-1 text-[10px] text-red-400/70 hover:text-red-400"
+                      aria-label={`${t('nostr.remove')} ${url}`}
+                    >
+                      {t('nostr.remove')}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="border-t border-[var(--wallet-border)] pt-3">
+            <div className="flex gap-2">
+              <input
+                type="url"
+                aria-label="Relay URL"
+                value={relayDraft}
+                onChange={(e) => setRelayDraft(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addRelay()}
+                placeholder="wss://relay.example.com"
+                className="wallet-input min-w-0 flex-1 font-mono text-xs"
+              />
+              <button
+                type="button"
+                onClick={addRelay}
+                className="flex items-center gap-1 rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-2 text-xs font-semibold text-[var(--wallet-accent)]"
+              >
+                <MdAdd aria-hidden="true" />
+                {t('nostr.add')}
+              </button>
+            </div>
+            {draftError ? (
+              <p className="mt-2 text-[10px] text-red-400">{draftError}</p>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3 py-2.5">
+          <p className="text-[10px] leading-relaxed text-yellow-400/90">
+            {t('nostr.privacyWarning')}
+          </p>
+        </section>
+      </>
     </div>
   );
 };
