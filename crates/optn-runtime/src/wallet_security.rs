@@ -913,8 +913,9 @@ impl WalletSecurity {
                     .as_ref()
                     .ok_or(TransportError::Unsupported)?;
                 if enabled {
-                    let password =
-                        password.ok_or_else(|| failure("Confirm the wallet password."))?;
+                    let Some(password) = password else {
+                        return Err(failure("Confirm the wallet password."));
+                    };
                     session
                         .file
                         .verify_password(password.expose())
@@ -1451,6 +1452,24 @@ pub(crate) mod tests {
             state.identity_revealed,
             "public identity disclosure can be authenticated"
         );
+        for password in [None, Some(secret("incorrect"))] {
+            assert!(security
+                .handle(
+                    &mut state,
+                    Request::SetBiometric {
+                        enabled: true,
+                        password,
+                        epoch: status.epoch,
+                    },
+                    5,
+                    &history,
+                    None,
+                    &Default::default(),
+                )
+                .is_err());
+            assert!(!biometric.enrolled(&handle).unwrap());
+            assert!(security.is_open(&state));
+        }
         security
             .handle(
                 &mut state,
