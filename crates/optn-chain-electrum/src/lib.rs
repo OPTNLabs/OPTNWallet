@@ -29,7 +29,7 @@ type DynIo = Box<dyn AsyncIo>;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 // Bound pending RPCs and peer-controlled response allocation on every transport.
-const MAX_PENDING_REQUESTS: usize = 16;
+const MAX_PENDING_REQUESTS: usize = 64;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PIPELINE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_WALLET_TRANSACTIONS: usize = 100_000;
@@ -1236,6 +1236,74 @@ mod tests {
             )
             .is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn full_pipeline_preserves_all_reordered_replies_above_legacy_limit() {
+        const REQUEST_COUNT: usize = 64;
+        let (client, server) = tokio::io::duplex(8192);
+        let mut session = Session {
+            reader: BufReader::new(Box::new(client)),
+            next_id: 7,
+            request_timeout: Duration::from_secs(2),
+            protocol: String::new(),
+        };
+        let peer = tokio::spawn(async move {
+            let mut server = BufReader::new(server);
+            let mut ids = Vec::new();
+            // Require the whole window before replying, including requests beyond 16.
+            for index in 0..REQUEST_COUNT {
+                let mut line = String::new();
+                assert!(server.read_line(&mut line).await.unwrap() > 0);
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["id"], json!(7 + index));
+                assert_eq!(request["params"], json!([index]));
+                ids.push(request["id"].clone());
+            }
+            // The complete response group exceeds the duplex buffer size.
+            for index in (0..REQUEST_COUNT).rev() {
+                let response = json!({
+                    "id": ids[index],
+                    "result": [index, "x".repeat(256)],
+                });
+                server
+                    .get_mut()
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        let requests: Vec<_> = (0..REQUEST_COUNT)
+            .map(|index| ("fixture", json!([index])))
+            .collect();
+        let expected: Vec<_> = (0..REQUEST_COUNT)
+            .map(|index| json!([index, "x".repeat(256)]))
+            .collect();
+        assert_eq!(session.call_many(&requests).await.unwrap(), expected);
+        assert_eq!(session.next_id, 7 + REQUEST_COUNT as u64);
+        peer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_pipeline_is_rejected_before_io() {
+        let (client, mut server) = tokio::io::duplex(8192);
+        let mut session = Session {
+            reader: BufReader::new(Box::new(client)),
+            next_id: 7,
+            request_timeout: Duration::from_secs(2),
+            protocol: String::new(),
+        };
+        let requests = vec![("fixture", json!([])); MAX_PENDING_REQUESTS + 1];
+        assert!(matches!(
+            session.call_many(&requests).await,
+            Err(ChainBackendError::Rejected(message))
+                if message == "invalid Electrum request group size"
+        ));
+        assert_eq!(session.next_id, 7);
+        drop(session);
+        let mut written = Vec::new();
+        server.read_to_end(&mut written).await.unwrap();
+        assert!(written.is_empty());
     }
 
     #[tokio::test]
