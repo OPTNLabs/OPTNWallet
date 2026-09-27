@@ -90,12 +90,20 @@ const trackerStore = localForage.createInstance({
   name: 'optn-wallet',
   storeName: 'outbound_transactions',
 });
-const listeners = new Set<() => void>();
+type OutboundTransactionChangeListener = (
+  record?: OutboundTransactionRecord,
+  previousState?: OutboundTransactionState
+) => void;
 
-function emitChange(): void {
+const listeners = new Set<OutboundTransactionChangeListener>();
+
+function emitChange(
+  record?: OutboundTransactionRecord,
+  previousState?: OutboundTransactionState
+): void {
   for (const listener of listeners) {
     try {
-      listener();
+      listener(record, previousState);
     } catch {
       // Keep tracker notifications isolated from UI subscribers.
     }
@@ -203,7 +211,10 @@ export function deriveTrackedTxid(rawTx: string): string | null {
   }
 }
 
-async function saveRecord(record: OutboundTransactionRecord): Promise<void> {
+async function saveRecord(
+  record: OutboundTransactionRecord,
+  previousState?: OutboundTransactionState
+): Promise<void> {
   const key = storageKey(record.txid, record.walletId);
   try {
     await trackerStore.setItem(key, record);
@@ -217,11 +228,11 @@ async function saveRecord(record: OutboundTransactionRecord): Promise<void> {
     // reserved and the reconciler can migrate the broadcast later.
     if (!saveFallbackRecord(record)) throw error;
   }
-  emitChange();
+  emitChange(record, previousState);
 }
 
 const OutboundTransactionTracker = {
-  subscribe(listener: () => void): () => void {
+  subscribe(listener: OutboundTransactionChangeListener): () => void {
     listeners.add(listener);
     return () => {
       listeners.delete(listener);
@@ -340,10 +351,10 @@ const OutboundTransactionTracker = {
       verificationPending:
         existing?.state === 'seen' || existing?.state === 'broadcasted'
           ? false
-          : (existing?.verificationPending ?? false),
+          : existing?.verificationPending ?? false,
       verificationMessage: existing?.verificationMessage ?? null,
     };
-    await saveRecord(record);
+    await saveRecord(record, existing?.state);
     return record;
   },
 
@@ -397,7 +408,7 @@ const OutboundTransactionTracker = {
           ? null
           : existing.verificationMessage,
     };
-    await saveRecord(next);
+    await saveRecord(next, existing.state);
     return next;
   },
 
@@ -421,7 +432,7 @@ const OutboundTransactionTracker = {
       verificationPending: true,
       verificationMessage: message,
     };
-    await saveRecord(next);
+    await saveRecord(next, existing.state);
     return next;
   },
 

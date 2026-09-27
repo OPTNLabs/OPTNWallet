@@ -5,6 +5,7 @@ import './polyfills/node-globals';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Capacitor } from '@capacitor/core';
+import { SplashScreen } from '@capacitor/splash-screen';
 import App from './app/AppShell';
 import './index.css';
 import 'react-tooltip/dist/react-tooltip.css';
@@ -16,6 +17,7 @@ import { store } from './state/store';
 import { ThemeProvider } from './app/theme/ThemeContext';
 import { WalletConfirmProvider } from './components/WalletConfirmDialog';
 import { I18nProvider } from './i18n/I18nProvider';
+import { ensureOptnCoreAsync } from './wasm/optn-core';
 
 installProductionConsoleGuards();
 installBarcodeScannerUnhandledRejectionGuard();
@@ -24,18 +26,34 @@ if (Capacitor.isNativePlatform()) {
   document.documentElement.classList.add('native-contained');
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <Provider store={store}>
-      <I18nProvider>
-        <ThemeProvider>
-          <HashRouter>
-            <WalletConfirmProvider>
-              <App />
-            </WalletConfirmProvider>
-          </HashRouter>
-        </ThemeProvider>
-      </I18nProvider>
-    </Provider>
-  </React.StrictMode>
-);
+function renderApp() {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <Provider store={store}>
+        <I18nProvider>
+          <ThemeProvider>
+            <HashRouter>
+              <WalletConfirmProvider>
+                <App />
+              </WalletConfirmProvider>
+            </HashRouter>
+          </ThemeProvider>
+        </I18nProvider>
+      </Provider>
+    </React.StrictMode>
+  );
+
+  if (Capacitor.isNativePlatform()) {
+    requestAnimationFrame(() => {
+      void SplashScreen.hide({ fadeOutDuration: 150 }).catch((error) => {
+        console.warn('Native splash screen hide failed:', error);
+      });
+    });
+  }
+}
+
+void ensureOptnCoreAsync()
+  .catch((error) => {
+    console.error('Shared wallet core initialization failed:', error);
+  })
+  .finally(renderApp);

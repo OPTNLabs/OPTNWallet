@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { MdModeNight, MdSunny } from 'react-icons/md';
@@ -15,7 +15,6 @@ import { DerivationPathSettings } from './DerivationPathSettings';
 import { ServerSettings } from './ServerSettings';
 import { ConsolePanel } from './ConsolePanel';
 import { ExperimentalSettings } from './ExperimentalSettings';
-import { CashFusionSettings } from './CashFusionSettings';
 import { NostrSettings } from '../nostr/NostrSettings';
 import { AddonsSettings } from './AddonsSettings';
 import RecoveryPhrase from '../../components/RecoveryPhrase';
@@ -57,6 +56,12 @@ import { useI18n } from '../../i18n/useI18n';
 import { LanguageSettings } from './LanguageSettings';
 import { MerchantPaySettings } from './MerchantPaySettings';
 import type { TranslationKey } from '../../i18n/resources';
+
+const CashFusionSettings = lazy(() =>
+  import('./CashFusionSettings').then(({ CashFusionSettings: component }) => ({
+    default: component,
+  }))
+);
 
 const Settings: React.FC = () => {
   const navigate = useNavigate();
@@ -278,7 +283,11 @@ const Settings: React.FC = () => {
       case 'experimental':
         return <ExperimentalSettings />;
       case 'cashfusion':
-        return cashFusionEnabled ? <CashFusionSettings /> : null;
+        return cashFusionEnabled ? (
+          <Suspense fallback={null}>
+            <CashFusionSettings />
+          </Suspense>
+        ) : null;
       case 'nostr':
         return <NostrSettings />;
       case 'addons':

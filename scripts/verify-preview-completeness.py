@@ -15,13 +15,20 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BASH = shutil.which("bash")
+BASH = os.environ.get("BASH") or shutil.which("bash")
 if BASH is None:
     raise SystemExit("Bash is required to exercise GitHub Actions run steps")
 
 
 def workflow(name):
-    return yaml.safe_load((ROOT / ".github/workflows" / name).read_text(encoding="utf-8"))
+    document = yaml.safe_load((ROOT / ".github/workflows" / name).read_text(encoding="utf-8"))
+    # PyYAML's YAML 1.1 loader treats the Actions `on` key as boolean True.
+    triggers = document.get("on", document.get(True, {}))
+    pull_request = triggers.get("pull_request", {})
+    if (not {"dev", "staging", "main"} <= set(pull_request.get("branches", []))
+            or "paths" in pull_request or "paths-ignore" in pull_request):
+        raise AssertionError(f"{name} must run for every dev/staging/main pull request")
+    return document
 
 
 def step(job, name):
@@ -43,7 +50,7 @@ def check(body, directory, expected_success, label, environment=None):
         raise AssertionError(f"{label}: unexpected exit {result.returncode}\n{result.stdout}\n{result.stderr}")
 
 
-def verify_assets(job, name, assets):
+def verify_assets(job, name, assets, event="push"):
     body = step(job, name)["run"]
     with tempfile.TemporaryDirectory(prefix="optn-preview-assets-") as temporary:
         directory = Path(temporary)
@@ -51,39 +58,38 @@ def verify_assets(job, name, assets):
             path = directory / "artifacts" / artifact / filename
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("synthetic build artifact", encoding="utf-8")
-        check(body, directory, True, f"{name}: complete set")
+        environment = {"GITHUB_EVENT_NAME": event}
+        check(body, directory, True, f"{name}: complete set", environment)
         for artifact, filename in assets:
             path = directory / "artifacts" / artifact / filename
             path.unlink()
-            check(body, directory, False, f"{name}: missing {artifact}")
+            check(body, directory, False, f"{name}: missing {artifact}", environment)
             path.write_text("synthetic build artifact", encoding="utf-8")
-    print(f"{name}: complete set accepted; all {len(assets)} individual omissions rejected")
+    print(f"{name} ({event}): complete set accepted; all {len(assets)} individual omissions rejected")
 
 
 def verify_results(job, name, successful):
     body = step(job, name)["run"]
     with tempfile.TemporaryDirectory(prefix="optn-preview-results-") as temporary:
         directory = Path(temporary)
-        # The real guard runs in both PR and push contexts. These synthetic
-        # result cases exercise the packaged/release branch, so pin the event
-        # explicitly instead of inheriting GITHUB_EVENT_NAME=pull_request from
-        # the CI job that invokes this script.
-        release_environment = {**successful, "GITHUB_EVENT_NAME": "push"}
-        check(body, directory, True, name, release_environment)
-        for variable, value in successful.items():
-            failures = ("false", "") if value == "true" else ("failure", "cancelled", "skipped", "")
-            for failure in failures:
-                check(
-                    body,
-                    directory,
-                    False,
-                    f"{name}: {variable}={failure}",
-                    {**successful, variable: failure, "GITHUB_EVENT_NAME": "push"},
-                )
+        for event in ("pull_request", "push", "workflow_dispatch"):
+            environment = {**successful, "GITHUB_EVENT_NAME": event}
+            check(body, directory, True, name, environment)
+            for variable, value in successful.items():
+                failures = ("false", "") if value == "true" else ("failure", "cancelled", "skipped", "")
+                for failure in failures:
+                    check(
+                        body,
+                        directory,
+                        False,
+                        f"{name} ({event}): {variable}={failure}",
+                        {**environment, variable: failure},
+                    )
     print(f"{name}: unsuccessful or absent dependencies rejected")
 
 
-desktop = workflow("desktop-preview.yml")["jobs"]["preview-complete"]
+desktop_jobs = workflow("desktop-preview.yml")["jobs"]
+desktop = desktop_jobs["preview-complete"]
 cli_workflow = workflow("cli-preview.yml")
 cli = cli_workflow["jobs"]["complete"]
 
@@ -96,6 +102,11 @@ verify_assets(desktop, "Verify nothing dropped", [
       for architecture in ("x64", "arm64")
       for kind, extension in (("appimage", "AppImage"), ("deb", "deb"), ("rpm", "rpm"), ("flatpak", "flatpak"))],
 ])
+verify_assets(desktop, "Verify nothing dropped", [
+    (f"preview-linux-{architecture}-{kind}", f"wallet.{kind}")
+    for architecture in ("x64", "arm64")
+    for kind in ("deb", "flatpak")
+], event="pull_request")
 verify_assets(cli, "Verify no target dropped", [
     (f"optn-cli-{label}", "optn.exe" if label == "windows-x64" else "optn")
     for label in ("linux-x64", "linux-arm64", "linux-riscv64", "linux-armv7", "windows-x64", "macos-arm64", "macos-x64")
@@ -119,3 +130,49 @@ with tempfile.TemporaryDirectory(prefix="optn-preview-probe-") as temporary:
     if "present=true" not in (directory / "probe-output.txt").read_text(encoding="utf-8"):
         raise AssertionError("CLI probe did not enable its build matrix")
 print("CLI deletion fails the probe instead of skipping its build matrix")
+
+# Matrix removal and conditional uploads must not turn missing platforms green.
+for job_id, labels in (
+    ("build-desktop-preview", {"windows-x64", "macos-arm64", "macos-x64", "linux-x64", "linux-arm64"}),
+    ("flatpak-preview", {"linux-x64", "linux-arm64"}),
+):
+    job = desktop_jobs[job_id]
+    if job.get("if") or job.get("continue-on-error"):
+        raise AssertionError(f"{job_id} must not skip PR builds or ignore failures")
+    actual = {entry["label"] for entry in job["strategy"]["matrix"]["include"]}
+    if not labels <= actual:
+        raise AssertionError(f"{job_id}: missing targets {labels - actual}")
+
+for job in (desktop, cli):
+    if job.get("if") != "always()":
+        raise AssertionError("Completeness jobs must run even after failed/skipped builds")
+for name in ("Download every preview artifact", "Verify nothing dropped"):
+    if step(desktop, name).get("if"):
+        raise AssertionError(f"{name} must also run on pull requests")
+
+for filename, job_id, artifacts in (
+    ("android-preview.yml", "debug-apk", {"app-debug-play", "app-debug-fdroid"}),
+    ("ios-preview.yml", "build-ios-preview", {"preview-ios-simulator"}),
+    ("extension-preview.yml", "build-extension-preview", {"extension-chrome", "extension-firefox"}),
+    ("desktop-riscv64.yml", "build", {"desktop-linux-riscv64-unbundled"}),
+):
+    job = workflow(filename)["jobs"][job_id]
+    if job.get("if") or job.get("continue-on-error"):
+        raise AssertionError(f"{filename}: required builder may not be skipped or advisory")
+    uploads = {item.get("with", {}).get("name"): item for item in job["steps"]
+               if "actions/upload-artifact@" in item.get("uses", "")}
+    for artifact in artifacts:
+        upload = uploads.get(artifact, {})
+        if (upload.get("with", {}).get("if-no-files-found") != "error"
+                or upload.get("if") or upload.get("continue-on-error")):
+            raise AssertionError(f"{filename}: {artifact} requires an unconditional fail-closed upload")
+    print(f"{filename}: required artifacts {', '.join(sorted(artifacts))}")
+
+rust_ui = workflow("tauri-rust-ui-mobile.yml")["jobs"]
+for job_id, verification in (("desktop", "Verify desktop binary"),
+                             ("android", "Verify APK"), ("ios", "Verify iOS simulator app")):
+    job = rust_ui[job_id]
+    check_step = step(job, verification)
+    if any(item.get("if") or item.get("continue-on-error") for item in (job, check_step)):
+        raise AssertionError(f"Rust UI {job_id} must build and verify its output")
+    print(f"Rust UI {job_id}: compile/output verification (not a published release artifact)")

@@ -6,6 +6,19 @@ import OutboundTransactionTracker, {
   type OutboundTransactionRecord,
 } from './OutboundTransactionTracker';
 
+function logReconcileTiming(
+  stage: string,
+  startedAt: number,
+  details: Record<string, number | boolean>
+): void {
+  if (!import.meta.env.DEV) return;
+  console.debug('[OutboundTransactionReconciler]', {
+    stage,
+    durationMs: Date.now() - startedAt,
+    ...details,
+  });
+}
+
 async function fetchWalletAddresses(walletId: number): Promise<string[]> {
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
@@ -43,9 +56,7 @@ async function listSeenTxids(
   if (!db) return new Set();
 
   // Normalize for case / accidental 0x — Electrum vs our store can differ.
-  const wanted = new Set(
-    txids.map((t) => t.replace(/^0x/i, '').toLowerCase())
-  );
+  const wanted = new Set(txids.map((t) => t.replace(/^0x/i, '').toLowerCase()));
   const quoted = txids.map(() => '?').join(', ');
   const statement = db.prepare(`
     SELECT tx_hash
@@ -130,8 +141,10 @@ export async function reconcileOutboundTransactions(
 ): Promise<OutboundTransactionRecord[]> {
   if (!walletId || walletId <= 0) return [];
 
+  const startedAt = Date.now();
   const active = await OutboundTransactionTracker.listActive(walletId);
   if (active.length === 0) return [];
+  logReconcileTiming('start', startedAt, { activeCount: active.length });
 
   await Promise.all(
     active
@@ -205,6 +218,12 @@ export async function reconcileOutboundTransactions(
   const visibilityByTxid = await ElectrumService.getTransactionVisibilityMany(
     ordinary.map((record) => record.txid)
   );
+  logReconcileTiming('visibility-complete', startedAt, {
+    ordinaryCount: ordinary.length,
+    visibleCount: Object.values(visibilityByTxid).filter(
+      (visibility) => visibility.seen
+    ).length,
+  });
 
   await Promise.all(
     ordinary
@@ -237,6 +256,7 @@ export async function reconcileOutboundTransactions(
   const afterRetry = await OutboundTransactionTracker.listActive(walletId);
   if (afterRetry.length === 0) return [];
 
+  let historyFetchSucceeded = true;
   try {
     await transactionManager.fetchAndStoreTransactionHistories(
       walletId,
@@ -244,7 +264,12 @@ export async function reconcileOutboundTransactions(
     );
   } catch {
     // Reconciliation is best-effort; leave unresolved items in place.
+    historyFetchSucceeded = false;
   }
+  logReconcileTiming('history-complete', startedAt, {
+    addressCount: addresses.length,
+    historyFetchSucceeded,
+  });
 
   const seen = await listSeenTxids(
     walletId,
@@ -264,5 +289,9 @@ export async function reconcileOutboundTransactions(
       )
   );
 
-  return await OutboundTransactionTracker.listActive(walletId);
+  const finalRecords = await OutboundTransactionTracker.listActive(walletId);
+  logReconcileTiming('complete', startedAt, {
+    unresolvedCount: finalRecords.length,
+  });
+  return finalRecords;
 }

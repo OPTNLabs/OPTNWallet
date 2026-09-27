@@ -238,8 +238,8 @@ jobs:
       - name: Build Tauri (debug)
         # Release/manual preview runs with bundles: tauri.conf.json says targets
         # "all", and the package checks below ensure no format silently drops.
-        # Pull requests use --no-bundle so they validate native compilation
-        # without repeating the slow installer work that release.yml performs.
+        # Linux PRs build only DEBs for the Flatpak checks. Other PR targets
+        # stay unbundled; slow AppImage/installer packaging stays in full runs.
         #
         # --verbose because the AppImage bundler swallows linuxdeploy's stderr:
         # a failure prints `failed to run linuxdeploy` and nothing else, which
@@ -263,12 +263,13 @@ jobs:
           target='${{ matrix.target }}'
           build() {
             if [ "${{ github.event_name }}" = 'pull_request' ]; then
-              # Pull requests already have the required Linux E2E binary
-              # check. Compile every native desktop target here, but defer
-              # installer/AppImage packaging to the staging/main release
-              # matrix. Packaging an uncached Linux AppImage was measured at
-              # 50-56 minutes and was the dominant PR-cycle bottleneck.
-              npx tauri build --debug --no-bundle --target "$target" --verbose
+              # Flatpak consumes a DEB; --no-bundle silently removed its PR
+              # coverage. DEB-only avoids the slow AppImage packaging path.
+              if [ "${{ runner.os }}" = 'Linux' ]; then
+                npx tauri build --debug --bundles deb --target "$target" --verbose
+              else
+                npx tauri build --debug --no-bundle --target "$target" --verbose
+              fi
             else
               npx tauri build --debug --target "$target" --verbose
             fi
@@ -409,7 +410,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload DEB package
-        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: preview-${{ matrix.label }}-deb
@@ -433,9 +434,7 @@ jobs:
   flatpak-preview:
     name: Preview Flatpak (${{ matrix.label }})
     needs: build-desktop-preview
-    # Flatpak consumes the packaged DEB. Keep it in full/manual preview and
-    # release validation; PRs use the faster unbundled native build above.
-    if: github.event_name != 'pull_request'
+    # Both PR and full preview builds provide native DEBs for this check.
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -572,30 +571,20 @@ jobs:
           DESKTOP_RESULT: ${{ needs.build-desktop-preview.result }}
           FLATPAK_RESULT: ${{ needs.flatpak-preview.result }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            if [ "$DESKTOP_RESULT" != success ]; then
-              echo '::error::a required native desktop preview failed, was cancelled, or was skipped'
-              exit 1
-            fi
-            exit 0
-          fi
           if [ "$DESKTOP_RESULT" != success ] || [ "$FLATPAK_RESULT" != success ]; then
             echo '::error::a required packaged desktop or Flatpak build failed, was cancelled, or was skipped'
             exit 1
           fi
 
       - name: Download every preview artifact
-        if: github.event_name != 'pull_request'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
 
       - name: List what arrived
-        if: github.event_name != 'pull_request'
         run: find artifacts -type f -print | sort
 
       - name: Verify nothing dropped
-        if: github.event_name != 'pull_request'
         run: |
           missing=0
           expect() {
@@ -609,16 +598,18 @@ jobs:
             fi
           }
 
-          expect preview-windows-x64-nsis     '*.exe'      'Windows NSIS installer'
-          expect preview-windows-x64-msi      '*.msi'      'Windows MSI installer'
-          expect preview-macos-arm64-dmg      '*.dmg'      'macOS Apple Silicon disk image'
-          expect preview-macos-x64-dmg        '*.dmg'      'macOS Intel disk image'
-          expect preview-linux-x64-appimage   '*.AppImage' 'Linux x64 AppImage'
-          expect preview-linux-arm64-appimage '*.AppImage' 'Linux ARM64 AppImage'
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            expect preview-windows-x64-nsis     '*.exe'      'Windows NSIS installer'
+            expect preview-windows-x64-msi      '*.msi'      'Windows MSI installer'
+            expect preview-macos-arm64-dmg      '*.dmg'      'macOS Apple Silicon disk image'
+            expect preview-macos-x64-dmg        '*.dmg'      'macOS Intel disk image'
+            expect preview-linux-x64-appimage   '*.AppImage' 'Linux x64 AppImage'
+            expect preview-linux-arm64-appimage '*.AppImage' 'Linux ARM64 AppImage'
+            expect preview-linux-x64-rpm        '*.rpm'      'Linux x64 RPM'
+            expect preview-linux-arm64-rpm      '*.rpm'      'Linux ARM64 RPM'
+          fi
           expect preview-linux-x64-deb        '*.deb'      'Linux x64 DEB'
           expect preview-linux-arm64-deb      '*.deb'      'Linux ARM64 DEB'
-          expect preview-linux-x64-rpm        '*.rpm'      'Linux x64 RPM'
-          expect preview-linux-arm64-rpm      '*.rpm'      'Linux ARM64 RPM'
           expect preview-linux-x64-flatpak    '*.flatpak'  'Linux x64 Flatpak'
           expect preview-linux-arm64-flatpak  '*.flatpak'  'Linux ARM64 Flatpak'
 

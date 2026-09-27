@@ -15,6 +15,7 @@ type PendingOutboundPanelProps = {
   onRelease?: (txid: string) => void;
   onClose?: () => void;
   compact?: boolean;
+  blocking?: boolean;
 };
 
 function stateLabel(
@@ -40,6 +41,7 @@ export default function PendingOutboundPanel({
   onRelease,
   onClose,
   compact = false,
+  blocking = true,
 }: PendingOutboundPanelProps) {
   const { t } = useI18n();
   if (records.length === 0) return null;
@@ -49,7 +51,9 @@ export default function PendingOutboundPanel({
 
   return createPortal(
     <div
-      className="wallet-popup-backdrop z-[1200] p-3 sm:p-4"
+      className={`wallet-popup-backdrop z-[1200] p-3 sm:p-4${
+        blocking ? '' : ' wallet-popup-backdrop--non-blocking'
+      }`}
       role="presentation"
       onClick={onClose}
     >
@@ -58,8 +62,9 @@ export default function PendingOutboundPanel({
         style={{
           maxHeight: 'calc(100dvh - var(--safe-bottom) - 1rem)',
         }}
-        role="dialog"
-        aria-modal="true"
+        role={blocking ? 'dialog' : 'status'}
+        aria-modal={blocking ? true : undefined}
+        aria-live={blocking ? undefined : 'polite'}
         aria-labelledby="pending-outbound-panel-title"
         onClick={(event) => event.stopPropagation()}
       >

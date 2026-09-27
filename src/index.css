@@ -364,6 +364,15 @@
     @apply fixed inset-0 z-[100] flex items-center justify-center bg-black/45 p-3 backdrop-blur-[2px];
   }
 
+  .wallet-popup-backdrop--non-blocking {
+    @apply pointer-events-none items-start justify-end bg-transparent;
+    backdrop-filter: none;
+  }
+
+  .wallet-popup-backdrop--non-blocking .wallet-popup-panel {
+    pointer-events: auto;
+  }
+
   .wallet-popup-panel {
     @apply w-full max-h-[min(90dvh,calc(100dvh-1.5rem))] max-w-md overflow-hidden rounded-2xl border p-6 shadow-xl;
     border-color: var(--wallet-border);

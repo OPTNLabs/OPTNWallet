@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { lazy, Suspense, useEffect, useState, useCallback } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
@@ -33,7 +33,6 @@ import {
   removeUserNode,
 } from '../../utils/servers/userNodes';
 import { Bip37NodeRow } from './Bip37NodeSettings';
-import { ServerPrivacySettings } from './ServerPrivacySettings';
 import {
   getBackend,
   setBackend,
@@ -43,6 +42,14 @@ import {
 import { persistDesktopBackend } from '../../platform/desktop/networkSettingsBridge';
 import { isDesktopPlatform } from '../../utils/platform';
 import { useI18n } from '../../i18n/useI18n';
+
+const ServerPrivacySettings = lazy(() =>
+  import('./ServerPrivacySettings').then(
+    ({ ServerPrivacySettings: component }) => ({
+      default: component,
+    })
+  )
+);
 
 // BCH P2P default ports across networks — an entry on one of these is a BIP37
 // full node, anything else is an Electrum/Fulcrum server. Lets one "Add server"
@@ -565,7 +572,11 @@ export const ServerSettings: React.FC = () => {
         )}
       </div>
 
-      {desktop && <ServerPrivacySettings />}
+      {desktop && (
+        <Suspense fallback={null}>
+          <ServerPrivacySettings />
+        </Suspense>
+      )}
     </div>
   );
 };

@@ -1,7 +1,10 @@
 import { useCallback, useMemo } from 'react';
 import { shortenTxHash } from '../../utils/shortenHash';
-import { PREFIX } from '../../utils/constants';
-import { parseDecimalAmountToAtomic } from '../../hooks/simple-send/helpers';
+import { PREFIX, TOKEN_OUTPUT_SATS } from '../../utils/constants';
+import {
+  parseAmountToSats,
+  parseDecimalAmountToAtomic,
+} from '../../hooks/simple-send/helpers';
 import {
   AssetType,
   CategorySummary,
@@ -25,6 +28,7 @@ type UseSimpleSendViewModelParams = {
   selectedCategory: string;
   amountToken: string;
   selectedTokenDecimals: number;
+  tokenOutputBch: string;
 };
 
 export function useSimpleSendViewModel({
@@ -39,14 +43,14 @@ export function useSimpleSendViewModel({
   selectedCategory,
   amountToken,
   selectedTokenDecimals,
+  tokenOutputBch,
 }: UseSimpleSendViewModelParams) {
   const displayTokenName = useCallback(
     (category: string) => displayNameFor(category, tokenMeta),
     [tokenMeta]
   );
 
-  const prefix =
-    currentNetwork === 'mainnet' ? PREFIX.mainnet : PREFIX.chipnet;
+  const prefix = currentNetwork === 'mainnet' ? PREFIX.mainnet : PREFIX.chipnet;
   const prefixLen = prefix.length;
   const mask = useCallback(
     (addr: string) => shortenTxHash(addr, prefixLen),
@@ -55,7 +59,10 @@ export function useSimpleSendViewModel({
 
   const inputSum = useMemo(() => {
     if (!Array.isArray(selectedForTx)) return 0n;
-    return selectedForTx.reduce((s, u) => s + BigInt(u?.amount ?? u?.value ?? 0), 0n);
+    return selectedForTx.reduce(
+      (s, u) => s + BigInt(u?.amount ?? u?.value ?? 0),
+      0n
+    );
   }, [selectedForTx]);
 
   const outputsTableRows = useMemo<OutputTableRow[]>(() => {
@@ -114,17 +121,22 @@ export function useSimpleSendViewModel({
 
   const ftCategories = categories.filter((c) => c.ftAmount > 0n);
   const nftCategories = categories.filter((c) => c.isNft);
+  const validTokenOutputValue =
+    parseAmountToSats(tokenOutputBch) >= TOKEN_OUTPUT_SATS;
 
   const canReview =
     (assetType === 'bch' && !!recipient && !!amountBch) ||
     (assetType === 'ft' &&
       !!recipient &&
       !!selectedCategory &&
-      parseDecimalAmountToAtomic(amountToken, selectedTokenDecimals) > 0n) ||
-    (assetType === 'nft' && !!recipient && !!selectedCategory);
+      parseDecimalAmountToAtomic(amountToken, selectedTokenDecimals) > 0n &&
+      validTokenOutputValue) ||
+    (assetType === 'nft' &&
+      !!recipient &&
+      !!selectedCategory &&
+      validTokenOutputValue);
 
-  const inputClass =
-    'w-full wallet-input wallet-focus-field rounded-xl';
+  const inputClass = 'w-full wallet-input wallet-focus-field rounded-xl';
   const selectClass =
     'w-full wallet-input wallet-focus-field appearance-none rounded-xl cursor-pointer';
 
