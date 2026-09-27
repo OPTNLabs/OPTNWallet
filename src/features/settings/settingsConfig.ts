@@ -15,6 +15,7 @@ export type SettingsPanelKey =
   | 'network'
   | 'faucet'
   | 'wallet-info'
+  | 'birthday'
   | 'derivation'
   | 'server'
   | 'console'
@@ -74,6 +75,13 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
     description: 'Name, type, network · xPub & path behind password/biometric',
     action: 'panel',
     target: 'wallet-info',
+  },
+  {
+    key: 'birthday',
+    title: 'Wallet birthday',
+    description: 'Where wallet history begins',
+    action: 'panel',
+    target: 'birthday',
   },
   {
     key: 'derivation',
@@ -199,6 +207,7 @@ export function getSettingsGroupRows(
     wallet: WALLET_ROWS.filter((row) =>
       [
         'wallet-info',
+        'birthday',
         'recovery',
         'derivation',
         'app-lock',
@@ -227,6 +236,7 @@ export function getSettingsGroupRows(
     if (
       !isDesktop &&
       [
+        'birthday',
         'app-lock',
         'rebuild-wallet',
         'export-archive',

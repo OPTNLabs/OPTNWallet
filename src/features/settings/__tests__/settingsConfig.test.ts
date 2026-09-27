@@ -8,6 +8,29 @@ import {
 import { Network } from '../../../state/slices/networkSlice';
 
 describe('settingsConfig', () => {
+  it('keeps desktop birthday under Wallet & security with one parent level', () => {
+    for (const network of [Network.MAINNET, Network.CHIPNET]) {
+      const walletRows = getSettingsGroupRows('wallet', true, network);
+      expect(walletRows.filter((row) => row.key === 'birthday')).toEqual([
+        expect.objectContaining({
+          title: 'Wallet birthday',
+          action: 'panel',
+          target: 'birthday',
+        }),
+      ]);
+      expect(getParentSettingsGroup('birthday', true, network)).toBe('wallet');
+      expect(getParentSettingsGroup('group:wallet', true, network)).toBeNull();
+      expect(
+        [
+          ...getVisibleWalletRows(true, network),
+          ...getSettingsGroupRows('features', true, network),
+          ...getSettingsGroupRows('about', true, network),
+          ...getSettingsGroupRows('wallet', false, network),
+        ].map((row) => row.key)
+      ).not.toContain('birthday');
+    }
+  });
+
   it('removes the duplicate desktop Nostr row while keeping mobile access and old-link parent navigation', () => {
     expect(
       getSettingsGroupRows('features', true, Network.CHIPNET).map(

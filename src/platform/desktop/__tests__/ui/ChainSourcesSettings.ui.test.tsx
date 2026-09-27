@@ -92,7 +92,6 @@ it('browses without probes and sends explicit selection through the old UI', asy
   render(
     <ChainSourcesSettings
       backRef={backRef}
-      birthdaySettings={<button>Existing birthday control</button>}
       fusionSettings={<button>Automatic Fusion server selection</button>}
       nostrSettings={<button>Existing Nostr relay pool</button>}
       feeSettings={<button>Existing fee control</button>}
@@ -231,12 +230,9 @@ it('browses without probes and sends explicit selection through the old UI', asy
   expect(screen.queryByText(/able to sync right now/)).not.toBeInTheDocument();
   act(() => backRef.current?.());
   expect(backRef.current).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /Wallet birthday/ }));
   expect(
-    screen.getByRole('button', { name: 'Existing birthday control' })
-  ).toBeInTheDocument();
-  act(() => backRef.current?.());
-  expect(backRef.current).toBeNull();
+    screen.queryByRole('button', { name: /Wallet birthday/ })
+  ).not.toBeInTheDocument();
   fireEvent.click(screen.getByTestId('chain-sources-own'));
   fireEvent.click(screen.getByRole('button', { name: 'Add infrastructure' }));
   fireEvent.change(screen.getByLabelText('Name'), {

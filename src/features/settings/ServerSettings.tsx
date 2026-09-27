@@ -36,7 +36,6 @@ import { Bip37NodeRow } from './Bip37NodeSettings';
 import { ChainSourcesSettings } from './ChainSourcesSettings';
 import { NostrSettings } from '../nostr/NostrSettings';
 import { CashFusionSettings } from './CashFusionSettings';
-import { WalletBirthdaySettings } from './WalletBirthdaySettings';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import {
   getBackend,
@@ -375,9 +374,6 @@ export const ServerSettings: React.FC<{
         feeSettings={feeSettings}
         fusionSettings={<CashFusionSettings variant="servers" />}
         nostrSettings={<NostrSettings key={walletId} />}
-        birthdaySettings={
-          <WalletBirthdaySettings key={walletId} walletId={walletId} />
-        }
         backRef={backRef}
       />
     );

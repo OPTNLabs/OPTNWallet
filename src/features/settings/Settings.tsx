@@ -31,6 +31,7 @@ import { RebuildWalletSettings } from '../../platform/desktop/RebuildWalletSetti
 import AppUpdateSettings from './AppUpdateSettings';
 import { ExportColdArchiveSettings } from '../../platform/desktop/ExportColdArchiveSettings';
 import { WalletInfoSettings } from './WalletInfoSettings';
+import { WalletBirthdaySettings } from './WalletBirthdaySettings';
 
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import { stopCashConnectThunk } from '../../state/slices/cashconnectSlice';
@@ -282,6 +283,13 @@ const Settings: React.FC = () => {
         return currentNetwork === Network.CHIPNET ? <FaucetView /> : null;
       case 'wallet-info':
         return <WalletInfoSettings />;
+      case 'birthday':
+        return desktop ? (
+          <WalletBirthdaySettings
+            key={currentWalletId}
+            walletId={currentWalletId}
+          />
+        ) : null;
       case 'derivation':
         return <DerivationPathSettings />;
       case 'server':
@@ -331,6 +339,8 @@ const Settings: React.FC = () => {
         return desktop ? 'Network' : t('settingsPanels.server');
       case 'wallet-info':
         return t('settingsPanels.walletInfo');
+      case 'birthday':
+        return 'Wallet birthday';
       case 'derivation':
         return t('settingsPanels.derivation');
       case 'console':
