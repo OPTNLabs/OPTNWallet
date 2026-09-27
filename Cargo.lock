@@ -2263,6 +2263,7 @@ dependencies = [
 name = "optn-runtime"
 version = "1.7.3"
 dependencies = [
+ "getrandom 0.2.17",
  "optn-app",
  "optn-core",
  "optn-platform",

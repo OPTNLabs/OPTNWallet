@@ -2131,9 +2131,9 @@ mod tests {
             },
         );
         let checkpoint = received.await.unwrap().unwrap();
-        let bytes = checkpoint
-            .seal(&key, &[7; optn_core::wallet_pack::NONCE_LEN])
-            .unwrap();
+        let mut nonce = [0; optn_core::wallet_pack::NONCE_LEN];
+        getrandom::getrandom(&mut nonce).unwrap();
+        let bytes = checkpoint.seal(&key, &nonce).unwrap();
         let reopened = WalletCheckpoint::open(&key, &bytes).unwrap();
 
         let (restored_app, _, _) = hd_identity_app();
@@ -2764,9 +2764,9 @@ mod tests {
                     .unwrap()
                     .checkpoint_key(Network::Chipnet, account)
                     .unwrap();
-                let bytes = checkpoint
-                    .seal(&key, &[23; optn_core::wallet_pack::NONCE_LEN])
-                    .unwrap();
+                let mut nonce = [0; optn_core::wallet_pack::NONCE_LEN];
+                getrandom::getrandom(&mut nonce).unwrap();
+                let bytes = checkpoint.seal(&key, &nonce).unwrap();
                 let reopened = WalletCheckpoint::open(&key, &bytes).unwrap();
                 let restored = AppRuntime::spawn(initial);
                 restored.restore_wallet_checkpoint(reopened).await.unwrap();
