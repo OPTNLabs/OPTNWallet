@@ -59,6 +59,19 @@ pub fn optn_coin_holds(app: tauri::AppHandle, wallet_id: u32) -> Result<Vec<Coin
     Ok(views(&holds_file(&app, wallet_id)?.load()?))
 }
 
+fn edit_holds(
+    app: &tauri::AppHandle,
+    wallet_id: u32,
+    edit: impl FnOnce(&mut optn_runtime::coin_holds::CoinHolds) -> Result<(), String>,
+) -> Result<Vec<CoinHoldView>, String> {
+    let runtime = app.state::<optn_runtime::AppRuntime>();
+    // Refuse new work throughout the edit, not just before and after it.
+    // The guard also cancels prior work and releases on every error path.
+    let _mutation = runtime.begin_wallet_mutation();
+    let result = holds_file(app, wallet_id).and_then(|file| file.update(edit));
+    result.map(|holds| views(&holds))
+}
+
 /// Freeze a coin. Only the user's own reason is accepted from a renderer:
 /// a pledge or a fusion round takes its hold through the code that owns it,
 /// so a screen cannot mint a hold that nothing will ever release.
@@ -70,12 +83,11 @@ pub fn optn_coin_freeze(
     vout: u32,
     note: Option<String>,
 ) -> Result<Vec<CoinHoldView>, String> {
-    let holds = holds_file(&app, wallet_id)?.update(|holds| {
+    edit_holds(&app, wallet_id, |holds| {
         holds
             .hold(&txid, vout, FreezeReason::User, note.clone())
             .map_err(|error| error.to_string())
-    })?;
-    Ok(views(&holds))
+    })
 }
 
 #[tauri::command]
@@ -85,12 +97,11 @@ pub fn optn_coin_unfreeze(
     txid: String,
     vout: u32,
 ) -> Result<Vec<CoinHoldView>, String> {
-    let holds = holds_file(&app, wallet_id)?.update(|holds| {
+    edit_holds(&app, wallet_id, |holds| {
         holds
             .release_user_hold(&txid, vout)
             .map_err(|error| error.to_string())
-    })?;
-    Ok(views(&holds))
+    })
 }
 
 #[cfg(test)]

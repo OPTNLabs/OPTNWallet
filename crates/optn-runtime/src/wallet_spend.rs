@@ -1,4 +1,4 @@
-//! Build and sign an ordinary BCH spend from a synchronized HD account.
+//! Build ordinary BCH spends and preflight already signed wallet transactions.
 //!
 //! The CLI could already do this; the wallet interfaces could not, because the
 //! code lived in the CLI binary and every other surface had to reimplement it.
@@ -11,13 +11,158 @@
 //! unlocked wallet for as long as the signature takes, and broadcasts the
 //! result through whichever chain route policy allows.
 
+use optn_app::AppState;
 use optn_core::{
+    cashaddr::Address,
+    coins::Outpoint,
     error::{CliError, Result},
     hd::Wallet,
+    network::Network,
     tx::{self, Output, Transaction, Utxo},
     watch_only::HdAddressBook,
 };
+use optn_transport::{security::WalletBroadcastRequest, TransportError, WalletSecurityStatus};
 use std::collections::BTreeSet;
+
+/// The same bound used by the native signed-transaction relay. Hosts must also
+/// check the hex length before allocating decoded bytes.
+pub const MAX_SIGNED_TRANSACTION_BYTES: usize = 100_000;
+
+/// Exact bytes and identities of a transaction that passed wallet preflight.
+/// This is neither a signature-verification result nor a broadcast receipt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedSignedTransaction {
+    pub raw: Vec<u8>,
+    /// Display-order hash, matching the wallet's outbound tracker.
+    pub txid: String,
+    /// Internal/wire hash for the shared broadcast coordinator.
+    pub wire_txid: [u8; 32],
+    /// Display-order `txid:vout` values derived from the actual raw inputs.
+    pub inputs: Vec<String>,
+}
+
+/// Preflight signed bytes without rebuilding outputs or obtaining signing keys.
+///
+/// `state` and `status` must come from the same authenticated runtime, protected
+/// by its retained operation guard across all host awaits and submission. The
+/// current fresh coin set is the ownership scope, including CashTokens. Unknown
+/// inputs are not presumed to be external contracts: they may be stale wallet
+/// inputs. Uncovered contracts, RPA and multisig require their own authenticated
+/// coverage before this scope can admit them. Hardware/watch-only single-account
+/// wallets may submit externally signed bytes under the same checks.
+pub fn validate_signed_submission(
+    state: &AppState,
+    status: &WalletSecurityStatus,
+    request: &WalletBroadcastRequest,
+    raw: &[u8],
+    held: &BTreeSet<String>,
+) -> std::result::Result<PreparedSignedTransaction, TransportError> {
+    if state.surface.is_viewer_only() {
+        return Err(TransportError::Unsupported);
+    }
+    if !status.available
+        || status
+            .active
+            .as_ref()
+            .is_none_or(|handle| handle.is_empty())
+        || request.wallet_id == 0
+        || status.legacy_source_id != Some(request.wallet_id)
+        || status.epoch != request.epoch
+        || state.lock.unlock_epoch != request.epoch
+    {
+        return Err(TransportError::Other(
+            "The signed transaction does not belong to the authenticated wallet session.".into(),
+        ));
+    }
+    let network = request
+        .network
+        .parse::<Network>()
+        .map_err(TransportError::InvalidData)?;
+    if network != state.network {
+        return Err(TransportError::Other(
+            "The wallet network changed. Review the transaction again.".into(),
+        ));
+    }
+    let wallet = state.wallet.as_ref().ok_or_else(|| {
+        TransportError::Other("Unlock the wallet before submitting a transaction.".into())
+    })?;
+    if !state.wallet_sync.utxos_fresh
+        || !state.wallet_sync.history_fresh
+        || state.wallet_sync.refreshing
+    {
+        return Err(TransportError::Other(
+            "Refresh the wallet before submitting a transaction.".into(),
+        ));
+    }
+    if wallet.multisig_policy.is_some()
+        || wallet.account_xpub.is_none()
+        || state.hd_addresses.is_none()
+    {
+        return Err(TransportError::Other(
+            "This wallet has no authenticated single-account submission coverage.".into(),
+        ));
+    }
+    if raw.is_empty()
+        || raw.len() > MAX_SIGNED_TRANSACTION_BYTES
+        || request.raw_hex.len() != raw.len() * 2
+        || !request.raw_hex.eq_ignore_ascii_case(&hex_lower(raw))
+    {
+        return Err(TransportError::InvalidData(
+            "Transaction bytes must match the bounded hexadecimal request.".into(),
+        ));
+    }
+    let decoded =
+        tx::decode(raw).map_err(|error| TransportError::InvalidData(error.to_string()))?;
+    if decoded.inputs.is_empty() || decoded.outputs.is_empty() {
+        return Err(TransportError::InvalidData(
+            "A wallet transaction must have inputs and outputs.".into(),
+        ));
+    }
+    let mut unique = BTreeSet::new();
+    let mut inputs = Vec::with_capacity(decoded.inputs.len());
+    for (mut txid, vout, _) in decoded.inputs {
+        if !unique.insert((txid, vout)) || (txid == [0; 32] && vout == u32::MAX) {
+            return Err(TransportError::InvalidData(
+                "Duplicate or coinbase inputs cannot be submitted as a wallet spend.".into(),
+            ));
+        }
+        txid.reverse();
+        let outpoint = Outpoint::new(txid, vout);
+        let displayed = outpoint.to_string();
+        let coin = state.coins.get(outpoint).ok_or_else(|| {
+            TransportError::Other(
+                "An input is outside the wallet's fresh owned coins. Refresh or use a supported submission scope."
+                    .into(),
+            )
+        })?;
+        if coin.freeze().is_some() || held.contains(&displayed) {
+            return Err(TransportError::Other(
+                "A transaction input is frozen or reserved.".into(),
+            ));
+        }
+        if coin.is_rpa() {
+            return Err(TransportError::Other(
+                "RPA input coverage is unavailable for this submission scope.".into(),
+            ));
+        }
+        let address = Address::decode(coin.address()).map_err(TransportError::InvalidData)?;
+        if address.prefix != network.prefix() {
+            return Err(TransportError::InvalidData(
+                "A transaction input belongs to another network.".into(),
+            ));
+        }
+        inputs.push(displayed);
+    }
+    let wire_txid = tx::double_sha256(raw);
+    let mut display = wire_txid;
+    display.reverse();
+    Ok(PreparedSignedTransaction {
+        raw: raw.to_vec(),
+        txid: hex_lower(&display),
+        wire_txid,
+        inputs,
+    })
+}
 
 /// A spendable output together with the path whose key controls it.
 #[derive(Debug, Clone)]
@@ -187,6 +332,282 @@ mod tests {
 
     fn wallet() -> Wallet {
         Wallet::from_mnemonic(MNEMONIC, "").unwrap()
+    }
+
+    #[derive(Clone)]
+    struct SubmissionFixture {
+        state: AppState,
+        status: WalletSecurityStatus,
+        request: WalletBroadcastRequest,
+        raw: Vec<u8>,
+        outpoint: Outpoint,
+        input: Utxo,
+    }
+
+    impl SubmissionFixture {
+        fn new() -> Self {
+            let wallet = wallet();
+            let path = "m/44'/1'/0'/0/0";
+            let address = wallet.address(Network::Chipnet, path).unwrap();
+            let input = Utxo {
+                // Asymmetric hashes catch display/wire-order hold bypasses.
+                txid: std::array::from_fn(|index| index as u8),
+                vout: 0,
+                value: 50_000,
+                script_pubkey: address.script_pubkey(),
+            };
+            let token = optn_core::token::TokenData::fungible(input.txid, 42);
+            let raw = Transaction::new(
+                vec![input.clone()],
+                vec![Output::with_tokens(
+                    49_000,
+                    address.script_pubkey(),
+                    token.encode_prefix().unwrap(),
+                )],
+            )
+            .sign(&[wallet.signing_key(path).unwrap()])
+            .unwrap();
+            let mut display = input.txid;
+            display.reverse();
+            let outpoint = Outpoint::new(display, input.vout);
+            let mut state = AppState {
+                network: Network::Chipnet,
+                ..Default::default()
+            };
+            state.reduce(optn_app::AppAction::OpenImportedWallet {
+                name: "Public raw submission fixture".into(),
+                receive_address: address.encode(),
+                account_path: "m/44'/1'/0'".into(),
+            });
+            state.wallet.as_mut().unwrap().account_xpub =
+                Some(wallet.account_xpub(Network::Chipnet, 0).unwrap());
+            state.hd_addresses = Some(Default::default());
+            state.wallet_sync.utxos_fresh = true;
+            state.wallet_sync.history_fresh = true;
+            state
+                .coins
+                .insert(
+                    optn_core::coins::Coin::new(outpoint, input.value, address.encode()).unwrap(),
+                )
+                .unwrap();
+            let status = WalletSecurityStatus {
+                available: true,
+                active: Some("public-fixture.optn".into()),
+                legacy_source_id: Some(42),
+                epoch: state.lock.unlock_epoch,
+                ..Default::default()
+            };
+            let request = WalletBroadcastRequest {
+                wallet_id: 42,
+                epoch: status.epoch,
+                network: "chipnet".into(),
+                raw_hex: hex_lower(&raw),
+            };
+            Self {
+                state,
+                status,
+                request,
+                raw,
+                outpoint,
+                input,
+            }
+        }
+
+        fn validate(
+            &self,
+            held: BTreeSet<String>,
+        ) -> std::result::Result<PreparedSignedTransaction, TransportError> {
+            validate_signed_submission(&self.state, &self.status, &self.request, &self.raw, &held)
+        }
+
+        fn replace_raw(&mut self, raw: Vec<u8>) {
+            self.request.raw_hex = hex_lower(&raw);
+            self.raw = raw;
+        }
+    }
+
+    #[test]
+    fn signed_submission_preserves_signature_and_token_bytes_for_covered_wallet_kinds() {
+        let mut fixture = SubmissionFixture::new();
+        // Hardware and airgap signatures are opaque to submission. No signing
+        // key is requested and the original bytes remain the hash commitment.
+        fixture.request.raw_hex.make_ascii_uppercase();
+        for kind in [
+            optn_app::WalletKind::Seed,
+            optn_app::WalletKind::Hardware,
+            optn_app::WalletKind::WatchOnly,
+        ] {
+            fixture.state.wallet.as_mut().unwrap().kind = kind;
+            let prepared = fixture.validate(BTreeSet::new()).unwrap();
+            assert_eq!(prepared.raw, fixture.raw);
+            assert_eq!(prepared.wire_txid, tx::double_sha256(&fixture.raw));
+            let mut expected = prepared.wire_txid;
+            expected.reverse();
+            assert_eq!(prepared.txid, hex_lower(&expected));
+            assert_eq!(prepared.inputs, [fixture.outpoint.to_string()]);
+            assert!(tx::decode(&prepared.raw).unwrap().outputs[0]
+                .token
+                .is_some());
+        }
+        // Token custody in the accepted coin set must not filter a submitted
+        // input as the ordinary BCH builder does. This preflight is not a
+        // token-conservation or signature-verification result.
+        let token_coin = fixture
+            .state
+            .coins
+            .get(fixture.outpoint)
+            .unwrap()
+            .clone()
+            .with_token(optn_core::token::TokenData::fungible([7; 32], 42));
+        fixture.state.coins.clear();
+        fixture.state.coins.insert(token_coin).unwrap();
+        assert_eq!(fixture.validate(BTreeSet::new()).unwrap().raw, fixture.raw);
+    }
+
+    #[test]
+    fn signed_submission_binds_status_epoch_network_and_fresh_coverage() {
+        let original = SubmissionFixture::new();
+        let changes: &[fn(&mut SubmissionFixture)] = &[
+            |f| f.state.surface = optn_app::AppSurface::Extension,
+            |f| f.status.available = false,
+            |f| f.status.active = None,
+            |f| f.status.legacy_source_id = None,
+            |f| f.request.wallet_id = 0,
+            |f| f.request.wallet_id = 43,
+            |f| f.request.epoch += 1,
+            |f| f.status.epoch += 1,
+            |f| f.state.lock.unlock_epoch += 1,
+            |f| f.state.wallet = None,
+            |f| f.request.network = "testnet4".into(),
+            |f| f.request.network = "bchtest".into(),
+            |f| f.state.wallet_sync.utxos_fresh = false,
+            |f| f.state.wallet_sync.history_fresh = false,
+            |f| f.state.wallet_sync.refreshing = true,
+            |f| f.state.hd_addresses = None,
+            |f| f.state.wallet.as_mut().unwrap().account_xpub = None,
+            |f| f.state.wallet.as_mut().unwrap().multisig_policy = Some("2 of 3".into()),
+        ];
+        for (index, change) in changes.iter().enumerate() {
+            let mut fixture = original.clone();
+            change(&mut fixture);
+            assert!(fixture.validate(BTreeSet::new()).is_err(), "case {index}");
+        }
+    }
+
+    #[test]
+    fn signed_submission_rejects_frozen_held_unknown_and_uncovered_rpa_inputs() {
+        let mut fixture = SubmissionFixture::new();
+        let mut held = BTreeSet::from([fixture.outpoint.to_string()]);
+        assert!(fixture.validate(held.clone()).is_err());
+        held.clear();
+        fixture
+            .state
+            .coins
+            .freeze(fixture.outpoint, optn_core::coins::FreezeReason::User)
+            .unwrap();
+        assert!(fixture.validate(held.clone()).is_err());
+        fixture.state.coins.unfreeze(fixture.outpoint).unwrap();
+        assert!(fixture.validate(held.clone()).is_ok());
+        // An omitted input cannot silently be treated as an external contract.
+        fixture.state.coins.clear();
+        assert!(fixture.validate(held.clone()).is_err());
+        let rpa = optn_core::coins::Coin::from_rpa_payment(
+            fixture.outpoint,
+            fixture.input.value,
+            fixture
+                .state
+                .wallet
+                .as_ref()
+                .unwrap()
+                .receive_address
+                .clone(),
+            "01".repeat(32),
+            0,
+            format!("02{}", "01".repeat(32)),
+        )
+        .unwrap();
+        fixture.state.coins.insert(rpa).unwrap();
+        assert!(fixture.validate(held).is_err());
+    }
+
+    #[test]
+    fn signed_submission_checks_every_input_not_just_one_owned_input() {
+        let mut fixture = SubmissionFixture::new();
+        let key = wallet().signing_key("m/44'/1'/0'/0/0").unwrap();
+        let additional = Utxo {
+            vout: 1,
+            ..fixture.input.clone()
+        };
+        let raw = Transaction::new(
+            vec![fixture.input.clone(), additional.clone()],
+            vec![Output::new(90_000, additional.script_pubkey.clone())],
+        )
+        .sign(&[key.clone(), key])
+        .unwrap();
+        fixture.replace_raw(raw);
+        assert!(fixture.validate(BTreeSet::new()).is_err());
+        let second = Outpoint::new(fixture.outpoint.txid(), 1);
+        fixture
+            .state
+            .coins
+            .insert(
+                optn_core::coins::Coin::new(
+                    second,
+                    additional.value,
+                    fixture
+                        .state
+                        .wallet
+                        .as_ref()
+                        .unwrap()
+                        .receive_address
+                        .clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(fixture.validate(BTreeSet::new()).is_ok());
+        assert!(fixture
+            .validate(BTreeSet::from([second.to_string()]))
+            .is_err());
+    }
+
+    #[test]
+    fn signed_submission_rejects_duplicate_inputs_and_malformed_or_unbound_bytes() {
+        let mut fixture = SubmissionFixture::new();
+        let original = fixture.raw.clone();
+        let key = wallet().signing_key("m/44'/1'/0'/0/0").unwrap();
+        let duplicate = Transaction::new(
+            vec![fixture.input.clone(), fixture.input.clone()],
+            vec![Output::new(10_000, fixture.input.script_pubkey.clone())],
+        )
+        .sign(&[key.clone(), key.clone()])
+        .unwrap();
+        fixture.replace_raw(duplicate);
+        assert!(matches!(
+            fixture.validate(BTreeSet::new()),
+            Err(TransportError::InvalidData(_))
+        ));
+        for raw in [
+            Vec::new(),
+            Transaction::new(Vec::new(), vec![Output::new(1, vec![0x51])])
+                .sign(&[])
+                .unwrap(),
+            Transaction::new(vec![fixture.input.clone()], Vec::new())
+                .sign(&[key])
+                .unwrap(),
+            original[..original.len() - 1].to_vec(),
+            [original.as_slice(), &[0]].concat(),
+            vec![0; MAX_SIGNED_TRANSACTION_BYTES + 1],
+        ] {
+            fixture.replace_raw(raw);
+            assert!(matches!(
+                fixture.validate(BTreeSet::new()),
+                Err(TransportError::InvalidData(_))
+            ));
+        }
+        fixture.replace_raw(original);
+        fixture.request.raw_hex.replace_range(..2, "ff");
+        assert!(fixture.validate(BTreeSet::new()).is_err());
     }
 
     #[test]

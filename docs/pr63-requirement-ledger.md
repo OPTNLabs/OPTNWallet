@@ -118,7 +118,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | Wallet birthday | **PARTIAL** (durable imported hints connected) | Shared `SetBirthday`/`ClearRescan`, sealed checkpoint, atomic `BeginHd` floor resolution; CLI process restart and Windows GUI height/date reopen and manual-override clearing verified on 2026-09-19. Unknown imports explicitly scan from genesis; missing authenticated date evidence fails closed; legacy manual floors migrate | Automatic same-route header acquisition is connected and tested; requests retain their runtime generation across header I/O. Host-generated creation-anchor capture, restored historical-date evidence and live date acquisition remain to verify. Imported mnemonic input is never treated as proof of fresh wallet creation |
 | Local BCMR / authchain | **PARTIAL** | HD sync now invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Connected synthetic sync checks accepted identity, unknown spentness, output mismatch, wrong registry hash, absent fetch transport and stale-state downgrade | Needs real-node/token workflow; desktop RPC credential controls and CLI private-input controls are connected (see evidence below). Unknown successors outside wallet history need a selected spender-discovery capability; legacy TypeScript migration remains. Authenticated token-identity caching and stale restart semantics are connected and tested (see 2026-09-19 evidence below) |
 | Token capability execution | **INTEGRATION** | `optn-runtime/src/token_capability.rs`; refuses global totals from partial data | Planner and executor exist; no provider adapter routes through them |
-| Broadcast lifecycle | **PARTIAL** | `optn-runtime/src/tx_broadcast.rs` | Uncertain-broadcast reconciliation exists; Send/PSBT/hardware/Fusion are not yet on one lifecycle |
+| Broadcast lifecycle | **PARTIAL** | `optn-runtime/src/tx_broadcast.rs`; retained desktop `TransactionManager` now submits signed bytes through the authenticated native command | Desktop single-account Send/CashTokens has guarded submission and preserves ambiguous outbox records. Durable shared outbox, uncovered contract/RPA/multisig inputs, and the other submission paths still need integration; see 2026-09-27 evidence below |
 
 ---
 
@@ -733,3 +733,86 @@ current-authority checks through the shared wallet path. It is synthetic-node
 integration evidence, not live public-token or packaged token-rendering proof.
 Electrum assertions and transaction inclusion proofs alone still cannot establish
 terminal unspentness; the existing full-node evidence requirement remains.
+
+### 2026-09-26: remaining review findings and authenticated spend ownership
+
+`eab6b58a` includes updater archives and detached signatures in release assembly.
+The regression executes the workflow's actual Bash against ten fixtures across
+all five desktop targets and checks their filenames and bytes: three artifacts
+were copied before the fix, all ten afterward. All 52 workflow tests pass.
+No platform, packaging dependency or completeness gate was removed.
+
+`eaacf6ce` requires the complete predecessor cursor for resumed BIP37 header
+walks before transport lookup or I/O. Genesis uses its known timestamp, including
+compatibility with the old `(0, 0)` request. Ten native header tests cover missing
+and contradictory cursors, refusal before connection and resumed ASERT acceptance
+and rejection. Difficulty and proof-of-work checks remain enabled.
+
+`0957fe5b` removes renderer-chosen hold-file ownership from native prepare/send.
+The authenticated runtime record supplies the legacy owner, preserved across
+password migration and checked against the unlock epoch and synchronized account.
+Unreadable holds or missing/ambiguous ownership refuse the spend. Holds are read
+again after authorization and before broadcast; runtime coin freezes also apply.
+The connected runtime test switches two stored wallets and locks to verify that
+ownership cannot follow a stale session. Shared signing paths now use the scanned
+address's complete derivation path, preserving branches 0, 1, 7 and 2 and nondefault
+accounts instead of interpreting every non-change branch as receive.
+
+All 321 runtime tests, three native spend tests, strict native/runtime/CLI Clippy,
+TypeScript and architecture checks passed. Retained UI hold, transaction-service,
+biometric and file-import tests pass. The first ad-hoc combined run used Vitest's
+5-second default and timed out on its first cold TransactionService import; its
+isolated rerun passed all 21 tests without changes or a timeout increase.
+`cb196b7c` limits wallet-open failures to fixed adapter stage labels; all 36 bridge
+tests include native diagnostic leakage cases and pass with scoped ESLint.
+
+All eight previously unresolved review threads were answered with evidence and
+resolved after the fixes were pushed. The PR-scoped open code-scanning query was
+empty at head `0957fe5b`; that revision's new scans and platform jobs were still
+queued/running. This is not full CI clearance, packaged spending evidence or
+completion of the separate durable proposal/outbox and wallet-scope union work.
+
+### 2026-09-27: automatic shared refresh and guarded retained-UI submission
+
+The retained desktop Send/CashTokens path reached CashScript's independent
+Electrum client through `TransactionManager`, bypassing the shared route policy.
+It now sends the exact reviewed signed bytes through `optn_wallet_broadcast`.
+Rust binds the request to the authenticated wallet, network and unlock epoch,
+requires every input in the fresh owned coin set, and checks durable holds again
+after acquiring the current selected service. It neither rebuilds nor signs.
+Unsupported ownership scopes refuse submission without a legacy-network fallback.
+
+The runtime retains cancellation across coalesced state updates and across the
+entire native hold-file mutation, including failed writes. Pending setup is
+cancelled on wallet/route changes; cancellation after possible handoff preserves
+the transaction id and an uncertain outcome. An ambiguous provider attempt stops
+broadcast failover. Deterministic rejection/unsupported-route handling and query
+failover remain intact. The retained outbox stores the Rust-decoded input outpoints
+before handoff, keeps uncertain records reserved, and binds retries to their saved
+wallet id. This does not yet move that renderer-owned outbox into Rust storage.
+
+`WalletRefresh` now schedules the existing shared HD/checkpoint/BCMR workflow on
+wallet open and periodically in both the native host and persistent CLI. Manual
+and automatic requests share one gate; a busy adapter does not invalidate fresh
+coins. Failures use bounded 5/10/20/40/60-second retries. Lock/context changes cancel
+pending setup and scans. CLI source/credential changes pause setup before waiting
+for the gate, then keep it paused throughout persistence. Native acquisition checks
+the installed network, current saved selection, generation and credentials even
+before its selection worker reacts. CLI EOF/input errors release the refresh
+owner and stop the dedicated driver. No renderer timer or new dependency was added.
+
+Validation: 341 shared runtime tests; 49 retained transaction/tracker/reconciler
+tests; five CLI wallet-security unit tests; both native automatic-refresh and
+installed-context regression tests; TypeScript, scoped lint/format and architecture
+checks pass. Strict runtime/native/CLI Clippy and the retained desktop production
+bundle also pass. The native automatic test reaches the real HD adapter with its header
+prerequisite and verifies lock cancellation. The CLI test uses its real dedicated
+driver and proves source-override refusal and shutdown. These are component and
+adapter proofs, not a live positive GUI send or new packaged-platform completion.
+
+The current submission scope is one authenticated HD account. Contracts, RPA and
+multisig inputs need authenticated coverage before admission; hardware/watch-only
+submission additionally needs the corresponding managed runtime record. The legacy
+whole-wallet Home balance remains separate because durable HD/RPA/contract union is
+unfinished. Shared durable outbox/reconciliation, CashFusion orchestration, one-shot
+CLI token projection and complete-category indexer execution remain open connections.

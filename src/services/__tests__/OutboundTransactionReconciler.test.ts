@@ -156,4 +156,32 @@ describe('OutboundTransactionReconciler privacy routes', () => {
     expect(visibilityMock).toHaveBeenCalledWith([ordinaryRecord.txid]);
     expect(reconnectMock).not.toHaveBeenCalled();
   });
+
+  it('retries under the recorded wallet rather than the currently selected wallet', async () => {
+    listActiveMock.mockResolvedValue([ordinaryRecord]);
+    visibilityMock.mockResolvedValue({});
+    shouldRebroadcastMock.mockReturnValue(true);
+    sendTransactionMock.mockResolvedValue({ txid: ordinaryRecord.txid });
+    prepareMock.mockImplementation((sql: string) => {
+      let stepped = false;
+      return {
+        bind: vi.fn(),
+        free: vi.fn(),
+        step: () => {
+          if (!sql.includes('FROM keys') || stepped) return false;
+          stepped = true;
+          return true;
+        },
+        getAsObject: () => ({ address: 'bitcoincash:qtest' }),
+      };
+    });
+    const { reconcileOutboundTransactions } = await import(
+      '../OutboundTransactionReconciler'
+    );
+    await reconcileOutboundTransactions(5);
+    expect(sendTransactionMock).toHaveBeenCalledExactlyOnceWith(
+      ordinaryRecord.rawTx,
+      5
+    );
+  });
 });

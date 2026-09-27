@@ -16,6 +16,7 @@ use optn_runtime::chain::{
     SourceDisposition, SourceId, SourceOrigin,
 };
 use optn_runtime::chain_service::ChainService;
+use optn_runtime::wallet_refresh::{RefreshOutcome, WalletRefresh};
 use optn_runtime::AppRuntime;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,6 +33,13 @@ use optn_runtime::header_verifier::ShvMmrHeaderVerifier;
 use optn_runtime::header_view::VerifiedHeaderView;
 
 type NativeSelection = (Network, Result<(SourceCatalog, ConnectionPolicy), String>);
+
+struct InstalledStack {
+    stack: NativeChainStack,
+    selection: NativeSelection,
+    generation: u64,
+    credential_revision: u64,
+}
 
 /// Authorize the renderer's scan target against the node selected in native
 /// application state. The renderer may describe the target, but cannot choose
@@ -223,7 +231,8 @@ fn shipped_header_verifier(network: Network) -> Result<ShvMmrHeaderVerifier, Str
 /// a policy change during probing cancels that build before publication.
 pub struct NativeChainRuntime {
     owner: AppRuntime,
-    stack: RwLock<Option<NativeChainStack>>,
+    stack: RwLock<Option<InstalledStack>>,
+    wallet_refresh: WalletRefresh,
     generation: AtomicU64,
     secrets: RwLock<NativeChainSecrets>,
     credential_revision: AtomicU64,
@@ -237,6 +246,7 @@ impl NativeChainRuntime {
     /// Create an inactive host with no published routes or supplied credentials.
     fn new(owner: AppRuntime, network_settings: NetworkSettingsStore) -> Self {
         Self {
+            wallet_refresh: WalletRefresh::new(owner.clone()),
             owner,
             stack: RwLock::new(None),
             generation: AtomicU64::new(0),
@@ -311,9 +321,18 @@ impl NativeChainRuntime {
         let native = Arc::new(Self::new(app_runtime.clone(), network_settings));
         let worker = native.clone();
         tauri::async_runtime::spawn(async move {
-            worker.run().await;
+            tokio::select! {
+                _ = worker.run() => {},
+                _ = worker.run_wallet_refresh() => {},
+            }
         });
         native
+    }
+
+    async fn run_wallet_refresh(&self) {
+        self.wallet_refresh
+            .run(|| self.sync_wallet_from(None))
+            .await;
     }
 
     /// Rebuild while observing selections, cancelling an in-flight build when they
@@ -605,7 +624,7 @@ impl NativeChainRuntime {
             let stack = self.stack.read().await;
             self.generation.fetch_add(1, Ordering::SeqCst);
             if let Some(stack) = stack.as_ref() {
-                stack.revocation.revoke();
+                stack.stack.revocation.revoke();
             }
         }
         self.owner
@@ -632,7 +651,7 @@ impl NativeChainRuntime {
             .read()
             .await
             .as_ref()
-            .map(|stack| stack.service.clone());
+            .map(|stack| stack.stack.service.clone());
         if let Some(previous) = previous {
             // Revoke routes even for callers holding an Arc to the old service.
             *previous.lock().await.catalog_mut() = SourceCatalog::default();
@@ -650,7 +669,12 @@ impl NativeChainRuntime {
                 {
                     return true;
                 }
-                *stack = Some(NativeChainStack::unavailable(error));
+                *stack = Some(InstalledStack {
+                    stack: NativeChainStack::unavailable(error),
+                    selection: captured_selection,
+                    generation,
+                    credential_revision: self.credential_revision.load(Ordering::SeqCst),
+                });
                 return true;
             }
         };
@@ -685,9 +709,14 @@ impl NativeChainRuntime {
                         && self.generation.load(Ordering::SeqCst) == generation
                         && self.credential_revision.load(Ordering::SeqCst) == credential_revision
                     {
-                        *stack = Some(NativeChainStack::unavailable(
-                            "RPC secure storage is unavailable; credentials were not bypassed.",
-                        ));
+                        *stack = Some(InstalledStack {
+                            stack: NativeChainStack::unavailable(
+                                "RPC secure storage is unavailable; credentials were not bypassed.",
+                            ),
+                            selection: captured_selection,
+                            generation,
+                            credential_revision,
+                        });
                     }
                     return true;
                 }
@@ -754,25 +783,50 @@ impl NativeChainRuntime {
         {
             return true;
         }
-        *stack = Some(replacement);
+        *stack = Some(InstalledStack {
+            stack: replacement,
+            selection: captured_selection,
+            generation,
+            credential_revision,
+        });
         true
     }
 
     /// Invoke a synchronous callback with the current service handle under the
-    /// stack read lock. Returns `None` during replacement; retained handles can
-    /// subsequently be revoked by a policy or credential change.
+    /// stack read lock. The installed context must still match the owner's
+    /// network and persisted policy, even before the selection worker reacts.
+    /// Retained handles can subsequently be revoked by policy/credential edits.
     pub async fn with_service<T>(
         &self,
         f: impl FnOnce(&Arc<Mutex<ChainService>>) -> T,
     ) -> Option<T> {
+        let network = self.owner.state().network;
+        {
+            let guard = self.stack.read().await;
+            let installed = guard.as_ref()?;
+            if installed.selection.0 != network || installed.stack.revocation.is_revoked() {
+                return None;
+            }
+        }
+        let persisted = self.persisted_selection(network).await;
         let guard = self.stack.read().await;
-        guard.as_ref().map(|stack| f(&stack.service))
+        let installed = guard.as_ref()?;
+        let current = self.owner.state();
+        if current.network != network
+            || installed.selection != Self::resolve_selection(&current, persisted)
+            || installed.generation != self.generation.load(Ordering::SeqCst)
+            || installed.credential_revision != self.credential_revision.load(Ordering::SeqCst)
+            || installed.stack.revocation.is_revoked()
+        {
+            return None;
+        }
+        Some(f(&installed.stack.service))
     }
 
     /// The host supplies its selected provider; HD discovery and durable
     /// publication remain the same runtime use case invoked by the CLI.
     pub async fn refresh_wallet(&self) -> Result<(), String> {
-        self.sync_wallet_from(None).await
+        self.refresh_once(None).await
     }
 
     /// Rescan this wallet from `height`, inclusive.
@@ -788,17 +842,30 @@ impl NativeChainRuntime {
             .dispatch(optn_app::AppAction::RequestRescanFrom { height })
             .await
             .map_err(|_| "The wallet runtime is no longer running.")?;
-        self.sync_wallet_from(Some(height)).await
+        self.refresh_once(Some(height)).await
     }
 
-    async fn sync_wallet_from(&self, floor: Option<u32>) -> Result<(), String> {
+    async fn refresh_once(&self, floor: Option<u32>) -> Result<(), String> {
+        match self
+            .wallet_refresh
+            .refresh(|| self.sync_wallet_from(floor))
+            .await?
+        {
+            RefreshOutcome::Refreshed => Ok(()),
+            RefreshOutcome::Busy => {
+                Err("A chain operation is already running. Please wait.".into())
+            }
+        }
+    }
+
+    async fn sync_wallet_from(&self, floor: Option<u32>) -> Result<RefreshOutcome, String> {
         let service = self
             .with_service(Arc::clone)
             .await
             .ok_or("Chain source is still connecting. Select a source in Settings and retry.")?;
-        let mut service = service
-            .try_lock()
-            .map_err(|_| "A chain operation is already running. Please wait.")?;
+        let Ok(mut service) = service.try_lock() else {
+            return Ok(RefreshOutcome::Busy);
+        };
         let state = self.owner.state();
         let wallet = state
             .wallet
@@ -851,7 +918,7 @@ impl NativeChainRuntime {
         if decision != optn_runtime::reconciliation::ReconciliationDecision::Accepted {
             return Err("Refresh was incomplete; retained history remains stale.".into());
         }
-        Ok(())
+        Ok(RefreshOutcome::Refreshed)
     }
 
     /// Tip of the accepted chain this host has verified, if it has one.
@@ -875,7 +942,7 @@ impl NativeChainRuntime {
             .read()
             .await
             .as_ref()
-            .map(|stack| stack.failures.clone())
+            .map(|stack| stack.stack.failures.clone())
             .unwrap_or_default()
     }
 
@@ -888,8 +955,8 @@ impl NativeChainRuntime {
         }
         stack
             .as_ref()
-            .filter(|stack| !stack.revocation.is_revoked())
-            .and_then(|stack| stack.tor_status)
+            .filter(|stack| stack.selection.0 == network && !stack.stack.revocation.is_revoked())
+            .and_then(|stack| stack.stack.tor_status)
     }
 
     /// Return the installed stack's configuration error, if any. An absent
@@ -899,7 +966,7 @@ impl NativeChainRuntime {
             .read()
             .await
             .as_ref()
-            .and_then(|stack| stack.configuration_error.clone())
+            .and_then(|stack| stack.stack.configuration_error.clone())
     }
 }
 /// Compatibility bridge from the existing app-wide server settings into the
@@ -1232,16 +1299,26 @@ mod tests {
         }
 
         fn supports(&self, operation: ChainOperation) -> bool {
-            operation == ChainOperation::WalletRefresh
+            matches!(
+                operation,
+                ChainOperation::WalletRefresh | ChainOperation::HeaderSync
+            )
         }
 
-        fn execute<'a>(
-            &'a self,
-            _request: &'a ChainRequest,
-        ) -> ChainFuture<'a, BackendObservation> {
+        fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
             let started = Arc::clone(&self.started);
             let calls = Arc::clone(&self.calls);
             Box::pin(async move {
+                if let ChainRequest::HeaderSync { start_height, .. } = request {
+                    return Ok(BackendObservation {
+                        payload: optn_runtime::chain_service::ChainPayload::Headers {
+                            start_height: *start_height,
+                            headers: vec![],
+                        },
+                        evidence: optn_runtime::chain::Evidence::ServerAssertion,
+                        chain_tip: None,
+                    });
+                }
                 calls.fetch_add(1, Ordering::SeqCst);
                 started.notify_one();
                 std::future::pending::<Result<BackendObservation, ChainBackendError>>().await
@@ -1344,6 +1421,10 @@ mod tests {
     }
 
     async fn pending_hd_refresh() -> PendingHdRefresh {
+        pending_hd_refresh_with_automatic(false).await
+    }
+
+    async fn pending_hd_refresh_with_automatic(automatic: bool) -> PendingHdRefresh {
         // This is the published BIP39 test vector, used only to derive public
         // test material for the shared HD path.
         let public_wallet =
@@ -1398,6 +1479,11 @@ mod tests {
             CapabilityConfidence::Advertised,
             CapabilityDiscovery::ExplicitConfiguration,
         );
+        capabilities.record(
+            Capability::HeaderStream,
+            CapabilityConfidence::Advertised,
+            CapabilityDiscovery::ExplicitConfiguration,
+        );
         let mut catalog = SourceCatalog::default();
         catalog
             .insert(ChainSource {
@@ -1422,20 +1508,31 @@ mod tests {
         }));
         let revocation = service.revocation();
         let service = Arc::new(Mutex::new(service));
-        native.stack.write().await.replace(NativeChainStack {
-            tor_status: Some(optn_core::tor::TorStatus::Absent),
-            revocation,
-            service: service.clone(),
-            event_sources: Vec::new(),
-            failures: Vec::new(),
-            configuration_error: None,
-            headers: optn_chain_native::new_accepted_header_store("chipnet"),
+        let selection = native.selection(&runtime.state()).await;
+        native.stack.write().await.replace(InstalledStack {
+            selection,
+            generation: native.generation.load(Ordering::SeqCst),
+            credential_revision: native.credential_revision.load(Ordering::SeqCst),
+            stack: NativeChainStack {
+                tor_status: Some(optn_core::tor::TorStatus::Absent),
+                revocation,
+                service: service.clone(),
+                event_sources: Vec::new(),
+                failures: Vec::new(),
+                configuration_error: None,
+                headers: optn_chain_native::new_accepted_header_store("chipnet"),
+            },
         });
 
         let old_service = service.clone();
         let refresh_runtime = runtime.clone();
         let refresh_xpub = xpub.clone();
+        let native_refresh = native.clone();
         let task = tokio::spawn(async move {
+            if automatic {
+                native_refresh.run_wallet_refresh().await;
+                return Ok(optn_runtime::reconciliation::ReconciliationDecision::Accepted);
+            }
             let mut worker = ProgressiveSyncWorker::new(Default::default());
             let mut service = old_service.lock().await;
             refresh_runtime
@@ -1447,9 +1544,13 @@ mod tests {
                 )
                 .await
         });
-        tokio::time::timeout(Duration::from_secs(2), started.notified())
-            .await
-            .expect("shared HD refresh reached the pending provider");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), started.notified())
+                .await
+                .is_ok(),
+            "shared HD refresh did not reach the fixture provider: {:?}",
+            runtime.state().wallet_sync.error
+        );
         assert!(service.try_lock().is_err(), "refresh must hold old service");
         assert_eq!(
             tokio::time::timeout(
@@ -1471,6 +1572,72 @@ mod tests {
             calls,
             task,
         }
+    }
+
+    #[tokio::test]
+    async fn automatic_wallet_refresh_reaches_hd_adapter_and_coalesces_manual_work() {
+        let refresh = pending_hd_refresh_with_automatic(true).await;
+        assert_eq!(refresh.calls.load(Ordering::SeqCst), 1);
+        let before = refresh.runtime.state().wallet_sync;
+        assert!(before.refreshing);
+        assert!(refresh
+            .native
+            .refresh_wallet()
+            .await
+            .unwrap_err()
+            .contains("already running"));
+        assert_eq!(refresh.runtime.state().wallet_sync, before);
+        assert_eq!(refresh.calls.load(Ordering::SeqCst), 1);
+        refresh
+            .runtime
+            .dispatch(AppAction::LockWallet)
+            .await
+            .unwrap();
+        let service = tokio::time::timeout(Duration::from_secs(2), refresh.old_service.lock())
+            .await
+            .expect("lock must drop the scheduled adapter future");
+        drop(service);
+        assert!(refresh.runtime.state().wallet.is_none());
+        assert_eq!(refresh.calls.load(Ordering::SeqCst), 1);
+        refresh.task.abort();
+        let _ = refresh.task.await;
+        std::fs::remove_dir(refresh.settings_directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_service_rejects_network_and_selection_changes_before_worker_runs() {
+        let directory = test_directory("installed-context");
+        let runtime = AppRuntime::spawn(AppState::default());
+        let native = NativeChainRuntime::new(runtime.clone(), NetworkSettingsStore::new(directory));
+        let selection = native.selection(&runtime.state()).await;
+        *native.stack.write().await = Some(InstalledStack {
+            stack: NativeChainStack::unavailable("public context fixture"),
+            selection,
+            generation: 0,
+            credential_revision: 0,
+        });
+        assert!(native.with_service(Arc::clone).await.is_some());
+        runtime
+            .dispatch(AppAction::SetNetwork(Network::Chipnet))
+            .await
+            .unwrap();
+        assert!(native.with_service(Arc::clone).await.is_none());
+        runtime
+            .dispatch(AppAction::SetNetwork(Network::Mainnet))
+            .await
+            .unwrap();
+        assert!(native.with_service(Arc::clone).await.is_some());
+        runtime
+            .dispatch(AppAction::SetServer {
+                kind: ServerKind::Electrum,
+                entry: "127.0.0.1:1".into(),
+            })
+            .await
+            .unwrap();
+        assert!(native.with_service(Arc::clone).await.is_none());
+        // No selection worker or provider was run: the old stack remains
+        // installed, proving acquisition itself rejects the stale context.
+        assert!(native.stack.read().await.is_some());
     }
 
     async fn assert_cancelled(refresh: PendingHdRefresh, reason: &str) {
