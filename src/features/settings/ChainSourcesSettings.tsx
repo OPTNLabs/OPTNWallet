@@ -52,7 +52,6 @@ type SourcePage =
   | 'routing'
   | 'privacy'
   | 'sync'
-  | 'birthday'
   | 'fusion'
   | 'fees'
   | 'explorer';
@@ -121,7 +120,6 @@ function pageTitle(page: SourcePage): string {
     sync: 'Diagnostics',
     fees: 'Transaction fees',
     fusion: 'CashFusion',
-    birthday: 'Wallet birthday',
     explorer: 'Explorer',
   }[page];
 }
@@ -249,7 +247,6 @@ type ChainSourcesSettingsProps = {
   feeSettings?: ReactNode;
   fusionSettings?: ReactNode;
   nostrSettings?: ReactNode;
-  birthdaySettings?: ReactNode;
   backRef?: MutableRefObject<(() => void) | null>;
 };
 
@@ -259,7 +256,6 @@ export function ChainSourcesSettings({
   feeSettings,
   fusionSettings,
   nostrSettings,
-  birthdaySettings,
   backRef,
 }: ChainSourcesSettingsProps) {
   const [view, setView] = useState<ChainSourcesView | null>(null);
@@ -802,23 +798,6 @@ export function ChainSourcesSettings({
                 <span className="text-xs wallet-muted">Open</span>
               </button>
             )}
-            {birthdaySettings && (
-              <button
-                type="button"
-                className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
-                onClick={() => navigate('birthday')}
-              >
-                <span>
-                  <span className="block text-sm font-semibold wallet-text-strong">
-                    Wallet birthday
-                  </span>
-                  <span className="block text-[11px] wallet-muted">
-                    Where wallet history begins
-                  </span>
-                </span>
-                <span aria-hidden="true">&#8250;</span>
-              </button>
-            )}
             {fusionSettings && (
               <button
                 type="button"
@@ -870,7 +849,6 @@ export function ChainSourcesSettings({
       {page === 'fees' && feeSettings}
       {page === 'fusion' && fusionSettings}
       {page === 'nostr' && nostrSettings}
-      {page === 'birthday' && birthdaySettings}
 
       {page === 'privacy' && (
         <>
