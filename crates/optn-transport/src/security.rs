@@ -2,6 +2,34 @@
 use optn_app::SecretText;
 use serde::{Deserialize, Serialize};
 
+/// Submit an already signed transaction from the retained wallet interface.
+/// The host authenticates the wallet binding; this request grants no signing authority.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WalletBroadcastRequest {
+    pub wallet_id: u32,
+    pub epoch: u64,
+    pub network: String,
+    pub raw_hex: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletBroadcastStatus {
+    Accepted,
+    Uncertain,
+    Rejected,
+    /// No submission was made by this call. Does not disprove an earlier attempt.
+    Deferred,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletBroadcastResponse {
+    pub txid: String,
+    pub status: WalletBroadcastStatus,
+    pub message: Option<String>,
+}
+
 /// User-supplied wallet-origin information.
 ///
 /// This deliberately has no `CreatedAt` variant. A creation anchor is a

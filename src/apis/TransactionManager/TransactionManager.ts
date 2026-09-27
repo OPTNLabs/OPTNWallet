@@ -28,6 +28,7 @@ import {
   txBytesFromHex,
 } from './feePolicy';
 import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
+import { isDesktopPlatform } from '../../utils/platform';
 
 function deriveTxidFromRawTx(rawTX: string): string | null {
   try {
@@ -136,14 +137,23 @@ export default function TransactionManager() {
     const history = await ElectrumService.getTransactionHistory(address);
     if (!isCurrentWalletSession(walletId, sessionGeneration)) return [];
     if (!Array.isArray(history)) {
-      logWarn('TransactionManager.fetchAndStoreTransactionHistory', 'Skipping non-array transaction history response', {
-        address,
-        walletId,
-      });
+      logWarn(
+        'TransactionManager.fetchAndStoreTransactionHistory',
+        'Skipping non-array transaction history response',
+        {
+          address,
+          walletId,
+        }
+      );
       return [];
     }
 
-    return storeTransactionHistory(walletId, address, history, sessionGeneration);
+    return storeTransactionHistory(
+      walletId,
+      address,
+      history,
+      sessionGeneration
+    );
   }
 
   async function fetchAndStoreTransactionHistories(
@@ -189,10 +199,14 @@ export default function TransactionManager() {
           sessionGeneration
         );
       } catch (error) {
-        logError('TransactionManager.fetchAndStoreTransactionHistories', error, {
-          address,
-          walletId,
-        });
+        logError(
+          'TransactionManager.fetchAndStoreTransactionHistories',
+          error,
+          {
+            address,
+            walletId,
+          }
+        );
       }
     }
 
@@ -207,11 +221,13 @@ export default function TransactionManager() {
     errorMessage: string | null;
     broadcastState?: 'broadcasted' | 'submitted';
   }> {
-    const txBuilder = TransactionBuilderHelper();
+    const desktop = isDesktopPlatform();
+    const selected = store.getState();
+    const sessionGeneration = selected.wallet_id.sessionGeneration ?? 0;
     const derivedTxid = deriveTxidFromRawTx(rawTX);
     const walletId =
       walletIdOverride === undefined
-        ? (store.getState().wallet_id.currentWalletId ?? null)
+        ? store.getState().wallet_id.currentWalletId ?? null
         : walletIdOverride;
     const priorAttempt = derivedTxid
       ? await OutboundTransactionTracker.getByTxid(derivedTxid, walletId)
@@ -233,10 +249,30 @@ export default function TransactionManager() {
     let txid: string | null = null;
     let errorMessage: string | null = null;
 
+    let spentInputs: Array<Pick<UTXO, 'tx_hash' | 'tx_pos'>> | undefined;
+    if (desktop) {
+      try {
+        const { transactionOutpoints } = await import('../../wasm/optn-core');
+        const inputs = JSON.parse(transactionOutpoints(rawTX)) as Array<{
+          txid: string;
+          vout: number;
+        }>;
+        spentInputs = inputs.map(({ txid, vout }) => ({
+          tx_hash: txid,
+          tx_pos: vout,
+        }));
+      } catch {
+        return {
+          txid: null,
+          errorMessage: 'Unable to read the signed transaction inputs.',
+        };
+      }
+    }
     await OutboundTransactionTracker.trackAttempt({
       rawTx: rawTX,
       walletId,
       source: 'wallet',
+      spentInputs,
     });
 
     if (derivedTxid && priorAttempt?.state === 'submitted') {
@@ -249,7 +285,48 @@ export default function TransactionManager() {
     }
 
     try {
-      txid = await txBuilder.sendTransaction(rawTX);
+      if (desktop) {
+        const { submitSignedTransaction } = await import(
+          '../../platform/desktop/engineBroadcast'
+        );
+        const result = await submitSignedTransaction(
+          rawTX,
+          walletId,
+          sessionGeneration,
+          selected.network.currentNetwork
+        );
+        const accepted =
+          result.status === 'accepted' && result.txid === derivedTxid;
+        if (
+          !accepted &&
+          derivedTxid &&
+          (result.status === 'uncertain' ||
+            result.status === 'accepted' ||
+            priorAttempt?.state === 'submitted')
+        ) {
+          // A refused retry never disproves an earlier uncertain submission.
+          // Preserve the signed transaction and its spent-input reservation.
+          await OutboundTransactionTracker.markState(
+            derivedTxid,
+            'submitted',
+            'Network broadcast outcome is unknown. Refresh history before retrying.',
+            walletId
+          );
+          return {
+            txid: derivedTxid,
+            errorMessage: null,
+            broadcastState: 'submitted',
+          };
+        }
+        if (!accepted) {
+          throw new Error(
+            result.message ?? 'The shared engine refused this transaction.'
+          );
+        }
+        txid = result.txid;
+      } else {
+        txid = await TransactionBuilderHelper().sendTransaction(rawTX);
+      }
       if (derivedTxid) {
         await OutboundTransactionTracker.markState(
           derivedTxid,
@@ -293,12 +370,8 @@ export default function TransactionManager() {
       broadcastState:
         txid && !errorMessage
           ? derivedTxid &&
-            (
-              await OutboundTransactionTracker.getByTxid(
-                derivedTxid,
-                walletId
-              )
-            )?.state === 'submitted'
+            (await OutboundTransactionTracker.getByTxid(derivedTxid, walletId))
+              ?.state === 'submitted'
             ? 'submitted'
             : 'broadcasted'
           : undefined,
@@ -378,7 +451,8 @@ export default function TransactionManager() {
         if (tokenAddress) {
           newOutput.recipientAddress = tokenAddress;
         } else {
-          newOutput.recipientAddress = toTokenAwareCashAddress(recipientAddress);
+          newOutput.recipientAddress =
+            toTokenAwareCashAddress(recipientAddress);
         }
 
         if (newOutput.amount < TOKEN_OUTPUT_SATS) {
@@ -406,7 +480,8 @@ export default function TransactionManager() {
         if (tokenAddress) {
           newOutput.recipientAddress = tokenAddress;
         } else {
-          newOutput.recipientAddress = toTokenAwareCashAddress(recipientAddress);
+          newOutput.recipientAddress =
+            toTokenAwareCashAddress(recipientAddress);
         }
 
         if (newOutput.amount < TOKEN_OUTPUT_SATS) {

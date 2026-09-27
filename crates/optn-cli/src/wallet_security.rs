@@ -1,6 +1,7 @@
 //! Independent CLI navigation over the same Rust wallet runtime. No GUI dependency.
 use crate::error::{CliError, Result};
 use optn_app::{AppAction, AppState, SecretText};
+use optn_runtime::wallet_refresh::{RefreshOutcome, WalletRefresh};
 use optn_runtime::{wallet_security::WalletSecurity, AppRuntime};
 use optn_transport::{
     TransportError, WalletSecurityRequest as Request, WalletSecurityStatus, WireAction, WireState,
@@ -10,6 +11,7 @@ use serde_json::{json, Value};
 use std::{
     io::{self, BufRead, IsTerminal, Read, Write},
     path::PathBuf,
+    sync::Arc,
 };
 use zeroize::Zeroizing;
 
@@ -102,7 +104,12 @@ enum NetworkCommand {
     },
 }
 
-async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkCommand) -> Value {
+async fn network_reply(
+    cli: &crate::Cli,
+    runtime: &AppRuntime,
+    refresh: &WalletRefresh,
+    command: NetworkCommand,
+) -> Value {
     let result = async {
         let skill = match &command {
             NetworkCommand::Status {} => "network",
@@ -121,11 +128,19 @@ async fn network_reply(cli: &crate::Cli, runtime: &AppRuntime, command: NetworkC
                 "Wallet and source-settings networks differ.".into(),
             ));
         }
-        if match &command {
+        let mutates = match &command {
             NetworkCommand::Status {} => false,
             NetworkCommand::Credentials { request } => request.mutates(),
             _ => true,
-        } {
+        };
+        // Cancel provider setup before waiting for the gate, and hold it through
+        // the write so no background pass can enter using the previous policy.
+        let _pause = if mutates {
+            Some(refresh.pause().await)
+        } else {
+            None
+        };
+        if mutates {
             // Invalidate before persistence: no prior spend/air-gap intent may
             // survive a source change, even if its subsequent file write fails.
             runtime
@@ -293,17 +308,42 @@ enum ChainCommand {
     History,
 }
 
-async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime, floor: Option<u32>) -> Result<()> {
+struct WalletSyncOptions {
+    network: optn_core::network::Network,
+    directory: Option<PathBuf>,
+    timeout: u64,
+    source_override: bool,
+}
+
+impl WalletSyncOptions {
+    fn from_cli(cli: &crate::Cli) -> Self {
+        Self {
+            network: cli.network,
+            directory: cli.network_config_dir.clone(),
+            timeout: crate::timeout_seconds(cli),
+            source_override: cli.host.is_some() || cli.port.is_some() || cli.no_tls,
+        }
+    }
+}
+
+async fn sync_wallet(
+    options: &WalletSyncOptions,
+    runtime: &AppRuntime,
+    floor: Option<u32>,
+) -> std::result::Result<RefreshOutcome, String> {
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(crate::timeout_seconds(cli)),
+        std::time::Duration::from_secs(options.timeout),
         async {
-            let selection = crate::configured_chain(cli)?.ok_or_else(|| {
-                CliError::Usage(
+            if options.source_override {
+                return Err(CliError::Usage(
                     "Wallet sync requires the shared source policy; remove the --host, --port or --no-tls override and use network select --protocol to select a source.".into(),
-                )
-            })?;
+                ));
+            }
+            let selection = crate::network_settings::shared_chain_selection(options.network, options.directory.as_deref())
+                .map_err(CliError::Usage)?
+                .ok_or_else(|| CliError::Usage("Wallet sync requires the shared source policy.".into()))?;
             let state = runtime.state();
-            if state.network != cli.network {
+            if state.network != options.network {
                 return Err(CliError::Usage(
                     "The saved wallet belongs to a different network. Select its network explicitly.".into(),
                 ));
@@ -311,17 +351,17 @@ async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime, floor: Option<u32>)
             let xpub = state.wallet.as_ref()
                 .and_then(|wallet| wallet.account_xpub.clone())
                 .ok_or_else(|| CliError::Usage("Open a saved HD wallet before syncing.".into()))?;
-            let worker = crate::hd_sync_worker(cli.network, &selection.policy)?;
+            let worker = crate::hd_sync_worker(options.network, &selection.policy)?;
             if let Some(height) = floor {
                 runtime.request_wallet_rescan(height).await
                     .map_err(|error| CliError::Network(error.to_string()))?;
             }
-            let stack = crate::network_settings::build_stack(cli.network, cli.network_config_dir.as_deref(), selection).await;
+            let stack = crate::network_settings::build_stack(options.network, options.directory.as_deref(), selection).await;
             let worker = worker.with_accepted_headers(stack.headers.clone());
             // Resume the accumulator this wallet last had sealed. Without it
             // every refresh re-verifies the chain from genesis, which on a
             // long chain exceeds the deadline before any wallet work starts.
-            let mut worker = crate::seed_header_progress(runtime, cli.network, worker).await?;
+            let mut worker = crate::seed_header_progress(runtime, options.network, worker).await?;
             let decision = runtime.sync_hd_wallet_from_floor(
                 &mut *stack.service.lock().await,
                 &mut worker,
@@ -332,16 +372,10 @@ async fn sync_wallet(cli: &crate::Cli, runtime: &AppRuntime, floor: Option<u32>)
             if decision != optn_runtime::reconciliation::ReconciliationDecision::Accepted {
                 return Err(CliError::Network("Wallet refresh was incomplete; retained history remains stale.".into()));
             }
-            Ok(())
+            Ok(RefreshOutcome::Refreshed)
         },
     ).await.unwrap_or_else(|_| Err(CliError::Network("Wallet refresh timed out; retained history remains stale.".into())));
-    if let Err(error) = &result {
-        runtime
-            .invalidate_wallet_sync(error.to_string())
-            .await
-            .map_err(|error| CliError::Network(error.to_string()))?;
-    }
-    result
+    result.map_err(|error| error.to_string())
 }
 
 fn success_reply(state: &AppState, status: WalletSecurityStatus) -> Value {
@@ -409,6 +443,7 @@ fn print_history(sync: &optn_app::WalletSyncView) {
 async fn execute(
     cli: &crate::Cli,
     runtime: &AppRuntime,
+    refresh: &WalletRefresh,
     input: Input,
 ) -> std::result::Result<WalletSecurityStatus, TransportError> {
     match input {
@@ -421,9 +456,16 @@ async fn execute(
                     ChainCommand::Rescan { from_height } => Some(from_height),
                     _ => None,
                 };
-                sync_wallet(cli, runtime, floor)
+                let options = WalletSyncOptions::from_cli(cli);
+                let outcome = refresh
+                    .refresh(|| sync_wallet(&options, runtime, floor))
                     .await
-                    .map_err(|error| TransportError::Other(error.to_string()))?;
+                    .map_err(TransportError::Other)?;
+                if outcome == RefreshOutcome::Busy {
+                    return Err(TransportError::Other(
+                        "A wallet refresh is already running. Please wait.".into(),
+                    ));
+                }
             }
             runtime.wallet_security(Request::Status).await
         }
@@ -452,6 +494,39 @@ async fn execute(
     }
 }
 
+fn start_wallet_driver(
+    driver: optn_runtime::AppRuntimeDriver,
+    automatic_runtime: AppRuntime,
+    automatic: Arc<WalletRefresh>,
+    options: WalletSyncOptions,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    std::thread::JoinHandle<()>,
+) {
+    let (stop_refresh, refresh_stopped) = tokio::sync::oneshot::channel::<()>();
+    let driver_thread = std::thread::spawn(move || {
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(executor) => executor.block_on(async move {
+                // stdin blocks the caller's executor. Keep refresh on the same
+                // independent executor as security, and drop its runtime clones
+                // before joining the driver on shutdown (including input errors).
+                let scheduled = async move {
+                    tokio::select! {
+                        _ = automatic.run(|| sync_wallet(&options, &automatic_runtime, None)) => {},
+                        _ = refresh_stopped => {},
+                    }
+                };
+                tokio::join!(driver.run(), scheduled);
+            }),
+            Err(_) => eprintln!("Wallet runtime could not start."),
+        }
+    });
+    (stop_refresh, driver_thread)
+}
+
 pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> Result<()> {
     let directory = directory
         .or_else(|| dirs::data_dir().map(|root| root.join("com.optilabs.wallet").join("wallets")))
@@ -467,16 +542,14 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
     };
     let (runtime, driver) = AppRuntime::new_with_security(initial, service)
         .map_err(|error| CliError::Usage(message(error)))?;
+    let refresh = Arc::new(WalletRefresh::new(runtime.clone()));
     // Native work and password derivation must not block terminal input handling.
-    let driver_thread = std::thread::spawn(move || {
-        match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(executor) => executor.block_on(driver.run()),
-            Err(_) => eprintln!("Wallet runtime could not start."),
-        }
-    });
+    let (stop_refresh, driver_thread) = start_wallet_driver(
+        driver,
+        runtime.clone(),
+        refresh.clone(),
+        WalletSyncOptions::from_cli(cli),
+    );
     if stdio {
         if io::stdin().is_terminal() {
             return Err(CliError::Usage(
@@ -488,8 +561,10 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
             let output = match serde_json::from_str::<Input>(&line) {
                 Ok(Input::View { view }) => wallet_view_reply(&runtime.state(), view),
                 Ok(Input::Airgap { airgap }) => airgap_reply(&runtime, airgap).await,
-                Ok(Input::Network { network }) => network_reply(cli, &runtime, network).await,
-                Ok(input) => match execute(cli, &runtime, input).await {
+                Ok(Input::Network { network }) => {
+                    network_reply(cli, &runtime, &refresh, network).await
+                }
+                Ok(input) => match execute(cli, &runtime, &refresh, input).await {
                     Ok(status) => success_reply(&runtime.state(), status),
                     Err(error) => json!({"ok": false, "error": message(error)}),
                 },
@@ -524,7 +599,9 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                 }
                 "network" => {
                     match network_prompt(argument) {
-                        Ok(command) => println!("{}", network_reply(cli, &runtime, command).await),
+                        Ok(command) => {
+                            println!("{}", network_reply(cli, &runtime, &refresh, command).await)
+                        }
                         Err(error) => eprintln!("{error}"),
                     }
                     continue;
@@ -571,7 +648,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                         },
                         _ => ChainCommand::History,
                     };
-                    match execute(cli, &runtime, Input::Chain { chain }).await {
+                    match execute(cli, &runtime, &refresh, Input::Chain { chain }).await {
                         Ok(_) => print_history(&runtime.state().wallet_sync),
                         Err(error) => eprintln!("{}", message(error)),
                     }
@@ -706,7 +783,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                 }
             };
             if let Some(request) = request {
-                match execute(cli, &runtime, Input::Security { request }).await {
+                match execute(cli, &runtime, &refresh, Input::Security { request }).await {
                     Ok(status) => {
                         for wallet in status.wallets {
                             println!("{}  {}", wallet.handle, wallet.name);
@@ -728,6 +805,8 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
         .dispatch(AppAction::LockWallet)
         .await
         .map_err(|_| CliError::Usage("Wallet runtime stopped.".into()))?;
+    drop(stop_refresh);
+    drop(refresh);
     drop(runtime);
     driver_thread
         .join()
@@ -951,7 +1030,8 @@ mod tests {
         });
         assert!(runtime.state().wallet_sync.utxos_fresh);
         let command = network_prompt("policy own-infrastructure").unwrap();
-        let reply = network_reply(&cli, &runtime, command).await;
+        let refresh = WalletRefresh::new(runtime.clone());
+        let reply = network_reply(&cli, &runtime, &refresh, command).await;
         assert_eq!(reply["ok"], true);
         assert!(!runtime.state().wallet_sync.history_fresh);
         assert!(!runtime.state().wallet_sync.utxos_fresh);
@@ -980,16 +1060,17 @@ mod tests {
         )
         .unwrap();
         let task = tokio::spawn(driver.run());
+        let refresh = WalletRefresh::new(runtime.clone());
         let history = serde_json::from_str(r#"{"chain":"history"}"#).unwrap();
-        let status = execute(&cli, &runtime, history).await.unwrap();
+        let status = execute(&cli, &runtime, &refresh, history).await.unwrap();
         let reply = success_reply(&runtime.state(), status.clone());
         assert_eq!(reply["wallet_sync"]["confirmed_sats"], Value::Null);
         assert_eq!(reply["wallet_sync"]["history_fresh"], false);
         assert_eq!(reply["wallet_sync"]["utxos_fresh"], false);
         assert_eq!(reply["wallet_sync"]["source"], Value::Null);
         let sync = serde_json::from_str(r#"{"chain":"sync"}"#).unwrap();
-        let error = execute(&cli, &runtime, sync).await.unwrap_err();
-        assert!(message(error).contains("Open a saved HD wallet"));
+        let error = execute(&cli, &runtime, &refresh, sync).await.unwrap_err();
+        assert!(message(error).contains("Open an HD wallet"));
         assert!(!runtime.state().wallet_sync.history_fresh);
         assert!(!runtime.state().wallet_sync.utxos_fresh);
 
@@ -1027,6 +1108,7 @@ mod tests {
         assert!(reply.get("receive_address").is_some());
         assert!(reply.get("hd_addresses").is_some());
         assert!(serde_json::from_str::<Input>(r#"{"chain":"broadcast"}"#).is_err());
+        drop(refresh);
         drop(runtime);
         task.await.unwrap();
     }
@@ -1040,5 +1122,93 @@ mod tests {
             "  password  "
         );
         assert!(private_line(&mut &b"123456789"[..], 8).is_err());
+    }
+
+    #[tokio::test]
+    async fn automatic_console_refresh_rejects_override_and_stops_on_eof_or_input_error() {
+        use clap::Parser;
+        use optn_app::{OpenedWallet, WalletKind};
+        use std::time::Duration;
+
+        for invalid_input in [false, true] {
+            let thread = {
+                let cli = crate::Cli::try_parse_from([
+                    "optn",
+                    "--network",
+                    "chipnet",
+                    "--host",
+                    "unused.invalid",
+                    "wallet",
+                ])
+                .unwrap();
+                let (runtime, driver) = AppRuntime::new(AppState {
+                    network: optn_app::Network::Chipnet,
+                    wallet: Some(OpenedWallet {
+                        kind: WalletKind::WatchOnly,
+                        name: "public CLI scheduling fixture".into(),
+                        receive_address: String::new(),
+                        master_fingerprint: None,
+                        account_path: "m/44'/1'/0'".into(),
+                        multisig_policy: None,
+                        account_xpub: Some("public fixture account".into()),
+                    }),
+                    ..Default::default()
+                });
+                let mut states = runtime.subscribe_state();
+                let refresh = Arc::new(WalletRefresh::new(runtime.clone()));
+                let (stop, thread) = start_wallet_driver(
+                    driver,
+                    runtime.clone(),
+                    refresh.clone(),
+                    WalletSyncOptions::from_cli(&cli),
+                );
+                // This is the production automatic adapter. A direct override
+                // must be refused before any provider or wallet-file access.
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        if states.borrow_and_update().wallet_sync.error.is_some() {
+                            break;
+                        }
+                        states.changed().await.unwrap();
+                    }
+                })
+                .await
+                .expect("the automatic CLI adapter must run on open");
+                assert!(!runtime.state().wallet_sync.utxos_fresh);
+                assert!(
+                    sync_wallet(&WalletSyncOptions::from_cli(&cli), &runtime, None)
+                        .await
+                        .unwrap_err()
+                        .contains("shared source policy")
+                );
+
+                // The same locals drop at EOF and on a `private_line(...)?`
+                // error. In particular, neither stop nor refresh may survive
+                // until the subsequent driver join.
+                let exit = (|| -> Result<()> {
+                    let mut input = if invalid_input {
+                        &b"too long"[..]
+                    } else {
+                        &b""[..]
+                    };
+                    assert!(private_line(&mut input, 4)?.is_none());
+                    Ok(())
+                })();
+                assert_eq!(exit.is_err(), invalid_input);
+                drop(stop);
+                drop(refresh);
+                drop(runtime);
+                thread
+            };
+            let (joined, result) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = joined.send(thread.join());
+            });
+            tokio::time::timeout(Duration::from_secs(2), result)
+                .await
+                .expect("EOF/error must not retain the runtime action channel")
+                .unwrap()
+                .unwrap();
+        }
     }
 }

@@ -192,7 +192,7 @@ describe('TransactionService.sendTransaction', () => {
     ]);
 
     expect(result.txid).toBe('new-txid');
-    expect(sendTransactionMock).toHaveBeenCalledWith(RAW_TX);
+    expect(sendTransactionMock).toHaveBeenCalledWith(RAW_TX, 11);
   });
 
   it('keeps the send lock when the new transaction reuses a reserved input', async () => {
@@ -247,7 +247,7 @@ describe('TransactionService.sendTransaction', () => {
     ]);
 
     expect(result.txid).toBe('new-txid');
-    expect(sendTransactionMock).toHaveBeenCalledWith(RAW_TX);
+    expect(sendTransactionMock).toHaveBeenCalledWith(RAW_TX, 11);
   });
 
   it('releases only explicitly selected multisig locks in their wallet scope', async () => {

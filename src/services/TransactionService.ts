@@ -565,10 +565,10 @@ class TransactionService {
     const holdError = await checkSendCoinHolds(rawTX, holdScope);
     if (holdError) return holdError;
     const transactionManager = this.getTransactionManager();
-    const res: BroadcastResult =
-      options?.walletId !== undefined || options?.multisig
-        ? await transactionManager.sendTransaction(rawTX, currentWalletId)
-        : await transactionManager.sendTransaction(rawTX);
+    const res: BroadcastResult = await transactionManager.sendTransaction(
+      rawTX,
+      currentWalletId
+    );
     const trackedTxid = deriveTrackedTxid(rawTX);
 
     if (res?.errorMessage || !res?.txid) {

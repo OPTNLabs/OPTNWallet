@@ -215,9 +215,7 @@ pub async fn optn_install_update(
         }
     };
     let updater = builder.build().map_err(|error| {
-        format!(
-            "This build cannot verify updates ({error}). Install from {RELEASES_PAGE} instead."
-        )
+        format!("This build cannot verify updates ({error}). Install from {RELEASES_PAGE} instead.")
     })?;
 
     let update = updater

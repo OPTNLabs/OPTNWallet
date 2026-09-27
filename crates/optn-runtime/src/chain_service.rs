@@ -756,7 +756,22 @@ impl ChainService {
                 Ok(value) => return Ok(value),
                 Err(ChainServiceError::Exhausted {
                     attempts: mut failed,
-                }) => attempts.append(&mut failed),
+                }) => {
+                    // A failed reply can follow a successful broadcast handoff.
+                    // Only unsupported operations (no I/O) and deterministic
+                    // rejections permit another route to submit the same bytes.
+                    let uncertain_broadcast = matches!(request, ChainRequest::Broadcast { .. })
+                        && failed.iter().any(|attempt| {
+                            !matches!(
+                                attempt.error,
+                                ChainBackendError::Unsupported | ChainBackendError::Rejected(_)
+                            )
+                        });
+                    attempts.append(&mut failed);
+                    if uncertain_broadcast {
+                        return Err(ChainServiceError::Exhausted { attempts });
+                    }
+                }
                 Err(
                     ChainServiceError::NoEligibleProvider | ChainServiceError::RouteUnavailable,
                 ) => {}
@@ -824,6 +839,7 @@ mod tests {
         entered: tokio::sync::Notify,
         spentness: OutpointSpentness,
         spender_response: std::sync::Mutex<ChainPayload>,
+        failure: std::sync::Mutex<Option<ChainBackendError>>,
     }
 
     impl ChainBackend for CountingBackend {
@@ -851,6 +867,7 @@ mod tests {
                 operation,
                 ChainOperation::HeaderSync
                     | ChainOperation::Broadcast
+                    | ChainOperation::WalletRefresh
                     | ChainOperation::OutpointSpentness
                     | ChainOperation::OutpointSpender
             )
@@ -862,7 +879,17 @@ mod tests {
                     self.entered.notify_one();
                     std::future::pending::<()>().await;
                 }
+                if let Some(error) = self.failure.lock().unwrap().clone() {
+                    return Err(error);
+                }
                 let payload = match request {
+                    ChainRequest::Broadcast { txid, .. } => {
+                        ChainPayload::BroadcastObserved { txid: *txid }
+                    }
+                    ChainRequest::WalletRefresh { .. } => ChainPayload::WalletRefresh {
+                        transactions: vec![],
+                        tip: None,
+                    },
                     ChainRequest::OutpointSpender { .. } => {
                         self.spender_response.lock().unwrap().clone()
                     }
@@ -883,7 +910,7 @@ mod tests {
         }
     }
 
-    fn routed_service() -> (ChainService, Arc<CountingBackend>, CapabilityRoute) {
+    fn counting_backend(source: &str) -> Arc<CountingBackend> {
         let mut capabilities = CapabilitySet::default();
         capabilities.record(
             Capability::ElectrumProtocol,
@@ -901,6 +928,11 @@ mod tests {
             CapabilityDiscovery::ActiveProbe,
         );
         capabilities.record(
+            Capability::UtxoQuery,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
+        capabilities.record(
             Capability::OutpointUnspentLookup,
             CapabilityConfidence::Verified,
             CapabilityDiscovery::ActiveProbe,
@@ -910,11 +942,11 @@ mod tests {
             CapabilityConfidence::Advertised,
             CapabilityDiscovery::ElectrumServerVersion,
         );
-        let backend = Arc::new(CountingBackend {
-            source: SourceId::new("server"),
+        Arc::new(CountingBackend {
+            source: SourceId::new(source),
             endpoint: Endpoint {
                 kind: EndpointKind::ElectrumTcp,
-                host: "server.invalid".into(),
+                host: format!("{source}.invalid"),
                 port: Some(50001),
             },
             capabilities,
@@ -931,7 +963,12 @@ mod tests {
                 vout: 0,
                 spender: None,
             }),
-        });
+            failure: std::sync::Mutex::new(None),
+        })
+    }
+
+    fn routed_service() -> (ChainService, Arc<CountingBackend>, CapabilityRoute) {
+        let backend = counting_backend("server");
         let mut catalog = SourceCatalog::default();
         catalog
             .insert(ChainSource {
@@ -950,6 +987,105 @@ mod tests {
             .routes_for_operation(ChainOperation::HeaderSync)
             .remove(0);
         (service, backend, route)
+    }
+
+    fn service_with_fallback(
+        failure: ChainBackendError,
+    ) -> (ChainService, Arc<CountingBackend>, Arc<CountingBackend>) {
+        let (mut service, primary, _) = routed_service();
+        *primary.failure.lock().unwrap() = Some(failure);
+        let fallback = counting_backend("fallback");
+        service
+            .catalog_mut()
+            .insert(ChainSource {
+                id: fallback.source.clone(),
+                label: "fallback".into(),
+                origin: SourceOrigin::UserAdded,
+                endpoints: vec![fallback.endpoint.clone()],
+                capabilities: CapabilitySet::default(),
+                disposition: SourceDisposition::Enabled,
+                priority: 1,
+            })
+            .unwrap();
+        service.register(fallback.clone());
+        (service, primary, fallback)
+    }
+
+    #[tokio::test]
+    async fn broadcast_stops_failover_after_an_ambiguous_attempt() {
+        for error in [
+            ChainBackendError::Timeout,
+            ChainBackendError::Offline,
+            ChainBackendError::Protocol("reply lost".into()),
+            ChainBackendError::InvalidResponse("malformed reply".into()),
+        ] {
+            let (mut service, primary, fallback) = service_with_fallback(error.clone());
+            let request = ChainRequest::Broadcast {
+                raw_tx: vec![1],
+                txid: [1; 32],
+            };
+            assert_eq!(
+                service.execute(&request).await,
+                Err(ChainServiceError::Exhausted {
+                    attempts: vec![AttemptFailure {
+                        source: primary.source.clone(),
+                        protocol: ProtocolFamily::Electrum,
+                        error,
+                    }],
+                })
+            );
+            assert_eq!(primary.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(fallback.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn broadcast_can_fall_back_after_unsupported_or_deterministic_rejection() {
+        for error in [
+            ChainBackendError::Unsupported,
+            ChainBackendError::Rejected("policy".into()),
+        ] {
+            let (mut service, primary, fallback) = service_with_fallback(error);
+            let request = ChainRequest::Broadcast {
+                raw_tx: vec![1],
+                txid: [1; 32],
+            };
+            let observation = service.execute(&request).await.unwrap();
+            assert_eq!(observation.source, fallback.source);
+            assert_eq!(
+                observation.value,
+                ChainPayload::BroadcastObserved { txid: [1; 32] }
+            );
+            assert_eq!(primary.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(fallback.calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn wallet_refresh_keeps_failover_after_ambiguous_errors() {
+        for error in [
+            ChainBackendError::Timeout,
+            ChainBackendError::Offline,
+            ChainBackendError::Protocol("reply lost".into()),
+            ChainBackendError::InvalidResponse("malformed reply".into()),
+        ] {
+            let (mut service, primary, fallback) = service_with_fallback(error);
+            let request = ChainRequest::WalletRefresh {
+                interests: vec![WalletInterest::script([0x51])],
+                from_height: None,
+            };
+            let observation = service.execute(&request).await.unwrap();
+            assert_eq!(observation.source, fallback.source);
+            assert_eq!(
+                observation.value,
+                ChainPayload::WalletRefresh {
+                    transactions: vec![],
+                    tip: None,
+                }
+            );
+            assert_eq!(primary.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(fallback.calls.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[test]

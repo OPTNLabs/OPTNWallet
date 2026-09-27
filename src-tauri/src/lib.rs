@@ -1332,6 +1332,7 @@ pub fn run() {
             coin_holds::optn_coin_unfreeze,
             wallet_spend::optn_wallet_prepare_spend,
             wallet_spend::optn_wallet_send,
+            wallet_spend::optn_wallet_broadcast,
             app_transport::optn_app_snapshot,
             app_transport::optn_wallet_refresh,
             app_transport::optn_wallet_rescan,

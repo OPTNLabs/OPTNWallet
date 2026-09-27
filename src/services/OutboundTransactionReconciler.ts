@@ -43,9 +43,7 @@ async function listSeenTxids(
   if (!db) return new Set();
 
   // Normalize for case / accidental 0x — Electrum vs our store can differ.
-  const wanted = new Set(
-    txids.map((t) => t.replace(/^0x/i, '').toLowerCase())
-  );
+  const wanted = new Set(txids.map((t) => t.replace(/^0x/i, '').toLowerCase()));
   const quoted = txids.map(() => '?').join(', ');
   const statement = db.prepare(`
     SELECT tx_hash
@@ -230,7 +228,9 @@ export async function reconcileOutboundTransactions(
     ordinaryRemaining
       .filter((record) => OutboundTransactionTracker.shouldRebroadcast(record))
       .map((record) =>
-        transactionManager.sendTransaction(record.rawTx).catch(() => null)
+        transactionManager
+          .sendTransaction(record.rawTx, record.walletId)
+          .catch(() => null)
       )
   );
 

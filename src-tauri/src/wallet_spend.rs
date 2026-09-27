@@ -14,8 +14,12 @@
 use crate::chain_runtime::NativeChainRuntime;
 use optn_core::{cashaddr::Address, coins::Outpoint, network::Network, tx};
 use optn_runtime::{
-    chain_service::{ChainOperation, ChainRequest},
+    tx_broadcast::{BroadcastCoordinator, BroadcastState},
     wallet_spend::{prepare_spend, SpendRequest, SpendableCoin},
+    WalletOperationGuard,
+};
+use optn_transport::security::{
+    WalletBroadcastRequest, WalletBroadcastResponse, WalletBroadcastStatus,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -149,7 +153,15 @@ async fn build(
     to: &str,
     sats: u64,
     fee_rate: u64,
-) -> Result<(optn_runtime::wallet_spend::PreparedSpend, u64), String> {
+) -> Result<
+    (
+        optn_runtime::wallet_spend::PreparedSpend,
+        u64,
+        WalletOperationGuard,
+    ),
+    String,
+> {
+    let guard = runtime.wallet_operation_guard();
     let state = runtime.state();
     let epoch = state.lock.unlock_epoch;
     let network = state.network;
@@ -218,9 +230,109 @@ async fn build(
     {
         return Err("Wallet history changed. Review the transaction again.".into());
     }
-    prepare_spend(&wallet, &coins, &request)
-        .map(|prepared| (prepared, epoch))
-        .map_err(|error| error.to_string())
+    if guard.is_revoked() {
+        return Err("Wallet changed. Review the transaction again.".into());
+    }
+    let prepared = prepare_spend(&wallet, &coins, &request).map_err(|error| error.to_string())?;
+    if guard.is_revoked() {
+        return Err("Wallet changed while signing. Review the transaction again.".into());
+    }
+    Ok((prepared, epoch, guard))
+}
+
+fn uncertain_broadcast(txid: &str) -> String {
+    format!("Broadcast outcome for {txid} is unknown. Refresh history before retrying.")
+}
+
+async fn preflight_signed(
+    app: &tauri::AppHandle,
+    runtime: &optn_runtime::AppRuntime,
+    request: &WalletBroadcastRequest,
+    raw: &[u8],
+) -> Result<optn_runtime::wallet_spend::PreparedSignedTransaction, String> {
+    let status = runtime
+        .wallet_security(optn_transport::WalletSecurityRequest::Status)
+        .await
+        .map_err(|_| "Wallet session is unavailable. Reopen it.")?;
+    let held = session_holds(app, runtime, request.epoch).await?;
+    optn_runtime::wallet_spend::validate_signed_submission(
+        &runtime.state(),
+        &status,
+        request,
+        raw,
+        &held,
+    )
+    .map_err(|error| match error {
+        optn_transport::TransportError::Other(message)
+        | optn_transport::TransportError::InvalidData(message) => message,
+        _ => "Wallet submission is unavailable.".into(),
+    })
+}
+
+/// Relay the exact signed BCH/CashToken bytes reviewed in the retained UI.
+/// This never signs, rebuilds, chooses a legacy server or bypasses Rust policy.
+#[tauri::command]
+pub async fn optn_wallet_broadcast(
+    app: tauri::AppHandle,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
+    request: WalletBroadcastRequest,
+) -> Result<WalletBroadcastResponse, String> {
+    let guard = runtime.wallet_operation_guard();
+    let attempt = async {
+        if request.raw_hex.len() > 2 * optn_runtime::wallet_spend::MAX_SIGNED_TRANSACTION_BYTES {
+            return Err("Signed transaction exceeds the submission limit.".to_string());
+        }
+        let raw = hex::decode(&request.raw_hex)
+            .map_err(|_| "Signed transaction is not valid hexadecimal.".to_string())?;
+        let prepared = preflight_signed(&app, &runtime, &request, &raw).await?;
+        let service = native
+            .with_service(Arc::clone)
+            .await
+            .ok_or("Chain source is still connecting. Retry when it is ready.")?;
+        let mut service = service
+            .try_lock()
+            .map_err(|_| "A chain operation is already running. Please wait.")?;
+        // Provider acquisition can yield. Bind the same bytes and reread durable
+        // holds immediately before the coordinator is allowed to start I/O.
+        preflight_signed(&app, &runtime, &request, &raw).await?;
+        let outcome = BroadcastCoordinator
+            .submit_guarded(&mut service, prepared.raw, prepared.wire_txid, &guard)
+            .await;
+        Ok::<_, String>((prepared.txid, outcome))
+    }
+    .await;
+    Ok(match attempt {
+        Ok((txid, outcome)) => {
+            let (status, message) = match outcome {
+                BroadcastState::Submitted { .. } | BroadcastState::Observed { .. } => {
+                    (WalletBroadcastStatus::Accepted, None)
+                }
+                BroadcastState::Rejected { .. } => (
+                    WalletBroadcastStatus::Rejected,
+                    Some("The selected sources rejected the transaction.".into()),
+                ),
+                BroadcastState::Unavailable { .. } => (
+                    WalletBroadcastStatus::Deferred,
+                    Some("Wallet or permitted route changed. Refresh before retrying.".into()),
+                ),
+                _ => (
+                    WalletBroadcastStatus::Uncertain,
+                    Some(uncertain_broadcast(&txid)),
+                ),
+            };
+            WalletBroadcastResponse {
+                txid,
+                status,
+                message,
+            }
+        }
+        Err(message) => WalletBroadcastResponse {
+            txid: String::new(),
+            status: WalletBroadcastStatus::Deferred,
+            message: Some(message),
+        },
+    })
 }
 
 /// Build and sign, without sending. Nothing leaves the device.
@@ -232,7 +344,7 @@ pub async fn optn_wallet_prepare_spend(
     sats: u64,
     fee_rate: Option<u64>,
 ) -> Result<PreparedSpendView, String> {
-    let (prepared, _) = build(&app, &runtime, &to, sats, fee_rate.unwrap_or(1)).await?;
+    let (prepared, _, _) = build(&app, &runtime, &to, sats, fee_rate.unwrap_or(1)).await?;
     Ok(PreparedSpendView {
         txid: prepared.txid,
         raw_hex: prepared.raw_hex,
@@ -259,7 +371,7 @@ pub async fn optn_wallet_send(
     sats: u64,
     fee_rate: Option<u64>,
 ) -> Result<PreparedSpendView, String> {
-    let (prepared, epoch) = build(&app, &runtime, &to, sats, fee_rate.unwrap_or(1)).await?;
+    let (prepared, epoch, guard) = build(&app, &runtime, &to, sats, fee_rate.unwrap_or(1)).await?;
 
     let raw = hex::decode(&prepared.raw_hex).map_err(|error| error.to_string())?;
     let txid = Outpoint::parse(&prepared.txid, 0)
@@ -276,41 +388,32 @@ pub async fn optn_wallet_send(
     let mut service = service
         .try_lock()
         .map_err(|_| "A chain operation is already running. Please wait.")?;
-    let routes = service.routes_for_operation(ChainOperation::Broadcast);
-    if routes.is_empty() {
-        return Err(
-            "No route may broadcast under the current policy. Check Settings → Servers.".into(),
-        );
+    let held = session_holds(&app, &runtime, epoch).await?;
+    if prepared.inputs.iter().any(|input| held.contains(input)) {
+        return Err("A selected coin is frozen or reserved. Review the transaction again.".into());
     }
-    let request = ChainRequest::Broadcast {
-        raw_tx: raw,
-        txid: wire_txid,
-    };
-    let mut last = String::from("no route accepted the transaction");
-    for route in routes {
-        let held = session_holds(&app, &runtime, epoch).await?;
-        if prepared.inputs.iter().any(|input| held.contains(input)) {
-            return Err(
-                "A selected coin is frozen or reserved. Review the transaction again.".into(),
-            );
+    match BroadcastCoordinator
+        .submit_guarded(&mut service, raw, wire_txid, &guard)
+        .await
+    {
+        BroadcastState::Submitted { .. } => Ok(PreparedSpendView {
+            txid: prepared.txid,
+            raw_hex: prepared.raw_hex,
+            fee_sats: prepared.fee_sats,
+            change_sats: prepared.change_sats,
+            input_count: prepared.input_count,
+            size_bytes: prepared.size_bytes,
+            inputs: prepared.inputs,
+            broadcast: true,
+        }),
+        BroadcastState::Unavailable { .. } => {
+            Err("No route may broadcast under the current policy. Check Settings → Network.".into())
         }
-        match service.execute_on_route(&route, &request).await {
-            Ok(_) => {
-                return Ok(PreparedSpendView {
-                    txid: prepared.txid,
-                    raw_hex: prepared.raw_hex,
-                    fee_sats: prepared.fee_sats,
-                    change_sats: prepared.change_sats,
-                    input_count: prepared.input_count,
-                    size_bytes: prepared.size_bytes,
-                    inputs: prepared.inputs,
-                    broadcast: true,
-                })
-            }
-            Err(error) => last = format!("{error:?}"),
+        BroadcastState::Rejected { .. } => {
+            Err("The selected sources rejected the transaction.".into())
         }
+        _ => Err(uncertain_broadcast(&prepared.txid)),
     }
-    Err(last)
 }
 
 #[cfg(test)]
@@ -365,33 +468,77 @@ mod tests {
             .is_empty());
     }
 
-    // No `use super::*`: the fixture below names every type it builds, and a
-    // glob that imports nothing used is a warning under `-D warnings`.
     #[test]
     fn a_token_output_is_never_offered_as_ordinary_change_or_input() {
-        // Spending a token-carrying output as plain BCH destroys the tokens it
-        // holds, so those outputs are dropped before selection ever sees them.
-        // Proven here on the projection itself: the filter is one line and its
-        // absence is invisible until someone loses an NFT.
-        use optn_core::token::TokenData;
-        use optn_core::tx::{DecodedOutput, UnspentOutput};
-        // Written out rather than defaulted: `TokenData` has no `Default`, and
-        // it should not gain one -- an all-zero category is not a category any
-        // output actually carries, so a default would be a value that looks
-        // like a token and names nothing.
-        let with_token = UnspentOutput {
-            txid: [7u8; 32],
-            vout: 0,
-            output: DecodedOutput {
-                value: 1_000,
-                script_pubkey: vec![0x76, 0xa9],
-                token: Some(TokenData {
-                    category: [9u8; 32],
-                    amount: 1,
-                    nft: None,
-                }),
-            },
+        use optn_core::{
+            cashaddr::Address,
+            hd::{AccountPath, Wallet},
+            network::Network,
+            token::TokenData,
+            tx::{self, Output, Transaction, Utxo},
+            watch_only::{address_under_account, HdAddressBook},
         };
-        assert!(with_token.output.token.is_some());
+        use optn_runtime::{
+            chain_service::{ObservedTransaction, WalletInterest},
+            sync_worker::WalletNetworkSnapshot,
+        };
+
+        let network = Network::Chipnet;
+        let wallet = Wallet::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "",
+        ).unwrap();
+        let account = AccountPath::default_for(network);
+        let xpub = wallet.account_xpub_at(account).unwrap();
+        let preview = address_under_account(network, &xpub, 0, 0).unwrap();
+        let script = Address::decode(&preview.address).unwrap().script_pubkey();
+        // Projection fixture only: both outputs pay the same derived script,
+        // so the token prefix is the only reason to exclude output zero.
+        let raw = Transaction::new(
+            vec![Utxo {
+                txid: [7; 32],
+                vout: 0,
+                value: 4_000,
+                script_pubkey: script.clone(),
+            }],
+            vec![
+                Output::with_tokens(
+                    1_000,
+                    script.clone(),
+                    TokenData::fungible([9; 32], 1).encode_prefix().unwrap(),
+                ),
+                Output::new(2_000, script.clone()),
+            ],
+        )
+        .sign(&[wallet.signing_key(&preview.path).unwrap()])
+        .unwrap();
+        let txid = tx::double_sha256(&raw);
+        let snapshot = WalletNetworkSnapshot {
+            hd: Some(HdAddressBook {
+                account,
+                account_xpub: xpub,
+                branches: [vec![preview], vec![], vec![], vec![]],
+                last_used: [Some(0), None, None, None],
+            }),
+            interests: vec![WalletInterest::script(script.clone())],
+            transactions: vec![ObservedTransaction {
+                txid,
+                raw,
+                block_height: None,
+            }],
+            tip: None,
+        };
+
+        let coins = super::spendable_coins(&snapshot, network).unwrap();
+        assert_eq!(
+            coins.len(),
+            1,
+            "token output must never reach BCH selection"
+        );
+        assert_eq!(coins[0].utxo.txid, txid);
+        assert_eq!(coins[0].utxo.vout, 1);
+        assert_eq!(coins[0].utxo.value, 2_000);
+        assert_eq!(coins[0].utxo.script_pubkey, script);
+        assert_eq!(coins[0].path, "m/44'/1'/0'/0/0");
     }
 }

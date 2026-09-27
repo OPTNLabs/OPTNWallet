@@ -8,10 +8,24 @@ import TransactionBuilderHelper from '../TransactionBuilderHelper';
 import { store } from '../../../state/store';
 import { TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 import OutboundTransactionTracker from '../../../services/OutboundTransactionTracker';
+import { invoke } from '@tauri-apps/api/core';
+import { isDesktopPlatform } from '../../../utils/platform';
+
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+vi.mock('../../../wasm/optn-core', () => ({
+  transactionOutpoints: vi.fn(() =>
+    JSON.stringify([{ txid: 'ab'.repeat(32), vout: 2 }])
+  ),
+}));
+vi.mock('../../../utils/platform', () => ({
+  isDesktopPlatform: vi.fn(() => false),
+}));
 
 vi.mock('../../../utils/cashAddress', () => ({
   toTokenAwareCashAddress: vi.fn((address: string) =>
-    address.includes(':q') ? address.replace(':q', ':z') : `converted:${address}`
+    address.includes(':q')
+      ? address.replace(':q', ':z')
+      : `converted:${address}`
   ),
 }));
 
@@ -54,7 +68,91 @@ describe('TransactionManager', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(isDesktopPlatform).mockReturnValue(false);
+    mockedStore.getState.mockReturnValue({
+      wallet_id: { currentWalletId: 7, sessionGeneration: 4 },
+      network: { currentNetwork: 'chipnet' },
+    } as never);
     mockedOutboundTracker.getByTxid.mockResolvedValue(null);
+  });
+
+  it('desktop send carries the selected session and signed bytes only to Rust', async () => {
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === 'optn_wallet_security') {
+        return { active: 'wallet.optn', legacy_source_id: 7, epoch: 12 };
+      }
+      expect(command).toBe('optn_wallet_broadcast');
+      expect(args).toEqual({
+        request: {
+          wallet_id: 7,
+          epoch: 12,
+          network: 'chipnet',
+          raw_hex: '00aa',
+        },
+      });
+      expect(mockedOutboundTracker.trackAttempt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spentInputs: [{ tx_hash: 'ab'.repeat(32), tx_pos: 2 }],
+        })
+      );
+      return {
+        status: 'accepted',
+        txid: '5fb2f34274d4d0e4bda9300027bc9c9490466f1c736511d2c4d89a1897d00c9e',
+        message: null,
+      };
+    });
+    const result = await TransactionManager().sendTransaction('00aa');
+    expect(result.broadcastState).toBe('broadcasted');
+    expect(mockedTxBuilderHelper).not.toHaveBeenCalled();
+    expect(mockedOutboundTracker.markState).toHaveBeenLastCalledWith(
+      result.txid,
+      'broadcasted',
+      null,
+      7
+    );
+    expect(mockedOutboundTracker.remove).not.toHaveBeenCalled();
+  });
+
+  it('desktop rejects a wallet switch before native handoff without a network fallback', async () => {
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async () => {
+      mockedStore.getState.mockReturnValue({
+        wallet_id: { currentWalletId: 7, sessionGeneration: 5 },
+        network: { currentNetwork: 'chipnet' },
+      } as never);
+      return { active: 'wallet.optn', legacy_source_id: 7, epoch: 12 };
+    });
+    const result = await TransactionManager().sendTransaction('00aa');
+    expect(result.txid).toBeNull();
+    expect(vi.mocked(invoke)).toHaveBeenCalledExactlyOnceWith(
+      'optn_wallet_security',
+      { request: { command: 'status' } }
+    );
+    expect(mockedTxBuilderHelper).not.toHaveBeenCalled();
+  });
+
+  it('desktop retains uncertain inputs if IPC fails or a later retry is refused', async () => {
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'optn_wallet_security') {
+        return { active: 'wallet.optn', legacy_source_id: 7, epoch: 12 };
+      }
+      throw new Error('IPC closed after handoff');
+    });
+    const first = await TransactionManager().sendTransaction('00aa');
+    expect(first.broadcastState).toBe('submitted');
+    mockedOutboundTracker.getByTxid.mockResolvedValue({
+      txid: first.txid,
+      state: 'submitted',
+      walletId: 7,
+    } as never);
+    vi.mocked(invoke).mockRejectedValue(new Error('wallet now closed'));
+    const retry = await TransactionManager().sendTransaction('00aa', 7);
+    expect(retry.broadcastState).toBe('submitted');
+    expect(retry.txid).toBe(first.txid);
+    expect(mockedOutboundTracker.remove).not.toHaveBeenCalled();
+    expect(mockedTxBuilderHelper).not.toHaveBeenCalled();
   });
 
   it('fetchAndStoreTransactionHistory upserts fetched history in a transaction', async () => {
@@ -63,7 +161,9 @@ describe('TransactionManager', () => {
       { tx_hash: 'b'.repeat(64), height: 101 },
     ];
 
-    mockedElectrumService.getTransactionHistory.mockResolvedValue(history as never);
+    mockedElectrumService.getTransactionHistory.mockResolvedValue(
+      history as never
+    );
 
     const upsertStmt = {
       run: vi.fn(),
@@ -80,14 +180,27 @@ describe('TransactionManager', () => {
     } as never);
 
     const tm = TransactionManager();
-    const result = await tm.fetchAndStoreTransactionHistory(7, 'bitcoincash:q1');
+    const result = await tm.fetchAndStoreTransactionHistory(
+      7,
+      'bitcoincash:q1'
+    );
 
     expect(result).toEqual(history);
     expect(db.exec).toHaveBeenCalledWith('BEGIN TRANSACTION');
     expect(db.exec).toHaveBeenCalledWith('COMMIT');
     expect(upsertStmt.run).toHaveBeenCalledTimes(2);
-    expect(upsertStmt.run).toHaveBeenNthCalledWith(1, [7, 'a'.repeat(64), 100, '']);
-    expect(upsertStmt.run).toHaveBeenNthCalledWith(2, [7, 'b'.repeat(64), 101, '']);
+    expect(upsertStmt.run).toHaveBeenNthCalledWith(1, [
+      7,
+      'a'.repeat(64),
+      100,
+      '',
+    ]);
+    expect(upsertStmt.run).toHaveBeenNthCalledWith(2, [
+      7,
+      'b'.repeat(64),
+      101,
+      '',
+    ]);
     expect(upsertStmt.free).toHaveBeenCalledTimes(1);
   });
 
@@ -95,7 +208,9 @@ describe('TransactionManager', () => {
     const history: TransactionHistoryItem[] = [
       { tx_hash: 'c'.repeat(64), height: 1 },
     ];
-    mockedElectrumService.getTransactionHistory.mockResolvedValue(history as never);
+    mockedElectrumService.getTransactionHistory.mockResolvedValue(
+      history as never
+    );
     const getDatabase = vi.fn();
     mockedDatabaseService.mockReturnValue({ getDatabase } as never);
     mockedStore.getState.mockReturnValue({
@@ -162,7 +277,11 @@ describe('TransactionManager', () => {
   it('sendTransaction retries the same raw tx after an ambiguous broadcast failure', async () => {
     const sendTransaction = vi
       .fn()
-      .mockRejectedValueOnce(new Error('request(blockchain.transaction.broadcast) timed out after 12000ms'))
+      .mockRejectedValueOnce(
+        new Error(
+          'request(blockchain.transaction.broadcast) timed out after 12000ms'
+        )
+      )
       .mockResolvedValueOnce('txid-ok');
 
     mockedTxBuilderHelper.mockReturnValue({
@@ -200,16 +319,20 @@ describe('TransactionManager', () => {
     const result = await tm.sendTransaction('01000000000100');
 
     expect(result.txid).toBeNull();
-    expect(result.errorMessage).toContain('spend the same input more than once');
+    expect(result.errorMessage).toContain(
+      'spend the same input more than once'
+    );
     expect(mockedOutboundTracker.remove).toHaveBeenCalled();
   });
 
   it('sendTransaction returns a friendly script-verification error and clears tracker', async () => {
-    const sendTransaction = vi.fn().mockRejectedValueOnce(
-      new Error(
-        'mandatory-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) (code 16)'
-      )
-    );
+    const sendTransaction = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'mandatory-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) (code 16)'
+        )
+      );
 
     mockedTxBuilderHelper.mockReturnValue({
       sendTransaction,
