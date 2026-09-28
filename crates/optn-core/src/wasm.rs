@@ -613,3 +613,77 @@ pub fn sign_p2pkh(context_json: &str, private_key: Vec<u8>, mode: u8) -> Result<
 pub fn p2pkh_lock(public_key: &[u8]) -> Result<Vec<u8>, String> {
     connect::p2pkh_lock(public_key)
 }
+
+// ---------------------------------------------------------------------------
+// BCMR authoring.
+// ---------------------------------------------------------------------------
+
+fn bcmr_author_err(e: crate::bcmr_author::AuthorError) -> JsValue {
+    JsValue::from_str(&serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone()))
+}
+
+#[wasm_bindgen(js_name = bcmrAuthorRegistry)]
+pub fn bcmr_author_registry(request_json: &str) -> Result<String, JsValue> {
+    use crate::bcmr_author::{author_registry, AuthorError, AuthorRequest, ErrorField};
+    let request: AuthorRequest = serde_json::from_str(request_json).map_err(|e| {
+        bcmr_author_err(AuthorError {
+            field: ErrorField::General,
+            message: format!("Invalid registry request: {e}"),
+        })
+    })?;
+    let authored = author_registry(&request).map_err(bcmr_author_err)?;
+    serde_json::to_string(&authored).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+#[wasm_bindgen(js_name = bcmrSuggestIdentity)]
+pub fn bcmr_suggest_identity(category: &str, has_nfts: bool) -> Result<String, JsValue> {
+    let suggested =
+        crate::bcmr_author::suggest_identity(category, has_nfts).map_err(bcmr_author_err)?;
+    serde_json::to_string(&suggested).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+#[wasm_bindgen(js_name = bcmrSymbolError)]
+pub fn bcmr_symbol_error(symbol: &str) -> Option<String> {
+    crate::bcmr_author::validate_symbol(symbol)
+        .err()
+        .map(|e| e.message)
+}
+
+#[wasm_bindgen(js_name = bcmrSequentialCommitment)]
+pub fn bcmr_sequential_commitment(number: u32) -> String {
+    crate::bcmr_author::to_hex(&crate::bcmr_author::sequential_commitment(u64::from(
+        number,
+    )))
+}
+
+#[wasm_bindgen(js_name = bcmrParsableCommitment)]
+pub fn bcmr_parsable_commitment(type_byte: u8, serial: u32) -> String {
+    crate::bcmr_author::to_hex(&crate::bcmr_author::parsable_commitment(
+        type_byte,
+        u64::from(serial),
+    ))
+}
+
+#[wasm_bindgen(js_name = bcmrDefaultParseBytecode)]
+pub fn bcmr_default_parse_bytecode() -> String {
+    crate::bcmr_author::DEFAULT_PARSE_BYTECODE.to_owned()
+}
+
+#[wasm_bindgen(js_name = bcmrIpfsCid)]
+pub fn bcmr_ipfs_cid(content: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest: [u8; 32] = Sha256::digest(content).into();
+    crate::bcmr_author::ipfs_raw_cid(&digest)
+}
+
+#[wasm_bindgen(js_name = bcmrReadPublication)]
+pub fn bcmr_read_publication(locking_bytecode: &[u8]) -> Option<String> {
+    let publication = crate::bcmr::parse_publication(locking_bytecode)?;
+    Some(
+        serde_json::json!({
+            "sha256": crate::bcmr_author::to_hex(&publication.content_hash),
+            "uris": publication.uris,
+        })
+        .to_string(),
+    )
+}
