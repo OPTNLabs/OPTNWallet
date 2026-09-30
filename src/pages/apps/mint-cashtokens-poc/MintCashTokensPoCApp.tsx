@@ -70,7 +70,10 @@ import {
   selectMintSourceUtxos,
 } from './utils/sourceHelpers';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
-import { selectWalletId } from '../../../state/slices/walletSlice';
+import {
+  selectNetworkType,
+  selectWalletId,
+} from '../../../state/slices/walletSlice';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
 
 type BcmrFieldKey =
@@ -111,6 +114,7 @@ type BcmrUploadStatus = {
 };
 
 type BcmrFormFingerprint = {
+  network: string;
   authbase: string;
   tokenCategory: string;
   tokenName: string;
@@ -197,6 +201,7 @@ const MintCashTokensPoCApp: React.FC = () => {
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
   const walletId = useSelector(selectWalletId);
+  const network = useSelector(selectNetworkType);
 
   const [addresses, setAddresses] = useState<WalletAddressRecord[]>([]);
   const [flatUtxos, setFlatUtxos] = useState<MintAppUtxo[]>([]);
@@ -452,6 +457,7 @@ const MintCashTokensPoCApp: React.FC = () => {
   const bcmrFormFingerprint = useMemo(() => {
     const parsedDecimals = Number.parseInt(bcmrTokenDecimals, 10);
     const fingerprint: BcmrFormFingerprint = {
+      network,
       authbase: bcmrAuthbase.trim().toLowerCase(),
       tokenCategory: bcmrTokenCategory.trim().toLowerCase(),
       tokenName: bcmrTokenName.trim(),
@@ -471,6 +477,7 @@ const MintCashTokensPoCApp: React.FC = () => {
     return JSON.stringify(fingerprint);
   }, [
     bcmrAuthbase,
+    network,
     bcmrTokenCategory,
     bcmrTokenName,
     bcmrTokenDescription,
@@ -1344,6 +1351,7 @@ const MintCashTokensPoCApp: React.FC = () => {
     setLoading(true);
     try {
       const json = generateBcmrRegistryJson({
+        network,
         baseRegistry: await (async () => {
           try {
             const existing =
@@ -1421,6 +1429,7 @@ const MintCashTokensPoCApp: React.FC = () => {
     }
   }, [
     clearBcmrFieldErrors,
+    network,
     bcmrTokenCategory,
     bcmrTokenName,
     bcmrTokenSymbol,

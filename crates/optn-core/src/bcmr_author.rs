@@ -129,6 +129,21 @@ pub fn parsable_commitment(type_byte: u8, serial: u64) -> Vec<u8> {
     out
 }
 
+/// Validate JS numbers before wasm-bindgen can truncate or wrap them.
+pub fn checked_commitment_number(
+    value: f64,
+    maximum: u32,
+    label: &str,
+) -> Result<u32, AuthorError> {
+    if !value.is_finite() || value.fract() != 0.0 || value < 0.0 || value > f64::from(maximum) {
+        return Err(AuthorError::new(
+            ErrorField::NftTypes,
+            format!("{label} must be a whole number between 0 and {maximum}."),
+        ));
+    }
+    Ok(value as u32)
+}
+
 /// One segment of a parsable commitment, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldWidth {
@@ -372,8 +387,17 @@ pub struct IdentityDraft {
 
 /// How the category's NFT commitments are read.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum NftDraft {
+    /// The retained editor's schema: omitted bytecode inherits the existing
+    /// layout, or selects sequential NFTs for a new collection.
+    Schema {
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        fields: Map<String, Value>,
+        parse: NftParseDraft,
+    },
     /// Commitments carry fields read by a parse bytecode. Omitting `bytecode`,
     /// `fields` and `types` selects the default type-and-serial layout.
     Parsable {
@@ -393,6 +417,15 @@ pub enum NftDraft {
         #[serde(default)]
         types: Map<String, Value>,
     },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NftParseDraft {
+    #[serde(default)]
+    bytecode: Option<String>,
+    #[serde(default)]
+    types: Map<String, Value>,
 }
 
 /// A registry ready to publish, and how to find it.
@@ -722,6 +755,34 @@ fn build_nfts(
     previous: Option<&Value>,
 ) -> Result<NftsOut, AuthorError> {
     let (description, bytecode, mut fields, mut types) = match draft {
+        NftDraft::Schema {
+            description,
+            fields,
+            parse,
+        } => {
+            let bytecode = parse
+                .bytecode
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or_else(|| previous?.get("parse")?.get("bytecode")?.as_str())
+                .map(|value| normalize_hex(value, ErrorField::NftBytecode, "Parse bytecode"))
+                .transpose()?;
+            let description = if description.trim().is_empty() {
+                previous
+                    .and_then(|nfts| nfts.get("description"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+            } else {
+                description.as_str()
+            };
+            (
+                description,
+                bytecode,
+                normalize_schema_fields(fields)?,
+                parse.types.clone(),
+            )
+        }
         NftDraft::Parsable {
             description,
             bytecode,
@@ -754,10 +815,10 @@ fn build_nfts(
                 }
                 None => default_types(collection_name),
             };
-            (description, Some(bytecode), fields, types)
+            (description.as_str(), Some(bytecode), fields, types)
         }
         NftDraft::Sequential { description, types } => {
-            (description, None, Map::new(), types.clone())
+            (description.as_str(), None, Map::new(), types.clone())
         }
     };
 
@@ -793,6 +854,49 @@ fn merge_missing(into: &mut Map<String, Value>, from: Option<&Value>) {
             into.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
+}
+
+/// Editor-only layout hints are extensions in the published schema. Keep both
+/// their validation and conversion here, rather than in the renderer adapter.
+fn normalize_schema_fields(fields: &Map<String, Value>) -> Result<Map<String, Value>, AuthorError> {
+    let mut fields = fields.clone();
+    for (id, field) in &mut fields {
+        let Some(field) = field.as_object_mut() else {
+            continue; // validate_fields reports the field-specific error.
+        };
+        for key in ["offset", "byteLength"] {
+            if let Some(value) = field.remove(key) {
+                let text = value.as_str().map(str::trim).unwrap_or("");
+                if !(key == "byteLength" && text == "variable"
+                    || !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
+                {
+                    return Err(AuthorError::new(
+                        ErrorField::NftFields,
+                        format!(
+                            "NFT field \"{id}\" {key} must be an integer{}.",
+                            if key == "byteLength" {
+                                " or \"variable\""
+                            } else {
+                                " greater than or equal to zero"
+                            }
+                        ),
+                    ));
+                }
+                let extensions = field
+                    .entry("extensions")
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .ok_or_else(|| {
+                        AuthorError::new(
+                            ErrorField::NftFields,
+                            "NFT field extensions must be an object.",
+                        )
+                    })?;
+                extensions.insert(key.to_owned(), Value::String(text.to_owned()));
+            }
+        }
+    }
+    Ok(fields)
 }
 
 fn default_fields() -> Map<String, Value> {
@@ -837,6 +941,51 @@ fn unknown_key<'a>(object: &'a Map<String, Value>, allowed: &[&str]) -> Option<&
         .find(|key| !allowed.contains(key))
 }
 
+fn string_map(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|map| map.values().all(Value::is_string))
+}
+
+/// Shared members of NFT fields/types (and preserved identity snapshots).
+/// Extensions are strings, string maps, or two-dimensional string maps:
+/// https://cashtokens.org/bcmr-v2.schema.json#/definitions/Extensions
+fn validate_metadata_members(
+    object: &Map<String, Value>,
+    field: ErrorField,
+    label: &str,
+) -> Result<(), AuthorError> {
+    for key in ["name", "description"] {
+        if object.get(key).is_some_and(|value| !value.is_string()) {
+            return Err(AuthorError::new(
+                field,
+                format!("{label} {key} must be a string."),
+            ));
+        }
+    }
+    if object.get("uris").is_some_and(|value| !string_map(value)) {
+        return Err(AuthorError::new(
+            field,
+            format!("{label} uris must map identifiers to strings."),
+        ));
+    }
+    if let Some(extensions) = object.get("extensions") {
+        let valid = extensions.as_object().is_some_and(|map| {
+            map.values().all(|value| {
+                value.is_string()
+                    || string_map(value)
+                    || value
+                        .as_object()
+                        .is_some_and(|map| map.values().all(string_map))
+            })
+        });
+        if !valid {
+            return Err(AuthorError::new(field, format!("{label} extensions must contain strings or one- or two-dimensional string maps.")));
+        }
+    }
+    Ok(())
+}
+
 fn validate_fields(fields: &Map<String, Value>) -> Result<(), AuthorError> {
     for (id, field) in fields {
         let fail = |message: String| Err(AuthorError::new(ErrorField::NftFields, message));
@@ -849,6 +998,7 @@ fn validate_fields(fields: &Map<String, Value>) -> Result<(), AuthorError> {
         if let Some(key) = unknown_key(field, &NFT_FIELD_KEYS) {
             return fail(format!("NFT field \"{id}\" has an unknown key \"{key}\"."));
         }
+        validate_metadata_members(field, ErrorField::NftFields, &format!("NFT field \"{id}\""))?;
         let Some(encoding) = field.get("encoding").and_then(Value::as_object) else {
             return fail(format!("NFT field \"{id}\" needs an encoding."));
         };
@@ -869,6 +1019,9 @@ fn validate_fields(fields: &Map<String, Value>) -> Result<(), AuthorError> {
             ));
         }
         if kind == "number" {
+            if encoding.get("unit").is_some_and(|value| !value.is_string()) {
+                return fail(format!("NFT field \"{id}\" unit must be a string."));
+            }
             if let Some(decimals) = encoding.get("decimals") {
                 if !decimals.as_u64().is_some_and(|d| d <= 18) {
                     return fail(format!(
@@ -906,6 +1059,7 @@ fn validate_types(
                 "NFT type \"{key}\" has an unknown key \"{unknown}\"."
             ));
         }
+        validate_metadata_members(object, ErrorField::NftTypes, &format!("NFT type \"{key}\""))?;
         let named = nft_type
             .get("name")
             .and_then(Value::as_str)
@@ -942,6 +1096,61 @@ fn parse_base(json: &str) -> Result<Value, AuthorError> {
             ErrorField::Registry,
             "Existing registry must be a JSON object.",
         ));
+    }
+    // Historical metadata is republished too; do not validate only the new
+    // snapshot and silently carry invalid nested fields into its content hash.
+    if let Some(identities) = value.get("identities") {
+        let fail = || {
+            AuthorError::new(
+                ErrorField::Registry,
+                "Existing identities must contain named snapshot objects.",
+            )
+        };
+        for history in identities.as_object().ok_or_else(fail)?.values() {
+            for snapshot in history.as_object().ok_or_else(fail)?.values() {
+                let snapshot = snapshot.as_object().ok_or_else(fail)?;
+                if !snapshot.get("name").is_some_and(Value::is_string) {
+                    return Err(fail());
+                }
+                validate_metadata_members(snapshot, ErrorField::Registry, "Existing snapshot")?;
+                if let Some(nfts) = snapshot.get("token").and_then(|token| token.get("nfts")) {
+                    let nfts = nfts.as_object().ok_or_else(fail)?;
+                    if let Some(key) = unknown_key(nfts, &["description", "fields", "parse"]) {
+                        return Err(AuthorError::new(
+                            ErrorField::Registry,
+                            format!("Existing NFTs have an unknown key \"{key}\"."),
+                        ));
+                    }
+                    validate_metadata_members(nfts, ErrorField::Registry, "Existing NFTs")?;
+                    let empty = Map::new();
+                    let fields = nfts
+                        .get("fields")
+                        .map(|fields| fields.as_object().ok_or_else(fail))
+                        .transpose()?
+                        .unwrap_or(&empty);
+                    let parse = nfts
+                        .get("parse")
+                        .and_then(Value::as_object)
+                        .ok_or_else(fail)?;
+                    if unknown_key(parse, &["bytecode", "types"]).is_some()
+                        || parse
+                            .get("bytecode")
+                            .is_some_and(|value| !value.is_string())
+                    {
+                        return Err(AuthorError::new(
+                            ErrorField::Registry,
+                            "Existing NFT parse definition is invalid.",
+                        ));
+                    }
+                    let types = parse
+                        .get("types")
+                        .and_then(Value::as_object)
+                        .ok_or_else(fail)?;
+                    validate_fields(fields)?;
+                    validate_types(types, fields)?;
+                }
+            }
+        }
     }
     Ok(value)
 }
@@ -1523,5 +1732,151 @@ mod tests {
             "identity": {"authbase": CATEGORY, "category": CATEGORY, "name": "A", "symbol": "A", "migrated": "x"}
         });
         assert!(serde_json::from_value::<AuthorRequest>(unknown).is_err());
+    }
+
+    #[test]
+    fn commitment_numbers_are_checked_before_integer_conversion() {
+        for maximum in [u32::from(u8::MAX), u32::MAX] {
+            for invalid in [
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                -1.0,
+                -0.5,
+                0.5,
+                f64::from(maximum) + 1.0,
+            ] {
+                assert_eq!(
+                    checked_commitment_number(invalid, maximum, "Number")
+                        .unwrap_err()
+                        .field,
+                    ErrorField::NftTypes
+                );
+            }
+            assert_eq!(
+                checked_commitment_number(0.0, maximum, "Number").unwrap(),
+                0
+            );
+            assert_eq!(
+                checked_commitment_number(f64::from(maximum), maximum, "Number").unwrap(),
+                maximum
+            );
+        }
+    }
+
+    #[test]
+    fn nested_field_and_type_values_follow_the_canonical_schema() {
+        let bad_members = [
+            ("name", serde_json::json!(123)),
+            ("description", Value::Null),
+            ("uris", serde_json::json!([])),
+            ("uris", serde_json::json!({"icon": 123})),
+            ("extensions", serde_json::json!({"x": true})),
+            ("extensions", serde_json::json!({"x": ["a"]})),
+            (
+                "extensions",
+                serde_json::json!({"x": {"a": {"b": {"c": "too deep"}}}}),
+            ),
+            (
+                "extensions",
+                serde_json::json!({"x": {"a": "mixed", "b": {"c": "depth"}}}),
+            ),
+        ];
+        for (key, value) in bad_members {
+            let mut fields = default_fields();
+            fields.get_mut("serial").unwrap()[key] = value.clone();
+            let draft = NftDraft::Parsable {
+                description: String::new(),
+                bytecode: None,
+                fields: Some(fields),
+                types: None,
+            };
+            assert_eq!(
+                author_registry(&request(Some(draft))).unwrap_err().field,
+                ErrorField::NftFields,
+                "field {key}: {value}"
+            );
+
+            let mut types = default_types("NFT");
+            types.get_mut("00").unwrap()[key] = value.clone();
+            let draft = NftDraft::Parsable {
+                description: String::new(),
+                bytecode: None,
+                fields: None,
+                types: Some(types),
+            };
+            assert_eq!(
+                author_registry(&request(Some(draft))).unwrap_err().field,
+                ErrorField::NftTypes,
+                "type {key}: {value}"
+            );
+        }
+        let mut fields = default_fields();
+        fields.get_mut("serial").unwrap()["encoding"]["unit"] = serde_json::json!(5);
+        assert_eq!(
+            validate_fields(&fields).unwrap_err().field,
+            ErrorField::NftFields
+        );
+
+        let members = serde_json::json!({
+            "name": "Name", "description": "", "uris": {"icon": "ipfs://icon"},
+            "extensions": {"text": "a", "map": {"a": "b"}, "matrix": {"a": {"b": "c"}}}
+        });
+        validate_metadata_members(members.as_object().unwrap(), ErrorField::NftFields, "Field")
+            .unwrap();
+    }
+
+    #[test]
+    fn preserved_snapshots_cannot_bypass_nested_validation() {
+        let base = parsed(&author_registry(&request(Some(parsable_default()))).unwrap());
+        for malformed in [
+            vec!["name"],
+            vec!["token", "nfts", "fields", "serial", "name"],
+            vec!["token", "nfts", "parse", "types", "00", "description"],
+        ] {
+            let mut base = base.clone();
+            let mut value = &mut base["identities"][CATEGORY][REVISION];
+            for key in malformed {
+                value = &mut value[key];
+            }
+            *value = serde_json::json!(123);
+            let mut r = request(None);
+            r.revision = "2026-09-26T12:00:00.000Z".to_owned();
+            r.base_registry = Some(base.to_string());
+            assert!(author_registry(&r).is_err());
+        }
+    }
+
+    #[test]
+    fn retained_editor_hints_are_validated_in_rust() {
+        let mut fields = Map::new();
+        fields.insert(
+            "serial".to_owned(),
+            serde_json::json!({
+                "encoding": {"type": "number"}, "offset": " 1 ", "byteLength": "variable"
+            }),
+        );
+        let draft = |fields| NftDraft::Schema {
+            description: String::new(),
+            fields,
+            parse: NftParseDraft {
+                bytecode: None,
+                types: Map::new(),
+            },
+        };
+        let registry = parsed(&author_registry(&request(Some(draft(fields.clone())))).unwrap());
+        let nfts = &registry["identities"][CATEGORY][REVISION]["token"]["nfts"];
+        assert!(nfts["parse"].get("bytecode").is_none());
+        assert_eq!(
+            nfts["fields"]["serial"]["extensions"],
+            serde_json::json!({"offset": "1", "byteLength": "variable"})
+        );
+        fields.get_mut("serial").unwrap()["byteLength"] = serde_json::json!("waffle");
+        assert_eq!(
+            author_registry(&request(Some(draft(fields))))
+                .unwrap_err()
+                .field,
+            ErrorField::NftFields
+        );
     }
 }
