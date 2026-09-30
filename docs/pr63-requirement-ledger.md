@@ -814,5 +814,42 @@ The current submission scope is one authenticated HD account. Contracts, RPA and
 multisig inputs need authenticated coverage before admission; hardware/watch-only
 submission additionally needs the corresponding managed runtime record. The legacy
 whole-wallet Home balance remains separate because durable HD/RPA/contract union is
-unfinished. Shared durable outbox/reconciliation, CashFusion orchestration, one-shot
-CLI token projection and complete-category indexer execution remain open connections.
+unfinished. One-shot CLI token projection was subsequently connected below; shared durable
+outbox/reconciliation, CashFusion orchestration and complete-category indexer
+execution remain open connections.
+
+### 2026-09-30: one-shot CLI Tokens uses the shared HD workflow
+
+At `6819c3ed`, `optn tokens` uses the same account acquisition, configured route,
+header restoration, HD discovery and encrypted checkpoint publication as Rescan
+and History. It reads accepted runtime coins and derives reported paths from the
+accepted HD address book. Saved nondefault accounts and HD watch-only records no
+longer fall through the legacy default-account seed path. Legacy credential input
+precedence remains unchanged for callers without a managed wallet.
+
+The existing JSON balances retain decimal `u128` totals and NFT details. Additive
+source, evidence and coverage fields identify the scanned HD scope; they do not
+claim global supply, RPA or contract coverage. Route, timeout, stale-state and
+persistence failures return errors rather than cached or legacy-network success.
+The documented 300-second default covers the whole HD pass; explicit timeouts
+remain exact. `--gap` now means history-driven discovery rather than a fixed
+receive/change prefix.
+
+Application integration evidence: the real CLI with a loopback provider covers
+saved account 1, watch-only and legacy credentials, tokens beyond the old prefix,
+branches 0/1/7/2, totals wider than `u64`, NFT paths, Rescan/History consistency,
+encrypted restart and failed-route refusal. The slice passed 107 CLI unit tests
+and 22 wallet-security integration tests (one OS credential-store test ignored).
+After integrating `dev`, both connected Tokens tests and strict CLI Clippy pass.
+The merged runtime also passes 87 wallet tests and strict Clippy. These are
+deterministic application tests, not new live token or packaged-device evidence.
+
+PR63 conflict resolution at `883ca9cc` retains the full desktop package matrix,
+mobile/extension/RISC-V gates and the newer `dev` wallet fixes. At `a1816267`, all
+six full Cargo dependency graphs resolve; native/core dependency audits pass
+with existing unmaintained-dependency warnings. Ninety-two focused retained-UI,
+signing, minting and release checks pass, and the Rust WASM is regenerated and
+freshness-checked. Checkpoint test nonces use OS randomness and missing biometric
+credentials are explicitly refused with regression coverage. Remote scans and
+platform builds must still succeed for the pushed revision; no security alerts
+were dismissed in this continuation.
