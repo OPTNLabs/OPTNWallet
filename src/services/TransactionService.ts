@@ -155,7 +155,10 @@ async function checkSendCoinHolds(
   if (!isDesktopPlatform()) return null;
   try {
     // Rust decodes the actual inputs; caller metadata is not authoritative.
-    const { transactionOutpoints } = await import('../wasm/optn-core');
+    const { ensureOptnCoreAsync, transactionOutpoints } = await import(
+      '../wasm/optn-core'
+    );
+    await ensureOptnCoreAsync();
     const outpoints = JSON.parse(transactionOutpoints(rawTX)) as Array<{
       txid: string;
       vout: number;

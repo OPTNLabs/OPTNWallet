@@ -252,7 +252,10 @@ export default function TransactionManager() {
     let spentInputs: Array<Pick<UTXO, 'tx_hash' | 'tx_pos'>> | undefined;
     if (desktop) {
       try {
-        const { transactionOutpoints } = await import('../../wasm/optn-core');
+        const { ensureOptnCoreAsync, transactionOutpoints } = await import(
+          '../../wasm/optn-core'
+        );
+        await ensureOptnCoreAsync();
         const inputs = JSON.parse(transactionOutpoints(rawTX)) as Array<{
           txid: string;
           vout: number;

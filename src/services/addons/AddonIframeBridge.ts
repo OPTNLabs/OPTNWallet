@@ -5,7 +5,10 @@
 // by a real unit test rather than only by manual iframe testing.
 import type { AddonSDK } from '../AddonsSDK';
 import type { AddonLocale } from '../../types/addons';
-import { addonLegacyGuestCallAllowed } from '../../wasm/optn-core';
+import {
+  addonLegacyGuestCallAllowed,
+  ensureOptnCoreAsync,
+} from '../../wasm/optn-core';
 
 const SANDBOX_URL = '/addon-sandbox.html';
 
@@ -23,8 +26,11 @@ export async function dispatchAddonSdkCall(
   methodName: string,
   args: unknown[]
 ): Promise<unknown> {
+  await ensureOptnCoreAsync();
   if (!addonLegacyGuestCallAllowed(moduleName, methodName)) {
-    throw new Error('unknown SDK module/method or capability unavailable to an untrusted addon guest');
+    throw new Error(
+      'unknown SDK module/method or capability unavailable to an untrusted addon guest'
+    );
   }
   const sdkRecord = sdk as unknown as Record<
     string,

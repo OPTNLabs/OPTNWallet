@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { transactionOutpoints as inspect } from '..';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { ensureOptnCoreAsync, transactionOutpoints as inspect } from '..';
 
 // Exercise Rust's generated binding, with public unsigned bytes only.
 const WIRE_TXID = 'efcdab8967452301'.repeat(4);
@@ -9,6 +9,8 @@ const OUTPUTS = '01e803000000000000015100000000';
 const SINGLE = `0200000001${INPUT}${OUTPUTS}`;
 
 describe('Rust transactionOutpoints binding', () => {
+  beforeAll(ensureOptnCoreAsync);
+
   it('exports the inspector from the generated Rust bundle', () => {
     expect(inspect).toBeTypeOf('function');
   });
