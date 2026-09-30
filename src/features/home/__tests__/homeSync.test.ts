@@ -8,6 +8,11 @@ const source = readFileSync(
 );
 
 describe('Home manual sync', () => {
+  it('does not start a full refresh when the Home route mounts', () => {
+    expect(source).not.toContain('autoSyncWalletRef');
+    expect(source).not.toContain('void handleRefresh();');
+  });
+
   it('refreshes transaction history after publishing the UTXO snapshot', () => {
     const utxoPublish = source.indexOf(
       'await refreshUTXOWorkerSubscriptions();'

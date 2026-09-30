@@ -17,7 +17,7 @@ import {
   selectCustomFeeSatPerByte,
   selectFeeMode,
 } from '../state/slices/preferencesSlice';
-import { SATSINBITCOIN } from '../utils/constants';
+import { SATSINBITCOIN, TOKEN_OUTPUT_SATS } from '../utils/constants';
 import UTXOService from '../services/UTXOService';
 import { outpointKey } from '../platform/desktop/CoinLabelService';
 import { applySpendOnlyFusedPolicy } from '../platform/desktop/fusionSpendPolicy';
@@ -57,6 +57,8 @@ import {
 import { finalizeRpaPayment, makeRpaDummyAddress } from '../services/RpaSender';
 import KeyService from '../services/KeyService';
 import { secp256k1 } from '@bitauth/libauth';
+
+const DEFAULT_TOKEN_OUTPUT_BCH = (TOKEN_OUTPUT_SATS / SATSINBITCOIN).toFixed(8);
 
 export default function useSimpleSend() {
   // Redux
@@ -381,6 +383,9 @@ export default function useSimpleSend() {
   >('bch');
   const [amountBchState, setAmountBchState] = useState<string>('');
   const [amountUsdState, setAmountUsdState] = useState<string>('');
+  const [tokenOutputBchState, setTokenOutputBchState] = useState<string>(
+    DEFAULT_TOKEN_OUTPUT_BCH
+  );
 
   // Flow
   const [mode, setMode] = useState<SimpleSendMode>('idle');
@@ -425,6 +430,8 @@ export default function useSimpleSend() {
   const amountBch = amountBchState;
   const amountUsd = amountUsdState;
   const amountToken = amountTokenState;
+  const tokenOutputBch = tokenOutputBchState;
+  const tokenOutputSats = parseAmountToSats(tokenOutputBch);
   const tokenDecimalsByCategory = useMemo(
     () => resolveTokenDecimalsByCategory(tokenUtxos),
     [tokenUtxos]
@@ -448,6 +455,10 @@ export default function useSimpleSend() {
     },
     [formatBchFromUsd]
   );
+
+  const setTokenOutputBch = useCallback((nextValue: string) => {
+    setTokenOutputBchState(normalizeDecimalInput(nextValue, 8));
+  }, []);
 
   const setAmountToken = useCallback(
     (nextValue: string) => {
@@ -512,6 +523,7 @@ export default function useSimpleSend() {
     setAmountBchState('');
     setAmountUsdState('');
     setAmountDisplayModeState('bch');
+    setTokenOutputBchState(DEFAULT_TOKEN_OUTPUT_BCH);
     setSelectedCategory('');
     setAmountToken('');
     setSelectedNftCommitment('');
@@ -696,6 +708,14 @@ export default function useSimpleSend() {
         return;
       }
 
+      if (tokenOutputSats < TOKEN_OUTPUT_SATS) {
+        setError(
+          `CashToken output value must be at least ${TOKEN_OUTPUT_SATS} sats.`
+        );
+        setMode('error');
+        return;
+      }
+
       // ===== FT (single category) =====
       if (assetType === 'ft') {
         if (!selectedCategory) {
@@ -746,6 +766,7 @@ export default function useSimpleSend() {
           recipient: normalizedRecipient,
           selectedCategory,
           amountToken,
+          tokenOutputSats,
           tokenChangeAddress,
           selectedChangeAddress,
           dbUtxos: feePool,
@@ -809,6 +830,7 @@ export default function useSimpleSend() {
           recipient: normalizedRecipient,
           selectedCategory,
           amountToken,
+          tokenOutputSats,
           tokenChangeAddress,
           selectedChangeAddress,
           dbUtxos: feePool,
@@ -858,6 +880,7 @@ export default function useSimpleSend() {
     assetType,
     selectedCategory,
     amountToken,
+    tokenOutputSats,
     selectedTokenDecimals,
     selectedNftCommitment,
     tokenUtxos,
@@ -1137,6 +1160,8 @@ export default function useSimpleSend() {
     amountToken,
     setAmountToken,
     selectedTokenDecimals,
+    tokenOutputBch,
+    setTokenOutputBch,
     selectedNftCommitment,
     setSelectedNftCommitment,
 

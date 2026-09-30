@@ -15,6 +15,8 @@ type PlannerParams = {
   recipient: string;
   selectedCategory: string;
   amountToken: string;
+  /** BCH value attached to the recipient's CashToken output. */
+  tokenOutputSats?: number;
   tokenChangeAddress: string;
   selectedChangeAddress: string;
   dbUtxos: UTXO[];
@@ -30,12 +32,17 @@ export function createSimpleSendPlanner({
   recipient,
   selectedCategory,
   amountToken,
+  tokenOutputSats = TOKEN_OUTPUT_SATS,
   tokenChangeAddress,
   selectedChangeAddress,
   dbUtxos,
   hardwareWallet = false,
   feePreferences = {},
 }: PlannerParams) {
+  const recipientTokenOutputSats = Number.isFinite(tokenOutputSats)
+    ? Math.max(TOKEN_OUTPUT_SATS, Math.trunc(tokenOutputSats))
+    : TOKEN_OUTPUT_SATS;
+
   function sortFeeUtxosPreferred(pool: UTXO[]) {
     return [...pool].sort((a, b) => {
       const aNonZero = a.tx_pos !== 0 ? 1 : 0;
@@ -110,7 +117,10 @@ export function createSimpleSendPlanner({
           inputSum: Number(inputSum),
         };
       } catch (error: unknown) {
-        return { ok: false, err: toErrorMessage(error, 'hardware plan failed') };
+        return {
+          ok: false,
+          err: toErrorMessage(error, 'hardware plan failed'),
+        };
       }
     }
 
@@ -154,7 +164,7 @@ export function createSimpleSendPlanner({
   function makeTokenOutputForRecipientFT(): TransactionOutput {
     return {
       recipientAddress: toTokenAwareCashAddress(recipient),
-      amount: TOKEN_OUTPUT_SATS,
+      amount: recipientTokenOutputSats,
       token: {
         category: selectedCategory,
         amount: BigInt(amountToken || '0'),
@@ -176,7 +186,7 @@ export function createSimpleSendPlanner({
   function makeTokenOutputForRecipientNFT(nftUtxo: UTXO): TransactionOutput {
     return {
       recipientAddress: toTokenAwareCashAddress(recipient),
-      amount: TOKEN_OUTPUT_SATS,
+      amount: recipientTokenOutputSats,
       token: {
         category: nftUtxo.token!.category,
         amount: 0n,

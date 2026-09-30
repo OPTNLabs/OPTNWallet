@@ -675,7 +675,7 @@ async function routeProposalToMobile(client, payload) {
   );
   await androidSetInput(client, '[data-testid="home-scan-input"]', 0, payload);
   await androidClickSelector(client, '[data-testid="home-scan-continue"]');
-  await androidWaitHeading(client, 'Cauldron', 120_000);
+  await androidWaitHeading(client, 'Pay merchant', 120_000);
   try {
     await androidWait(
       client,

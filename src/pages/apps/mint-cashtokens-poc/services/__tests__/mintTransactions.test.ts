@@ -56,7 +56,9 @@ describe('mintTransactions', () => {
 
     const sdkError = {
       tx: {
-        build: vi.fn().mockResolvedValue({ errorMsg: 'boom', finalOutputs: null, hex: '' }),
+        build: vi
+          .fn()
+          .mockResolvedValue({ errorMsg: 'boom', finalOutputs: null, hex: '' }),
       },
     } as unknown as AddonSDK;
 
@@ -78,7 +80,9 @@ describe('mintTransactions', () => {
 
     const sdkMissing = {
       tx: {
-        build: vi.fn().mockResolvedValue({ errorMsg: '', finalOutputs: null, hex: '' }),
+        build: vi
+          .fn()
+          .mockResolvedValue({ errorMsg: '', finalOutputs: null, hex: '' }),
       },
     } as unknown as AddonSDK;
 
@@ -142,15 +146,34 @@ describe('mintTransactions', () => {
         sdkAddressBook: [],
         tokenOutputSats: 546,
       })
-    ).rejects.toThrow('No valid Candidate UTXO selected');
+    ).rejects.toThrow(
+      'Only genesis UTXOs or minting authority NFTs can be used as mint sources.'
+    );
 
-    const genesis = makeUtxo({ tx_hash: 'g'.repeat(64), tx_pos: 0, value: 1000, token: null });
-    const fee = makeUtxo({ tx_hash: 'f'.repeat(64), tx_pos: 1, value: 2000, token: null });
+    const genesis = makeUtxo({
+      tx_hash: 'g'.repeat(64),
+      tx_pos: 0,
+      value: 1000,
+      token: null,
+    });
+    const fee = makeUtxo({
+      tx_hash: 'f'.repeat(64),
+      tx_pos: 1,
+      value: 2000,
+      token: null,
+    });
 
     const sdkFail = {
       tx: {
-        addOutput: vi.fn().mockReturnValue({ recipientAddress: 'bitcoincash:qrcp', amount: 546n }),
-        build: vi.fn().mockResolvedValue({ errorMsg: 'still failing', hex: '', finalOutputs: null }),
+        addOutput: vi.fn().mockReturnValue({
+          recipientAddress: 'bitcoincash:qrcp',
+          amount: 546n,
+        }),
+        build: vi.fn().mockResolvedValue({
+          errorMsg: 'still failing',
+          hex: '',
+          finalOutputs: null,
+        }),
       },
     } as unknown as AddonSDK;
 
@@ -178,8 +201,18 @@ describe('mintTransactions', () => {
       bytecodeSize: 123,
     });
 
-    const genesis = makeUtxo({ tx_hash: 'g'.repeat(64), tx_pos: 0, value: 5000, token: null });
-    const fee = makeUtxo({ tx_hash: 'f'.repeat(64), tx_pos: 1, value: 2000, token: null });
+    const genesis = makeUtxo({
+      tx_hash: 'g'.repeat(64),
+      tx_pos: 0,
+      value: 5000,
+      token: null,
+    });
+    const fee = makeUtxo({
+      tx_hash: 'f'.repeat(64),
+      tx_pos: 1,
+      value: 2000,
+      token: null,
+    });
 
     const nftDraft = makeDraft({
       sourceKey: `${genesis.tx_hash}:0`,
@@ -194,7 +227,11 @@ describe('mintTransactions', () => {
     const addOutput = vi.fn().mockReturnValue({
       recipientAddress: 'bitcoincash:qrcp',
       amount: 546n,
-      token: { category: genesis.tx_hash, amount: 0n, nft: { capability: 'mutable', commitment: 'abcd' } },
+      token: {
+        category: genesis.tx_hash,
+        amount: 0n,
+        nft: { capability: 'mutable', commitment: 'abcd' },
+      },
     });
 
     const build = vi.fn().mockResolvedValue({
@@ -214,7 +251,9 @@ describe('mintTransactions', () => {
       flatUtxos: [genesis, fee],
       activeOutputDrafts: [nftDraft],
       changeAddress: 'bitcoincash:qchange',
-      sdkAddressBook: [{ address: 'bitcoincash:qrcp', tokenAddress: 'simpleledger:qrcp' }],
+      sdkAddressBook: [
+        { address: 'bitcoincash:qrcp', tokenAddress: 'simpleledger:qrcp' },
+      ],
       tokenOutputSats: 546,
     });
 
@@ -232,6 +271,84 @@ describe('mintTransactions', () => {
     expect(out.feePaid).toBe(454n);
   });
 
+  it('buildMintPreview supports an NFT minting authority and preserves its category', async () => {
+    buildTransactionMock.mockResolvedValueOnce({
+      errorMsg: '',
+      finalOutputs: [
+        {
+          recipientAddress: 'bitcoincash:qrcp',
+          amount: 1000n,
+          token: {
+            category: 'c'.repeat(64),
+            amount: 0n,
+            nft: { capability: 'none', commitment: 'new' },
+          },
+        },
+        { recipientAddress: 'bitcoincash:qchange', amount: 4000n },
+      ],
+      finalTransaction: 'c0de',
+      bytecodeSize: 123,
+    });
+
+    const authority = makeUtxo({
+      tx_hash: 'a'.repeat(64),
+      tx_pos: 1,
+      value: 3000,
+      token: {
+        category: 'c'.repeat(64),
+        amount: 0n,
+        nft: { capability: 'minting', commitment: 'seed' },
+      },
+    });
+    const fee = makeUtxo({
+      tx_hash: 'f'.repeat(64),
+      tx_pos: 2,
+      value: 3000,
+      token: null,
+    });
+    const draft = makeDraft({
+      sourceKey: `${authority.tx_hash}:1`,
+      config: {
+        mintType: 'NFT',
+        ftAmount: '1',
+        nftCapability: 'none',
+        nftCommitment: 'new',
+      },
+    });
+    const addOutput = vi.fn().mockReturnValue({
+      recipientAddress: 'bitcoincash:qrcp',
+      amount: 1000n,
+      token: {
+        category: 'c'.repeat(64),
+        amount: 0n,
+        nft: { capability: 'none', commitment: 'new' },
+      },
+    });
+    const sdk = { tx: { addOutput } } as unknown as AddonSDK;
+
+    const out = await buildMintPreview({
+      sdk,
+      selectedUtxos: [authority],
+      flatUtxos: [authority, fee],
+      activeOutputDrafts: [draft],
+      changeAddress: 'bitcoincash:qchange',
+      sdkAddressBook: [],
+      tokenOutputSats: 1000,
+    });
+
+    expect(addOutput).toHaveBeenCalledWith(
+      'bitcoincash:qrcp',
+      1000,
+      0n,
+      'c'.repeat(64),
+      [authority, fee],
+      [],
+      'none',
+      'new'
+    );
+    expect(out.inputsForBuild).toEqual([authority, fee]);
+  });
+
   it('buildMintPreview keeps a wallet-controlled output before BCMR OP_RETURN when enabled', async () => {
     buildTransactionMock.mockResolvedValueOnce({
       errorMsg: '',
@@ -244,8 +361,18 @@ describe('mintTransactions', () => {
       bytecodeSize: 123,
     });
 
-    const genesis = makeUtxo({ tx_hash: 'g'.repeat(64), tx_pos: 0, value: 5000, token: null });
-    const fee = makeUtxo({ tx_hash: 'f'.repeat(64), tx_pos: 1, value: 2000, token: null });
+    const genesis = makeUtxo({
+      tx_hash: 'g'.repeat(64),
+      tx_pos: 0,
+      value: 5000,
+      token: null,
+    });
+    const fee = makeUtxo({
+      tx_hash: 'f'.repeat(64),
+      tx_pos: 1,
+      value: 2000,
+      token: null,
+    });
     const draft = makeDraft({ sourceKey: `${genesis.tx_hash}:0` });
 
     const addOutput = vi.fn().mockReturnValue({

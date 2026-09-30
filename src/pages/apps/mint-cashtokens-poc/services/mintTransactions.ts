@@ -16,6 +16,7 @@ import {
   utxoKey,
   utxoValue,
 } from '../utils';
+import { isSelectableMintSource } from '../utils/sourceHelpers';
 
 type BuildResult = Awaited<
   ReturnType<typeof TransactionService.buildTransaction>
@@ -108,16 +109,25 @@ export async function buildMintPreview({
   inputsForBuild: MintAppUtxo[];
   feePaid: bigint;
 }> {
-  const genesisInputs = selectedUtxos.filter((u) => u.tx_pos === 0 && !u.token);
-  if (genesisInputs.length === 0) {
+  const invalidSource = selectedUtxos.find(
+    (utxo) => !isSelectableMintSource(utxo)
+  );
+  if (invalidSource) {
     throw new Error(
-      'No valid Candidate UTXO selected (requires vout=0, non-token).'
+      'Only genesis UTXOs or minting authority NFTs can be used as mint sources.'
     );
   }
 
-  const genesisKeySet = new Set(genesisInputs.map((u) => utxoKey(u)));
-  const feeCandidates = selectFeeCandidates(flatUtxos, genesisKeySet);
-  const sourceByKey = new Map(genesisInputs.map((u) => [utxoKey(u), u]));
+  const mintInputs = selectedUtxos.filter(isSelectableMintSource);
+  if (mintInputs.length === 0) {
+    throw new Error(
+      'No valid mint source selected (requires a genesis UTXO or minting authority NFT).'
+    );
+  }
+
+  const mintSourceKeySet = new Set(mintInputs.map((u) => utxoKey(u)));
+  const feeCandidates = selectFeeCandidates(flatUtxos, mintSourceKeySet);
+  const sourceByKey = new Map(mintInputs.map((u) => [utxoKey(u), u]));
 
   if (feeCandidates.length === 0) {
     throw new Error('No non-genesis UTXOs available to fund transaction fees.');
@@ -131,7 +141,7 @@ export async function buildMintPreview({
 
   for (let i = 0; i < feeCandidates.length; i++) {
     feeInputs.push(feeCandidates[i]);
-    inputsForBuild = genesisInputs.concat(feeInputs);
+    inputsForBuild = mintInputs.concat(feeInputs);
 
     const outputs: TransactionOutput[] = [];
     if (bcmrPublication?.enabled) {
@@ -150,7 +160,7 @@ export async function buildMintPreview({
     for (const d of activeOutputDrafts) {
       const src = sourceByKey.get(d.sourceKey);
       if (!src) continue;
-      const category = src.tx_hash;
+      const category = src.token?.category ?? src.tx_hash;
       const isNFT = d.config.mintType === 'NFT';
       const tokenAmount = isNFT ? 0n : toBigIntSafe(d.config.ftAmount);
 
@@ -204,7 +214,12 @@ export async function buildMintPreview({
     }
   }
 
-  if (!built || built.errorMsg || !built.finalOutputs || !built.finalTransaction) {
+  if (
+    !built ||
+    built.errorMsg ||
+    !built.finalOutputs ||
+    !built.finalTransaction
+  ) {
     throw new Error(built?.errorMsg || 'Failed to build mint transaction.');
   }
 

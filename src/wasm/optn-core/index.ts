@@ -20,7 +20,7 @@
 // Correctness oracle: test-vectors/rpa.json — the same file the Rust and
 // TypeScript suites read. If this binding is wrong, optnCore.verify.test.ts
 // stops matching.
-import { initSync } from './generated/optn_core';
+import initOptnCore, { initSync } from './generated/optn_core';
 import { OPTN_CORE_WASM_BASE64 } from './generated/optnCoreWasmBase64.generated';
 
 export * from './generated/optn_core';
@@ -41,6 +41,7 @@ function decodeBase64(base64: string): Uint8Array {
 }
 
 let ready = false;
+let asyncInitialization: Promise<void> | null = null;
 
 /**
  * Instantiate the core. Safe to call repeatedly; later calls are no-ops.
@@ -54,11 +55,31 @@ export function ensureOptnCore(): void {
   ready = true;
 }
 
-// Initialised on import as well as on demand.
-//
-// Two call styles reach this module and both have to work. The fusion helpers
-// call `ensureOptnCore()` before each operation. The CashConnect signing glue
-// imports the generated bindings directly and never calls anything, so without
-// this line its first call would hit an uninstantiated module. `ensureOptnCore`
-// is idempotent, so paying it here costs the on-demand callers nothing.
-ensureOptnCore();
+/**
+ * Initialize the shared core without compiling a large WASM module on the
+ * Android WebView main thread. WebView rejects synchronous compilation above
+ * its small-module threshold, while the generated async loader uses the
+ * permitted WebAssembly.instantiate path.
+ */
+export function ensureOptnCoreAsync(): Promise<void> {
+  if (ready) return Promise.resolve();
+  if (asyncInitialization) return asyncInitialization;
+
+  asyncInitialization = initOptnCore({
+    module_or_path: decodeBase64(OPTN_CORE_WASM_BASE64),
+  })
+    .then(() => {
+      ready = true;
+    })
+    .catch((error) => {
+      asyncInitialization = null;
+      throw error;
+    });
+
+  return asyncInitialization;
+}
+
+// The app shell awaits ensureOptnCoreAsync() before mounting React. Keeping
+// initialization out of module evaluation is required by Android WebView's
+// main-thread WASM compilation limit; synchronous callers remain safe after
+// that startup gate has completed.
