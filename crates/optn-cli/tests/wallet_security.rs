@@ -1013,7 +1013,7 @@ fn tokens_honor_explicit_timeout_without_reporting_an_empty_balance() {
 fn tokens_share_hd_sync_for_saved_watch_only_and_legacy_accounts() {
     use optn_core::token::{Capability, Nft, TokenData};
     use optn_runtime::wallet_checkpoint::WalletCheckpointStorage;
-    use rand::{distributions::Alphanumeric, rngs::OsRng, Rng, RngCore};
+    use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
     use std::sync::atomic::Ordering;
 
     let directory = test_directory();
@@ -1036,8 +1036,7 @@ fn tokens_share_hd_sync_for_saved_watch_only_and_legacy_accounts() {
         .map(char::from)
         .collect();
     let watch_input = format!("{watch_password}\n");
-    let mut entropy = [0; 56];
-    OsRng.try_fill_bytes(&mut entropy).unwrap();
+    let entropy = std::array::from_fn(|_| OsRng.gen());
     let checkpoint_entropy: [u8; 32] = OsRng.gen();
     let watch = optn_core::wallet_file::WatchOnlyFile::create(
         "Public watch fixture",
