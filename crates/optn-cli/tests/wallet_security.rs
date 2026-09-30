@@ -761,15 +761,40 @@ fn managed_spend_refuses_without_shared_runtime_coin_freshness() {
     assert!(values[0].get("raw").is_none() && values[0].get("txid").is_none());
 }
 
-#[test]
-fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart() {
-    use optn_runtime::wallet_checkpoint::WalletCheckpointStorage;
+fn hd_loopback(
+    raw: &[u8],
+) -> (
+    u16,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    std::thread::JoinHandle<Vec<String>>,
+) {
+    use sha2::{Digest, Sha256};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    let directory = test_directory();
-    fixture(directory.path(), "public.optn", 1); // Nondefault account must be retained.
+    let scripts: Vec<String> = if raw.is_empty() {
+        Vec::new()
+    } else {
+        optn_core::tx::decode(raw)
+            .unwrap()
+            .outputs
+            .iter()
+            .map(|output| {
+                Sha256::digest(&output.script_pubkey)
+                    .iter()
+                    .rev()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect()
+            })
+            .collect()
+    };
+    let txid: String = optn_core::header_hash::sha256d(raw)
+        .iter()
+        .rev()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let raw_hex: String = raw.iter().map(|byte| format!("{byte:02x}")).collect();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -805,9 +830,20 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
                     }
                     "server.peers.subscribe" | "blockchain.scripthash.get_mempool" => json!([]),
                     "blockchain.scripthash.get_history" => {
-                        histories.push(request["params"][0].as_str().unwrap().to_owned());
-                        json!([])
+                        let script = request["params"][0].as_str().unwrap().to_owned();
+                        histories.push(script.clone());
+                        if scripts.contains(&script) {
+                            json!([{"tx_hash":txid,"height":0}])
+                        } else {
+                            json!([])
+                        }
                     }
+                    "blockchain.transaction.get" if request["params"][0] == txid => {
+                        json!(raw_hex)
+                    }
+                    // No registry/authchain transaction is available in this
+                    // fixture. Unresolved metadata must not hide owned tokens.
+                    "blockchain.transaction.get" => Value::Null,
                     "blockchain.headers.subscribe" => {
                         json!({"height":0,"hex":optn_runtime::header_verifier::CHIPNET_GENESIS_HEADER_HEX})
                     }
@@ -824,6 +860,16 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
         }
         histories
     });
+    (port, stopped, server)
+}
+
+#[test]
+fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart() {
+    use optn_runtime::wallet_checkpoint::WalletCheckpointStorage;
+    use std::sync::atomic::Ordering;
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 1); // Nondefault account must be retained.
+    let (port, stopped, server) = hd_loopback(&[]);
     let output = run_cli_at(
         directory.path(),
         &[
@@ -932,6 +978,281 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
     let reply = &responses(&output)[0];
     assert!(reply["security"]["manual_rescan_from"].is_null());
     assert!(reply["wallet_sync"]["scan_coverage"].is_null());
+}
+
+#[test]
+fn tokens_honor_explicit_timeout_without_reporting_an_empty_balance() {
+    let directory = test_directory();
+    // The OS accepts the loopback connection, but this listener never replies.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let started = std::time::Instant::now();
+    let output = run_cli_at(
+        directory.path(),
+        &["tokens", "--gap", "1"],
+        "",
+        listener.local_addr().unwrap().port(),
+    );
+    assert_eq!(output.status.code(), Some(3));
+    let value = &responses(&output)[0];
+    assert_eq!(
+        value["message"],
+        "HD rescan timed out before completing the account"
+    );
+    assert_eq!(value["ok"], false);
+    assert!(value.get("fungible").is_none());
+    // run_cli_at supplies --timeout 1. Neither the provider's longer timeout nor
+    // Tokens' 300-second default may replace that whole-refresh budget.
+    assert!(
+        (std::time::Duration::from_secs(1)..std::time::Duration::from_secs(10))
+            .contains(&started.elapsed())
+    );
+    assert!(!directory.path().join(".state").exists());
+}
+
+#[test]
+fn tokens_share_hd_sync_for_saved_watch_only_and_legacy_accounts() {
+    use optn_core::token::{Capability, Nft, TokenData};
+    use optn_runtime::wallet_checkpoint::WalletCheckpointStorage;
+    use std::sync::atomic::Ordering;
+
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 1);
+    let network = optn_app::Network::Chipnet;
+    let account = optn_core::hd::AccountPath::new(1, 1).unwrap();
+    let wallet =
+        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
+            .unwrap();
+    let saved_xpub = wallet.account_xpub_at(account).unwrap();
+    let legacy_xpub =
+        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+            .unwrap()
+            .account_xpub_at(optn_core::hd::AccountPath::default_for(network))
+            .unwrap();
+    // Public fixture entropy only; this account contains no signing key.
+    let watch = optn_core::wallet_file::WatchOnlyFile::create(
+        "Public watch fixture",
+        &saved_xpub,
+        "73c5da0a",
+        "old-password",
+        "old-password",
+        network,
+        account,
+        &[5; 56],
+        &[6; 32],
+    )
+    .unwrap();
+    std::fs::write(directory.path().join("watch.optn"), watch.encode().unwrap()).unwrap();
+
+    let amount = i64::MAX as u64;
+    let fungible = TokenData::fungible([9; 32], amount);
+    let mixed = TokenData {
+        nft: Some(Nft {
+            capability: Capability::Mutable,
+            commitment: vec![0xab, 0xcd],
+        }),
+        ..fungible.clone()
+    };
+    let nft_only = TokenData {
+        category: [1; 32],
+        amount: 0,
+        nft: Some(Nft {
+            capability: Capability::None,
+            commitment: Vec::new(),
+        }),
+    };
+    // Raw observation fixture, never signed or broadcast. An output at receive
+    // zero keeps discovery open past the former --gap 1 fixed prefix. Three
+    // fungible outputs exercise a total wider than u64, plus zero-satoshi NFTs.
+    let mut outputs = Vec::new();
+    for xpub in [&saved_xpub, &legacy_xpub] {
+        for (branch, index, token) in [
+            (0, 0, None),
+            (0, 1, Some(&fungible)),
+            (1, 0, Some(&fungible)),
+            (2, 0, Some(&mixed)),
+            (7, 0, Some(&nft_only)),
+        ] {
+            let address =
+                optn_core::watch_only::address_under_account(network, xpub, branch, index).unwrap();
+            let mut script = token.map_or_else(Vec::new, |token| token.encode_prefix().unwrap());
+            script.extend_from_slice(
+                &optn_core::cashaddr::Address::decode(&address.address)
+                    .unwrap()
+                    .script_pubkey(),
+            );
+            outputs.push((if branch == 7 { 0u64 } else { 100 }, script));
+        }
+    }
+    let mut raw = vec![2, 0, 0, 0, 0]; // No inputs: serialization fixture only.
+    raw.extend_from_slice(&optn_core::tx::varint(outputs.len() as u64));
+    for (value, script) in outputs {
+        raw.extend_from_slice(&value.to_le_bytes());
+        raw.extend_from_slice(&optn_core::tx::varint(script.len() as u64));
+        raw.extend_from_slice(&script);
+    }
+    raw.extend_from_slice(&[0; 4]);
+    let txid: String = optn_core::header_hash::sha256d(&raw)
+        .iter()
+        .rev()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let (port, stopped, server) = hd_loopback(&raw);
+    for (handle, account_index, first_output) in [
+        (Some("public.optn"), 1, 0),
+        (Some("watch.optn"), 1, 0),
+        (None, 0, 5),
+    ] {
+        let mut args = Vec::new();
+        if let Some(handle) = handle {
+            args.extend(["--wallet", handle, "--password-stdin"]);
+        }
+        args.extend(["tokens", "--gap", "1"]);
+        let input = if handle.is_some() {
+            "old-password\n"
+        } else {
+            "stdin must not override the environment fixture\n"
+        };
+        let output = run_cli_at(directory.path(), &args, input, port);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            responses(&output)[0],
+            json!({
+                "ok": true,
+                "network": "chipnet",
+                "token_utxos": 4,
+                "fungible": [{"category":"09".repeat(32),"amount":(u128::from(amount) * 3).to_string()}],
+                "nfts": [
+                    {"category":"09".repeat(32),"capability":"mutable","commitment":"abcd",
+                     "txid":txid,"vout":first_output + 3,"path":format!("m/44'/1'/{account_index}'/2/0")},
+                    {"category":"01".repeat(32),"capability":"none","commitment":"",
+                     "txid":txid,"vout":first_output + 4,"path":format!("m/44'/1'/{account_index}'/7/0")}
+                ],
+                "scope": {"kind":"hd-account","account_path":format!("m/44'/1'/{account_index}'"),"branches":[0,1,7,2]},
+                "source": "cli-electrum",
+                "evidence": "ServerAssertion",
+                "scan_coverage": {"from_height":0,"skipped_below":null,"chosen_by_holder":false},
+                "complete": true,
+            })
+        );
+    }
+    // Reuse the same route and checkpoint through both existing consumers.
+    for command in ["rescan", "history"] {
+        let output = run_cli_at(
+            directory.path(),
+            &[
+                "--wallet",
+                "public.optn",
+                "--password-stdin",
+                command,
+                "--gap",
+                "1",
+            ],
+            "old-password\n",
+            port,
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let value = &responses(&output)[0];
+        assert_eq!(value["source"], "cli-electrum");
+        assert_eq!(value["evidence"], "ServerAssertion");
+        assert_eq!(value["complete"], true);
+        assert_eq!(value["confirmed"], 0);
+        assert_eq!(value["unconfirmed"], 400);
+        assert_eq!(value["total"], 400);
+        if command == "rescan" {
+            assert_eq!(value["account_path"], "m/44'/1'/1'");
+            assert_eq!(value["utxos"], 5);
+            assert_eq!(value["wallet_sync"]["history"].as_array().unwrap().len(), 1);
+        } else {
+            assert_eq!(value["count"], 1);
+            assert_eq!(value["shown"], 1);
+            assert_eq!(value["transactions"].as_array().unwrap().len(), 1);
+        }
+    }
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let birthday = json!({"request":{"command":"set_birthday","epoch":1,"birthday":{"kind":"height","height":1}}});
+    let updated = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n{birthday}\n"),
+    );
+    assert_eq!(responses(&updated)[1]["ok"], true);
+    let above_tip = run_cli_at(
+        directory.path(),
+        &[
+            "--wallet",
+            "public.optn",
+            "--password-stdin",
+            "tokens",
+            "--gap",
+            "1",
+        ],
+        "old-password\n",
+        port,
+    );
+    // This fixture reports only genesis. A birthday beyond that observed tip
+    // cannot become an apparently complete empty Tokens result.
+    assert!(!above_tip.status.success());
+    let value = &responses(&above_tip)[0];
+    assert_eq!(value["ok"], false);
+    assert!(value["message"]
+        .as_str()
+        .unwrap()
+        .contains("above the observed tip"));
+    assert!(value.get("fungible").is_none());
+    stopped.store(true, Ordering::SeqCst);
+    assert!(!server.join().unwrap().is_empty());
+
+    let disk = optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(
+        directory.path().join(".state"),
+    );
+    let key = wallet.checkpoint_key(network, account).unwrap();
+    let id = optn_core::header_hash::sha256d(b"public.optn\0chipnet\0m/44'/1'/1'");
+    let (_, revision) = disk
+        .load(&id, &key)
+        .unwrap()
+        .expect("durable HD token snapshot");
+    let watch_key = watch.unlock("old-password").unwrap().checkpoint_key.clone();
+    let watch_id = optn_core::header_hash::sha256d(b"watch.optn\0chipnet\0m/44'/1'/1'");
+    assert!(disk.load(&watch_id, &watch_key).unwrap().is_some());
+
+    let reopened = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n"),
+    );
+    let value = &responses(&reopened)[0];
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["wallet_sync"]["history"].as_array().unwrap().len(), 1);
+    assert_eq!(value["wallet_sync"]["history_fresh"], false);
+    // Closed selected route must fail even with a valid checkpoint and a legacy
+    // phrase available. Wrong password must never fall back to that phrase.
+    for password in ["old-password\n", "wrong-public-fixture-password\n"] {
+        let failed = run_cli_at(
+            directory.path(),
+            &[
+                "--wallet",
+                "public.optn",
+                "--password-stdin",
+                "tokens",
+                "--gap",
+                "1",
+            ],
+            password,
+            port,
+        );
+        assert!(!failed.status.success());
+        assert_eq!(responses(&failed)[0]["ok"], false);
+    }
+    assert_eq!(disk.load(&id, &key).unwrap().unwrap().1, revision);
 }
 
 #[test]

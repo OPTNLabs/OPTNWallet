@@ -93,7 +93,7 @@ struct Cli {
     profile: String,
 
     /// Seconds to wait before giving up. Defaults to 300 for rescan, history,
-    /// and wallet; 30 otherwise.
+    /// tokens, wallet and RPA discovery/sweep; 30 otherwise. HD commands use one total budget.
     #[arg(long, global = true)]
     timeout: Option<u64>,
 
@@ -169,6 +169,7 @@ enum Command {
     },
     /// CashToken balances held by the wallet.
     Tokens {
+        /// Consecutive unused addresses required after history on each HD branch.
         #[arg(long, default_value_t = 20)]
         gap: u32,
     },
@@ -830,6 +831,7 @@ fn timeout_seconds(cli: &Cli) -> u64 {
             &cli.command,
             Command::Rescan { .. }
                 | Command::History { .. }
+                | Command::Tokens { .. }
                 | Command::Wallet { .. }
                 | Command::Rpa {
                     action: RpaCommand::Discover { .. } | RpaCommand::Sweep { .. }
@@ -1409,15 +1411,32 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
     .map_err(|_| CliError::Network("shared wallet refresh timed out".into()))?
 }
 
-async fn rescan_shared_wallet(
+struct SyncedHdWallet {
+    state: optn_app::AppState,
+    snapshot: optn_runtime::reconciliation::ReconciledSnapshot<
+        optn_runtime::sync_worker::WalletNetworkSnapshot,
+    >,
+    worker: optn_runtime::sync_worker::ProgressiveSyncWorker,
+}
+
+impl SyncedHdWallet {
+    fn address_book(&self) -> Result<&optn_core::watch_only::HdAddressBook> {
+        self.snapshot
+            .value
+            .hd
+            .as_ref()
+            .ok_or_else(|| CliError::Protocol("HD rescan has no address book".into()))
+    }
+}
+
+async fn sync_shared_wallet(
     cli: &Cli,
     gap: u32,
     cap: u32,
-    all: bool,
     account_path: Option<&str>,
     xpub: Option<&str>,
     from_height: Option<u32>,
-) -> Result<Value> {
+) -> Result<SyncedHdWallet> {
     use optn_runtime::chain::{
         ChainSource, ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceDisposition,
         SourceId, SourceOrigin,
@@ -1501,67 +1520,197 @@ async fn rescan_shared_wallet(
             }
         }
     };
-    tokio::time::timeout(std::time::Duration::from_secs(timeout_seconds(cli)), async {
-        let runtime = managed.cloned().unwrap_or_else(|| optn_runtime::AppRuntime::spawn(optn_app::AppState {
-            network: cli.network,
-            wallet: Some(optn_app::OpenedWallet {
-                kind: optn_app::WalletKind::WatchOnly, name: "HD account rescan".into(),
-                receive_address: receive.address, master_fingerprint: None, account_path: account.to_string(),
-                multisig_policy: None, account_xpub: Some(xpub.clone()),
-            }), ..Default::default()
-        }));
-        if let Some(height) = from_height {
-            runtime.request_wallet_rescan(height).await.map_err(|error| CliError::Usage(error.to_string()))?;
-        }
-        let worker = hd_sync_worker(cli.network, &selection.policy)?;
-        let stack = crate::network_settings::build_stack(cli.network, cli.network_config_dir.as_deref(), selection).await;
-        let mut worker = seed_header_progress(&runtime, cli.network, worker.with_accepted_headers(stack.headers.clone())).await?;
-        runtime.sync_hd_wallet_from_floor(&mut *stack.service.lock().await, &mut worker, xpub,
-            optn_runtime::hd_sync::HdSyncLimits { gap_limit: gap, addresses_per_branch: cap }, from_height)
-            .await.map_err(|error| CliError::Network(format!("HD rescan incomplete: {error}")))?;
-        let status = runtime.subscribe_wallet_sync().borrow().clone();
-        if !status.sync.history_fresh || !status.sync.utxos_fresh {
-            return Err(CliError::Network("HD rescan did not publish a complete account".into()));
-        }
-        let snapshot = status.authoritative.ok_or_else(|| CliError::Protocol("HD rescan has no snapshot".into()))?;
-        let book = snapshot.value.hd.as_ref().ok_or_else(|| CliError::Protocol("HD rescan has no address book".into()))?;
-        let mut addresses = Vec::new();
-        for (branch, entries) in book.branches.iter().enumerate() {
-            for (index, address) in entries.iter().enumerate() {
-                let script = Address::decode(&address.address).map_err(CliError::Protocol)?.script_pubkey();
-                let (confirmed, unconfirmed) = snapshot.value.script_balance(&script)?;
-                let utxos = snapshot.value.script_outputs(&script)?;
-                if all || confirmed != 0 || unconfirmed != 0 || !utxos.is_empty() {
-                    addresses.push(json!({"path": address.path, "address": address.address,
-                        "chain": (["receiving", "change", "defi", "compatibility"][branch]),
-                        "branch":optn_core::watch_only::HD_SCAN_BRANCHES[branch], "index": index,
-                        "confirmed": confirmed, "unconfirmed": unconfirmed, "utxos": utxos.len()}));
-                }
+    tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_seconds(cli)),
+        async {
+            let runtime = managed.cloned().unwrap_or_else(|| {
+                optn_runtime::AppRuntime::spawn(optn_app::AppState {
+                    network: cli.network,
+                    wallet: Some(optn_app::OpenedWallet {
+                        kind: optn_app::WalletKind::WatchOnly,
+                        name: "HD account rescan".into(),
+                        receive_address: receive.address,
+                        master_fingerprint: None,
+                        account_path: account.to_string(),
+                        multisig_policy: None,
+                        account_xpub: Some(xpub.clone()),
+                    }),
+                    ..Default::default()
+                })
+            });
+            if let Some(height) = from_height {
+                runtime
+                    .request_wallet_rescan(height)
+                    .await
+                    .map_err(|error| CliError::Usage(error.to_string()))?;
+            }
+            let worker = hd_sync_worker(cli.network, &selection.policy)?;
+            let stack = crate::network_settings::build_stack(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                selection,
+            )
+            .await;
+            let mut worker = seed_header_progress(
+                &runtime,
+                cli.network,
+                worker.with_accepted_headers(stack.headers.clone()),
+            )
+            .await?;
+            runtime
+                .sync_hd_wallet_from_floor(
+                    &mut *stack.service.lock().await,
+                    &mut worker,
+                    xpub,
+                    optn_runtime::hd_sync::HdSyncLimits {
+                        gap_limit: gap,
+                        addresses_per_branch: cap,
+                    },
+                    from_height,
+                )
+                .await
+                .map_err(|error| CliError::Network(format!("HD rescan incomplete: {error}")))?;
+            let status = runtime.subscribe_wallet_sync().borrow().clone();
+            if !status.sync.history_fresh || !status.sync.utxos_fresh {
+                return Err(CliError::Network(
+                    "HD rescan did not publish a complete account".into(),
+                ));
+            }
+            let snapshot = status
+                .authoritative
+                .ok_or_else(|| CliError::Protocol("HD rescan has no snapshot".into()))?;
+            let state = runtime.state();
+            if !state.wallet_sync.history_fresh
+                || !state.wallet_sync.utxos_fresh
+                || state.wallet.is_none()
+            {
+                return Err(CliError::Network(
+                    "HD wallet session ended before reporting its result".into(),
+                ));
+            }
+            Ok(SyncedHdWallet {
+                state,
+                snapshot,
+                worker,
+            })
+        },
+    )
+    .await
+    .map_err(|_| CliError::Network("HD rescan timed out before completing the account".into()))?
+}
+
+async fn rescan_shared_wallet(
+    cli: &Cli,
+    gap: u32,
+    cap: u32,
+    all: bool,
+    account_path: Option<&str>,
+    xpub: Option<&str>,
+    from_height: Option<u32>,
+) -> Result<Value> {
+    let synced = sync_shared_wallet(cli, gap, cap, account_path, xpub, from_height).await?;
+    let book = synced.address_book()?;
+    let snapshot = &synced.snapshot;
+    let state = &synced.state;
+    let mut addresses = Vec::new();
+    for (branch, entries) in book.branches.iter().enumerate() {
+        for (index, address) in entries.iter().enumerate() {
+            let script = Address::decode(&address.address)
+                .map_err(CliError::Protocol)?
+                .script_pubkey();
+            let (confirmed, unconfirmed) = snapshot.value.script_balance(&script)?;
+            let utxos = snapshot.value.script_outputs(&script)?;
+            if all || confirmed != 0 || unconfirmed != 0 || !utxos.is_empty() {
+                addresses.push(json!({"path": address.path, "address": address.address,
+                    "chain": (["receiving", "change", "defi", "compatibility"][branch]),
+                    "branch":optn_core::watch_only::HD_SCAN_BRANCHES[branch], "index": index,
+                    "confirmed": confirmed, "unconfirmed": unconfirmed, "utxos": utxos.len()}));
             }
         }
-        let state = runtime.state();
-        if !state.wallet_sync.history_fresh || !state.wallet_sync.utxos_fresh || state.wallet.is_none() {
-            return Err(CliError::Network("HD wallet session ended before reporting its result".into()));
+    }
+    let confirmed_total = state
+        .wallet_sync
+        .confirmed_sats
+        .ok_or_else(|| CliError::Protocol("HD balance is unavailable".into()))?;
+    let unconfirmed_total = state.wallet_sync.pending_sats;
+    let total = state
+        .wallet_sync
+        .total_sats()
+        .ok_or_else(|| CliError::Protocol("HD total balance overflow".into()))?;
+    let (header_verifier, mmr, header_height, header_commitment, header_evidence) =
+        header_verifier_report(&synced.worker);
+    Ok(
+        json!({"ok":true, "hd":true, "complete":!state.wallet_sync.scan_coverage.is_some_and(|coverage| coverage.skipped_below.is_some()), "network":cli.network.to_string(),
+        "account_path":book.account.to_string(), "gap":gap, "max_addresses":cap,
+        "selection":"shared-native-policy", "source":snapshot.source.as_str(),
+        "evidence":format!("{:?}",snapshot.evidence),
+        "header_verifier": header_verifier,
+        "mmr": mmr,
+        "header_height": header_height,
+        "header_commitment": header_commitment,
+        "header_evidence": header_evidence,
+        "branches":optn_core::watch_only::HD_SCAN_BRANCHES, "last_used":book.last_used,
+        "scanned_addresses":snapshot.value.interests.len(), "confirmed":confirmed_total,
+        "unconfirmed":unconfirmed_total, "total":total, "utxos":state.coins.len(), "addresses":addresses,
+        "wallet_sync":optn_transport::WireState::from(state).wallet_sync}),
+    )
+}
+
+fn tokens_from_shared_wallet(synced: &SyncedHdWallet) -> Result<Value> {
+    let state = &synced.state;
+    let book = synced.address_book()?;
+    let paths: std::collections::BTreeMap<_, _> = book
+        .branches
+        .iter()
+        .flatten()
+        .map(|address| (address.address.as_str(), address.path.as_str()))
+        .collect();
+    let mut fungible = std::collections::BTreeMap::<String, u128>::new();
+    let mut nfts = Vec::new();
+    let mut token_utxos = 0usize;
+    for coin in state.coins.iter() {
+        let Some(token) = coin.token() else { continue };
+        let path = paths.get(coin.address()).ok_or_else(|| {
+            CliError::Protocol("Token output is outside the synced HD account".into())
+        })?;
+        token_utxos += 1;
+        let category = token.category_hex();
+        if token.amount > 0 {
+            let total = fungible.entry(category.clone()).or_default();
+            *total = total
+                .checked_add(u128::from(token.amount))
+                .ok_or_else(|| CliError::Protocol("Token balance overflow".into()))?;
         }
-        let confirmed_total = state.wallet_sync.confirmed_sats.ok_or_else(|| CliError::Protocol("HD balance is unavailable".into()))?;
-        let unconfirmed_total = state.wallet_sync.pending_sats;
-        let total = state.wallet_sync.total_sats().ok_or_else(|| CliError::Protocol("HD total balance overflow".into()))?;
-        let (header_verifier, mmr, header_height, header_commitment, header_evidence) =
-            header_verifier_report(&worker);
-        Ok(json!({"ok":true, "hd":true, "complete":!state.wallet_sync.scan_coverage.is_some_and(|coverage| coverage.skipped_below.is_some()), "network":cli.network.to_string(),
-            "account_path":account.to_string(), "gap":gap, "max_addresses":cap,
-            "selection":"shared-native-policy", "source":snapshot.source.as_str(),
-            "evidence":format!("{:?}",snapshot.evidence),
-            "header_verifier": header_verifier,
-            "mmr": mmr,
-            "header_height": header_height,
-            "header_commitment": header_commitment,
-            "header_evidence": header_evidence,
-            "branches":optn_core::watch_only::HD_SCAN_BRANCHES, "last_used":book.last_used,
-            "scanned_addresses":snapshot.value.interests.len(), "confirmed":confirmed_total,
-            "unconfirmed":unconfirmed_total, "total":total, "utxos":state.coins.len(), "addresses":addresses,
-            "wallet_sync":optn_transport::WireState::from(&state).wallet_sync}))
-    }).await.map_err(|_| CliError::Network("HD rescan timed out before completing the account".into()))?
+        if let Some(nft) = &token.nft {
+            nfts.push(json!({
+                "category": category,
+                "capability": nft.capability.as_str(),
+                "commitment": hex(&nft.commitment),
+                "txid": coin.outpoint().txid_hex(),
+                "vout": coin.outpoint().vout(),
+                "path": path,
+            }));
+        }
+    }
+    Ok(json!({
+        "ok": true,
+        "network": state.network.to_string(),
+        "token_utxos": token_utxos,
+        "fungible": fungible.iter().map(|(category, amount)| json!({
+            "category": category,
+            "amount": amount.to_string(),
+        })).collect::<Vec<_>>(),
+        "nfts": nfts,
+        "scope": {
+            "kind": "hd-account",
+            "account_path": book.account.to_string(),
+            "branches": optn_core::watch_only::HD_SCAN_BRANCHES,
+        },
+        "source": synced.snapshot.source.as_str(),
+        "evidence": format!("{:?}", synced.snapshot.evidence),
+        "scan_coverage": state.wallet_sync.scan_coverage.as_ref().map(optn_transport::WireScanCoverage::from),
+        "complete": state.wallet_sync.scan_coverage.is_some_and(|coverage| coverage.skipped_below.is_none()),
+    }))
 }
 
 fn header_verifier_report(
@@ -2294,56 +2443,16 @@ async fn run(cli: &Cli) -> Result<Value> {
             }))
         }
         Command::Tokens { gap } => {
-            let wallet = read_wallet(cli).await?;
-            let coin = default_coin_type(cli.network);
-            // category -> (fungible total, nft count)
-            let mut fungible: std::collections::BTreeMap<String, u128> = Default::default();
-            let mut nfts: Vec<Value> = Vec::new();
-            let mut token_utxos = 0usize;
-
-            for change in [false, true] {
-                for index in 0..*gap {
-                    let path = hd::address_path(coin, 0, change, index);
-                    let address = wallet.address(cli.network, &path)?;
-                    for u in client()?.utxos(&address.electrum_scripthash()).await? {
-                        let Some(t) = u.token_data else { continue };
-                        token_utxos += 1;
-                        if let Some(amount) = t.amount.as_deref() {
-                            // Sent as a decimal string because the top of the
-                            // range does not survive a JSON number.
-                            let parsed: u128 = amount.parse().map_err(|_| {
-                                CliError::Protocol(format!(
-                                    "token amount '{amount}' is not a number"
-                                ))
-                            })?;
-                            if parsed > 0 {
-                                *fungible.entry(t.category.clone()).or_default() += parsed;
-                            }
-                        }
-                        if let Some(nft) = t.nft {
-                            nfts.push(json!({
-                                "category": t.category,
-                                "capability": nft.capability.unwrap_or_else(|| "none".into()),
-                                "commitment": nft.commitment.unwrap_or_default(),
-                                "txid": u.tx_hash,
-                                "vout": u.tx_pos,
-                                "path": path,
-                            }));
-                        }
-                    }
-                }
-            }
-
-            Ok(json!({
-                "ok": true,
-                "network": cli.network.to_string(),
-                "token_utxos": token_utxos,
-                "fungible": fungible.iter().map(|(category, amount)| json!({
-                    "category": category,
-                    "amount": amount.to_string(),
-                })).collect::<Vec<_>>(),
-                "nfts": nfts,
-            }))
+            let synced = sync_shared_wallet(
+                cli,
+                *gap,
+                optn_core::discovery::ADDRESS_CAP.max(*gap),
+                None,
+                None,
+                None,
+            )
+            .await?;
+            tokens_from_shared_wallet(&synced)
         }
         Command::Rescan {
             from_height,
@@ -4546,13 +4655,73 @@ mod manifest_tests {
             ("ping", 30),
             ("rescan", 300),
             ("history", 300),
+            ("tokens", 300),
             ("wallet", 300),
         ] {
             let default = Cli::try_parse_from(["optn", command]).unwrap();
-            let explicit = Cli::try_parse_from(["optn", command, "--timeout", "1"]).unwrap();
             assert_eq!(timeout_seconds(&default), seconds);
-            assert_eq!(timeout_seconds(&explicit), 1);
+            for seconds in ["0", "1", "417"] {
+                let explicit =
+                    Cli::try_parse_from(["optn", command, "--timeout", seconds]).unwrap();
+                assert_eq!(timeout_seconds(&explicit), seconds.parse::<u64>().unwrap());
+            }
         }
+    }
+
+    #[test]
+    fn tokens_report_limited_hd_coverage_and_selected_source() {
+        let mut synced = SyncedHdWallet {
+            state: optn_app::AppState {
+                network: Network::Chipnet,
+                wallet_sync: optn_app::WalletSyncView {
+                    scan_coverage: Some(optn_app::ScanCoverageView {
+                        from_height: 700_000,
+                        skipped_below: Some(700_000),
+                        chosen_by_holder: true,
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            snapshot: optn_runtime::reconciliation::ReconciledSnapshot {
+                value: optn_runtime::sync_worker::WalletNetworkSnapshot {
+                    hd: Some(optn_core::watch_only::HdAddressBook {
+                        account: hd::AccountPath::new(1, 1).unwrap(),
+                        account_xpub: "account-key-must-not-be-exported".into(),
+                        branches: Default::default(),
+                        last_used: [None; 4],
+                    }),
+                    interests: Vec::new(),
+                    transactions: Vec::new(),
+                    tip: None,
+                },
+                source: optn_runtime::chain::SourceId::new("selected-fixture"),
+                evidence: optn_runtime::chain::Evidence::ServerAssertion,
+                chain_tip: None,
+            },
+            worker: optn_runtime::sync_worker::ProgressiveSyncWorker::new(Default::default()),
+        };
+        let value = tokens_from_shared_wallet(&synced).unwrap();
+        assert_eq!(
+            value["scope"],
+            json!({"kind":"hd-account","account_path":"m/44'/1'/1'","branches":[0,1,7,2]})
+        );
+        assert_eq!(value["source"], "selected-fixture");
+        assert_eq!(value["evidence"], "ServerAssertion");
+        assert_eq!(
+            value["scan_coverage"],
+            json!({"from_height":700_000,"skipped_below":700_000,"chosen_by_holder":true})
+        );
+        assert_eq!(value["complete"], false);
+        assert!(!value
+            .to_string()
+            .contains("account-key-must-not-be-exported"));
+        assert!(value.get("transactions").is_none());
+
+        synced.state.wallet_sync.scan_coverage = None;
+        let unknown = tokens_from_shared_wallet(&synced).unwrap();
+        assert_eq!(unknown["complete"], false);
+        assert!(unknown["scan_coverage"].is_null());
     }
 
     fn command_path_exists(path: &str) -> bool {
