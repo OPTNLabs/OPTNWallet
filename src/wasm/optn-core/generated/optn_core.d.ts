@@ -224,9 +224,9 @@ export interface InitOutput {
     readonly bcmrAuthorRegistry: (a: number, b: number) => [number, number, number, number];
     readonly bcmrDefaultParseBytecode: () => [number, number];
     readonly bcmrIpfsCid: (a: number, b: number) => [number, number];
-    readonly bcmrParsableCommitment: (a: number, b: number) => [number, number];
+    readonly bcmrParsableCommitment: (a: number, b: number) => [number, number, number, number];
     readonly bcmrReadPublication: (a: number, b: number) => [number, number];
-    readonly bcmrSequentialCommitment: (a: number) => [number, number];
+    readonly bcmrSequentialCommitment: (a: number) => [number, number, number, number];
     readonly bcmrSuggestIdentity: (a: number, b: number, c: number) => [number, number, number, number];
     readonly bcmrSymbolError: (a: number, b: number) => [number, number];
     readonly connectP2pkhLock: (a: number, b: number) => [number, number, number, number];

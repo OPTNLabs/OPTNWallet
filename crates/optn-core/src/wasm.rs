@@ -397,13 +397,14 @@ pub fn fusion_scalar_is_canonical(bytes: &[u8]) -> bool {
 /// Add packed 32-byte non-zero canonical scalars modulo the group order.
 #[wasm_bindgen(js_name = fusionScalarSum)]
 pub fn fusion_scalar_sum(packed: &[u8]) -> Result<Vec<u8>, JsValue> {
-    if packed.is_empty() || packed.len() % 32 != 0 {
+    let (scalars, remainder) = packed.as_chunks::<32>();
+    if scalars.is_empty() || !remainder.is_empty() {
         return Err(JsValue::from_str(
             "packed scalars must contain one or more 32-byte values",
         ));
     }
     let mut total = k256::Scalar::ZERO;
-    for chunk in packed.chunks_exact(32) {
+    for chunk in scalars {
         total += scalar_from(chunk, "scalar")?;
     }
     Ok(total.to_bytes().to_vec())
@@ -466,11 +467,12 @@ pub fn fusion_pedersen_balance_holds(
 ) -> Result<bool, JsValue> {
     use k256::ProjectivePoint;
 
-    if packed_commitments.is_empty() || packed_commitments.len() % 65 != 0 {
+    let (commitments, remainder) = packed_commitments.as_chunks::<65>();
+    if commitments.is_empty() || !remainder.is_empty() {
         return Ok(false);
     }
     let mut sum = ProjectivePoint::IDENTITY;
-    for encoded in packed_commitments.chunks_exact(65) {
+    for encoded in commitments {
         let point = match crate::fusion::schnorr::parse_point(encoded) {
             Ok(point) => point,
             Err(_) => return Ok(false),
@@ -650,17 +652,23 @@ pub fn bcmr_symbol_error(symbol: &str) -> Option<String> {
 }
 
 #[wasm_bindgen(js_name = bcmrSequentialCommitment)]
-pub fn bcmr_sequential_commitment(number: u32) -> String {
-    crate::bcmr_author::to_hex(&crate::bcmr_author::sequential_commitment(u64::from(
-        number,
-    )))
+pub fn bcmr_sequential_commitment(number: f64) -> Result<String, JsValue> {
+    let number = crate::bcmr_author::checked_commitment_number(number, u32::MAX, "NFT number")
+        .map_err(bcmr_author_err)?;
+    Ok(crate::bcmr_author::to_hex(
+        &crate::bcmr_author::sequential_commitment(u64::from(number)),
+    ))
 }
 
 #[wasm_bindgen(js_name = bcmrParsableCommitment)]
-pub fn bcmr_parsable_commitment(type_byte: u8, serial: u32) -> String {
-    crate::bcmr_author::to_hex(&crate::bcmr_author::parsable_commitment(
-        type_byte,
-        u64::from(serial),
+pub fn bcmr_parsable_commitment(type_byte: f64, serial: f64) -> Result<String, JsValue> {
+    let type_byte =
+        crate::bcmr_author::checked_commitment_number(type_byte, u32::from(u8::MAX), "NFT type")
+            .map_err(bcmr_author_err)?;
+    let serial = crate::bcmr_author::checked_commitment_number(serial, u32::MAX, "Serial number")
+        .map_err(bcmr_author_err)?;
+    Ok(crate::bcmr_author::to_hex(
+        &crate::bcmr_author::parsable_commitment(type_byte as u8, u64::from(serial)),
     ))
 }
 
