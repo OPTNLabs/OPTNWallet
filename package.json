@@ -135,7 +135,7 @@
     "@walletconnect/utils": "^2.23.9",
     "@wizardconnect/core": "^0.1.6",
     "@wizardconnect/wallet": "^0.1.5",
-    "axios": "^1.18.0",
+    "axios": "^1.20.0",
     "bip39": "^3.1.0",
     "buffer": "^6.0.3",
     "cashc": "0.13.0-next.3",
@@ -173,10 +173,10 @@
       "picomatch": "^2.3.2"
     },
     "ws": "^8.21.0",
-    "axios": "^1.18.0",
+    "axios": "^1.20.0",
     "protobufjs": "^8.7.0",
     "ip-address": "10.4.0",
-    "serialize-javascript": "^7.0.5",
+    "serialize-javascript": "^7.1.2",
     "valibot": "1.4.2",
     "@wdio/utils": {
       "@puppeteer/browsers": "3.2.2"
@@ -248,9 +248,9 @@
     "**/mocha/diff": "8.0.4",
     "**/uuid": "11.1.1",
     "**/esbuild": "0.28.2",
-    "**/axios": "^1.18.0",
+    "**/axios": "^1.20.0",
     "**/protobufjs": "8.7.0",
-    "**/serialize-javascript": "^7.0.5"
+    "**/serialize-javascript": "^7.1.2"
   },
   "packageManager": "npm@10.9.2"
 }
