@@ -1013,6 +1013,7 @@ fn tokens_honor_explicit_timeout_without_reporting_an_empty_balance() {
 fn tokens_share_hd_sync_for_saved_watch_only_and_legacy_accounts() {
     use optn_core::token::{Capability, Nft, TokenData};
     use optn_runtime::wallet_checkpoint::WalletCheckpointStorage;
+    use rand::{distributions::Alphanumeric, rngs::OsRng, Rng, RngCore};
     use std::sync::atomic::Ordering;
 
     let directory = test_directory();
@@ -1028,17 +1029,26 @@ fn tokens_share_hd_sync_for_saved_watch_only_and_legacy_accounts() {
             .unwrap()
             .account_xpub_at(optn_core::hd::AccountPath::default_for(network))
             .unwrap();
-    // Public fixture entropy only; this account contains no signing key.
+    // Only the account is a published vector; encryption inputs need no fixed bytes.
+    let watch_password: String = OsRng
+        .sample_iter(Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+    let watch_input = format!("{watch_password}\n");
+    let mut entropy = [0; 56];
+    OsRng.try_fill_bytes(&mut entropy).unwrap();
+    let checkpoint_entropy: [u8; 32] = OsRng.gen();
     let watch = optn_core::wallet_file::WatchOnlyFile::create(
         "Public watch fixture",
         &saved_xpub,
         "73c5da0a",
-        "old-password",
-        "old-password",
+        &watch_password,
+        &watch_password,
         network,
         account,
-        &[5; 56],
-        &[6; 32],
+        &entropy,
+        &checkpoint_entropy,
     )
     .unwrap();
     std::fs::write(directory.path().join("watch.optn"), watch.encode().unwrap()).unwrap();
@@ -1107,12 +1117,15 @@ fn tokens_share_hd_sync_for_saved_watch_only_and_legacy_accounts() {
             args.extend(["--wallet", handle, "--password-stdin"]);
         }
         args.extend(["tokens", "--gap", "1"]);
-        let input = if handle.is_some() {
-            "old-password\n"
-        } else {
-            "stdin must not override the environment fixture\n"
+        let input = match handle {
+            Some("watch.optn") => watch_input.as_str(),
+            Some(_) => "old-password\n",
+            None => "stdin must not override the environment fixture\n",
         };
         let output = run_cli_at(directory.path(), &args, input, port);
+        for bytes in [&output.stdout, &output.stderr] {
+            assert!(!String::from_utf8_lossy(bytes).contains(&watch_password));
+        }
         assert!(
             output.status.success(),
             "{}",
@@ -1220,7 +1233,11 @@ fn tokens_share_hd_sync_for_saved_watch_only_and_legacy_accounts() {
         .load(&id, &key)
         .unwrap()
         .expect("durable HD token snapshot");
-    let watch_key = watch.unlock("old-password").unwrap().checkpoint_key.clone();
+    let watch_key = watch
+        .unlock(&watch_password)
+        .unwrap()
+        .checkpoint_key
+        .clone();
     let watch_id = optn_core::header_hash::sha256d(b"watch.optn\0chipnet\0m/44'/1'/1'");
     assert!(disk.load(&watch_id, &watch_key).unwrap().is_some());
 
