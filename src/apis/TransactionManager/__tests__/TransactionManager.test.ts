@@ -13,6 +13,7 @@ import { isDesktopPlatform } from '../../../utils/platform';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('../../../wasm/optn-core', () => ({
+  ensureOptnCoreAsync: vi.fn(async () => {}),
   transactionOutpoints: vi.fn(() =>
     JSON.stringify([{ txid: 'ab'.repeat(32), vout: 2 }])
   ),
@@ -112,6 +113,22 @@ describe('TransactionManager', () => {
       7
     );
     expect(mockedOutboundTracker.remove).not.toHaveBeenCalled();
+  });
+
+  it('refuses a failed Rust initialization before tracking or network handoff', async () => {
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    const { ensureOptnCoreAsync } = await import('../../../wasm/optn-core');
+    vi.mocked(ensureOptnCoreAsync).mockRejectedValueOnce(
+      new Error('WASM unavailable')
+    );
+    const result = await TransactionManager().sendTransaction('00aa');
+    expect(result).toEqual({
+      txid: null,
+      errorMessage: 'Unable to read the signed transaction inputs.',
+    });
+    expect(mockedOutboundTracker.trackAttempt).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(mockedTxBuilderHelper).not.toHaveBeenCalled();
   });
 
   it('desktop rejects a wallet switch before native handoff without a network fallback', async () => {
