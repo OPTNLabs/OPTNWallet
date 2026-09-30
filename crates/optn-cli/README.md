@@ -192,10 +192,10 @@ addresses per chain are checked before an account is considered empty.
 
 ## Rescanning an HD account
 
-`rescan` is the account refresh path shared with the native runtime. It scans
-the receiving (`/0`), change (`/1`), and existing DeFi/Cauldron (`/2`) branches
-of one BIP44 account. RPA branch `/3` is not an ordinary P2PKH branch and is
-not included.
+`rescan`, `history` and `tokens` use the account refresh path shared with the
+native runtime. It scans the receiving (`/0`), change (`/1`), DeFi (`/7`) and
+legacy compatibility (`/2`) branches of one BIP44 account. RPA branch `/3` is
+not an ordinary P2PKH branch and is not included.
 
 ```bash
 optn rescan
@@ -220,20 +220,53 @@ xpub must name the selected account index. The command remains statically
 classified as `secret` by `optn skills`, so `OPTN_POLICY=read` still refuses
 it; use `OPTN_POLICY=secret` or a higher policy for watch-only rescans.
 
-Without `--host`, `--port`, or `--no-tls`, `rescan` loads the exact persisted
-per-network source catalog and policy and builds the native chain stack. With
-no persisted policy, it creates a native Electrum selection from the network
-default; endpoint flags create an explicit native Electrum selection instead.
+Without `--host`, `--port`, or `--no-tls`, these commands load the persisted
+per-network source catalog and policy (or the shipped selection when none is
+saved) and build the native chain stack. Endpoint flags create an explicit
+native Electrum selection instead.
 Loopback sources connect directly. Selected remote Electrum, BIP37, and
 Neutrino routes require a verified SOCKS Tor proxy at `127.0.0.1:9050` or
 `127.0.0.1:9150`; otherwise that route is refused without a direct fallback.
 Remote BCHN RPC and ZMQ sources are currently unavailable on this native path.
 Other CLI commands are partly legacy Electrum paths, so do not infer their
-routing from `rescan`.
+routing from these HD commands.
 
 `--timeout` applies to the whole native account rescan, including route setup
 and HD discovery. Its default is 300 seconds; pass `--timeout` to override it.
 A timeout or incomplete branch does not report a complete account.
+
+### Token balances
+
+`optn tokens --gap 20` now performs that same history-driven HD pass. Previously
+it queried only the first `gap` receiving and change addresses. The option still
+defaults to 20, but now means a trailing unused-history gap on every supported
+HD branch, including durable issued addresses. Zero is rejected. The initial
+per-branch budget is the greater of 200 and `gap`; saved issued inventory may
+raise it within the runtime's 10,000-address bound. An incomplete scan is an
+error, never an empty balance or a fallback to the legacy Electrum client.
+
+With `--wallet FILE`, Tokens uses the saved account and encrypted checkpoint,
+including imported HD watch-only accounts. `--wallet-directory` and
+`--password-stdin` retain their meaning. A saved wallet without an HD account
+key is refused. Without `--wallet`, the existing `OPTN_MNEMONIC`, network/profile
+keychain, then stdin precedence and `OPTN_PASSPHRASE` still apply. Only a public
+account key enters the temporary sync runtime; no managed wallet or checkpoint
+is created for those legacy inputs. The `secret` command policy is unchanged.
+
+JSON keeps `ok`, `network`, `token_utxos`, `fungible` and `nfts`. Fungible totals
+remain decimal strings summed with `u128`; NFTs retain category, capability,
+commitment, transaction id, output index and derivation path. Additive `scope`
+identifies the HD account path and branches; `source`, `evidence` and
+`scan_coverage` report the accepted route and actual birthday/rescan coverage.
+`complete` applies only within this HD scope and is false when earlier heights
+are omitted or coverage is unknown. It never claims global token supply or
+RPA/contract inventory. Account public keys and raw transactions are not exported.
+Route, refresh and persistence failures do not return cached success.
+
+Tokens now defaults to **300 seconds for the entire HD refresh**, including
+route setup and discovery, like Rescan and History. This replaces its former
+30-second per-request budget. An explicit `--timeout` is honored exactly; native
+GUI and provider timeouts are unchanged.
 
 ## Paying for HTTP with x402
 
@@ -510,10 +543,11 @@ script      76a91476a04053bda0a88bda5177b86a15c3b29f55987388ac
 scripthash  71b6a00546326a622c2a484e88a81909706a0cce15009aa87fd9a6569ca84c93
 ```
 
-**Timeouts.** `--timeout` defaults to 30 seconds except for `rescan`, whose
-whole-account budget defaults to 300 seconds. An explicit value overrides
-either default. A server that accepts the connection and never answers produces
-exit code 3 with the endpoint named.
+**Timeouts.** `--timeout` defaults to 300 seconds for `rescan`, `history`,
+`tokens`, `wallet` and RPA discovery/sweep; other commands default to 30 seconds.
+For the HD refresh commands this is one whole-pass budget. An explicit value
+overrides either default. A server that accepts the connection and never
+answers produces a network error (exit code 3).
 
 **A specific server.** `--host` and `--port` override the network default.
 `--no-tls` exists for a local server on a plaintext port; do not use it across
