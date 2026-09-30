@@ -1084,10 +1084,14 @@ export const localeOverrides = {
     'send.selectCategory': 'اختر فئة…',
     'send.balance': 'الرصيد',
     'send.tokenAmount': 'كمية الرمز',
+    'send.tokenBchAmount': 'قيمة BCH المرفقة',
+    'send.tokenBchMinimum':
+      'الحد الأدنى {sats} ساتوشي لمخرج الرمز؛ يتم اختيار رسوم الشبكة بشكل منفصل.',
     'send.decimals': '{count} منازل عشرية',
     'send.integer': 'عدد صحيح',
     'send.bcmrMetadata':
       'تم التحليل باستخدام بيانات BCMR الوصفية للفئة المحددة.',
+    'send.attachedBch': 'BCH مرفقة',
     'send.nfts': 'NFTs',
     'send.nftCommitment': 'التزام NFT',
     'send.optionalHexCommitment': 'التزام سداسي عشري اختياري…',

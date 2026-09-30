@@ -6,6 +6,7 @@ import {
   connectSignInput,
   connectSignP2pkh,
   connectSigningSerialization,
+  ensureOptnCore,
 } from '../../wasm/optn-core';
 
 export const CONNECT_ALL_OUTPUTS = 0x41;
@@ -58,6 +59,7 @@ export function connectorSigningSerialization(
   coveredBytecode: Uint8Array,
   mode: number
 ): Uint8Array {
+  ensureOptnCore();
   return connectSigningSerialization(
     contextJson(context),
     coveredBytecode,
@@ -71,6 +73,7 @@ export function signConnectorInput(
   coveredBytecode: Uint8Array,
   mode: number
 ): Uint8Array {
+  ensureOptnCore();
   return connectSignInput(
     contextJson(context),
     privateKey,
@@ -80,10 +83,12 @@ export function signConnectorInput(
 }
 
 export function connectorPublicKey(privateKey: Uint8Array): Uint8Array {
+  ensureOptnCore();
   return connectPublicKey(privateKey);
 }
 
 export function connectorP2pkhLock(publicKey: Uint8Array): Uint8Array {
+  ensureOptnCore();
   return connectP2pkhLock(publicKey);
 }
 
@@ -92,5 +97,6 @@ export function signConnectorP2pkh(
   privateKey: Uint8Array,
   mode = CONNECT_ALL_OUTPUTS_ALL_UTXOS
 ): Uint8Array {
+  ensureOptnCore();
   return connectSignP2pkh(contextJson(context), privateKey, mode);
 }

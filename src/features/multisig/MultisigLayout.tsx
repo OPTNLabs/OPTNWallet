@@ -38,10 +38,16 @@ export default function MultisigLayout() {
   const [isPendingPanelOpen, setIsPendingPanelOpen] = useState(true);
   const { outboundTransactions, reconciling, refresh, release } =
     useOutboundTransactions(routeWalletValid ? routeId : null);
+  // Broadcasted records remain active for spend-lock safety, but are no longer
+  // pending network handoff and should not cover the workspace UI.
+  const networkPendingOutboundTransactions = outboundTransactions.filter(
+    (record) => record.state !== 'broadcasted'
+  );
 
   useEffect(() => {
-    if (outboundTransactions.length > 0) setIsPendingPanelOpen(true);
-  }, [outboundTransactions.length]);
+    if (networkPendingOutboundTransactions.length > 0)
+      setIsPendingPanelOpen(true);
+  }, [networkPendingOutboundTransactions.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,14 +133,15 @@ export default function MultisigLayout() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--wallet-bg)]">
-      {outboundTransactions.length > 0 && isPendingPanelOpen && (
+      {networkPendingOutboundTransactions.length > 0 && isPendingPanelOpen && (
         <PendingOutboundPanel
-          records={outboundTransactions}
+          records={networkPendingOutboundTransactions}
           refreshing={reconciling}
           onRefresh={() => void refresh()}
           onRelease={(txid) => void release(txid)}
           onClose={() => setIsPendingPanelOpen(false)}
           compact
+          blocking={false}
         />
       )}
       <header className="shrink-0 border-b border-[var(--wallet-border)] px-4 pb-3 pt-[calc(var(--safe-top)+0.75rem)]">
