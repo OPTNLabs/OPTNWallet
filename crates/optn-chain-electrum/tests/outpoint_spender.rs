@@ -445,7 +445,7 @@ async fn history_candidate_returns_after_first_batch_despite_more_than_128_decoy
     let raw = successor(1000);
     let candidate_txid = sha256d(&raw);
     let mut mock = Mock {
-        pipeline_width: 16,
+        pipeline_width: 64,
         ..Mock::default()
     };
     let candidate_hash = mock.add(HISTORY, &raw, 101);
@@ -462,7 +462,7 @@ async fn history_candidate_returns_after_first_batch_despite_more_than_128_decoy
     assert_spender(result, Some((&raw, Some(101))));
     assert_queries(&calls, true, None, true);
     let fetched = downloads(&calls);
-    assert_eq!(fetched.len(), 16);
+    assert_eq!(fetched.len(), 64);
     assert!(fetched.contains(&candidate_hash.as_str()));
 }
 
