@@ -67,6 +67,132 @@ mod wasm {
             })
         }
 
+        fn rescan_from_height<'a>(&'a self, height: u32) -> TransportFuture<'a, ()> {
+            Box::pin(async move {
+                let args = command_args("height", &JsValue::from_f64(height.into()))?;
+                invoke("optn_wallet_rescan", args).await?;
+                Ok(())
+            })
+        }
+
+        fn export_network_configuration<'a>(
+            &'a self,
+            network: String,
+        ) -> TransportFuture<'a, String> {
+            Box::pin(async move {
+                let args = command_args("network", &JsValue::from_str(&network))?;
+                invoke("optn_chain_export_configuration", args)
+                    .await?
+                    .as_string()
+                    .ok_or_else(|| {
+                        TransportError::InvalidData(
+                            "Invalid network configuration response.".into(),
+                        )
+                    })
+            })
+        }
+
+        fn chain_sources<'a>(
+            &'a self,
+            network: String,
+        ) -> TransportFuture<'a, optn_transport::chain_sources::ChainSourcesView> {
+            Box::pin(async move {
+                let args = command_args("network", &JsValue::from_str(&network))?;
+                let value = invoke("optn_chain_sources", args).await?;
+                serde_wasm_bindgen::from_value(value)
+                    .map_err(|error| TransportError::InvalidData(error.to_string()))
+            })
+        }
+
+        fn edit_chain_sources<'a>(
+            &'a self,
+            network: String,
+            edit: optn_transport::chain_sources::ChainSourceEdit,
+        ) -> TransportFuture<'a, ()> {
+            Box::pin(async move {
+                use optn_transport::chain_sources::ChainSourceEdit;
+                let args = command_args("network", &JsValue::from_str(&network))?;
+                let set = |key: &str, value: &str| {
+                    Reflect::set(&args, &JsValue::from_str(key), &JsValue::from_str(value))
+                        .map(|_| ())
+                        .map_err(js_error)
+                };
+                let command = match edit {
+                    ChainSourceEdit::Selection(selection) => {
+                        let value = serde_wasm_bindgen::to_value(&selection)
+                            .map_err(|error| TransportError::InvalidData(error.to_string()))?;
+                        Reflect::set(&args, &JsValue::from_str("selection"), &value)
+                            .map_err(js_error)?;
+                        "optn_chain_set_selection"
+                    }
+                    ChainSourceEdit::Policy(policy) => {
+                        set("policy", &policy)?;
+                        "optn_chain_set_policy"
+                    }
+                    ChainSourceEdit::Disposition {
+                        source,
+                        disposition,
+                    } => {
+                        set("source", &source)?;
+                        set("disposition", &disposition)?;
+                        "optn_chain_set_source_disposition"
+                    }
+                    ChainSourceEdit::Remove(source) => {
+                        set("source", &source)?;
+                        "optn_chain_remove_source"
+                    }
+                    ChainSourceEdit::Add(mut request) => {
+                        request.network = Some(network);
+                        let value = serde_wasm_bindgen::to_value(&request)
+                            .map_err(|error| TransportError::InvalidData(error.to_string()))?;
+                        Reflect::set(&args, &JsValue::from_str("request"), &value)
+                            .map_err(js_error)?;
+                        "optn_chain_add_source"
+                    }
+                    ChainSourceEdit::Retry => "optn_chain_rebuild",
+                    ChainSourceEdit::Import(configuration) => {
+                        set("configuration", &configuration)?;
+                        "optn_chain_import_configuration"
+                    }
+                };
+                invoke(command, args).await?;
+                if command != "optn_chain_rebuild" {
+                    invoke("optn_chain_rebuild", Object::new().into()).await?;
+                }
+                Ok(())
+            })
+        }
+
+        fn rpc_credentials<'a>(
+            &'a self,
+            network: String,
+            request: optn_transport::chain_sources::RpcCredentialRequest,
+        ) -> TransportFuture<'a, optn_transport::chain_sources::RpcCredentialStatus> {
+            Box::pin(async move {
+                let args = command_args("network", &JsValue::from_str(&network))?;
+                let request = serde_wasm_bindgen::to_value(&request).map_err(|_| {
+                    TransportError::InvalidData("Invalid credential request.".into())
+                })?;
+                Reflect::set(&args, &JsValue::from_str("request"), &request).map_err(js_error)?;
+                let result = invoke("optn_chain_rpc_credentials", args).await?;
+                serde_wasm_bindgen::from_value(result)
+                    .map_err(|_| TransportError::InvalidData("Invalid credential status.".into()))
+            })
+        }
+
+        fn airgap<'a>(
+            &'a self,
+            request: optn_transport::AirgapRequest,
+        ) -> TransportFuture<'a, optn_transport::AirgapResponse> {
+            Box::pin(async move {
+                let value = serde_wasm_bindgen::to_value(&request)
+                    .map_err(|_| TransportError::InvalidData("Invalid air-gap request.".into()))?;
+                let result = invoke("optn_airgap", command_args("request", &value)?).await?;
+                serde_wasm_bindgen::from_value(result)
+                    .map_err(|_| TransportError::InvalidData("Invalid air-gap response.".into()))
+            })
+        }
+
         fn wallet_security<'a>(
             &'a self,
             request: optn_transport::WalletSecurityRequest,
@@ -107,6 +233,53 @@ mod wasm {
             Box::pin(async move {
                 let args = command_args("text", &JsValue::from_str(&text))?;
                 invoke("clipboard_write_text", args).await?;
+                Ok(())
+            })
+        }
+
+        fn tor_status<'a>(&'a self) -> TransportFuture<'a, optn_transport::WireTorStatus> {
+            Box::pin(async move {
+                let value = invoke("optn_tor_readiness", Object::new().into()).await?;
+                serde_wasm_bindgen::from_value(value).map_err(|error| {
+                    TransportError::InvalidData(format!("unreadable Tor status: {error}"))
+                })
+            })
+        }
+
+        fn start_tor<'a>(&'a self) -> TransportFuture<'a, optn_transport::WireTorStatus> {
+            Box::pin(async move {
+                // Bootstrapping can take a minute on a filtered network, and
+                // the command waits for it. Reading the status back afterwards
+                // rather than trusting the start call means the answer is what
+                // the chain layer will actually see, not what starting a
+                // process implied.
+                invoke("tor_start", Object::new().into()).await?;
+                let value = invoke("optn_tor_readiness", Object::new().into()).await?;
+                serde_wasm_bindgen::from_value(value).map_err(|error| {
+                    TransportError::InvalidData(format!("unreadable Tor status: {error}"))
+                })
+            })
+        }
+
+        fn trust_socks_port<'a>(&'a self, port: u16, trusted: bool) -> TransportFuture<'a, ()> {
+            Box::pin(async move {
+                let args = Object::new();
+                Reflect::set(
+                    &args,
+                    &JsValue::from_str("port"),
+                    &JsValue::from_f64(port.into()),
+                )
+                .map_err(js_error)?;
+                Reflect::set(
+                    &args,
+                    &JsValue::from_str("trusted"),
+                    &JsValue::from_bool(trusted),
+                )
+                .map_err(js_error)?;
+                invoke("optn_chain_trust_socks_proxy", args.into()).await?;
+                // Routes were built while the proxy was untrusted, and nothing
+                // rebuilds them on a settings write alone.
+                invoke("optn_chain_rebuild", Object::new().into()).await?;
                 Ok(())
             })
         }

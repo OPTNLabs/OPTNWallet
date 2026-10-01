@@ -3,11 +3,9 @@ import { describe, expect, it } from 'vitest';
 import reducer, {
   normalizeExperimentalPersistedState,
   selectAutoFuseEnabled,
-  selectNostrChatEnabled,
   selectP2pFusionEnabled,
   setAutoFuseEnabled,
   setCashFusionEnabled,
-  setNostrChatEnabled,
   setP2pFusionEnabled,
 } from '../../state/slices/experimentalSlice';
 
@@ -18,9 +16,7 @@ describe('experimentalSlice CashFusion preferences', () => {
     expect(state.autoFuseEnabled).toBe(false);
     expect(state.p2pFusionEnabled).toBe(true);
     expect(selectAutoFuseEnabled({ experimental: state } as never)).toBe(false);
-    expect(selectP2pFusionEnabled({ experimental: state } as never)).toBe(
-      true
-    );
+    expect(selectP2pFusionEnabled({ experimental: state } as never)).toBe(true);
   });
 
   it('preserves an explicit Auto Fuse choice when CashFusion is later re-enabled', () => {
@@ -74,37 +70,29 @@ describe('experimentalSlice CashFusion preferences', () => {
   });
 });
 
-describe('experimentalSlice Nostr chat preferences', () => {
-  it('defaults Nostr chat on', () => {
+describe('retired Nostr chat switch', () => {
+  it('does not maintain a separate chat enable flag', () => {
     const state = reducer(undefined, { type: 'unknown' });
-
-    expect(state.nostrChatEnabled).toBe(true);
-    expect(selectNostrChatEnabled({ experimental: state } as never)).toBe(true);
+    expect(state).not.toHaveProperty('nostrChatEnabled');
   });
 
-  it('migrates the old default-off value to on exactly once', () => {
-    const restored = normalizeExperimentalPersistedState({
-      nostrChatEnabled: false,
-    });
-
-    expect(restored).toMatchObject({
-      nostrChatEnabled: true,
-      nostrChatDefaultOnApplied: true,
-    });
-  });
-
-  it('preserves a later explicit opt-out after the default-on migration', () => {
-    let state = reducer(undefined, setNostrChatEnabled(false));
-    state = {
-      ...state,
-      nostrChatDefaultOnApplied: true,
-    };
-
-    const restored = normalizeExperimentalPersistedState(state);
-
-    expect(restored).toMatchObject({
-      nostrChatEnabled: false,
-      nostrChatDefaultOnApplied: true,
-    });
-  });
+  it.each([false, true])(
+    'removes the retired flag after prior migration=%s without resetting unrelated choices',
+    (migrated) => {
+      const restored = normalizeExperimentalPersistedState({
+        nostrChatEnabled: false,
+        nostrChatDefaultOnApplied: migrated,
+        cashFusionEnabled: false,
+        torEnabled: true,
+        nostrRelays: ['wss://relay.user.example'],
+      });
+      expect(restored).not.toHaveProperty('nostrChatEnabled');
+      expect(restored).not.toHaveProperty('nostrChatDefaultOnApplied');
+      expect(restored).toMatchObject({
+        cashFusionEnabled: false,
+        torEnabled: true,
+      });
+      expect(restored?.nostrRelays).toContain('wss://relay.user.example');
+    }
+  );
 });

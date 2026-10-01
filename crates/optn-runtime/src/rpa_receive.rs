@@ -807,7 +807,9 @@ mod tests {
         fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
             Box::pin(async move {
                 self.requests.lock().unwrap().push(request.clone());
-                if let ChainRequest::HeaderSync { start_height, .. } = request {
+                if let ChainRequest::HeaderSync { start_height, .. }
+                | ChainRequest::HeaderSyncFromLocator { start_height, .. } = request
+                {
                     return Ok(BackendObservation {
                         payload: ChainPayload::Headers {
                             start_height: *start_height,
@@ -1015,7 +1017,8 @@ mod tests {
                         from_height,
                         to_height,
                     } => Some((*from_height, *to_height)),
-                    ChainRequest::HeaderSync { .. } => None,
+                    ChainRequest::HeaderSync { .. }
+                    | ChainRequest::HeaderSyncFromLocator { .. } => None,
                     _ => panic!("Cash Code keys/scripts/prefixes must never enter node requests"),
                 })
                 .collect::<Vec<_>>();

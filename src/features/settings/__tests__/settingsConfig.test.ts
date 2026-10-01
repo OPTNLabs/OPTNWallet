@@ -8,6 +8,44 @@ import {
 import { Network } from '../../../state/slices/networkSlice';
 
 describe('settingsConfig', () => {
+  it('keeps desktop birthday under Wallet & security with one parent level', () => {
+    for (const network of [Network.MAINNET, Network.CHIPNET]) {
+      const walletRows = getSettingsGroupRows('wallet', true, network);
+      expect(walletRows.filter((row) => row.key === 'birthday')).toEqual([
+        expect.objectContaining({
+          title: 'Wallet birthday',
+          action: 'panel',
+          target: 'birthday',
+        }),
+      ]);
+      expect(getParentSettingsGroup('birthday', true, network)).toBe('wallet');
+      expect(getParentSettingsGroup('group:wallet', true, network)).toBeNull();
+      expect(
+        [
+          ...getVisibleWalletRows(true, network),
+          ...getSettingsGroupRows('features', true, network),
+          ...getSettingsGroupRows('about', true, network),
+          ...getSettingsGroupRows('wallet', false, network),
+        ].map((row) => row.key)
+      ).not.toContain('birthday');
+    }
+  });
+
+  it('removes the duplicate desktop Nostr row while keeping mobile access and old-link parent navigation', () => {
+    expect(
+      getSettingsGroupRows('features', true, Network.CHIPNET).map(
+        (row) => row.key
+      )
+    ).not.toContain('nostr');
+    expect(
+      getSettingsGroupRows('features', false, Network.CHIPNET).map(
+        (row) => row.key
+      )
+    ).toContain('nostr');
+    expect(getParentSettingsGroup('nostr', true, Network.CHIPNET)).toBe(
+      'features'
+    );
+  });
   it('exposes wallet settings including the pending tx lock screen link', () => {
     const row = WALLET_ROWS.find((entry) => entry.key === 'pending-outbox');
 
@@ -131,16 +169,40 @@ describe('settingsConfig', () => {
     expect(aboutRow?.description).toMatch(/Bitcoin Cash Contracts info/i);
   });
 
-  it('keeps language selection under About & support', () => {
+  it('offers the update check on desktop and nowhere else', () => {
+    // Both directions on purpose. Mobile is updated by its store and the web
+    // build is whatever the server served, so the row would be a dead end
+    // there -- but a filter that dropped it everywhere is how the button goes
+    // missing without anyone noticing, which is what happened before it
+    // existed.
+    const desktop = getSettingsGroupRows('about', true, Network.MAINNET);
+    expect(desktop.map((row) => row.key)).toContain('updates');
+    expect(desktop.find((row) => row.key === 'updates')).toMatchObject({
+      action: 'panel',
+      target: 'updates',
+    });
+
+    const mobile = getSettingsGroupRows('about', false, Network.MAINNET);
+    expect(mobile.map((row) => row.key)).not.toContain('updates');
+  });
+
+  it('keeps appearance and language selection under About & support', () => {
     const about = getSettingsGroupRows('about', false, Network.MAINNET);
 
+    // Appearance sits beside Language because both are app presentation, not
+    // wallet state: changing either touches no key, wallet or network.
     expect(about.map((row) => row.key)).toEqual([
+      'appearance',
       'language',
       'about',
       'terms',
       'contact',
     ]);
     expect(about[0]).toMatchObject({
+      action: 'panel',
+      target: 'appearance',
+    });
+    expect(about[1]).toMatchObject({
       action: 'panel',
       target: 'language',
     });

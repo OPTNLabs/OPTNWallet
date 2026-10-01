@@ -15,7 +15,181 @@ a rule; nothing in it proves interoperability.
 | Production-network rule | Mainnet/chipnet constants and difficulty rules, tested separately and never against regtest fixtures |
 | Packaged app / device | Behaviour of a shipped artifact on a real target |
 
+## Live shared wallet workflow — 2026-09-19
+
+The opt-in `chipnet_wallet_runtime` test passed in 76.28 seconds against live
+Chipnet at height 324131 through an isolated, runner-owned Tor process on
+localhost port 19050. The test used the published BIP39 public HD fixture and
+observed two transactions and one output; no signing or broadcast was attempted.
+
+It exercised runtime HD sync, encrypted watch-only storage and restart, resumed
+sync, `DirectTransport` state parity, retained stale observations after an outage,
+lock clearing, the actual CLI `rescan --from-height 1`, and the saved-wallet CLI
+stdio open/sync/history sequence. Partial-height scans report incomplete coverage.
+This is Electrum **ServerAssertion** evidence, not an SHV/MMR or packaged GUI run.
+
+The first run exposed a removed `--from-height` option. The repair restored its
+runtime/persistence forwarding and partial-coverage reporting. All native CLI
+chain operations now forward saved proxy confirmations through
+`network_settings::build_stack`, including the persistent wallet console.
+
+Repeat with a Tor process you own (the port is explicit authorization in the test
+harness, never inferred from a listener):
+
+```powershell
+$env:OPTN_CHIPNET_TEST_TOR_PORT = '<owned Tor SOCKS port>'
+cargo test --locked --manifest-path crates/optn-cli/Cargo.toml --test chipnet_wallet_runtime -- --ignored --nocapture
+```
+
+The same changes passed all 14 CLI wallet process tests and strict CLI Clippy.
+Local run logs remain outside Git under `artifacts/issue75-live-20260919`.
+
 ## Environment
+
+### Corrected Android server-override behavior — 2026-09-12
+
+Actions run `34695691936`, artifact `10299220620`, built the Rust Leptos debug
+APK from PR head `0e7da05811bdf4e9365ff4c4a70c3fd5720364a5` and merge
+`47bec4e17b38ec126e624713c881536e44257079`.
+SHA-256: `27c2a981aac6c49ac90def165be7800ff8444869079ed0c48ff39b7a10e562d7`.
+
+The isolated Android 36 emulator required replacement installation because CI
+debug signing keys differ between runs. Only its public-fixture encrypted
+wallet/checkpoint and Chipnet settings were copied across; this is a persisted
+data compatibility check, not proof of an in-place signed Android upgrade.
+The saved wallet opened with its test password and restored 39,774 sats, one
+output, two transactions and the same allocated receive address as stale.
+
+With the host Tor bridge available, the old saved `127.0.0.1:1` override now
+caused refresh to report no permitted wallet route and retain stale data. It
+did not become up to date through the public source, as the earlier APK did.
+Settings still displayed the selected local server. Explicitly changing the
+field to `chipnet.imaginary.cash:50002` persisted an `explicit` source-ID scope
+with no fallback. GUI refresh then reported `host:chipnet.imaginary.cash`, tip
+323133 and the same 39,774-sat balance. The native file and rendered controls
+agreed on the selected source.
+
+A second force-stop/restart retained that explicit live-server selection and
+the encrypted observations as stale. Refresh resumed successfully through the
+same source without re-entering it. The Android-generated encrypted wallet,
+checkpoint and settings were also copied into an isolated Windows fixture
+directory and opened by the standalone CLI built at `df197b38`:
+
+`optn --network chipnet --network-config-dir <fixture> --timeout 180 wallet --directory <fixture>/wallets --stdio`
+
+Status, open, history, sync and history replies restored 39,774 sats and two
+transactions at tip 323133, first stale and then fresh. The selected source
+remained `host:chipnet.imaginary.cash`; observed process connections used
+localhost Tor 9150. This exercises the real portable storage and CLI process,
+not a separately constructed wallet. CLI stdio does not expose the UTXO count;
+the one-output observation belongs to the GUI and earlier runtime tests.
+
+The macOS ARM64 Rust Leptos debug DMG at the same PR head was built by fork
+workflow run `34695691021`; its checksum and build metadata were verified.
+SHA-256: `d88af1ae6ef6a2e463ce14829ab4bb747c59d40a429ba3f3400fd93249c34fef`.
+This is macOS build/package evidence, not a macOS launch or signing test.
+
+The Android result closes the specific server-override fallback regression.
+It remains read-only `ServerAssertion` evidence using an authorized host Tor
+bridge, not bundled Android Tor startup, SPV/MMR or SeedCash signing.
+
+### Packaged Android watch-only restart and source-selection regression — 2026-09-12
+
+Rust Leptos debug APK from Actions run `34693926047`, artifact `10297522988`:
+PR head `a7af43d9d01cf1852f515f47ce0c25edacc7adad`, compiled merge
+`3a84faa04e5453286e746b9dedac3952e69ad06e`, target `aarch64-linux-android`.
+SHA-256: `359ff38efec1acb144b37636da36bdfbeaa675d8bdbfeb022a1506c97a87c34a`.
+
+Installed on an isolated Android 36 x86_64 emulator using its ARM64 translation.
+All wallet actions used the rendered controls. The public BIP39 account at
+`m/44'/1'/0'` was validated, saved with a test password, and opened. The guest
+stayed in airplane mode; an ADB reverse mapping connected guest localhost 9150
+to the explicitly authorized host Tor service only while a Chipnet wallet was
+open. No signing, broadcast, user wallet, or mainnet operation was involved.
+
+The GUI synchronized against `chipnet.imaginary.cash:50002`: 39,774 sats,
+one unspent output, two history entries, tip 323130, `ServerAssertion` evidence.
+History showed a 50,000-sat receipt and a 10,226-sat debit including fees,
+matching the CLI fixture. Removing the bridge and force-stopping/restarting the
+app preserved the saved-wallet listing. A wrong password was rejected; the
+correct password restored the same address allocation, balance and history
+offline, explicitly labelled as saved data requiring refresh.
+
+**This APK also exposed a privacy regression:** selecting `127.0.0.1:1` in
+Servers saved the field but synchronization silently selected the public
+bootstrap Electrum source. The legacy overlay writer used unrestricted Auto;
+the shared reader merged public defaults into that selection. The accompanying
+Rust repair restricts legacy overrides to their configured source IDs and
+applies the same compatibility rule when GUI/CLI reopen old saved settings.
+Its component/native/CLI checks do not replace retesting a rebuilt APK.
+
+This proves packaged watch-only persistence and stale-state restoration. It
+does not establish correct source isolation in the named APK, native Android
+Tor startup, SPV/MMR verification, SeedCash signing, or complete #71/#75 parity.
+
+### Managed watch-only import, persistence and CLI resume — 2026-09-12
+
+Windows/Rust 1.98, `34ade590` plus the accompanying runtime, GUI/CLI and live-test
+changes: the public BIP39 HD fixture at `m/44'/1'/0'` used the exact Chipnet
+Electrum selection through Tor. The revised `chipnet_wallet_runtime` test
+passed at height 323126 with two transactions and one output (72.38 seconds;
+93.11 seconds after making the child-process pipe draining robust).
+
+Unlike the earlier manually restored public checkpoint test, this run imports
+through `WalletSecurityRequest::ImportWatchOnly`, writes the encrypted account
+and checkpoint using the production native storage adapters, then syncs.
+After locking and creating a new runtime, the saved-wallet list discovers the
+record; opening it restores identical history, coins and partial scan coverage
+as stale. Live sync restores freshness. A separate real CLI process then opens
+the same saved wallet and resumes using the same persisted source selection.
+Both CLI paths and the typed GUI transport agree on totals. Route failure
+retains stale observations; lock clears the runtime view. Account xpub and
+password do not appear in CLI replies or the stored account ciphertext.
+
+`cargo test --locked --manifest-path crates/optn-cli/Cargo.toml --test chipnet_wallet_runtime -- --ignored --nocapture`
+
+Evidence remains `ServerAssertion`, not SPV. This is managed-runtime/CLI live
+evidence, not a packaged GUI test or a SeedCash signing round trip. The Rust
+GUI's typed and scanned-account save controls compile against this same
+request; the separate APK evidence above covers the typed-account restart flow.
+
+### Chipnet manual rescan and restart — 2026-09-12
+
+Windows, `a9b5d6f4` plus the accompanying shared rescan changes. The same
+read-only public HD fixture and Tor source completed at height 323122, with
+two transactions and one output. `rescan --from-height 1` reported partial
+history coverage instead of claiming full history; CLI and typed transport
+totals agreed. Encrypted checkpoint restore retained that coverage and the
+default runtime refresh resumed from it. One attempt timed out at the source
+during resync; the unchanged test passed on retry in 77.33 seconds.
+
+This command exercises public-account checkpoint restore and the real CLI.
+The private-wallet open path is separately covered by
+`private_hd_manual_rescan_persists_floor_across_failure_restart_and_cancellation`,
+which uses the actual encrypted checkpoint codec and wallet security actor.
+Neither test proves a packaged GUI launch or signing.
+
+### Chipnet shared-runtime restart verification — 2026-09-12
+
+Executed on Windows against PR63 code at `61b11bc3` plus the accompanying
+`chipnet_wallet_runtime` test extension. The test uses a published public HD
+account, the exact persisted Chipnet Electrum selection, and a verified local
+Tor SOCKS route. It does not sign or broadcast transactions.
+
+`cargo test --locked --manifest-path crates/optn-cli/Cargo.toml --test chipnet_wallet_runtime -- --ignored --nocapture`
+
+Result: PASS in 77.80 seconds; height 323116, two transactions, one unspent output.
+The test verifies receive/change/DeFi HD discovery, matching CLI and typed
+transport totals, stale retention after route failure, lock clearing, atomic
+encrypted checkpoint storage, a new runtime restoring identical coins/history
+as stale, and a live resync restoring freshness. The actual CLI `rescan` command
+uses the same durable source policy. Evidence remains `ServerAssertion`; this
+run does not establish SPV verification, packaged GUI behavior, or SeedCash
+signing. Earlier local-node results below remain separate evidence.
+
+Build note: use separate Cargo target directories for the workspace and the
+excluded CLI workspace. A reused shared target produced an inconsistent cached
+ECDSA type error; a fresh CLI target compiled and passed without a code change.
 
 Recorded at OPTN commit `a69a055a` on `agent/rpa-shared-vectors` (PR #63).
 
@@ -32,6 +206,108 @@ Recorded at OPTN commit `a69a055a` on `agent/rpa-shared-vectors` (PR #63).
 | Data directory | isolated, discarded between runs |
 
 Compact filters are on by default; `--nocfilters` would disable them.
+
+### Route eligibility, against a public host and a private one
+
+`live_route_eligibility_follows_ownership_not_address_shape`, in
+`crates/optn-chain-native/src/lib.rs`. Opt-in; it reaches real hosts.
+
+    OPTN_LIVE_PUBLIC_ELECTRUM=chipnet.imaginary.cash:50002     OPTN_LIVE_OWN_ELECTRUM=<your node>:50001     cargo test --manifest-path crates/optn-chain-native/Cargo.toml       -- --ignored --nocapture live_route
+
+Run against `dperson/torproxy` on `127.0.0.1:9050` — one of
+`AUTODETECT_SOCKS_PORTS` — and then again with that container stopped. The
+same policy and the same sources both times; only Tor changed.
+
+| Tor | Public `chipnet.imaginary.cash:50002` | Declared own node, private mesh |
+| --- | --- | --- |
+| verified on 9050 | eligible; served 10 headers, ASERT and MMR verified | eligible |
+| stopped | refused: *"remote native chain route requires a verified Tor SOCKS proxy"* | eligible |
+
+The bottom-left cell is the one that matters: no direct fallback, no DNS
+attempt, nothing. The bottom-right is the other half of the same rule — Tor
+is there to stop a third-party server learning which addresses this IP asks
+about, and the holder's own node is not a third party. Requiring it there is
+what had made own-infrastructure-only unable to reach any own infrastructure
+that was not on `127.0.0.0/8`.
+
+The test asserts both rows, choosing which by probing Tor itself, so it says
+something whichever way the host happens to be configured rather than only
+passing in a convenient environment.
+
+### A real reorg, against BCHD regtest
+
+`a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment`, in
+`crates/optn-chain-neutrino/tests/regtest_live.rs`. Run it with the node
+below listening, `--ignored`.
+
+| | |
+| --- | --- |
+| Node | `zquestz/bchd:latest`, bchd 0.22.2 |
+| Flags | `--regtest --regtestanyhost --txindex --notls --listen=0.0.0.0:18444 --rpclisten=0.0.0.0:18443` |
+| Genesis | `0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206`, which is the value `REGTEST_GENESIS_HEADER_HEX` hashes to |
+| The reorg | a block the wallet had already verified, dropped with `invalidateblock`, then six mined over it |
+
+Three things it establishes, none of which had been driven against a node
+that reorganised:
+
+- **Pruning does not move the commitment.** Headers below a floor are
+  dropped and `VerifiedHeaderView::checkpoint()` is unchanged. Pruning is a
+  storage decision; if it moved the root, a pruned wallet could no longer say
+  which chain it had verified.
+- **A forked branch is refused, not extended onto.** After the reorg the node
+  serves a different branch from the fork point, and `extend` returns an
+  error. A verifier that accepted it would carry a chain the node has
+  abandoned.
+- **Recovery is a rebuild, not a rewind.** `rewind_to` is the index half only
+  — the accumulator is append-only, as `header_view.rs` says in place — so
+  the test pins that rewinding alone still refuses the new branch, and that
+  building again from the shipped anchor reaches the node's longer branch with
+  a commitment that differs from the pre-reorg one.
+
+What it does not establish: re-proving a *pruned* range needs an SHV peer, and
+BCHD does not serve `getshv`. That half is covered separately below, against
+BCHN.
+
+### ZMQ notifications, against Bitcoin Cash Node
+
+`crates/optn-chain-zmq/tests/bchn_live.rs`, three tests, run with `--ignored`
+against the node below.
+
+| | |
+| --- | --- |
+| Node | `zquestz/bitcoin-cash-node:latest`, BCHN 29.1.0 (`v29.1.0-b31ed10b4`) |
+| Flags | `-regtest -server -listen=0 -zmqpubrawtx/-zmqpubhashtx/-zmqpubrawblock/-zmqpubhashblock=tcp://0.0.0.0:28332` |
+| Confirmed by | `getzmqnotifications` listing all four publishers on one socket |
+| Services | `0000000000000425` — NODE_NETWORK, NODE_BLOOM, NODE_BITCOIN_CASH; bit 9 clear, so this build advertises no SHV |
+
+What it establishes:
+
+- **The two block topics agree, and the node holds the block.** The hash this
+  crate computes from the first 80 bytes of a `rawblock` is the same hash
+  `hashblock` reports, and `getblockheader` on it succeeds. The event
+  identifies a block. It does not prove one.
+- **The two transaction topics agree on one txid**, so a consumer woken by
+  `hashtx` can match what `rawtx` would have reported.
+- **Sequence numbers advance by one per topic**, which is what makes a
+  dropped notification detectable rather than silent. BCHN does send the
+  frame; without it a gap would be indistinguishable from a quiet node.
+
+**A bug this found.** BCHN publishes the `hash*` topics with the uint256
+reversed — `data[31 - i] = hash.begin()[i]` in the publisher — so those frames
+carry display order while `sha256d` over a `rawtx` or `rawblock` body yields
+internal order. `parse_hash` took the frame as it arrived, so the same
+transaction reached the runtime under two byte-reversed txids depending on
+which topic reported it, and the one from `hashtx` matched nothing the wallet
+held: a wake-up about a payment, reversed into a payment that does not exist.
+
+It survived unit testing because the fixture was 32 equal bytes, which is its
+own reversal. Only a real node could produce a hash that is not a palindrome.
+Fixed in `parse_hash`, with the byte order now stated on `ChainEventKind`
+itself, where the next provider author will look.
+
+What it does not establish: double-spend proofs. `rawds`/`hashds` are
+subscribed and parsed, but regtest with one node produces none, so that topic
+is still component evidence only.
 
 ### Bitcoin Cash Node — SHV
 
@@ -142,102 +418,147 @@ Recorded so the gap is not mistaken for a pass.
 - **Reorg and restart.** The header store and the replay module have unit
   coverage for both, but neither has been driven against a live node here.
 
-## PR #89 CashCode validation — 2026-09-12
+## 2026-09-19: native Leptos GUI live Chipnet and offline reopen
 
-This section is separate from the historical PR #63 regtest evidence above.
-The designated Chipnet test profile was loaded through Windows Credential
-Manager; no recovery phrase or private key was exported. All destinations are
-test-wallet addresses. The new receipt discovery and sweep use `optn-runtime`
-and `optn-core`; desktop TypeScript only adapts IPC, UI, and existing persistence.
+An isolated Windows Tauri/Leptos debug executable (identifier `com.optilabs.wallet.issue75test`, SHA-256 `0d9b2ca31d5291ec0b29f158276713152ed2a1bab134169adfd17ffdbb5d6b8e`) imported the public BIP39 fixture as a watch-only HD account at `m/44'/1'/0'`. Through visible GUI controls, a runner-owned Tor SOCKS port 19050 was explicitly confirmed, the Electrum policy selected, and Refresh wallet invoked. At height 324136 the GUI displayed 39,774 sats, one output, and two history entries (received 50,000 sats and sent 10,226 sats). The UI explicitly labelled the evidence Server assertion.
 
-### Fulcrum: live discovery and signed sweep preview
+The runner stopped that Tor process and restarted the same executable. Opening the encrypted watch-only wallet displayed the same 39,774 sats, receive address and both history entries, labelled `Saved balance · refresh needed`, with the network offline. This verifies the actual packaged Windows UI and native encrypted restart path; it does not establish SHV/MMR proof, live P2P resume, transaction signing/broadcast, Android/macOS packaging or all-renderer parity. Public screenshots and logs remain outside Git under `artifacts/issue75-live-20260919`.
 
-With a saved exact-source policy selecting `chipnet.bch.ninja:50002` (TLS),
-`optn --network chipnet --profile <test-profile> --network-config-dir <fulcrum-config>
---json --timeout 600 rpa discover --from-height 323041` returned:
+An attempted refresh while Tor was stopped refused the unavailable route and retained the same stale balance/history. After restarting the owned Tor process, Retry connections and Refresh wallet returned the same account to `Up to date`. This proves saved-state recovery and a subsequent live refresh, not a suffix-only network download: ordinary HD refresh currently rechecks account history from its configured scan floor.
 
-- Complete requested scope through height **323130**, including mempool.
-- Receipt `7658fbe1cf34f6c1393ab017e92f36e186a199e8b512a1786bff547b0a8d2680:0`,
-  **50,002 satoshis**, confirmed at height **323041**, unspent, no tokens.
-- Stealth address `bchtest:qqa2np3npedy36s8kdj7glpndwr4ap0hkyhd6fa7h4` and its
-  public input-origin recipe. No known-transaction hint was supplied to discovery.
-- Evidence remains `ServerAssertion`; an index response is not a consensus proof.
+## 2026-09-19: durable restore settings through GUI and CLI
 
-On the same saved route, `rpa sweep
-bchtest:qqs3eeafad6hv2d8g7tzc9xhl5p72xtzjcfyv70a96 --from-height 323041 --dry-run`
-returned one input, **49,809 satoshis** back to the test wallet, and a **193-satoshi**
-fee. Its transaction ID was
-`43947112df64d86a11d870c1f6e4f46048769dbc0707a7bfce109a39bd092982`.
-The signed bytes passed an independent libauth BCH VM check against the real
-receipt's value and locking script. This preview was **not broadcast**.
+The shared Rust `SetBirthday` request now seals imported height/date/unknown
+provenance with wallet restart state before acknowledging success. HD sync
+resolves that state inside the same actor turn that issues its sync lease.
+The connected runtime regression cancels an in-flight scan after a changed
+hint, reopens the encrypted wallet, and observes the saved floor in every HD
+provider round. An unresolved date makes no provider request with a guessed
+floor. Legacy manual floors survive migration separately from birthdays.
 
-The new selected-source `rpa pay <self-cashcode> 50003 --gap 1 --dry-run`
-also completed on that Fulcrum policy. It discovered the real **18,778,868-satoshi**
-HD change output, built a **50,003-satoshi** payment plus **18,728,639-satoshi**
-change and a **226-satoshi** fee, and ground the input prefix in 3,206 attempts.
-The resulting transaction
-`a5ffbf8de6152ce45e630182464c5f612015a7ccf5d7b48c37074a6c4b61eb99`
-passed the independent BCH VM against its freshly fetched parent transaction.
-It was not broadcast. Funding discovery and submission share the selected source
-and endpoint; the existing Rust payment builder is reused across providers.
+The real CLI process suite passed all 15 tests, including height/date/unknown
+updates across process restarts and stale-epoch rejection. The runtime suite
+passed 278 tests, including storage failure, imported-hint correction, legacy
+migration and the connected HD sequence. These are local deterministic tests.
 
-### BIP37: scope and verification boundary
+An isolated Windows Tauri/Leptos debug executable (SHA-256
+`417e5aed41aa518985a3f9d80cffb9057b12bfacd0c39e60e021abf358f16a78`,
+base `29b3434f` plus the restore-settings worktree changes) used visible settings
+controls to save height zero, restart, save 2020-01-01 UTC, and restart again.
+Both choices reappeared, with the existing 39,774-sat cached balance retained
+and labelled stale. The test reset the hint to Unknown and stopped its own
+process. Evidence is outside Git in `artifacts/issue75-live-20260919`.
 
-Live discovery through the exact selected node `96.126.111.144:48333`, over Tor,
-completed scope **323041–323133** in approximately **7m47s**. It found the same
-**50,002-satoshi** receipt and origin as Fulcrum, unspent within the confirmed-chain
-scope, with no token and `includes_mempool: false`. No Electrum fallback occurred.
-Earlier attempts failed during cold header synchronization without publishing
-partial receipts. Consecutive public-header batches now reuse the selected-node
-connection, with one bounded same-node reconnect on transport interruption.
+This GUI run was offline: it does not prove live date-based P2P recovery,
+automatic header acquisition, signing, broadcast or other packaged platforms.
+Trusted fresh-wallet creation anchors are not inferred from caller-supplied
+mnemonics. An outstanding manual rescan takes precedence until explicitly cleared.
 
-Selected-source `rpa pay` with the same 50,003-satoshi self-payment, `--gap 1`,
-`--from-height 323041`, and `--dry-run` also passed through BIP37. It produced
-**byte-identical** signed transaction data to the Fulcrum preview above, while
-reporting `includes_mempool: false`. The floor is the explicit test scan scope,
-not a claim that the older test wallet has no history before that height.
+The follow-up `ClearRescan` command uses the same durable storage/session guard
+and leaves birthday provenance intact. Its connected runtime test restores the
+birthday's floor after an override; the CLI process test clears and reopens
+without resurrecting the override. A Windows GUI build (SHA-256
+`0e454f6b9407339e890a382e3bb6aa2adb395040c265103598b3f7455d93e8cd`,
+base `66204fa8` plus this follow-up) visibly requested a height-zero manual
+rescan while offline, displayed the override without reopening the settings
+pane, and cleared it through the confirmation control. The cached 39,774 sats
+remained visible and stale. This is offline control/persistence evidence,
+not a successful network rescan.
+# 2026-09-19: imported-date header acquisition (runtime integration)
 
-An initial BIP37 sweep attempt returned `submitted`, but neither a subsequent
-read-only `getdata` request to the selected node nor Fulcrum found the transaction.
-This exposed a relay completion bug, not successful propagation. CLI and desktop
-now share a bounded Rust relay that requires matching `getdata`, transaction
-transfer, and a nonce-matched post-transfer pong; disconnects and timeouts report
-uncertainty. A pong is processing progress, not proof of mempool acceptance.
+`sync_hd_wallet_from_floor` now catches a typed unresolved-history-start result
+and performs the existing bounded verified-header pass on a permitted wallet
+route before asking the actor to resolve the saved date again. The original
+runtime generation travels with `BeginHd`; changing the wallet or restore intent
+during I/O cannot obtain a lease for the replacement context. Source revocation
+is checked before retry. No wallet query uses a guessed floor.
 
-After refreshing the still-unspent receipt, one controlled retry of the exact
-same signed sweep bytes through that BIP37 node succeeded. Independent Fulcrum
-reads found transaction
-`43947112df64d86a11d870c1f6e4f46048769dbc0707a7bfce109a39bd092982`,
-no remaining receipt UTXO, and **49,809 satoshis** at the designated normal test
-wallet. The **193-satoshi** fee matches the independently VM-verified preview.
-At verification the transaction was in the mempool, not yet confirmed. No new
-payment or alternate-provider broadcast was used for the retry.
+The existing durable-birthday actor regression now starts with no time anchors,
+acquires synthetic proof-of-work/ASERT-valid headers on its selected provider,
+resolves block 20, verifies that every HD round uses that floor, and cancels a
+held header request after a birthday change without another wallet query.
+These synthetic parameters are test-only and are never installed by production.
+All 278 runtime tests pass; strict runtime Clippy, CLI check, native GUI
+library/test check and rustfmt pass. This is connected integration evidence,
+not a new live Chipnet or packaged-device run. An unavailable verifier, missing
+route, failed pass, or still-unresolved historical date remains fail-closed;
+one bounded pass does not claim exhaustive historical recovery.
+## CLI named source policies (2026-09-19)
 
-Discovery uses an all-match filter and scans complete blocks locally from the
-inclusive birthday. It never uploads candidate outpoints or derived stealth
-scripts to another provider. Accepted headers, complete merkle matches, and
-transaction identities are checked before publication. A late failure rejects
-the pass rather than reporting partial history as complete.
+`optn network policy <preset>` and the interactive wallet command
+`network policy <preset>` apply the existing shared Rust policy presets:
+`auto`, `privacy`, `own-infrastructure`, `electrum-only`, `bip37-only`, and
+`neutrino-only`. Private wallet stdio accepts
+`{"network":{"op":"policy","preset":"auto"}}`.
 
-BIP37 block discovery is **confirmed-chain-only**: it cannot establish absence
-of unconfirmed spends. Both UI and CLI expose this limitation. A source or Tor
-policy change invalidates publication. Mainnet P2P remains gated on a reviewed
-checkpoint; these Chipnet checks do not establish mainnet or packaged-device parity.
+The executable integration test
+`named_policy_selection_is_shared_by_prompt_stdio_and_reopened_cli` exercises
+all six presets, reads the saved policy from a separate process, and rejects
+invalid presets without changing the configuration. Wallet-session edits
+invalidate sync freshness before persistence. This is interface/persistence
+evidence, not a live sync result for every protocol or a GUI verification claim.
 
-### Local checks and unrelated emulator boundary
+## Packaged Windows source controls (2026-09-19)
 
-- Full TypeScript suite (`npm test -- --maxWorkers=1`): **1,929 passed,
-  10 skipped** across 328 files, against the regenerated Rust WASM. No unhandled
-  teardown errors remain; the key-manager test awaits its real lazy cleanup.
-- Desktop production bundle (`npx vite build --config vite.desktop.config.ts`),
-  core TypeScript check, and generated-WASM freshness check passed.
-- Rust core, **212 runtime tests**, **39 BIP37 tests**, **4 CLI RPA tests**, and
-  native locator/network regressions passed; native and WASM checks passed using
-  Rust **1.98.1**. CLI/runtime/BIP37 Clippy and formatting checks passed.
-- The review-summary SeedCash fixture now uses distinct parent-output values.
-  Its optional live signer test was attempted against the existing external
-  SeedCash checkout, but that checkout lacks the compatible signer API and its
-  signer references a missing `Bip44.derive_private_child_key`. This is not a
-  successful emulator-signing result and is not required by CashCode discovery.
-- Packaged desktop interaction, mainnet spending, and reorg/restart live tests
-  are not established by these results.
+The real Tauri/Leptos settings screen initially recreated its selected row on
+every one-second application snapshot. A source-name draft disappeared after
+2.5 seconds, and the source catalog could remain on "Updating sources..." even
+though native IPC returned the catalog. Memoizing the selected settings row
+preserves its local state and pending work until navigation changes.
+
+After rebuilding WASM and the native executable, the same public Chipnet fixture
+passed these interactions through the rendered controls: loading the catalog,
+retaining the source-name draft across snapshots, selecting Own Infrastructure
+and Auto, saving an explicit source with no fallback, leaving/reopening Settings,
+and restarting/unlocking the process with the saved policy retained. The test
+restored the fixture's Electrum policy afterward. Native readback confirmed the
+policy produced by each control. No signing or broadcast occurred.
+
+Executable SHA-256:
+`0ecfc0282228a78dde5149bfe6dc75d15c339fa452f75c3f18e64bc92fe6d39e`.
+It was built from `c4a7833c` plus the settings fix and pending provider work;
+the provider work is not validated by this GUI check.
+
+This was an offline Windows interaction/persistence check with zero usable
+routes, not live connectivity or Android/macOS evidence. Strict WASM UI Clippy,
+Trunk/native builds and the architecture boundary check passed. Reproduction:
+open a disposable wallet, Settings > Servers, type a source-name draft, wait
+over two snapshot periods, then save a policy and restart/reopen the wallet.
+The draft must remain while on the screen; the saved policy must survive restart.
+
+## Selected-source metadata integration (2026-09-19)
+
+HD refresh now resolves held categories through operation-aware source selection
+before the existing persistence/publication guard. Transaction bytes must hash
+to the requested ID. A selected fully validating node must explicitly report the
+terminal outpoint unspent, with matching value and script. Unknown spentness,
+missing capabilities and server assertions cannot become verified identities.
+Known successors are re-read from the same provider; unknown successors still
+require a separate spender-discovery capability.
+
+The native shared stack installs bounded HTTPS registry retrieval only with
+verified Tor and a public-permitting source scope. Own-infrastructure and exact
+restricted policies do not acquire external registry authority. Policy changes
+retire the fetcher. Runtime hash checks precede identity parsing; refresh work
+is bounded to 20 seconds, 32 categories, 64 hops per walk, three URIs per
+publication and a 2 MiB successful-response byte budget.
+
+`hd_sync_publishes_identity_only_after_selected_unspent_and_permitted_fetch`
+exercises actual shared HD sync and Assets projection using synthetic providers:
+accepted identity, null spentness, wrong output value, wrong registry hash, no
+fetch transport and stale downgrade after invalidation. This is connected runtime
+evidence, not a live node, GUI token display or metadata-restart-cache test.
+
+The BCHN adapter probes [`getindexinfo`](https://bitcoin-cash-node-e5454e.gitlab.io/doc/json-rpc/getindexinfo/)
+for a synchronized transaction index so a default-configured node can expose
+historical lookup. [`gettxout`](https://docs.bitcoincashnode.org/doc/json-rpc/gettxout/)
+returns an unspent assertion or unknown, never an inferred spender. Exact BCH
+decimal parsing retains one-satoshi values; no binary floating-point conversion
+is used. Authenticated RPC credential entry in GUI/CLI remains an explicit
+interaction gap; internal credential setters do not establish that usability.
+
+The interactive wallet commands `assets` and `nfts`, or private stdio
+`{"view":"assets"}` / `{"view":"nfts"}`, render those shared projections through
+the existing framework-free `optn-ui-text` crate. A process test opens a public
+fixture, reaches both views, locks it and confirms further asset reads are
+refused. This tests command wiring and lock boundaries, not live token discovery.

@@ -16,6 +16,7 @@ import { useAutoFusion } from './useAutoFusion';
 import { useWalletFusionPolicy } from './useWalletFusionPolicy';
 import { useTransportConfig } from './useTransportConfig';
 import { useWindowTitle } from './useWindowTitle';
+import { useNostrRelayHealth } from './nostr/useNostrRelayHealth';
 import { migrateWalletFileNames } from './walletFile';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import {
@@ -48,6 +49,7 @@ const DesktopAppShell: React.FC = () => {
   // Transport config describes how the PROCESS reaches the network, so it is
   // shared by every window rather than per wallet or per window.
   useTransportConfig();
+  useNostrRelayHealth();
   const fusionPolicyReady = useWalletFusionPolicy();
   useAutoFusion(fusionPolicyReady);
   // Which wallet this window holds, in the title bar — with several windows

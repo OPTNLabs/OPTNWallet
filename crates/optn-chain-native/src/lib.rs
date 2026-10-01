@@ -10,8 +10,15 @@
 //! model. Tauri and the CLI build this same stack.
 
 use optn_chain_bchn::{BchnRpcBackend, BchnRpcConfig, RpcAuth};
+pub mod coin_holds_file;
 pub mod network_config;
+pub mod registry_fetch;
 pub mod wallet_checkpoint;
+// Re-exported because the shell reaches BIP37 directly in two places: the
+// Cash Code node scan builds one bounded block batch against the selected
+// peer rather than a wallet refresh, and the legacy broadcast path relays a
+// transaction on an already-open stream. Both need the backend types rather
+// than the stack.
 pub use optn_chain_bip37::{
     relay_tx_on_stream, Bip37Backend, Bip37Config, Bip37Transport, TxRelayOutcome,
 };
@@ -22,7 +29,7 @@ use optn_core::endpoint::is_loopback_host;
 use optn_core::tor::{route as tor_route, Route as TorRoute, TorStatus};
 use optn_runtime::chain::{
     build_selection_plan, ChainEventSource, ChainSource, ConnectionPolicy, Endpoint, EndpointKind,
-    ProtocolFamily, SourceCatalog, SourceId,
+    ProtocolFamily, SourceCatalog, SourceId, SourceScope,
 };
 use optn_runtime::chain_service::ChainService;
 use optn_runtime::events::ChainEventStream;
@@ -45,14 +52,30 @@ pub struct NativeChainSecrets {
 }
 
 impl NativeChainSecrets {
+    pub fn from_credentials(
+        credentials: Vec<optn_runtime::rpc_credentials::LoadedRpcCredential>,
+    ) -> Self {
+        let mut secrets = Self::default();
+        for credential in credentials {
+            secrets.set_rpc_basic_auth(
+                &credential.source,
+                &credential.endpoint,
+                credential.username.expose(),
+                credential.password.expose(),
+            );
+        }
+        secrets
+    }
+
     pub fn set_rpc_basic_auth(
         &mut self,
         source: &SourceId,
+        endpoint: &Endpoint,
         username: impl Into<String>,
         password: impl Into<String>,
     ) {
         self.rpc_auth.insert(
-            source.as_str().to_owned(),
+            rpc_endpoint_binding(source, endpoint),
             RpcAuth::Basic {
                 username: username.into(),
                 password: password.into(),
@@ -68,12 +91,40 @@ impl NativeChainSecrets {
         set_membership(&mut self.rpc_https, source.as_str(), enabled);
     }
 
-    fn rpc_auth(&self, source: &SourceId) -> RpcAuth {
+    /// Add persisted authentication without discarding host-probed settings.
+    /// The endpoint-bound map prevents a source row with another RPC endpoint
+    /// from inheriting the credential while the source-level compatibility
+    /// flags retain their existing semantics.
+    pub fn merge(&mut self, other: Self) {
+        self.rpc_auth.extend(other.rpc_auth);
+        self.rpc_txindex.extend(other.rpc_txindex);
+        self.rpc_https.extend(other.rpc_https);
+    }
+
+    fn rpc_auth(&self, source: &SourceId, endpoint: &Endpoint) -> RpcAuth {
         self.rpc_auth
-            .get(source.as_str())
+            .get(&rpc_endpoint_binding(source, endpoint))
             .cloned()
             .unwrap_or(RpcAuth::None)
     }
+}
+
+/// Source ids identify a catalog row, while an RPC password identifies one
+/// endpoint. A row may carry more than one RPC endpoint, so source-only keys
+/// would let a later endpoint inherit credentials intended for another node.
+fn rpc_endpoint_binding(source: &SourceId, endpoint: &Endpoint) -> String {
+    format!(
+        "{}\u{0}bchn-rpc\u{0}{}\u{0}{}",
+        source.as_str(),
+        endpoint
+            .host
+            .trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .trim_end_matches('.')
+            .to_ascii_lowercase(),
+        endpoint.port.unwrap_or_default(),
+    )
 }
 
 fn set_membership(set: &mut BTreeSet<String>, value: &str, enabled: bool) {
@@ -96,6 +147,8 @@ pub struct NativeChainProbeFailure {
 }
 
 pub struct NativeChainStack {
+    /// Last proxy observation used to build this stack, not a new connectivity check.
+    pub tor_status: Option<TorStatus>,
     /// The accepted block headers every provider in this stack reads.
     ///
     /// Owned here rather than by any provider: the runtime writes verified
@@ -116,6 +169,7 @@ impl NativeChainStack {
     pub fn unavailable(error: impl Into<String>) -> Self {
         let service = ChainService::new(SourceCatalog::default(), ConnectionPolicy::auto());
         Self {
+            tor_status: None,
             // Empty rather than seeded: no provider is registered in this
             // state, so nothing should be able to read a header from it.
             headers: Arc::new(optn_runtime::header_store::SharedHeaders::default()),
@@ -145,6 +199,39 @@ fn selected_source_ids(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> BT
         .collect()
 }
 
+/// A public BCMR registry is outside a holder's selected node infrastructure.
+/// It is therefore available only under a policy scope that deliberately
+/// permits public sources. A verified Tor listener supplies transport privacy,
+/// never permission to contact an arbitrary external registry.
+fn policy_allows_public_registry(policy: &ConnectionPolicy) -> bool {
+    let allows_public =
+        |scope: &SourceScope| matches!(scope, SourceScope::AllEnabled | SourceScope::PublicEnabled);
+    allows_public(&policy.primary_scope)
+        || policy.fallback_scope.as_ref().is_some_and(allows_public)
+}
+
+fn configured_metadata_origins(
+    catalog: &SourceCatalog,
+    policy: &ConnectionPolicy,
+    kind: EndpointKind,
+) -> Vec<url::Url> {
+    let plan = optn_runtime::chain::build_endpoint_selection_plan(catalog, policy, kind);
+    plan.primary
+        .iter()
+        .chain(&plan.fallback)
+        .filter_map(|id| catalog.get(id))
+        .flat_map(|source| &source.endpoints)
+        .filter(|endpoint| endpoint.kind == kind)
+        .filter_map(|endpoint| {
+            let mut url = url::Url::parse("https://gateway.invalid/").ok()?;
+            url.set_host(Some(&endpoint.host)).ok()?;
+            url.set_port(endpoint.port).ok()?;
+            Some(url)
+        })
+        .take(16)
+        .collect()
+}
+
 fn endpoint_can_use_native_tor(endpoint: &Endpoint, policy: &ConnectionPolicy) -> bool {
     match endpoint.kind {
         EndpointKind::ElectrumTls | EndpointKind::ElectrumTcp => {
@@ -159,32 +246,132 @@ fn endpoint_can_use_native_tor(endpoint: &Endpoint, policy: &ConnectionPolicy) -
 }
 
 fn needs_default_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> bool {
+    if [
+        EndpointKind::IpfsGatewayHttps,
+        EndpointKind::BcmrIndexerHttps,
+    ]
+    .into_iter()
+    .any(|kind| !configured_metadata_origins(catalog, policy, kind).is_empty())
+    {
+        // The bounded metadata HTTP adapter currently requires verified Tor,
+        // including when the configured gateway is owned by the user.
+        return true;
+    }
     let selected = selected_source_ids(catalog, policy);
     catalog.iter().any(|source| {
         source.is_enabled()
             && selected.contains(&source.id)
+            // Declared own infrastructure is dialled directly, so it does not
+            // put the stack through Tor detection either -- two probes at
+            // 1500 ms each that nothing would then use.
+            && !source.is_user_infrastructure()
             && source.endpoints.iter().any(|endpoint| {
                 !is_loopback_host(&endpoint.host) && endpoint_can_use_native_tor(endpoint, policy)
             })
     })
 }
 
-async fn default_tor_status(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> TorStatus {
+/// Where a proxy may be, and why this wallet would trust it.
+///
+/// The split is the whole point. Answering a SOCKS5 greeting proves a SOCKS5
+/// proxy is listening and nothing more: every no-auth proxy answers the same
+/// three bytes, and Tor has no reply that distinguishes it from a corporate
+/// proxy, an SSH dynamic forward, or something hostile that forwards in the
+/// clear. Trust therefore comes from where the proxy came from.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TorProxyTrust<'a> {
+    /// Ports of proxies this process started and owns.
+    ///
+    /// The application runs a Tor of its own on a port deliberately outside
+    /// the conventional pair so it never collides with one the holder already
+    /// runs. Owning the process is what makes it trusted; naming the port here
+    /// is also what makes it visible at all, since auto-detection would never
+    /// look there.
+    pub managed: &'a [u16],
+    /// Loopback ports the holder has confirmed are their own Tor.
+    ///
+    /// Persisted in `UserNetworkOverlay::trusted_socks_ports`. One deliberate
+    /// act, once, rather than a probe that cannot tell the difference.
+    pub trusted: &'a [u16],
+}
+
+/// Does this stack need a proxy at all, and is there one it may use?
+///
+/// A conventional port that answers but has neither provenance comes back
+/// [`TorStatus::Unverified`] rather than [`TorStatus::Verified`]: something is
+/// there, the holder can say whether it is theirs, and until they do the
+/// routes that need Tor refuse instead of handing their traffic to a stranger.
+pub async fn tor_status_for(
+    catalog: &SourceCatalog,
+    policy: &ConnectionPolicy,
+    trust: TorProxyTrust<'_>,
+) -> TorStatus {
     if !needs_default_tor_proxy(catalog, policy) {
         return TorStatus::Absent;
     }
 
-    // ponytail: default Tor ports only; add a typed persisted proxy route when
-    // the shared network overlay owns custom proxy configuration.
-    for &socks_port in optn_core::tor::AUTODETECT_SOCKS_PORTS {
-        if is_tor_socks_port(DEFAULT_TOR_HOST, socks_port).await {
+    tor_status_from_trust(trust).await
+}
+
+/// Resolve a proxy's usable status from provenance alone.
+///
+/// This is shared by native consumers which are not chain routes themselves.
+/// The caller decides whether its destination requires Tor; this function owns
+/// the only answer to whether a loopback SOCKS listener is trusted enough to
+/// carry that traffic.
+pub async fn tor_status_from_trust(trust: TorProxyTrust<'_>) -> TorStatus {
+    for &socks_port in trust.managed.iter().chain(trust.trusted) {
+        if socks_answers(DEFAULT_TOR_HOST, socks_port).await {
             return TorStatus::Verified { socks_port };
+        }
+    }
+
+    // Nothing with provenance answered. Look at the conventional ports anyway,
+    // because "a proxy is there but I cannot tell whether it is yours" is a
+    // far more useful thing to report than "no Tor found" -- it is the
+    // difference between a holder starting Tor and a holder confirming the Tor
+    // they already have.
+    for &socks_port in optn_core::tor::AUTODETECT_SOCKS_PORTS {
+        if socks_answers(DEFAULT_TOR_HOST, socks_port).await {
+            return TorStatus::Unverified { socks_port };
         }
     }
     TorStatus::Absent
 }
 
-async fn is_tor_socks_port(host: &str, port: u16) -> bool {
+/// Convenience for callers that own no proxy and carry no trust list.
+pub async fn tor_status_with_managed(
+    catalog: &SourceCatalog,
+    policy: &ConnectionPolicy,
+    managed: &[u16],
+) -> TorStatus {
+    tor_status_for(
+        catalog,
+        policy,
+        TorProxyTrust {
+            managed,
+            trusted: &[],
+        },
+    )
+    .await
+}
+
+/// Whether any selected source would have to be reached through a proxy.
+///
+/// A host asks this before starting its own Tor: bootstrapping one for a stack
+/// that only dials loopback or the holder's own infrastructure would be a
+/// pointless minute of waiting.
+pub fn requires_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> bool {
+    needs_default_tor_proxy(catalog, policy)
+}
+
+/// Does *a SOCKS5 proxy* answer here?
+///
+/// Named for what it establishes. It used to be called `is_tor_socks_port`,
+/// which is not what a `05 01 00` greeting and an `05 00` reply show: that
+/// exchange is the SOCKS5 no-auth handshake and every such proxy completes it.
+/// Whether the proxy is Tor is decided by provenance, in `tor_status_for`.
+async fn socks_answers(host: &str, port: u16) -> bool {
     let probe = async {
         let mut stream = TcpStream::connect((host, port)).await.ok()?;
         stream.write_all(&[0x05, 0x01, 0x00]).await.ok()?;
@@ -198,7 +385,34 @@ async fn is_tor_socks_port(host: &str, port: u16) -> bool {
     )
 }
 
-fn native_chain_route(endpoint: &Endpoint, tor_status: TorStatus) -> TorRoute {
+/// How a chain route to `endpoint` on `source` may be made, or that it may not.
+///
+/// Fails closed like the Fusion rule it borrows, with one difference that
+/// matters: a source the user has *declared* as their own infrastructure is
+/// reached directly, exactly as loopback is.
+///
+/// Tor is there to stop a third-party server learning that this IP is asking
+/// about these addresses. Your own node already knows — it is yours, and it is
+/// the node the wallet is asking on your behalf. Routing to it over Tor buys
+/// nothing and costs the mode its purpose: `is_loopback_host` recognises only
+/// `127.0.0.0/8`, `localhost` and `::1`, so a self-hosted node one room away on
+/// a LAN address, or on a private mesh, was refused as "remote" and
+/// own-infrastructure-only could not reach any own infrastructure that was not
+/// on this machine.
+///
+/// The declaration is what carries this, not the address: `UserInfrastructure`
+/// is a group the holder wrote down (`SourceOrigin::UserInfrastructure`), and
+/// `SourceScope::UserInfrastructure` already selects on exactly that. A plain
+/// `UserAdded` endpoint -- a public server someone pasted in -- is still a
+/// third party and still needs Tor.
+fn native_chain_route(
+    source: &ChainSource,
+    endpoint: &Endpoint,
+    tor_status: TorStatus,
+) -> TorRoute {
+    if source.is_user_infrastructure() {
+        return TorRoute::Direct;
+    }
     tor_route(&endpoint.host, tor_status)
 }
 
@@ -296,7 +510,19 @@ pub async fn build_native_chain_stack(
     network: &str,
     secrets: &NativeChainSecrets,
 ) -> NativeChainStack {
-    let tor_status = default_tor_status(&catalog, &policy).await;
+    build_native_chain_stack_via(catalog, policy, network, secrets, TorProxyTrust::default()).await
+}
+
+/// Build a stack without a retained header store, carrying the host's proxy
+/// provenance just like the retained-header constructor below.
+pub async fn build_native_chain_stack_via(
+    catalog: SourceCatalog,
+    policy: ConnectionPolicy,
+    network: &str,
+    secrets: &NativeChainSecrets,
+    trust: TorProxyTrust<'_>,
+) -> NativeChainStack {
+    let tor_status = tor_status_for(&catalog, &policy, trust).await;
     build_native_chain_stack_with_tor_status(catalog, policy, network, secrets, tor_status, None)
         .await
 }
@@ -315,7 +541,30 @@ pub async fn build_native_chain_stack_with_headers(
     secrets: &NativeChainSecrets,
     headers: Arc<optn_runtime::header_store::SharedHeaders>,
 ) -> NativeChainStack {
-    let tor_status = default_tor_status(&catalog, &policy).await;
+    build_native_chain_stack_with_headers_via(
+        catalog,
+        policy,
+        network,
+        secrets,
+        headers,
+        TorProxyTrust::default(),
+    )
+    .await
+}
+
+/// As above, but also carrying which proxies this host may trust — its own
+/// Tor, which does not listen on the conventional pair, and any the holder has
+/// confirmed. A conventional port with neither provenance is reported as
+/// unverified and the routes that need Tor refuse.
+pub async fn build_native_chain_stack_with_headers_via(
+    catalog: SourceCatalog,
+    policy: ConnectionPolicy,
+    network: &str,
+    secrets: &NativeChainSecrets,
+    headers: Arc<optn_runtime::header_store::SharedHeaders>,
+    trust: TorProxyTrust<'_>,
+) -> NativeChainStack {
+    let tor_status = tor_status_for(&catalog, &policy, trust).await;
     build_native_chain_stack_with_tor_status(
         catalog,
         policy,
@@ -342,6 +591,21 @@ async fn build_native_chain_stack_with_tor_status(
     let selected = selected_source_ids(&catalog, &policy);
     let sources = catalog.iter().cloned().collect::<Vec<_>>();
     let mut service = ChainService::new(catalog, policy.clone());
+    if let TorStatus::Verified { socks_port } = tor_status {
+        let gateways =
+            configured_metadata_origins(service.catalog(), &policy, EndpointKind::IpfsGatewayHttps);
+        let indexers =
+            configured_metadata_origins(service.catalog(), &policy, EndpointKind::BcmrIndexerHttps);
+        let allow_publisher = policy_allows_public_registry(&policy);
+        if allow_publisher || !gateways.is_empty() || !indexers.is_empty() {
+            service.set_registry_fetcher(Arc::new(registry_fetch::ConfiguredRegistryFetcher::new(
+                registry_fetch::VerifiedRegistryTor { socks_port },
+                gateways,
+                indexers,
+                allow_publisher,
+            )));
+        }
+    }
     let mut event_sources: Vec<Arc<dyn NativeChainEventSource>> = Vec::new();
     let mut failures = Vec::new();
 
@@ -367,7 +631,7 @@ async fn build_native_chain_stack_with_tor_status(
                 continue;
             }
 
-            let route = native_chain_route(endpoint, tor_status);
+            let route = native_chain_route(&source, endpoint, tor_status);
             if route.is_refused() {
                 record_remote_route_failure(
                     &mut failures,
@@ -454,7 +718,7 @@ async fn build_native_chain_stack_with_tor_status(
                     let mut config = BchnRpcConfig::new(
                         source.id.clone(),
                         endpoint.clone(),
-                        secrets.rpc_auth(&source.id),
+                        secrets.rpc_auth(&source.id, endpoint),
                     );
                     config.txindex = secrets.rpc_txindex.contains(source.id.as_str());
                     config.https = secrets.rpc_https.contains(source.id.as_str());
@@ -490,6 +754,7 @@ async fn build_native_chain_stack_with_tor_status(
     }
 
     NativeChainStack {
+        tor_status: Some(tor_status),
         headers,
         revocation: service.revocation(),
         service: Arc::new(Mutex::new(service)),
@@ -518,6 +783,181 @@ mod tests {
     use super::*;
     use optn_runtime::chain::ProtocolSet;
 
+    #[tokio::test]
+    async fn configured_metadata_uses_source_policy_without_becoming_chain_provider() {
+        for kind in [
+            EndpointKind::IpfsGatewayHttps,
+            EndpointKind::BcmrIndexerHttps,
+        ] {
+            use optn_runtime::chain::{build_endpoint_selection_plan, SourceDisposition};
+            use optn_runtime::network_config::{add_user_source_services, UserNetworkOverlay};
+            let mut overlay = UserNetworkOverlay::default();
+            let own = add_user_source_services(
+                &mut overlay,
+                "My gateway",
+                vec![Endpoint {
+                    kind,
+                    host: "gateway.example".into(),
+                    port: Some(443),
+                }],
+                Some("home"),
+            )
+            .unwrap();
+            let public = add_user_source_services(
+                &mut overlay,
+                "Other gateway",
+                vec![Endpoint {
+                    kind,
+                    host: "public.example".into(),
+                    port: Some(8443),
+                }],
+                None,
+            )
+            .unwrap();
+            let mut catalog = SourceCatalog::default();
+            for source in overlay.user_sources {
+                catalog.insert(source).unwrap();
+            }
+            let mut policy = ConnectionPolicy::own_infrastructure();
+            policy.preferred = vec![public.clone()];
+            assert_eq!(
+                configured_metadata_origins(&catalog, &policy, kind)
+                    .iter()
+                    .map(url::Url::as_str)
+                    .collect::<Vec<_>>(),
+                vec!["https://gateway.example/"]
+            );
+            assert!(build_selection_plan(&catalog, &policy).primary.is_empty());
+            assert!(requires_tor_proxy(&catalog, &policy));
+            policy.fallback_scope = Some(SourceScope::PublicEnabled);
+            let plan = build_endpoint_selection_plan(&catalog, &policy, kind);
+            assert_eq!(plan.primary, vec![own.clone()]);
+            assert_eq!(plan.fallback, vec![public.clone()]);
+            catalog.get_mut(&public).unwrap().disposition = SourceDisposition::Banned;
+            assert_eq!(
+                configured_metadata_origins(&catalog, &policy, kind).len(),
+                1
+            );
+            policy.fallback_scope = None;
+            let stack = build_native_chain_stack_with_tor_status(
+                catalog.clone(),
+                policy.clone(),
+                "chipnet",
+                &NativeChainSecrets::default(),
+                TorStatus::Verified { socks_port: 9050 },
+                None,
+            )
+            .await;
+            let service = stack.service.lock().await;
+            let fetcher = service
+                .registry_fetcher()
+                .expect("own gateway installs metadata transport");
+            assert!(
+                fetcher
+                    .fetch(
+                        "https://publisher.example/registry.json",
+                        Default::default()
+                    )
+                    .await
+                    .is_err(),
+                "own-only must not dial arbitrary publishers"
+            );
+            drop(service);
+            catalog.get_mut(&own).unwrap().disposition = SourceDisposition::Disabled;
+            assert!(configured_metadata_origins(&catalog, &policy, kind).is_empty());
+            assert!(!requires_tor_proxy(&catalog, &policy));
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_fetcher_requires_verified_tor_and_a_public_source_scope() {
+        async fn installed(policy: ConnectionPolicy, tor_status: TorStatus) -> bool {
+            let stack = build_native_chain_stack_with_tor_status(
+                SourceCatalog::default(),
+                policy,
+                "chipnet",
+                &NativeChainSecrets::default(),
+                tor_status,
+                None,
+            )
+            .await;
+            let installed = stack.service.lock().await.registry_fetcher().is_some();
+            installed
+        }
+
+        assert!(
+            installed(
+                ConnectionPolicy::auto(),
+                TorStatus::Verified { socks_port: 9050 },
+            )
+            .await
+        );
+        assert!(policy_allows_public_registry(&ConnectionPolicy {
+            protocols: ProtocolSet::wallet_sync(),
+            primary_scope: SourceScope::UserInfrastructure,
+            fallback_scope: Some(SourceScope::PublicEnabled),
+            preferred: Vec::new(),
+        }));
+        assert!(
+            !installed(
+                ConnectionPolicy::own_infrastructure(),
+                TorStatus::Verified { socks_port: 9050 },
+            )
+            .await
+        );
+        assert!(
+            !installed(
+                ConnectionPolicy::exact(SourceId::new("holder-node"), ProtocolFamily::Electrum),
+                TorStatus::Verified { socks_port: 9050 },
+            )
+            .await
+        );
+        assert!(
+            !installed(ConnectionPolicy::auto(), TorStatus::Absent).await,
+            "public scope without verified proxy must not gain a registry transport"
+        );
+
+        let stack = build_native_chain_stack_with_tor_status(
+            SourceCatalog::default(),
+            ConnectionPolicy::auto(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Verified { socks_port: 9050 },
+            None,
+        )
+        .await;
+        let mut service = stack.service.lock().await;
+        assert!(service.registry_fetcher().is_some());
+        service.set_policy(ConnectionPolicy::own_infrastructure());
+        assert!(
+            service.registry_fetcher().is_none(),
+            "a fetcher authorized by the previous public policy cannot survive an own-only selection"
+        );
+    }
+
+    /// A public endpoint someone pasted in: a third party, needing Tor.
+    fn pasted_source() -> ChainSource {
+        ChainSource {
+            id: SourceId::new("pasted"),
+            label: "Pasted".into(),
+            origin: optn_runtime::chain::SourceOrigin::UserAdded,
+            endpoints: Vec::new(),
+            capabilities: Default::default(),
+            disposition: optn_runtime::chain::SourceDisposition::Enabled,
+            priority: 0,
+        }
+    }
+
+    /// A node the holder declared as theirs.
+    fn declared_own_source() -> ChainSource {
+        ChainSource {
+            origin: optn_runtime::chain::SourceOrigin::UserInfrastructure {
+                group: "home".into(),
+            },
+            ..pasted_source()
+        }
+    }
+
     #[test]
     fn native_direct_dial_reuses_the_core_loopback_rule() {
         for host in ["localhost", "LOCALHOST", "127.0.0.1", "127.13.9.2", "::1"] {
@@ -527,7 +967,7 @@ mod tests {
                 port: Some(50002),
             };
             assert_eq!(
-                native_chain_route(&endpoint, TorStatus::Absent),
+                native_chain_route(&pasted_source(), &endpoint, TorStatus::Absent),
                 TorRoute::Direct,
                 "{host}"
             );
@@ -539,10 +979,203 @@ mod tests {
                 port: Some(50002),
             };
             assert!(
-                native_chain_route(&endpoint, TorStatus::Absent).is_refused(),
+                native_chain_route(&pasted_source(), &endpoint, TorStatus::Absent).is_refused(),
                 "{host}"
             );
         }
+    }
+
+    /// Own infrastructure is reachable off this machine, with no Tor.
+    ///
+    /// The whole point of the mode is a node the holder runs; before this, an
+    /// own-infrastructure policy could only reach `127.0.0.0/8`, so a node on
+    /// a LAN address or a private mesh was refused as "remote" and the mode
+    /// had nothing it could select. Tor protects you from a third-party
+    /// server; your own node is not one.
+    #[test]
+    fn declared_own_infrastructure_dials_directly_without_tor() {
+        let own = declared_own_source();
+        for host in [
+            "192.168.1.50",
+            "100.100.51.120",
+            "node.internal",
+            "10.0.0.9",
+        ] {
+            let endpoint = Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: host.into(),
+                port: Some(50001),
+            };
+            assert_eq!(
+                native_chain_route(&own, &endpoint, TorStatus::Absent),
+                TorRoute::Direct,
+                "declared own infrastructure at {host} must not require Tor"
+            );
+            // The same address, merely pasted in, is still a third party.
+            assert!(
+                native_chain_route(&pasted_source(), &endpoint, TorStatus::Absent).is_refused(),
+                "an undeclared {host} must still fail closed"
+            );
+        }
+    }
+
+    /// A remote source, so Tor detection actually runs.
+    fn public_catalog() -> SourceCatalog {
+        let mut catalog = SourceCatalog::default();
+        let mut source = pasted_source();
+        source.endpoints = vec![Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: "electrum.example.org".into(),
+            port: Some(50002),
+        }];
+        catalog.insert(source).expect("insert");
+        catalog
+    }
+
+    /// A TCP listener that completes the SOCKS5 no-auth greeting and nothing
+    /// else, which is all any SOCKS5 proxy does -- Tor included.
+    async fn fake_socks_proxy() -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut greeting = [0u8; 3];
+                if stream.read_exact(&mut greeting).await.is_err() {
+                    continue;
+                }
+                let _ = stream.write_all(&[0x05, 0x00]).await;
+            }
+        });
+        (port, handle)
+    }
+
+    #[tokio::test]
+    async fn a_socks_greeting_alone_does_not_make_a_proxy_trusted() {
+        // The row-4 hole. This listener is not Tor -- it is thirty lines of
+        // test code -- and it answers the greeting exactly as Tor does, which
+        // is the whole problem: there is no reply that tells them apart. Before
+        // this, any process holding 9050 was promoted to Verified and handed
+        // traffic the wallet believed was anonymised.
+        let (port, handle) = fake_socks_proxy().await;
+        let catalog = public_catalog();
+        let policy = ConnectionPolicy::auto();
+
+        // Found, and refused: something is there, but nothing says it is Tor.
+        let found = tor_status_for(
+            &catalog,
+            &policy,
+            TorProxyTrust {
+                managed: &[],
+                trusted: &[],
+            },
+        )
+        .await;
+        // Auto-detection only looks at 9050/9150, so an ephemeral port is not
+        // even seen -- the meaningful assertion is that it is never usable.
+        assert_eq!(found.usable_port(), None);
+
+        // Named as merely present: still unusable.
+        let probed = socks_answers(DEFAULT_TOR_HOST, port).await;
+        assert!(probed, "the fake proxy must answer, or this proves nothing");
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn provenance_is_what_makes_a_proxy_usable() {
+        // The same listener, the same greeting, the same bytes on the wire.
+        // Only where it came from changes, and that is the whole rule.
+        let (port, handle) = fake_socks_proxy().await;
+        let catalog = public_catalog();
+        let policy = ConnectionPolicy::auto();
+
+        let owned = tor_status_for(
+            &catalog,
+            &policy,
+            TorProxyTrust {
+                managed: &[port],
+                trusted: &[],
+            },
+        )
+        .await;
+        assert_eq!(
+            owned,
+            TorStatus::Verified { socks_port: port },
+            "a proxy this process started and owns is usable"
+        );
+
+        let confirmed = tor_status_for(
+            &catalog,
+            &policy,
+            TorProxyTrust {
+                managed: &[],
+                trusted: &[port],
+            },
+        )
+        .await;
+        assert_eq!(
+            confirmed,
+            TorStatus::Verified { socks_port: port },
+            "a proxy the holder confirmed is usable"
+        );
+
+        let neither = tor_status_for(
+            &catalog,
+            &policy,
+            TorProxyTrust {
+                managed: &[],
+                trusted: &[],
+            },
+        )
+        .await;
+        assert_ne!(
+            neither,
+            TorStatus::Verified { socks_port: port },
+            "the same proxy without provenance must not be usable"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn a_trusted_port_that_stops_answering_is_not_still_trusted() {
+        // Trust is in the port, not in the listener. If the holder's Tor is
+        // not running, the confirmation must not make its absence look like
+        // presence.
+        let (port, handle) = fake_socks_proxy().await;
+        handle.abort();
+        // Give the abort a moment to release the socket.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let status = tor_status_for(
+            &public_catalog(),
+            &ConnectionPolicy::auto(),
+            TorProxyTrust {
+                managed: &[],
+                trusted: &[port],
+            },
+        )
+        .await;
+        assert_ne!(status, TorStatus::Verified { socks_port: port });
+    }
+
+    /// And it does not drag the stack through Tor detection it will not use.
+    #[test]
+    fn own_infrastructure_does_not_ask_for_a_tor_proxy() {
+        let mut catalog = SourceCatalog::default();
+        let mut source = declared_own_source();
+        source.endpoints = vec![Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "100.100.51.120".into(),
+            port: Some(50001),
+        }];
+        catalog.insert(source).expect("insert");
+        assert!(!needs_default_tor_proxy(
+            &catalog,
+            &ConnectionPolicy::own_infrastructure()
+        ));
     }
 
     #[test]
@@ -552,7 +1185,11 @@ mod tests {
             host: "public.example".into(),
             port: Some(50002),
         };
-        let route = native_chain_route(&endpoint, TorStatus::Verified { socks_port: 9050 });
+        let route = native_chain_route(
+            &pasted_source(),
+            &endpoint,
+            TorStatus::Verified { socks_port: 9050 },
+        );
 
         match electrum_transport(&endpoint, route).expect("verified route") {
             ElectrumTransport::Tor {
@@ -583,7 +1220,7 @@ mod tests {
                 let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
             }
         });
-        assert!(!is_tor_socks_port(DEFAULT_TOR_HOST, port).await);
+        assert!(!socks_answers(DEFAULT_TOR_HOST, port).await);
     }
 
     #[tokio::test]
@@ -739,6 +1376,110 @@ mod tests {
             assert_eq!(
                 bip37.default_port, neutrino.default_port,
                 "{network} default port differs between BIP37 and Neutrino"
+            );
+        }
+    }
+
+    /// Build a source at `host:port`, public or declared as the holder's own.
+    fn live_source(id: &str, host: &str, port: u16, own: bool) -> ChainSource {
+        ChainSource {
+            id: SourceId::new(id),
+            label: id.into(),
+            origin: if own {
+                optn_runtime::chain::SourceOrigin::UserInfrastructure {
+                    group: "live-test".into(),
+                }
+            } else {
+                optn_runtime::chain::SourceOrigin::UserAdded
+            },
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host: host.into(),
+                port: Some(port),
+            }],
+            capabilities: Default::default(),
+            disposition: optn_runtime::chain::SourceDisposition::Enabled,
+            priority: 0,
+        }
+    }
+
+    async fn stack_for(source: ChainSource) -> NativeChainStack {
+        let mut catalog = SourceCatalog::default();
+        let policy = ConnectionPolicy::auto();
+        catalog.insert(source).expect("insert");
+        build_native_chain_stack(catalog, policy, "chipnet", &NativeChainSecrets::default()).await
+    }
+
+    /// A public endpoint is never dialled without Tor, and the holder's own is
+    /// never made to wait for it.
+    ///
+    /// Issue #75's rows 3 and 5 both said "not exercised end to end against a
+    /// live route change", and both are the same invariant seen from two
+    /// sides: what may be reached depends on who owns it, not on what the
+    /// address looks like.
+    ///
+    /// Opt-in, because it reaches real hosts:
+    ///
+    ///   OPTN_LIVE_PUBLIC_ELECTRUM=chipnet.imaginary.cash:50002     ///   OPTN_LIVE_OWN_ELECTRUM=<your node>:50001     ///   cargo test --manifest-path crates/optn-chain-native/Cargo.toml     ///     -- --ignored --nocapture live_route
+    ///
+    /// Tor is detected, not required: with a verified SOCKS proxy the public
+    /// route becomes eligible, and without one it must be refused. Both are
+    /// asserted, so the test says something either way rather than only when
+    /// the environment happens to suit it.
+    #[tokio::test]
+    #[ignore = "reaches real hosts; see the doc comment for the variables it needs"]
+    async fn live_route_eligibility_follows_ownership_not_address_shape() {
+        let public = std::env::var("OPTN_LIVE_PUBLIC_ELECTRUM").ok();
+        let own = std::env::var("OPTN_LIVE_OWN_ELECTRUM").ok();
+        assert!(
+            public.is_some() || own.is_some(),
+            "set OPTN_LIVE_PUBLIC_ELECTRUM and/or OPTN_LIVE_OWN_ELECTRUM"
+        );
+
+        let split = |value: &str| -> (String, u16) {
+            let (host, port) = value.rsplit_once(':').expect("host:port");
+            (host.to_owned(), port.parse().expect("port"))
+        };
+
+        if let Some(endpoint) = public.as_deref() {
+            let (host, port) = split(endpoint);
+            let stack = stack_for(live_source("live-public", &host, port, false)).await;
+            let refused = stack
+                .failures
+                .iter()
+                .any(|failure| failure.error == REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE);
+            // Which way it went depends on the host's Tor, and the invariant
+            // is the same either way: a public endpoint is reached through
+            // Tor or not at all.
+            match tor_status_from_trust(TorProxyTrust::default()).await {
+                TorStatus::Verified { .. } => assert!(
+                    !refused,
+                    "a verified Tor proxy is available and the public route was                      still refused: {:?}",
+                    stack.failures
+                ),
+                TorStatus::Unverified { .. } | TorStatus::Absent => assert!(
+                    refused,
+                    "no verified Tor proxy, so the public route must be refused                      rather than dialled directly; failures were {:?}",
+                    stack.failures
+                ),
+            }
+        }
+
+        if let Some(endpoint) = own.as_deref() {
+            let (host, port) = split(endpoint);
+            let stack = stack_for(live_source("live-own", &host, port, true)).await;
+            // Declared own infrastructure is dialled directly whatever Tor is
+            // doing. Tor hides you from a third-party server; your own node is
+            // not one, and requiring it there is what made
+            // own-infrastructure-only unable to reach any own infrastructure
+            // that was not on this machine.
+            assert!(
+                !stack
+                    .failures
+                    .iter()
+                    .any(|failure| failure.error == REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE),
+                "the holder's own node was refused for want of Tor: {:?}",
+                stack.failures
             );
         }
     }

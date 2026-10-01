@@ -49,6 +49,20 @@ pub async fn optn_wallet_security(
         })
 }
 
+/// Forward public PSBT preparation/finalization; the runtime owns validation.
+#[tauri::command]
+pub async fn optn_airgap(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    request: optn_transport::AirgapRequest,
+) -> Result<optn_transport::AirgapResponse, String> {
+    runtime.airgap(request).await.map_err(|error| match error {
+        optn_transport::TransportError::Other(message)
+        | optn_transport::TransportError::InvalidData(message) => message,
+        optn_transport::TransportError::AuthenticationRequired => "Open the wallet first.".into(),
+        _ => "Air-gap signing is unavailable on this interface.".into(),
+    })
+}
+
 /// Appearance save failures are returned after the runtime has applied the
 /// selection. Callers should refresh their snapshot and display the error;
 /// retrying the same selection retries persistence even if reduction is a no-op.
@@ -226,6 +240,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn changing_appearance_writes_nothing_but_appearance() {
+        // The other half of "theme/skin persist without touching keys". That a
+        // theme survives a restart is asserted above; this asserts what the
+        // save did *not* do. A presentation setting has no business writing
+        // near wallet material, and the failure it guards is silent -- nobody
+        // notices an extra file until it is a corrupt one.
+        use crate::appearance::tests::TestDirectory;
+        use crate::network_config::NetworkSettingsStore;
+        use optn_app::{AppAction, AppState, ThemeMode, UiSkin};
+
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let network_settings = NetworkSettingsStore::new(directory.0.clone());
+        let runtime = optn_runtime::AppRuntime::spawn(AppState::default());
+
+        // Something that looks like wallet material, to prove it is untouched
+        // rather than merely absent.
+        let wallet = directory.0.join("wallet.optn");
+        std::fs::write(&wallet, b"ciphertext").unwrap();
+        let before = std::fs::read(&wallet).unwrap();
+
+        for action in [
+            AppAction::SetSkin(UiSkin::Cyberpunk),
+            AppAction::SetTheme(ThemeMode::Light),
+            AppAction::ToggleTheme,
+        ] {
+            dispatch_action(&runtime, &store, &network_settings, action)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            std::fs::read(&wallet).unwrap(),
+            before,
+            "an appearance change rewrote wallet material"
+        );
+
+        let mut written: Vec<String> = std::fs::read_dir(&directory.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        written.sort();
+        assert_eq!(
+            written,
+            vec!["appearance.json".to_string(), "wallet.optn".to_string()],
+            "an appearance change created files beyond its own"
+        );
+    }
+
+    #[tokio::test]
     async fn network_settings_are_saved_before_the_runtime_publishes_them() {
         use crate::appearance::tests::TestDirectory;
         use crate::network_config::NetworkSettingsStore;
@@ -280,6 +344,93 @@ mod tests {
                 .as_deref(),
             Some("main.example:50002")
         );
+    }
+
+    #[tokio::test]
+    async fn chipnet_server_dispatch_restricts_selection_until_explicit_default_reset() {
+        use crate::appearance::tests::TestDirectory;
+        use optn_app::{AppAction, AppState, ServerKind};
+        use optn_core::network::Network;
+        use optn_runtime::chain::{build_selection_plan, ConnectionPolicy, SourceId};
+
+        let directory = TestDirectory::new();
+        let appearance = directory.store();
+        let network_settings = NetworkSettingsStore::new(directory.0.clone());
+        let mut state = AppState {
+            network: Network::Chipnet,
+            ..AppState::default()
+        };
+        state.apply(AppAction::OpenCreatedWallet {
+            name: "Public source-selection fixture".into(),
+            receive_address: "bchtest:qqaz6s295ncfs53m86qj0uw6sl8u2kuw0ymst35fx4".into(),
+            account_path: "m/44'/1'/0'".into(),
+        });
+        let runtime = optn_runtime::AppRuntime::spawn(state);
+        dispatch_action(
+            &runtime,
+            &appearance,
+            &network_settings,
+            AppAction::SetServer {
+                kind: ServerKind::Electrum,
+                entry: "127.0.0.1:1".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime
+                .state()
+                .servers
+                .for_network(Network::Chipnet)
+                .electrum
+                .as_deref(),
+            Some("127.0.0.1:1")
+        );
+        let (catalog, policy) = network_settings
+            .chain_selection(Network::Chipnet)
+            .unwrap()
+            .unwrap();
+        let selection = build_selection_plan(&catalog, &policy);
+        assert_eq!(selection.primary, [SourceId::new("host:127.0.0.1")]);
+        assert!(selection.fallback.is_empty());
+
+        // The acknowledgement must survive a new adapter reading the actual file.
+        let restarted = NetworkSettingsStore::new(directory.0.clone());
+        let mut restored = AppState::default();
+        restarted.restore(&mut restored).unwrap();
+        assert_eq!(restored.servers, runtime.state().servers);
+        let (catalog, policy) = restarted
+            .chain_selection(Network::Chipnet)
+            .unwrap()
+            .unwrap();
+        assert_eq!(build_selection_plan(&catalog, &policy), selection);
+
+        dispatch_action(
+            &runtime,
+            &appearance,
+            &network_settings,
+            AppAction::UseNetworkDefaultServers,
+        )
+        .await
+        .unwrap();
+        assert!(runtime.state().wallet.is_some());
+        assert!(runtime
+            .state()
+            .servers
+            .for_network(Network::Chipnet)
+            .is_empty());
+        let (catalog, policy) = restarted
+            .chain_selection(Network::Chipnet)
+            .unwrap()
+            .unwrap();
+        let defaults = optn_runtime::bootstrap::shipped_source_catalog(Network::Chipnet);
+        assert_eq!(policy, ConnectionPolicy::auto());
+        assert_eq!(
+            build_selection_plan(&catalog, &policy),
+            build_selection_plan(&defaults, &ConnectionPolicy::auto())
+        );
+        restarted.restore(&mut restored).unwrap();
+        assert!(restored.servers.for_network(Network::Chipnet).is_empty());
     }
 
     #[tokio::test]

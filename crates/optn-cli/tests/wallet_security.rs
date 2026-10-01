@@ -114,6 +114,35 @@ fn stdio_console_keeps_every_reply_including_eof_on_one_json_line() {
 }
 
 #[test]
+fn wallet_asset_views_use_shared_renderer_and_refuse_locked_state() {
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 0);
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let lock = json!({"action":WireAction::from(AppAction::LockWallet)});
+    let output = run_cli(directory.path(), &["wallet", "--stdio"], &format!(
+        "{{\"view\":\"assets\"}}\n{open}\n{{\"view\":\"assets\"}}\n{{\"view\":\"nfts\"}}\n{lock}\n{{\"view\":\"assets\"}}\n"
+    ));
+    assert!(output.status.success());
+    let replies = responses(&output);
+    assert_eq!(replies[0]["ok"], false);
+    assert_eq!(replies[1]["ok"], true);
+    assert_eq!(replies[2]["title"], "Assets");
+    assert!(replies[3]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line
+            .as_str()
+            .is_some_and(|line| line.contains("no non-fungible tokens"))));
+    assert_eq!(replies[5]["ok"], false);
+    let prompt = run_cli(directory.path(), &["wallet"], "assets\nnfts\nquit\n");
+    assert!(prompt.status.success());
+    assert_eq!(responses(&prompt)[0]["ok"], false);
+    assert_eq!(responses(&prompt)[1]["ok"], false);
+}
+
+#[test]
 fn private_stdio_errors_do_not_echo_credentials_or_malformed_input() {
     let directory = test_directory();
     fixture(directory.path(), "public.optn", 0);
@@ -192,6 +221,54 @@ fn request(input: &mut ChildStdin, output: &mut BufReader<ChildStdout>, value: V
 }
 
 #[test]
+fn imported_hd_inventory_is_validated_and_survives_cli_restart() {
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 1);
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let wallet =
+        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
+            .unwrap();
+    let addresses: Vec<_> = [(0, 201), (2, 31)].into_iter().map(|(branch, index)| {
+        json!({"branch":branch,"index":index,"address":wallet.address(
+            optn_core::network::Network::Chipnet, &format!("m/44'/1'/1'/{branch}/{index}")).unwrap().encode()})
+    }).collect();
+    let inventory = json!({"request":{"command":"import_hd_inventory","epoch":1,
+        "account_path":"m/44'/1'/1'","addresses":addresses}});
+    let mut stale = inventory.clone();
+    stale["request"]["epoch"] = json!(0);
+    let mut wrong = inventory.clone();
+    wrong["request"]["addresses"][0]["address"] = json!(address(0));
+    let first = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n{stale}\n{wrong}\n{inventory}\n"),
+    );
+    assert!(first.status.success());
+    let replies = responses(&first);
+    assert_eq!(replies[1]["ok"], false);
+    assert_eq!(replies[2]["ok"], false);
+    assert_eq!(replies[3]["ok"], true, "{:?}", replies[3]);
+    assert_eq!(replies[3]["hd_addresses"]["next"], json!([202, 0, 0]));
+    assert_eq!(replies[3]["hd_addresses"]["compatibility_horizon"], 32);
+    assert_eq!(replies[3]["hd_addresses"]["current_receive"], 0);
+    assert_eq!(replies[3]["receive_address"], address(1));
+    assert_eq!(replies[3]["wallet_sync"]["utxos_fresh"], false);
+
+    let restarted = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n{inventory}\n"),
+    );
+    assert!(restarted.status.success());
+    let after = responses(&restarted);
+    assert_eq!(after[0]["ok"], true);
+    assert_eq!(after[0]["hd_addresses"], replies[3]["hd_addresses"]);
+    assert_eq!(after[1]["hd_addresses"], replies[3]["hd_addresses"]);
+    assert_eq!(after[0]["wallet_sync"]["utxos_fresh"], false);
+}
+
+#[test]
 fn issued_receive_addresses_survive_cli_restart_and_wrong_epochs_do_not_allocate() {
     let directory = test_directory();
     fixture(directory.path(), "public.optn", 1);
@@ -228,6 +305,170 @@ fn issued_receive_addresses_survive_cli_restart_and_wrong_epochs_do_not_allocate
     assert_eq!(restarted[0]["receive_address"], expected);
     assert_eq!(restarted[1]["hd_addresses"]["current_receive"], 2);
     assert_eq!(restarted[1]["hd_addresses"]["next"], json!([3, 0, 0]));
+}
+
+#[test]
+fn birthday_hints_survive_real_cli_restart_and_reject_stale_epoch() {
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 0);
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let mut expected = json!({"kind":"unknown"});
+    for (input, saved) in [
+        (
+            json!({"kind":"height","height":0}),
+            json!({"kind":"imported_at_height","height":0}),
+        ),
+        (
+            json!({"kind":"time","requested_time":172800}),
+            json!({"kind":"imported_at_time","requested_time":172800}),
+        ),
+        (json!({"kind":"unknown"}), json!({"kind":"unknown"})),
+    ] {
+        let stale = json!({"request":{"command":"set_birthday","epoch":0,"birthday":input}});
+        let update = json!({"request":{"command":"set_birthday","epoch":1,"birthday":input}});
+        let status = json!({"request":{"command":"status"}});
+        let output = run_cli(
+            directory.path(),
+            &["wallet", "--stdio"],
+            &format!("{open}\n{stale}\n{status}\n{update}\n"),
+        );
+        assert!(output.status.success());
+        let replies = responses(&output);
+        assert_eq!(replies[0]["security"]["restore_birthday"], expected);
+        assert_eq!(replies[1]["ok"], false);
+        assert_eq!(replies[2]["security"]["restore_birthday"], expected);
+        assert_eq!(replies[3]["ok"], true, "{:?}", replies[3]);
+        assert_eq!(replies[3]["security"]["restore_birthday"], saved);
+        assert_eq!(replies[3]["wallet_sync"]["utxos_fresh"], false);
+        expected = saved;
+    }
+    let output = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n"),
+    );
+    assert!(output.status.success());
+    assert_eq!(
+        responses(&output)[0]["security"]["restore_birthday"],
+        expected
+    );
+}
+
+#[test]
+fn managed_watch_only_import_survives_stdio_restart_without_exposing_xpub() {
+    let directory = test_directory();
+    let xpub = optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+        .unwrap()
+        .account_xpub_at(optn_core::hd::AccountPath::new(1, 7).unwrap())
+        .unwrap();
+    let password = "managed-public-fixture-password";
+    let wrong_password = "incorrect-public-fixture-password";
+    let assert_hidden = |output: &Output| {
+        for bytes in [&output.stdout, &output.stderr] {
+            let text = String::from_utf8_lossy(bytes);
+            assert!(
+                !text.contains(&xpub),
+                "stdio must not echo the account xpub"
+            );
+            assert!(!text.contains(password));
+            assert!(!text.contains(wrong_password));
+        }
+    };
+    let import = json!({"request": {
+        "command": "import_watch_only",
+        "name": "Saved public account",
+        "account_xpub": xpub,
+        "master_fingerprint": "73c5da0a",
+        "password": password,
+        "confirmation": password,
+        "network": "chipnet",
+        "account_path": "m/44'/1'/7'",
+    }});
+    let next = json!({"request": {"command": "next_receive", "epoch": 1}});
+    let imported = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{import}\n{next}\n"),
+    );
+    assert!(imported.status.success());
+    assert_hidden(&imported);
+    let replies = responses(&imported);
+    assert_eq!(replies.len(), 3);
+    assert_eq!(replies[0]["ok"], true);
+    assert_eq!(replies[0]["security"]["has_password"], true);
+    assert_eq!(replies[0]["hd_addresses"]["current_receive"], 0);
+    assert_eq!(replies[1]["ok"], true);
+    assert_eq!(replies[1]["hd_addresses"]["current_receive"], 1);
+    assert_eq!(replies[2]["locked"], true);
+    let handle = replies[0]["security"]["active"].as_str().unwrap();
+    let receive = optn_core::watch_only::address_under_account(
+        optn_core::network::Network::Chipnet,
+        &xpub,
+        0,
+        1,
+    )
+    .unwrap()
+    .address;
+    assert_eq!(replies[1]["receive_address"], receive);
+    let record = std::fs::read(directory.path().join(handle)).unwrap();
+    assert!(!record
+        .windows(xpub.len())
+        .any(|window| window == xpub.as_bytes()));
+    let checkpoint_files = std::fs::read_dir(directory.path().join(".state"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    assert!(!checkpoint_files.is_empty());
+    for path in checkpoint_files {
+        let bytes = std::fs::read(path).unwrap();
+        assert!(!bytes
+            .windows(xpub.len())
+            .any(|window| window == xpub.as_bytes()));
+    }
+
+    // A separate process must discover the record while locked and must not
+    // install any wallet authority after the deliberately incorrect password.
+    let status = json!({"request": {"command": "status"}});
+    let wrong = json!({"request": {
+        "command": "open", "handle": handle, "password": wrong_password,
+    }});
+    let open = json!({"request": {
+        "command": "open", "handle": handle, "password": password,
+    }});
+    let restarted = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{status}\n{wrong}\n{status}\n{open}\n"),
+    );
+    assert!(restarted.status.success());
+    assert_hidden(&restarted);
+    let replies = responses(&restarted);
+    assert_eq!(replies.len(), 5);
+    assert_eq!(replies[0]["ok"], true);
+    assert!(replies[0]["security"]["active"].is_null());
+    assert_eq!(
+        replies[0]["security"]["wallets"],
+        json!([
+            {"handle": handle, "name": "Saved public account"}
+        ])
+    );
+    assert_eq!(replies[1]["ok"], false);
+    assert_eq!(replies[2]["ok"], true);
+    assert!(replies[2]["security"]["active"].is_null());
+    assert!(replies[2]["receive_address"].is_null());
+    assert!(replies[2]["hd_addresses"].is_null());
+    assert_eq!(replies[3]["ok"], true);
+    assert_eq!(replies[3]["security"]["active"], handle);
+    assert_eq!(replies[3]["receive_address"], receive);
+    assert_eq!(replies[3]["hd_addresses"]["current_receive"], 1);
+    assert_eq!(replies[3]["wallet_sync"]["history_fresh"], false);
+    assert_eq!(replies[4]["locked"], true);
+    assert_eq!(
+        std::fs::read(directory.path().join(handle)).unwrap(),
+        record
+    );
 }
 
 #[test]
@@ -520,22 +761,47 @@ fn managed_spend_refuses_without_shared_runtime_coin_freshness() {
     assert!(values[0].get("raw").is_none() && values[0].get("txid").is_none());
 }
 
-#[test]
-fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart() {
-    use optn_runtime::wallet_checkpoint::WalletCheckpointStorage;
+fn hd_loopback(
+    raw: &[u8],
+) -> (
+    u16,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    std::thread::JoinHandle<Vec<String>>,
+) {
+    use sha2::{Digest, Sha256};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    let directory = test_directory();
-    fixture(directory.path(), "public.optn", 1); // Nondefault account must be retained.
+    let scripts: Vec<String> = if raw.is_empty() {
+        Vec::new()
+    } else {
+        optn_core::tx::decode(raw)
+            .unwrap()
+            .outputs
+            .iter()
+            .map(|output| {
+                Sha256::digest(&output.script_pubkey)
+                    .iter()
+                    .rev()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect()
+            })
+            .collect()
+    };
+    let txid: String = optn_core::header_hash::sha256d(raw)
+        .iter()
+        .rev()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let raw_hex: String = raw.iter().map(|byte| format!("{byte:02x}")).collect();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
     let stopped = Arc::new(AtomicBool::new(false));
     let stop = stopped.clone();
     let server = std::thread::spawn(move || {
-        let mut histories = 0;
+        let mut histories = Vec::new();
         while !stop.load(Ordering::SeqCst) {
             let stream = match listener.accept() {
                 Ok((stream, _)) => stream,
@@ -564,10 +830,24 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
                     }
                     "server.peers.subscribe" | "blockchain.scripthash.get_mempool" => json!([]),
                     "blockchain.scripthash.get_history" => {
-                        histories += 1;
-                        json!([])
+                        let script = request["params"][0].as_str().unwrap().to_owned();
+                        histories.push(script.clone());
+                        if scripts.contains(&script) {
+                            json!([{"tx_hash":txid,"height":0}])
+                        } else {
+                            json!([])
+                        }
                     }
-                    "blockchain.headers.subscribe" => Value::Null,
+                    "blockchain.transaction.get" if request["params"][0] == txid => {
+                        json!(raw_hex)
+                    }
+                    // No registry/authchain transaction is available in this
+                    // fixture. Unresolved metadata must not hide owned tokens.
+                    "blockchain.transaction.get" => Value::Null,
+                    "blockchain.headers.subscribe" => {
+                        json!({"height":0,"hex":optn_runtime::header_verifier::CHIPNET_GENESIS_HEADER_HEX})
+                    }
+                    "blockchain.block.headers" => json!({"count": 0, "hex": "", "max": 2016}),
                     method => panic!("unexpected loopback request: {method}"),
                 };
                 writeln!(
@@ -580,6 +860,16 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
         }
         histories
     });
+    (port, stopped, server)
+}
+
+#[test]
+fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart() {
+    use optn_runtime::wallet_checkpoint::WalletCheckpointStorage;
+    use std::sync::atomic::Ordering;
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 1); // Nondefault account must be retained.
+    let (port, stopped, server) = hd_loopback(&[]);
     let output = run_cli_at(
         directory.path(),
         &[
@@ -587,6 +877,8 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
             "public.optn",
             "--password-stdin",
             "rescan",
+            "--from-height",
+            "0",
             "--gap",
             "1",
             "--max-addresses",
@@ -596,10 +888,34 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
         port,
     );
     stopped.store(true, Ordering::SeqCst);
+    let mut queried = server.join().unwrap();
+    let account = optn_core::hd::AccountPath::new(1, 1).unwrap();
+    let wallet =
+        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
+            .unwrap();
+    let xpub = wallet.account_xpub_at(account).unwrap();
+    // Receive zero was already issued at unlock. Include its trailing unused
+    // gap in the first pass, alongside change, DeFi and compatibility branches.
+    let mut expected: Vec<_> = [(0, 0), (0, 1), (1, 0), (7, 0), (2, 0)]
+        .into_iter()
+        .map(|(branch, index)| {
+            let address = optn_core::watch_only::address_under_account(
+                optn_app::Network::Chipnet,
+                &xpub,
+                branch,
+                index,
+            )
+            .unwrap();
+            optn_core::cashaddr::Address::decode(&address.address)
+                .unwrap()
+                .electrum_scripthash()
+        })
+        .collect();
+    queried.sort();
+    expected.sort();
     assert_eq!(
-        server.join().unwrap(),
-        4,
-        "all ordinary HD branches must be queried"
+        queried, expected,
+        "query each required HD address exactly once"
     );
     assert!(
         output.status.success(),
@@ -609,13 +925,11 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
     let value = &responses(&output)[0];
     assert_eq!(value["account_path"], "m/44'/1'/1'");
     assert_eq!(value["complete"], true);
-    assert_eq!(value["scanned_addresses"], 4);
-    let account = optn_core::hd::AccountPath::new(1, 1).unwrap();
-    let key =
-        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
-            .unwrap()
-            .checkpoint_key(optn_app::Network::Chipnet, account)
-            .unwrap();
+    assert_eq!(value["wallet_sync"]["scan_coverage"]["from_height"], 0);
+    assert_eq!(value["scanned_addresses"], 5);
+    let key = wallet
+        .checkpoint_key(optn_app::Network::Chipnet, account)
+        .unwrap();
     let id = optn_core::header_hash::sha256d(b"public.optn\0chipnet\0m/44'/1'/1'");
     let disk = optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(
         directory.path().join(".state"),
@@ -636,4 +950,740 @@ fn managed_rescan_persists_the_selected_hd_account_and_reopens_it_after_restart(
     );
     assert_eq!(responses(&output)[0]["ok"], true);
     assert_eq!(disk.load(&id, &key).unwrap().unwrap().1, revision);
+    assert_eq!(responses(&output)[0]["security"]["manual_rescan_from"], 0);
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let stale = json!({"request":{"command":"clear_rescan","epoch":0}});
+    let clear = json!({"request":{"command":"clear_rescan","epoch":1}});
+    let output = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n{stale}\n{clear}\n"),
+    );
+    assert!(output.status.success());
+    let replies = responses(&output);
+    assert_eq!(replies[1]["ok"], false);
+    assert_eq!(replies[2]["ok"], true, "{:?}", replies[2]);
+    assert!(replies[2]["security"]["manual_rescan_from"].is_null());
+    assert_eq!(
+        replies[2]["security"]["restore_birthday"]["kind"],
+        "unknown"
+    );
+    let output = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n"),
+    );
+    assert!(output.status.success());
+    let reply = &responses(&output)[0];
+    assert!(reply["security"]["manual_rescan_from"].is_null());
+    assert!(reply["wallet_sync"]["scan_coverage"].is_null());
+}
+
+#[test]
+fn tokens_honor_explicit_timeout_without_reporting_an_empty_balance() {
+    let directory = test_directory();
+    // The OS accepts the loopback connection, but this listener never replies.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let started = std::time::Instant::now();
+    let output = run_cli_at(
+        directory.path(),
+        &["tokens", "--gap", "1"],
+        "",
+        listener.local_addr().unwrap().port(),
+    );
+    assert_eq!(output.status.code(), Some(3));
+    let value = &responses(&output)[0];
+    assert_eq!(
+        value["message"],
+        "HD rescan timed out before completing the account"
+    );
+    assert_eq!(value["ok"], false);
+    assert!(value.get("fungible").is_none());
+    // run_cli_at supplies --timeout 1. Neither the provider's longer timeout nor
+    // Tokens' 300-second default may replace that whole-refresh budget.
+    assert!(
+        (std::time::Duration::from_secs(1)..std::time::Duration::from_secs(10))
+            .contains(&started.elapsed())
+    );
+    assert!(!directory.path().join(".state").exists());
+}
+
+#[test]
+fn tokens_share_hd_sync_for_saved_watch_only_and_legacy_accounts() {
+    use optn_core::token::{Capability, Nft, TokenData};
+    use optn_runtime::wallet_checkpoint::WalletCheckpointStorage;
+    use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
+    use std::sync::atomic::Ordering;
+
+    let directory = test_directory();
+    fixture(directory.path(), "public.optn", 1);
+    let network = optn_app::Network::Chipnet;
+    let account = optn_core::hd::AccountPath::new(1, 1).unwrap();
+    let wallet =
+        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "TREZOR")
+            .unwrap();
+    let saved_xpub = wallet.account_xpub_at(account).unwrap();
+    let legacy_xpub =
+        optn_core::hd::Wallet::from_mnemonic(optn_core::hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+            .unwrap()
+            .account_xpub_at(optn_core::hd::AccountPath::default_for(network))
+            .unwrap();
+    // Only the account is a published vector; encryption inputs need no fixed bytes.
+    let watch_password: String = OsRng
+        .sample_iter(Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+    let watch_input = format!("{watch_password}\n");
+    let entropy = std::array::from_fn(|_| OsRng.gen());
+    let checkpoint_entropy: [u8; 32] = OsRng.gen();
+    let watch = optn_core::wallet_file::WatchOnlyFile::create(
+        "Public watch fixture",
+        &saved_xpub,
+        "73c5da0a",
+        &watch_password,
+        &watch_password,
+        network,
+        account,
+        &entropy,
+        &checkpoint_entropy,
+    )
+    .unwrap();
+    std::fs::write(directory.path().join("watch.optn"), watch.encode().unwrap()).unwrap();
+
+    let amount = i64::MAX as u64;
+    let fungible = TokenData::fungible([9; 32], amount);
+    let mixed = TokenData {
+        nft: Some(Nft {
+            capability: Capability::Mutable,
+            commitment: vec![0xab, 0xcd],
+        }),
+        ..fungible.clone()
+    };
+    let nft_only = TokenData {
+        category: [1; 32],
+        amount: 0,
+        nft: Some(Nft {
+            capability: Capability::None,
+            commitment: Vec::new(),
+        }),
+    };
+    // Raw observation fixture, never signed or broadcast. An output at receive
+    // zero keeps discovery open past the former --gap 1 fixed prefix. Three
+    // fungible outputs exercise a total wider than u64, plus zero-satoshi NFTs.
+    let mut outputs = Vec::new();
+    for xpub in [&saved_xpub, &legacy_xpub] {
+        for (branch, index, token) in [
+            (0, 0, None),
+            (0, 1, Some(&fungible)),
+            (1, 0, Some(&fungible)),
+            (2, 0, Some(&mixed)),
+            (7, 0, Some(&nft_only)),
+        ] {
+            let address =
+                optn_core::watch_only::address_under_account(network, xpub, branch, index).unwrap();
+            let mut script = token.map_or_else(Vec::new, |token| token.encode_prefix().unwrap());
+            script.extend_from_slice(
+                &optn_core::cashaddr::Address::decode(&address.address)
+                    .unwrap()
+                    .script_pubkey(),
+            );
+            outputs.push((if branch == 7 { 0u64 } else { 100 }, script));
+        }
+    }
+    let mut raw = vec![2, 0, 0, 0, 0]; // No inputs: serialization fixture only.
+    raw.extend_from_slice(&optn_core::tx::varint(outputs.len() as u64));
+    for (value, script) in outputs {
+        raw.extend_from_slice(&value.to_le_bytes());
+        raw.extend_from_slice(&optn_core::tx::varint(script.len() as u64));
+        raw.extend_from_slice(&script);
+    }
+    raw.extend_from_slice(&[0; 4]);
+    let txid: String = optn_core::header_hash::sha256d(&raw)
+        .iter()
+        .rev()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let (port, stopped, server) = hd_loopback(&raw);
+    for (handle, account_index, first_output) in [
+        (Some("public.optn"), 1, 0),
+        (Some("watch.optn"), 1, 0),
+        (None, 0, 5),
+    ] {
+        let mut args = Vec::new();
+        if let Some(handle) = handle {
+            args.extend(["--wallet", handle, "--password-stdin"]);
+        }
+        args.extend(["tokens", "--gap", "1"]);
+        let input = match handle {
+            Some("watch.optn") => watch_input.as_str(),
+            Some(_) => "old-password\n",
+            None => "stdin must not override the environment fixture\n",
+        };
+        let output = run_cli_at(directory.path(), &args, input, port);
+        for bytes in [&output.stdout, &output.stderr] {
+            assert!(!String::from_utf8_lossy(bytes).contains(&watch_password));
+        }
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            responses(&output)[0],
+            json!({
+                "ok": true,
+                "network": "chipnet",
+                "token_utxos": 4,
+                "fungible": [{"category":"09".repeat(32),"amount":(u128::from(amount) * 3).to_string()}],
+                "nfts": [
+                    {"category":"09".repeat(32),"capability":"mutable","commitment":"abcd",
+                     "txid":txid,"vout":first_output + 3,"path":format!("m/44'/1'/{account_index}'/2/0")},
+                    {"category":"01".repeat(32),"capability":"none","commitment":"",
+                     "txid":txid,"vout":first_output + 4,"path":format!("m/44'/1'/{account_index}'/7/0")}
+                ],
+                "scope": {"kind":"hd-account","account_path":format!("m/44'/1'/{account_index}'"),"branches":[0,1,7,2]},
+                "source": "cli-electrum",
+                "evidence": "ServerAssertion",
+                "scan_coverage": {"from_height":0,"skipped_below":null,"chosen_by_holder":false},
+                "complete": true,
+            })
+        );
+    }
+    // Reuse the same route and checkpoint through both existing consumers.
+    for command in ["rescan", "history"] {
+        let output = run_cli_at(
+            directory.path(),
+            &[
+                "--wallet",
+                "public.optn",
+                "--password-stdin",
+                command,
+                "--gap",
+                "1",
+            ],
+            "old-password\n",
+            port,
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let value = &responses(&output)[0];
+        assert_eq!(value["source"], "cli-electrum");
+        assert_eq!(value["evidence"], "ServerAssertion");
+        assert_eq!(value["complete"], true);
+        assert_eq!(value["confirmed"], 0);
+        assert_eq!(value["unconfirmed"], 400);
+        assert_eq!(value["total"], 400);
+        if command == "rescan" {
+            assert_eq!(value["account_path"], "m/44'/1'/1'");
+            assert_eq!(value["utxos"], 5);
+            assert_eq!(value["wallet_sync"]["history"].as_array().unwrap().len(), 1);
+        } else {
+            assert_eq!(value["count"], 1);
+            assert_eq!(value["shown"], 1);
+            assert_eq!(value["transactions"].as_array().unwrap().len(), 1);
+        }
+    }
+    let open =
+        json!({"request":{"command":"open","handle":"public.optn","password":"old-password"}});
+    let birthday = json!({"request":{"command":"set_birthday","epoch":1,"birthday":{"kind":"height","height":1}}});
+    let updated = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n{birthday}\n"),
+    );
+    assert_eq!(responses(&updated)[1]["ok"], true);
+    let above_tip = run_cli_at(
+        directory.path(),
+        &[
+            "--wallet",
+            "public.optn",
+            "--password-stdin",
+            "tokens",
+            "--gap",
+            "1",
+        ],
+        "old-password\n",
+        port,
+    );
+    // This fixture reports only genesis. A birthday beyond that observed tip
+    // cannot become an apparently complete empty Tokens result.
+    assert!(!above_tip.status.success());
+    let value = &responses(&above_tip)[0];
+    assert_eq!(value["ok"], false);
+    assert!(value["message"]
+        .as_str()
+        .unwrap()
+        .contains("above the observed tip"));
+    assert!(value.get("fungible").is_none());
+    stopped.store(true, Ordering::SeqCst);
+    assert!(!server.join().unwrap().is_empty());
+
+    let disk = optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(
+        directory.path().join(".state"),
+    );
+    let key = wallet.checkpoint_key(network, account).unwrap();
+    let id = optn_core::header_hash::sha256d(b"public.optn\0chipnet\0m/44'/1'/1'");
+    let (_, revision) = disk
+        .load(&id, &key)
+        .unwrap()
+        .expect("durable HD token snapshot");
+    let watch_key = watch
+        .unlock(&watch_password)
+        .unwrap()
+        .checkpoint_key
+        .clone();
+    let watch_id = optn_core::header_hash::sha256d(b"watch.optn\0chipnet\0m/44'/1'/1'");
+    assert!(disk.load(&watch_id, &watch_key).unwrap().is_some());
+
+    let reopened = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{open}\n"),
+    );
+    let value = &responses(&reopened)[0];
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["wallet_sync"]["history"].as_array().unwrap().len(), 1);
+    assert_eq!(value["wallet_sync"]["history_fresh"], false);
+    // Closed selected route must fail even with a valid checkpoint and a legacy
+    // phrase available. Wrong password must never fall back to that phrase.
+    for password in ["old-password\n", "wrong-public-fixture-password\n"] {
+        let failed = run_cli_at(
+            directory.path(),
+            &[
+                "--wallet",
+                "public.optn",
+                "--password-stdin",
+                "tokens",
+                "--gap",
+                "1",
+            ],
+            password,
+            port,
+        );
+        assert!(!failed.status.success());
+        assert_eq!(responses(&failed)[0]["ok"], false);
+    }
+    assert_eq!(disk.load(&id, &key).unwrap().unwrap().1, revision);
+}
+
+#[test]
+fn stdio_airgap_routes_to_runtime_and_never_grants_broadcast() {
+    let directory = test_directory();
+    let input = [
+        json!({"airgap":{"op":"prepare", "destination":"bchtest:qqaz6s295ncfs53m86qj0uw6sl8u2kuw0ymst35fx4", "amount_sats":1000}}),
+        json!({"airgap":{"op":"finalize", "request_id":1, "signed_psbt_hex":"70736274ff"}}),
+        json!({"airgap":{"op":"cancel"}}),
+        json!({"airgap":{"op":"broadcast", "raw_transaction_hex":"00"}}),
+        json!({"airgap":{"op":"finalize", "request_id":1, "signed_psbt_hex":"00", "broadcast":true}}),
+    ].into_iter().map(|value| format!("{value}\n")).collect::<String>();
+    let output = run_cli(directory.path(), &["wallet", "--stdio"], &input);
+    assert!(output.status.success());
+    let replies = responses(&output);
+    assert_eq!(replies.len(), 6);
+    for reply in &replies[..2] {
+        assert_eq!(
+            reply["ok"], false,
+            "A locked console cannot prepare or finalize"
+        );
+        assert_ne!(
+            reply["error"], "Invalid wallet command.",
+            "Valid envelopes must reach the shared runtime"
+        );
+        assert!(reply.get("airgap").is_none());
+    }
+    assert_eq!(replies[2]["ok"], true);
+    assert_eq!(replies[2]["sent"], false);
+    assert_eq!(replies[2]["airgap"]["request_id"], 0);
+    assert!(replies[2]["airgap"]["raw_transaction_hex"].is_null());
+    for reply in &replies[3..5] {
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["error"], "Invalid wallet command.");
+    }
+}
+
+#[test]
+fn source_selection_is_shared_durable_and_invalid_edits_preserve_the_file() {
+    let directory = test_directory();
+    let selection = directory.path().join("selection.json");
+    std::fs::write(
+        &selection,
+        serde_json::to_vec(&json!({
+            "protocols":["Bip37"], "primary_scope":"MyInfrastructure",
+            "fallback_scope":null, "preferred":[]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let args = ["network", "configure", selection.to_str().unwrap()];
+    let output = run_cli(directory.path(), &args, "");
+    assert!(
+        output.status.success(),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let config = directory.path().join("network-config/network-chipnet.json");
+    let before = std::fs::read(&config).unwrap();
+    let output = run_cli(directory.path(), &["network", "status"], "");
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["policy"]["primary_scope"], "UserInfrastructure");
+    assert_eq!(value["policy"]["fallback_scope"], Value::Null);
+    assert_eq!(value["policy"]["protocols"], json!(["Bip37"]));
+    std::fs::write(
+        &selection,
+        serde_json::to_vec(&json!({
+            "protocols":["Bip37"], "primary_scope":{"Selected":["missing-source"]},
+            "fallback_scope":null, "preferred":[]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(!run_cli(directory.path(), &args, "").status.success());
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+
+    let exported = run_cli(directory.path(), &["network", "export"], "");
+    assert!(exported.status.success());
+    let mut archive: Value = serde_json::from_slice(&exported.stdout).unwrap();
+    assert_eq!(archive["network"], "chipnet");
+    let portable = directory.path().join("portable.json");
+    std::fs::write(&portable, &exported.stdout).unwrap();
+    let restored = test_directory();
+    let import_args = ["network", "import", portable.to_str().unwrap()];
+    let imported = run_cli(restored.path(), &import_args, "");
+    assert!(
+        imported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&imported.stdout)
+    );
+    let status = run_cli(restored.path(), &["network", "status"], "");
+    assert!(status.status.success());
+    let restored_value: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(restored_value["policy"], value["policy"]);
+    let restored_config = restored.path().join("network-config/network-chipnet.json");
+    let accepted = std::fs::read(&restored_config).unwrap();
+    archive["network"] = json!("mainnet");
+    std::fs::write(&portable, serde_json::to_vec(&archive).unwrap()).unwrap();
+    assert!(!run_cli(restored.path(), &import_args, "").status.success());
+    assert_eq!(std::fs::read(&restored_config).unwrap(), accepted);
+    std::fs::write(&portable, b"{invalid").unwrap();
+    assert!(!run_cli(restored.path(), &import_args, "").status.success());
+    assert_eq!(std::fs::read(&restored_config).unwrap(), accepted);
+}
+
+#[test]
+fn source_mutations_keep_an_empty_exact_scope_after_a_cli_restart() {
+    let directory = test_directory();
+    let request = directory.path().join("source.json");
+    std::fs::write(
+        &request,
+        serde_json::to_vec(&json!({
+            "network":"chipnet",
+            "label":"Temporary P2P",
+            "kind":"p2p",
+            "host":"temporary-source.example",
+            "port":8333,
+            "infrastructure_group":null,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let source = "host:temporary-source.example";
+
+    let added = run_cli(
+        directory.path(),
+        &["network", "add", request.to_str().unwrap()],
+        "",
+    );
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    let selected = run_cli(
+        directory.path(),
+        &["network", "select", source, "--protocol", "bip37"],
+        "",
+    );
+    assert!(
+        selected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    let config = directory.path().join("network-config/network-chipnet.json");
+    let before_invalid = std::fs::read(&config).unwrap();
+    assert!(!run_cli(
+        directory.path(),
+        &["network", "disposition", source, "not-a-disposition"],
+        "",
+    )
+    .status
+    .success());
+    assert_eq!(std::fs::read(&config).unwrap(), before_invalid);
+    let selected_status: Value = serde_json::from_slice(&selected.stdout).unwrap();
+    let bootstrap = selected_status["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["origin"].as_str().unwrap().starts_with("Bootstrap"))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !run_cli(directory.path(), &["network", "remove", &bootstrap], "")
+            .status
+            .success()
+    );
+    assert_eq!(std::fs::read(&config).unwrap(), before_invalid);
+
+    // Private stdio uses the same mutation path and must reject no state
+    // between disable and re-enable. Both replies are public status only.
+    let disposition = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!(
+            "{{\"network\":{{\"op\":\"disposition\",\"source\":\"{source}\",\"disposition\":\"disabled\"}}}}\n{{\"network\":{{\"op\":\"disposition\",\"source\":\"{source}\",\"disposition\":\"enabled\"}}}}\n"
+        ),
+    );
+    assert!(
+        disposition.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disposition.stderr)
+    );
+    let replies = responses(&disposition);
+    assert!(replies.len() >= 2);
+    assert_eq!(replies[0]["ok"], true);
+    assert_eq!(
+        replies[0]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == source)
+            .unwrap()["disposition"],
+        "Disabled"
+    );
+    assert_eq!(replies[1]["ok"], true);
+
+    // The interactive wallet prompt reaches the same asynchronous remove path.
+    let removed = run_cli(
+        directory.path(),
+        &["wallet"],
+        &format!("network remove {source}\nquit\n"),
+    );
+    assert!(
+        removed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    assert_eq!(responses(&removed)[0]["ok"], true);
+
+    // A new process must retain the holder's explicitly empty scope; Auto
+    // would silently expand it back to the bootstrap catalog.
+    let reopened = run_cli(directory.path(), &["network", "status"], "");
+    assert!(
+        reopened.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reopened.stderr)
+    );
+    let status: Value = serde_json::from_slice(&reopened.stdout).unwrap();
+    assert_eq!(status["policy"]["primary_scope"], "Explicit({})");
+    assert_eq!(status["policy"]["fallback_scope"], Value::Null);
+    assert!(status["primary"].as_array().unwrap().is_empty());
+    assert!(status["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry["id"] != source));
+}
+
+#[test]
+fn wallet_prompt_and_private_stdio_share_source_settings() {
+    let directory = test_directory();
+    let selection = json!({
+        "protocols":["Bip37"], "primary_scope":"MyInfrastructure",
+        "fallback_scope":null, "preferred":[]
+    });
+    let input = format!("network configure {selection}\nnetwork status\nquit\n");
+    let output = run_cli(directory.path(), &["wallet"], &input);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let prompt = responses(&output);
+    assert_eq!(prompt.len(), 2);
+    assert_eq!(prompt[0]["ok"], true);
+    assert_eq!(prompt[1]["policy"]["primary_scope"], "UserInfrastructure");
+    let config = directory.path().join("network-config/network-chipnet.json");
+    let before = std::fs::read(&config).unwrap();
+    let input = concat!(
+        "{\"network\":{\"op\":\"status\"}}\n",
+        "{\"network\":{\"op\":\"select\",\"source\":\"missing-source\",\"protocol\":\"bip37\"}}\n",
+        "{\"network\":{\"op\":\"status\",\"secret\":\"must-not-echo\"}}\n"
+    );
+    let output = run_cli(directory.path(), &["wallet", "--stdio"], input);
+    assert!(output.status.success());
+    let replies = responses(&output);
+    assert_eq!(replies[0]["policy"], prompt[1]["policy"]);
+    assert_eq!(replies[1]["ok"], false);
+    assert_eq!(replies[2]["error"], "Invalid wallet command.");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("must-not-echo"));
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+}
+
+#[test]
+fn named_policy_selection_is_shared_by_prompt_stdio_and_reopened_cli() {
+    let directory = test_directory();
+    for preset in [
+        "own-infrastructure",
+        "privacy",
+        "electrum-only",
+        "bip37-only",
+        "neutrino-only",
+        "auto",
+    ] {
+        let input = format!("network policy {preset}\nquit\n");
+        let selected = run_cli(directory.path(), &["wallet"], &input);
+        assert!(selected.status.success());
+        let selected = responses(&selected);
+        assert_eq!(selected[0]["ok"], true, "{preset}: {selected:?}");
+        let reopened = run_cli(directory.path(), &["network", "status"], "");
+        assert!(reopened.status.success());
+        let reopened: Value = serde_json::from_slice(&reopened.stdout).unwrap();
+        assert_eq!(reopened["policy"], selected[0]["policy"]);
+        assert!(reopened["policy"]["fallback_scope"].is_null());
+        if preset == "own-infrastructure" {
+            assert_eq!(reopened["policy"]["primary_scope"], "UserInfrastructure");
+        } else {
+            assert_eq!(reopened["policy"]["primary_scope"], "AllEnabled");
+        }
+    }
+    let one_shot = run_cli(
+        directory.path(),
+        &["network", "policy", "own-infrastructure"],
+        "",
+    );
+    assert!(one_shot.status.success());
+    let stdio = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        "{\"network\":{\"op\":\"policy\",\"preset\":\"auto\"}}\n",
+    );
+    assert!(stdio.status.success());
+    assert_eq!(
+        responses(&stdio)[0]["policy"]["primary_scope"],
+        "AllEnabled"
+    );
+    let config = directory.path().join("network-config/network-chipnet.json");
+    let before = std::fs::read(&config).unwrap();
+    for invalid in ["custom", "unknown"] {
+        assert!(
+            !run_cli(directory.path(), &["network", "policy", invalid], "")
+                .status
+                .success()
+        );
+        assert_eq!(std::fs::read(&config).unwrap(), before);
+    }
+}
+
+#[test]
+fn rpc_credentials_refuse_unknown_sources_without_echoing_private_input() {
+    let directory = test_directory();
+    let marker = format!(
+        "private-{}",
+        directory.path().file_name().unwrap().to_string_lossy()
+    );
+    let request = json!({"network":{"op":"credentials","request":{"op":"set","source":"absent","username":marker,"password":marker}}});
+    let output = run_cli(
+        directory.path(),
+        &["wallet", "--stdio"],
+        &format!("{request}\n"),
+    );
+    assert!(output.status.success());
+    assert_eq!(responses(&output)[0]["ok"], false);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&marker));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(&marker));
+}
+
+#[test]
+#[ignore = "uses a disposable entry in the real operating-system credential store"]
+fn rpc_credentials_survive_cli_restart_and_stay_out_of_export() {
+    use optn_runtime::chain::{Endpoint, EndpointKind};
+    use optn_runtime::network_config::{
+        add_user_source, NetworkConfigEnvelope, SHIPPED_CATALOG_VERSION,
+    };
+    let directory = test_directory();
+    let label = directory
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let mut envelope = NetworkConfigEnvelope::current(SHIPPED_CATALOG_VERSION, Default::default());
+    let source = add_user_source(
+        &mut envelope.overlay,
+        &label,
+        Endpoint {
+            kind: EndpointKind::BchnRpc,
+            host: "127.0.0.1".into(),
+            port: Some(18443),
+        },
+        Some(&label),
+    )
+    .unwrap();
+    let unique = optn_runtime::chain::SourceId::new(format!("credential-test-{label}"));
+    envelope
+        .overlay
+        .user_sources
+        .iter_mut()
+        .find(|entry| entry.id == source)
+        .unwrap()
+        .id = unique.clone();
+    let source = unique;
+    let config = directory.path().join("network-config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("network-chipnet.json"),
+        optn_runtime::network_config::encode_envelope_json(&envelope).unwrap(),
+    )
+    .unwrap();
+    let marker = format!("private-{label}");
+    let call = |op: Value| {
+        run_cli(
+            directory.path(),
+            &["wallet", "--stdio"],
+            &format!("{}\n", json!({"network":{"op":"credentials","request":op}})),
+        )
+    };
+    let set =
+        call(json!({"op":"set","source":source.as_str(),"username":marker,"password":marker}));
+    let status = call(json!({"op":"status","source":source.as_str()}));
+    let exported = run_cli(directory.path(), &["network", "export"], "");
+    // Clean up before assertions so a failed check cannot leave the public test credential behind.
+    let removed = call(json!({"op":"remove","source":source.as_str()}));
+    let missing = call(json!({"op":"status","source":source.as_str()}));
+    for output in [&set, &status] {
+        assert!(output.status.success());
+        assert_eq!(
+            responses(output)[0]["configured"],
+            true,
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    for output in [&removed, &missing] {
+        assert!(output.status.success());
+        assert_eq!(responses(output)[0]["configured"], false);
+    }
+    assert!(exported.status.success());
+    for output in [&set, &status, &removed, &missing, &exported] {
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(&marker));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(&marker));
+    }
 }

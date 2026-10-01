@@ -37,8 +37,8 @@ jobs:
       - name: Regenerate npm lockfile
         run: npm install --package-lock-only --ignore-scripts
 
-      # Validate the committed resolution. Regenerating selects newly published
-      # dependencies and can fail an unchanged PR after an unrelated release.
+      # Resolve the committed versions, not today's newest compatible releases.
+      # Full metadata resolution rejects missing or incompatible lockfiles.
       - name: Validate application workspace lockfile
         run: cargo metadata --locked --format-version 1 > /dev/null
 

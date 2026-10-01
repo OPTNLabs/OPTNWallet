@@ -77,7 +77,7 @@ type TrackAttemptArgs = {
   dappUrl?: string | null;
   requestId?: string | null;
   userPrompt?: string | null;
-  spentInputs?: UTXO[];
+  spentInputs?: Array<Pick<UTXO, 'tx_hash' | 'tx_pos'>>;
 };
 
 type RecordBroadcastArgs = TrackAttemptArgs & {
@@ -196,7 +196,9 @@ async function migrateFallbackRecords(): Promise<
   return records;
 }
 
-function toTrackedOutpoints(inputs?: UTXO[]): TrackedOutpoint[] {
+function toTrackedOutpoints(
+  inputs?: Array<Pick<UTXO, 'tx_hash' | 'tx_pos'>>
+): TrackedOutpoint[] {
   return (inputs ?? []).map((utxo) => ({
     tx_hash: String(utxo.tx_hash).trim().toLowerCase(),
     tx_pos: utxo.tx_pos,

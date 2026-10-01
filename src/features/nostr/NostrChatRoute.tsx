@@ -5,25 +5,24 @@ import { useSelector } from 'react-redux';
 
 import { homeRoute } from '../../navigation/routes';
 import type { RootState } from '../../state/store';
-import { selectNostrChatEnabled } from '../../state/slices/experimentalSlice';
 
 /**
- * Honor an explicit chat opt-out before any chat-side effects can start.
+ * Require an opened wallet before any chat-side effects can start.
  * Mounting the client derives the Nostr identity, publishes the kind-10050
  * relay list, and starts a gift-wrap subscription.
  */
 export const NostrChatRoute: FC<PropsWithChildren> = ({ children }) => {
-  const enabled = useSelector(selectNostrChatEnabled);
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
   const navigate = useNavigate();
+  const opened = walletId > 0;
 
   useEffect(() => {
-    if (!enabled) {
+    if (!opened) {
       navigate(homeRoute(walletId), { replace: true });
     }
-  }, [enabled, navigate, walletId]);
+  }, [opened, navigate, walletId]);
 
-  return enabled ? <>{children}</> : null;
+  return opened ? <>{children}</> : null;
 };

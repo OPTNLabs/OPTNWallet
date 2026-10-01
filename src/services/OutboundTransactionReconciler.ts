@@ -249,7 +249,9 @@ export async function reconcileOutboundTransactions(
     ordinaryRemaining
       .filter((record) => OutboundTransactionTracker.shouldRebroadcast(record))
       .map((record) =>
-        transactionManager.sendTransaction(record.rawTx).catch(() => null)
+        transactionManager
+          .sendTransaction(record.rawTx, record.walletId)
+          .catch(() => null)
       )
   );
 

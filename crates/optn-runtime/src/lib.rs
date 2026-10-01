@@ -9,6 +9,7 @@
 //! The runtime does not choose an executor for the host. `AppRuntime::new`
 //! returns a driver future which Tauri, tests, or another shell can spawn.
 
+mod airgap;
 /// Provider-neutral SHV/MMR header verification using the pure optn-core accumulator.
 pub mod authchain;
 /// Provenance-preserving normalization of upstream node/server bootstrap feeds.
@@ -20,6 +21,7 @@ pub mod capability_planner;
 pub mod chain;
 /// Runtime-owned operation-aware provider selection and bounded failover.
 pub mod chain_service;
+pub mod coin_holds;
 /// Query-before-apply gate for lossy event-stream sequence gaps.
 pub mod event_recovery;
 /// Provider-neutral normalized chain event streams. Event delivery is never
@@ -40,6 +42,8 @@ pub mod network_config;
 pub mod reconciliation;
 /// Native-only Cash Code discovery and public spending recipes.
 pub mod rpa_receive;
+pub mod rpc_credentials;
+pub mod source_selection;
 /// Progressive capability-route wallet synchronization.
 pub mod sync_worker;
 /// Broadcast state tracking. Timeout/offline ambiguity is preserved rather than
@@ -52,8 +56,10 @@ pub mod update;
 pub mod wallet_birthday;
 /// Authenticated HD restart state; storage never grants unlock or spend authority.
 pub mod wallet_checkpoint;
+pub mod wallet_refresh;
 /// Private ciphertext sessions and password verification shared by native hosts.
 pub mod wallet_security;
+pub mod wallet_spend;
 /// Session-bound publication of provider observations into application state.
 pub mod wallet_sync;
 
@@ -111,10 +117,107 @@ pub struct AppRuntime {
     state_rx: watch::Receiver<AppState>,
     event_tx: broadcast::Sender<AppEvent>,
     revocation: Arc<AtomicU64>,
+    operation_changes: watch::Sender<u64>,
+    operation_mutations: Arc<AtomicU64>,
     wallet_sync_rx: watch::Receiver<wallet_sync::WalletReconciliation>,
 }
 
+/// Lifetime of work authorized against one wallet/coin snapshot. This grants
+/// no authority to sign: callers still use the ordinary authorization gates.
+pub struct WalletOperationGuard {
+    revocation: Arc<AtomicU64>,
+    generation: u64,
+    operation_changes: watch::Receiver<u64>,
+    operation_generation: u64,
+    operation_mutations: Arc<AtomicU64>,
+    began_during_mutation: bool,
+    wallet_sync_rx: watch::Receiver<wallet_sync::WalletReconciliation>,
+    state_rx: watch::Receiver<AppState>,
+    baseline: AppState,
+}
+
+impl WalletOperationGuard {
+    pub fn is_revoked(&self) -> bool {
+        let current = self.state_rx.borrow();
+        self.generation != self.revocation.load(Ordering::SeqCst)
+            || self.began_during_mutation
+            || self.operation_mutations.load(Ordering::SeqCst) != 0
+            || *self.operation_changes.borrow() != self.operation_generation
+            || self.wallet_sync_rx.has_changed().unwrap_or(true)
+            || self.state_rx.has_changed().is_err()
+            || current.wallet.is_none()
+            || !current.wallet_sync.utxos_fresh
+            || !current.wallet_sync.history_fresh
+            || wallet_work_changed(&self.baseline, &current)
+    }
+
+    /// Watches retained revisions, so cancellation before registration is not
+    /// lost. Cosmetic snapshots wake the check without cancelling the operation.
+    pub async fn cancelled(&self) {
+        let mut operations = self.operation_changes.clone();
+        let mut states = self.state_rx.clone();
+        let mut sync = self.wallet_sync_rx.clone();
+        loop {
+            if self.is_revoked() {
+                return;
+            }
+            tokio::select! {
+                result = operations.changed() => if result.is_err() { return; },
+                result = states.changed() => if result.is_err() { return; },
+                result = sync.changed() => if result.is_err() { return; },
+            }
+        }
+    }
+}
+
+fn wallet_work_changed(before: &AppState, after: &AppState) -> bool {
+    before.lock.unlock_epoch != after.lock.unlock_epoch
+        || before.lock.auto_lock != after.lock.auto_lock
+        || before.lock.prompt != after.lock.prompt
+        || before.surface != after.surface
+        || before.features != after.features
+        || before.network != after.network
+        || before.wallet != after.wallet
+        || before.coins.len() != after.coins.len()
+        || !before.coins.iter().zip(after.coins.iter()).all(|(a, b)| {
+            a.outpoint() == b.outpoint()
+                && a.value_sats() == b.value_sats()
+                && a.address() == b.address()
+                && a.source() == b.source()
+                && a.token() == b.token()
+                && a.freeze() == b.freeze()
+                && a.fuse_depth() == b.fuse_depth()
+        })
+        || before.hd_addresses != after.hd_addresses
+        || before.spend != after.spend
+        || before.wallet_sync != after.wallet_sync
+}
+
+fn cancel_operations(changes: &watch::Sender<u64>) {
+    changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+}
+
+/// Trusted host mutation of legacy wallet reservations. New wallet operations
+/// remain refused until every concurrent edit has finished, including errors.
+#[must_use]
+pub struct WalletMutationGuard {
+    active: Arc<AtomicU64>,
+    changes: watch::Sender<u64>,
+}
+
+impl Drop for WalletMutationGuard {
+    fn drop(&mut self) {
+        cancel_operations(&self.changes);
+        self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 enum RuntimeRequest {
+    Airgap(
+        optn_transport::AirgapRequest,
+        u64,
+        oneshot::Sender<Result<optn_transport::AirgapResponse, TransportError>>,
+    ),
     WalletSync(WalletSyncRequest),
     WalletOperation(
         optn_app::AuthScope,
@@ -122,6 +225,7 @@ enum RuntimeRequest {
         oneshot::Sender<Result<optn_core::hd::Wallet, TransportError>>,
     ),
     Action(AppAction, oneshot::Sender<()>),
+    Observation(AppAction, oneshot::Sender<()>),
     Security(
         WalletSecurityRequest,
         u64,
@@ -130,6 +234,7 @@ enum RuntimeRequest {
 }
 
 pub struct AppRuntimeDriver {
+    airgap: airgap::AirgapSession,
     action_rx: mpsc::Receiver<RuntimeRequest>,
     state_tx: watch::Sender<AppState>,
     event_tx: broadcast::Sender<AppEvent>,
@@ -137,6 +242,7 @@ pub struct AppRuntimeDriver {
     wallet_sync: WalletSyncSession,
     security: Option<wallet_security::WalletSecurity>,
     revocation: Arc<AtomicU64>,
+    operation_changes: watch::Sender<u64>,
     started: std::time::Instant,
 }
 
@@ -157,6 +263,12 @@ impl DirectTransport {
 }
 
 impl AppTransport for DirectTransport {
+    fn airgap<'a>(
+        &'a self,
+        request: optn_transport::AirgapRequest,
+    ) -> TransportFuture<'a, optn_transport::AirgapResponse> {
+        Box::pin(async move { self.runtime.airgap(request).await })
+    }
     fn wallet_security<'a>(
         &'a self,
         request: WalletSecurityRequest,
@@ -191,6 +303,39 @@ impl AppTransport for DirectTransport {
 }
 
 impl AppRuntime {
+    pub fn wallet_operation_guard(&self) -> WalletOperationGuard {
+        let operation_generation = *self.operation_changes.borrow();
+        let mut wallet_sync_rx = self.wallet_sync_rx.clone();
+        wallet_sync_rx.borrow_and_update();
+        WalletOperationGuard {
+            generation: self.revocation.load(Ordering::SeqCst),
+            revocation: self.revocation.clone(),
+            operation_generation,
+            began_during_mutation: self.operation_mutations.load(Ordering::SeqCst) != 0,
+            operation_mutations: self.operation_mutations.clone(),
+            operation_changes: self.operation_changes.subscribe(),
+            wallet_sync_rx,
+            state_rx: self.state_rx.clone(),
+            baseline: self.state(),
+        }
+    }
+
+    /// A host changing a legacy reservation must cancel pending wallet work.
+    /// This does not invalidate otherwise valid chain observations or change
+    /// authorization; it only stops operations retaining the previous holds.
+    pub fn cancel_wallet_operations(&self) {
+        cancel_operations(&self.operation_changes);
+    }
+
+    pub fn begin_wallet_mutation(&self) -> WalletMutationGuard {
+        self.operation_mutations.fetch_add(1, Ordering::SeqCst);
+        self.cancel_wallet_operations();
+        WalletMutationGuard {
+            active: self.operation_mutations.clone(),
+            changes: self.operation_changes.clone(),
+        }
+    }
+
     /// Trusted native caller only. No corresponding wire or renderer command exists.
     pub async fn wallet_for_operation(
         &self,
@@ -210,6 +355,7 @@ impl AppRuntime {
         let (state_tx, state_rx) = watch::channel(initial_state.clone());
         let (event_tx, _) = broadcast::channel(EVENT_CAPACITY);
         let revocation = Arc::new(AtomicU64::new(0));
+        let (operation_changes, _) = watch::channel(0);
         let (wallet_sync, wallet_sync_rx) = WalletSyncSession::new();
 
         (
@@ -218,9 +364,12 @@ impl AppRuntime {
                 state_rx,
                 event_tx: event_tx.clone(),
                 revocation: Arc::clone(&revocation),
+                operation_changes: operation_changes.clone(),
+                operation_mutations: Arc::new(AtomicU64::new(0)),
                 wallet_sync_rx,
             },
             AppRuntimeDriver {
+                airgap: Default::default(),
                 action_rx,
                 state_tx,
                 event_tx,
@@ -228,6 +377,7 @@ impl AppRuntime {
                 wallet_sync,
                 security: None,
                 revocation,
+                operation_changes,
                 started: std::time::Instant::now(),
             },
         )
@@ -253,9 +403,43 @@ impl AppRuntime {
         ) {
             self.revocation.fetch_add(1, Ordering::SeqCst);
         }
+        if matches!(
+            action,
+            AppAction::LockWallet
+                | AppAction::CancelAuth
+                | AppAction::GoBack
+                | AppAction::SetNetwork(_)
+                | AppAction::FreezeCoin(_)
+                | AppAction::UnfreezeCoin(_)
+                | AppAction::RequestRescanFrom { .. }
+        ) {
+            self.cancel_wallet_operations();
+        }
         let (applied_tx, applied_rx) = oneshot::channel();
         self.action_tx
             .send(RuntimeRequest::Action(action, applied_tx))
+            .await
+            .map_err(|_| RuntimeStopped)?;
+        applied_rx.await.map_err(|_| RuntimeStopped)
+    }
+
+    /// Publish a wallet observation the interface is not allowed to make.
+    ///
+    /// [`Self::dispatch`] uses `reduce_intent`, which refuses
+    /// `SetTokenIdentity`. Hash-verified BCMR results enter through this path.
+    pub async fn observe(&self, action: AppAction) -> Result<(), RuntimeStopped> {
+        if !matches!(
+            action,
+            AppAction::SetTokenIdentity { .. }
+                | AppAction::SetFusionPhase(_)
+                | AppAction::SetTorReady(_)
+                | AppAction::InsertCoin(_)
+        ) {
+            return Err(RuntimeStopped);
+        }
+        let (applied_tx, applied_rx) = oneshot::channel();
+        self.action_tx
+            .send(RuntimeRequest::Observation(action, applied_tx))
             .await
             .map_err(|_| RuntimeStopped)?;
         applied_rx.await.map_err(|_| RuntimeStopped)
@@ -275,6 +459,14 @@ impl AppRuntime {
         &self,
         request: WalletSecurityRequest,
     ) -> Result<WalletSecurityStatus, TransportError> {
+        if !matches!(
+            request,
+            WalletSecurityRequest::Status
+                | WalletSecurityRequest::Authenticate { .. }
+                | WalletSecurityRequest::SetBiometric { .. }
+        ) {
+            self.cancel_wallet_operations();
+        }
         let generation = self.revocation.load(Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.action_tx
@@ -301,6 +493,15 @@ fn publish_state(state: &mut AppState, state_tx: &watch::Sender<AppState>) {
 }
 
 impl AppRuntimeDriver {
+    fn publish_state(&mut self) {
+        // A watch receiver may see only the last of several snapshots. Retain
+        // invalidation even if a later snapshot restores the original values.
+        if wallet_work_changed(&self.state_tx.borrow(), &self.state) {
+            cancel_operations(&self.operation_changes);
+        }
+        publish_state(&mut self.state, &self.state_tx);
+    }
+
     fn now_ms(&self) -> u64 {
         elapsed_ms(self.started)
     }
@@ -324,7 +525,12 @@ impl AppRuntimeDriver {
             security.reconcile(&self.state);
         }
         self.wallet_sync.project_status(&mut self.state);
-        publish_state(&mut self.state, &self.state_tx);
+        self.airgap.reconcile(
+            &self.state,
+            self.revocation.load(Ordering::SeqCst),
+            self.wallet_sync.coins_are_fresh(),
+        );
+        self.publish_state();
         let _ = self.event_tx.send(event);
     }
 
@@ -333,6 +539,7 @@ impl AppRuntimeDriver {
             now_ms: self.now_ms(),
         }) {
             self.revocation.fetch_add(1, Ordering::SeqCst);
+            cancel_operations(&self.operation_changes);
             self.publish(event);
         }
     }
@@ -345,7 +552,7 @@ impl AppRuntimeDriver {
                 _ = self.wallet_sync.wait_for_abandonment() => {
                     self.wallet_sync.cancel_abandoned();
                     self.wallet_sync.project_status(&mut self.state);
-                    publish_state(&mut self.state, &self.state_tx);
+                    self.publish_state();
                     continue;
                 }
                 request = self.action_rx.recv() => match request { Some(request) => request, None => break },
@@ -354,6 +561,9 @@ impl AppRuntimeDriver {
             self.expire_session();
             let now_ms = self.now_ms();
             match request {
+                RuntimeRequest::Airgap(request, generation, reply) => {
+                    self.handle_airgap(request, generation, reply);
+                }
                 RuntimeRequest::WalletSync(request) => {
                     self.wallet_sync.handle(
                         request,
@@ -395,7 +605,7 @@ impl AppRuntimeDriver {
                         ))
                     };
                     self.wallet_sync.project_status(&mut self.state);
-                    publish_state(&mut self.state, &self.state_tx);
+                    self.publish_state();
                     let _ = reply.send(result);
                 }
                 RuntimeRequest::Security(request, generation, reply) => {
@@ -403,10 +613,17 @@ impl AppRuntimeDriver {
                         continue;
                     }
                     let is_query = matches!(request, WalletSecurityRequest::Status);
+                    let changes_birthday = matches!(
+                        request,
+                        WalletSecurityRequest::SetBirthday { .. }
+                            | WalletSecurityRequest::ClearRescan { .. }
+                    );
+                    let previous_restore_state = self.wallet_sync.restore_state().clone();
                     let opens_wallet = matches!(
                         request,
                         WalletSecurityRequest::Open { .. }
                             | WalletSecurityRequest::Create { .. }
+                            | WalletSecurityRequest::ImportWatchOnly { .. }
                             | WalletSecurityRequest::UnlockBiometric { .. }
                     );
                     let authenticates =
@@ -438,6 +655,8 @@ impl AppRuntimeDriver {
                             request,
                             now_ms,
                             self.wallet_sync.reconciliation(),
+                            self.wallet_sync.header_progress(),
+                            self.wallet_sync.bcmr_cache(),
                         )
                     } else {
                         Err(TransportError::Unsupported)
@@ -446,6 +665,14 @@ impl AppRuntimeDriver {
                     let revoked = generation != self.revocation.load(Ordering::SeqCst)
                         || (!is_query && reply.is_closed())
                         || (!opens_wallet && previous_lock.idle_should_lock(finished_ms));
+                    let birthday_restore_state = if !revoked && result.is_ok() && changes_birthday {
+                        self.security
+                            .as_ref()
+                            .and_then(|security| security.restore_state())
+                            .cloned()
+                    } else {
+                        None
+                    };
                     // Storage may already have committed a password change. Keep its state
                     // coherent even if an OS enrollment refresh subsequently returned an error.
                     self.state = candidate;
@@ -457,6 +684,14 @@ impl AppRuntimeDriver {
                                 .into(),
                         ))
                     } else {
+                        if let Some(restore_state) = birthday_restore_state {
+                            if restore_state != previous_restore_state {
+                                self.revocation.fetch_add(1, Ordering::SeqCst);
+                                cancel_operations(&self.operation_changes);
+                                self.state.spend = None;
+                                self.wallet_sync.birthday_changed(restore_state);
+                            }
+                        }
                         if result.is_ok()
                             && (opens_wallet
                                 || authenticates
@@ -491,6 +726,7 @@ impl AppRuntimeDriver {
                                 // A new address expands scan scope; password rotation revokes
                                 // authority. Both cancel work begun against the previous state.
                                 self.revocation.fetch_add(1, Ordering::SeqCst);
+                                cancel_operations(&self.operation_changes);
                                 self.state.spend = None;
                                 self.wallet_sync.on_event(&AppEvent::WalletRebuilt);
                             }
@@ -500,12 +736,19 @@ impl AppRuntimeDriver {
                     };
                     let _ = reply.send(result);
                 }
+                RuntimeRequest::Observation(action, applied) => {
+                    if let Some(event) = self.state.reduce(action) {
+                        self.publish(event);
+                    }
+                    let _ = applied.send(());
+                }
                 RuntimeRequest::Action(action, applied) => {
                     if self.security.is_some()
                         && matches!(
                             action,
                             AppAction::OpenCreatedWallet { .. }
                                 | AppAction::OpenImportedWallet { .. }
+                                | AppAction::OpenWatchOnlyWallet(_)
                         )
                     {
                         self.state.notice = Some(
@@ -553,8 +796,17 @@ impl AppRuntimeDriver {
                         AppAction::FreezeCoin(_)
                             | AppAction::UnfreezeCoin(_)
                             | AppAction::SetCoinLabel { .. }
+                            | AppAction::RequestRescanFrom { .. }
                     )
                     .then(|| self.state.clone());
+                    let requested_rescan_height = match &action {
+                        AppAction::RequestRescanFrom { height } => Some(*height),
+                        _ => None,
+                    };
+                    let mut annotation_restore_state = self.wallet_sync.restore_state().clone();
+                    if let Some(height) = requested_rescan_height {
+                        annotation_restore_state.request_rescan_from(height);
+                    }
                     let annotation_generation = self.revocation.load(Ordering::SeqCst);
                     let mut event = if self.wallet_sync.requires_fresh_coins(&action, &self.state) {
                         self.state.spend = None;
@@ -577,13 +829,30 @@ impl AppRuntimeDriver {
                             event = Some(self.wallet_sync.persist_annotation(
                                 &mut self.state,
                                 previous,
-                                |app, sync| security.persist_checkpoint(app, sync),
+                                &annotation_restore_state,
+                                |app, sync, restore_state, progress, cache| {
+                                    security.persist_checkpoint(
+                                        app,
+                                        sync,
+                                        restore_state,
+                                        progress,
+                                        cache,
+                                    )
+                                },
                                 |app| guard.allows(app, applied.is_closed()),
                             ));
                             if event == Some(AppEvent::CoinsChanged) {
                                 security.checkpoint_published();
                             }
                         }
+                    }
+                    if event == Some(AppEvent::CoinsChanged) {
+                        self.wallet_sync
+                            .install_restore_state(annotation_restore_state);
+                    }
+                    if requested_rescan_height.is_some() && event == Some(AppEvent::CoinsChanged) {
+                        self.state.spend = None;
+                        self.wallet_sync.rescan_requested();
                     }
                     // Storage may have crossed the idle deadline. Lock and drop the
                     // private session before publishing any annotation result.
@@ -602,6 +871,119 @@ impl AppRuntimeDriver {
 mod tests {
     use super::*;
     use optn_app::{AppRoute, ThemeMode};
+
+    fn fresh_operation_fixture() -> (AppRuntime, AppRuntimeDriver) {
+        let mut state = AppState::default();
+        state.reduce(AppAction::OpenImportedWallet {
+            name: "public cancellation fixture".into(),
+            receive_address: optn_core::cashaddr::Address::from_hash(
+                "bitcoincash",
+                optn_core::cashaddr::AddressKind::P2pkh,
+                [1; 20],
+            )
+            .encode(),
+            account_path: "m/44'/145'/0'".into(),
+        });
+        state.wallet_sync.utxos_fresh = true;
+        state.wallet_sync.history_fresh = true;
+        AppRuntime::new(state)
+    }
+
+    #[tokio::test]
+    async fn operation_guard_retains_invalidation_across_coalesced_publications() {
+        let (runtime, mut driver) = fresh_operation_fixture();
+        let guard = runtime.wallet_operation_guard();
+        assert!(!guard.is_revoked());
+        driver.state.theme = ThemeMode::Dark;
+        driver.state.lock.record_activity(10);
+        driver.publish_state();
+        assert!(!guard.is_revoked(), "cosmetic changes do not revoke work");
+
+        driver.state.wallet_sync.utxos_fresh = false;
+        driver.publish_state();
+        driver.state.wallet_sync.utxos_fresh = true;
+        driver.publish_state();
+        assert!(guard.is_revoked(), "restored values must not revive work");
+        tokio::time::timeout(std::time::Duration::from_secs(1), guard.cancelled())
+            .await
+            .expect("cancellation before waiter registration must be retained");
+
+        let fresh = runtime.wallet_operation_guard();
+        assert!(!fresh.is_revoked());
+        // Reconciliation can publish before its AppState projection. The guard
+        // must observe that retained revision too, not just compare AppState.
+        driver.wallet_sync.on_event(&AppEvent::ServersChanged);
+        assert!(runtime.state().wallet_sync.utxos_fresh);
+        assert!(fresh.is_revoked());
+        let latest = runtime.wallet_operation_guard();
+        assert!(!latest.is_revoked(), "old revisions are not new changes");
+        drop(driver);
+        assert!(
+            latest.is_revoked(),
+            "a closed runtime cannot authorize work"
+        );
+    }
+
+    #[tokio::test]
+    async fn operation_guard_revokes_before_the_actor_processes_a_lock() {
+        let (runtime, _driver) = fresh_operation_fixture();
+        let guard = runtime.wallet_operation_guard();
+        tokio::select! {
+            biased;
+            _ = runtime.dispatch(AppAction::LockWallet) => panic!("actor is not running"),
+            _ = std::future::ready(()) => {},
+        }
+        assert!(runtime.state().wallet.is_some());
+        assert!(guard.is_revoked());
+        tokio::time::timeout(std::time::Duration::from_secs(1), guard.cancelled())
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn operation_guard_refuses_the_entire_hold_mutation_window() {
+        let (runtime, mut driver) = fresh_operation_fixture();
+        let coin =
+            optn_app::Coin::new(optn_app::Outpoint::new([1; 32], 0), 2_000, "public fixture")
+                .unwrap();
+        driver.state.coins.insert(coin).unwrap();
+        driver.publish_state();
+        let before = runtime.wallet_operation_guard();
+        driver
+            .state
+            .coins
+            .restore_annotations(
+                optn_app::Outpoint::new([1; 32], 0),
+                Some("new label".into()),
+                None,
+                0,
+            )
+            .unwrap();
+        driver.publish_state();
+        assert!(!before.is_revoked(), "coin labels are cosmetic");
+        let first = runtime.begin_wallet_mutation();
+        let during = runtime.wallet_operation_guard();
+        assert!(before.is_revoked());
+        assert!(during.is_revoked());
+        let second = runtime.begin_wallet_mutation();
+        drop(first);
+        assert!(runtime.wallet_operation_guard().is_revoked());
+        drop(second);
+        assert!(
+            during.is_revoked(),
+            "finishing a write cannot revive older work"
+        );
+        assert!(!runtime.wallet_operation_guard().is_revoked());
+        let failed = || -> Result<(), ()> {
+            let _mutation = runtime.begin_wallet_mutation();
+            Err(())
+        };
+        assert!(failed().is_err());
+        assert!(
+            !runtime.wallet_operation_guard().is_revoked(),
+            "error releases the gate"
+        );
+    }
 
     #[test]
     fn checkpoint_publication_host_clock_expires_before_another_request() {
@@ -725,6 +1107,74 @@ mod tests {
         );
         state = transport.snapshot().await.unwrap();
         assert_eq!(state.theme, ThemeMode::Dark);
+    }
+
+    /// Native CLI actions and renderer wire actions share session revocation.
+    #[tokio::test]
+    async fn fusion_consent_is_revoked_across_interface_and_wallet_boundaries() {
+        use optn_app::fusion::{FusionPhase, FusionSession, FusionWaitReason};
+        use optn_app::{AppSurface, FeatureFlag};
+        use optn_transport::{WireAction, WireState};
+
+        for boundary in [
+            AppAction::LockWallet,
+            AppAction::SetNetwork(optn_core::network::Network::Chipnet),
+            AppAction::SetSurface(AppSurface::Extension),
+            AppAction::SetAutoFusionEnabled(false),
+            AppAction::SetFeatureEnabled {
+                flag: FeatureFlag::CashFusion,
+                enabled: false,
+            },
+            AppAction::CancelFusion,
+        ] {
+            let mut state = AppState::for_surface(AppSurface::Desktop);
+            state.reduce(AppAction::OpenCreatedWallet {
+                name: "session-boundary".into(),
+                receive_address: "bitcoincash:qq0000000000000000000000000000000000000000".into(),
+                account_path: "m/44'/145'/0'".into(),
+            });
+            state.reduce(AppAction::SetAutoFusionEnabled(true));
+            let runtime = AppRuntime::spawn(state);
+            let renderer = DirectTransport::new(runtime.clone());
+            // CLI/native intent arms; renderer sees the same state.
+            runtime.dispatch(AppAction::StartFusion).await.unwrap();
+            assert!(renderer.snapshot().await.unwrap().fusion.session_armed);
+            for forged in [
+                AppAction::SetTorReady(true),
+                AppAction::SetFusionPhase(FusionPhase::Completed {
+                    txid: "ab".repeat(32),
+                    fused_sats: 9_000,
+                    at_ms: 1,
+                }),
+            ] {
+                renderer
+                    .dispatch(AppAction::try_from(WireAction::from(forged)).unwrap())
+                    .await
+                    .unwrap();
+            }
+            assert!(!runtime.state().tor_ready);
+            assert_eq!(runtime.state().fusion.rounds_completed, 0);
+            renderer
+                .dispatch(AppAction::try_from(WireAction::from(boundary.clone())).unwrap())
+                .await
+                .unwrap();
+            let snapshot = AppState::try_from(WireState::from(&runtime.state())).unwrap();
+            assert!(!snapshot.fusion.session_armed, "{boundary:?}");
+            assert_eq!(snapshot.fusion.phase, FusionPhase::Idle, "{boundary:?}");
+        }
+
+        // A waiting paid service must still offer cancellation in either UI.
+        let waiting = FusionSession {
+            session_armed: true,
+            phase: FusionPhase::Waiting {
+                reason: FusionWaitReason::Cooldown,
+                until_ms: 20_000,
+            },
+            ..FusionSession::new()
+        };
+        let mut state = AppState::for_surface(AppSurface::Desktop);
+        state.fusion = waiting;
+        assert!(optn_app::fusion_view_model(&state).can_cancel);
     }
 
     #[tokio::test]

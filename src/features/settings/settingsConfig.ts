@@ -2,6 +2,7 @@ import { ROUTE_PATHS } from '../../navigation/routes';
 import { Network } from '../../state/slices/networkSlice';
 
 export type SettingsPanelKey =
+  | 'appearance'
   | 'recovery'
   | 'about'
   | 'terms'
@@ -14,6 +15,7 @@ export type SettingsPanelKey =
   | 'network'
   | 'faucet'
   | 'wallet-info'
+  | 'birthday'
   | 'derivation'
   | 'server'
   | 'console'
@@ -24,7 +26,8 @@ export type SettingsPanelKey =
   | 'language'
   | 'app-lock'
   | 'rebuild-wallet'
-  | 'export-archive';
+  | 'export-archive'
+  | 'updates';
 
 export type SettingsGroupKey = 'wallet' | 'features' | 'about';
 
@@ -38,6 +41,13 @@ export type SettingsRowConfig = {
 };
 
 export const WALLET_ROWS: SettingsRowConfig[] = [
+  {
+    key: 'appearance',
+    title: 'Appearance',
+    description: 'Theme mode and skin',
+    action: 'panel',
+    target: 'appearance',
+  },
   {
     key: 'language',
     title: 'Language',
@@ -65,6 +75,13 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
     description: 'Name, type, network · xPub & path behind password/biometric',
     action: 'panel',
     target: 'wallet-info',
+  },
+  {
+    key: 'birthday',
+    title: 'Wallet birthday',
+    description: 'Where wallet history begins',
+    action: 'panel',
+    target: 'birthday',
   },
   {
     key: 'derivation',
@@ -190,6 +207,7 @@ export function getSettingsGroupRows(
     wallet: WALLET_ROWS.filter((row) =>
       [
         'wallet-info',
+        'birthday',
         'recovery',
         'derivation',
         'app-lock',
@@ -211,16 +229,22 @@ export function getSettingsGroupRows(
   };
 
   return rowsByGroup[group].filter((row) => {
+    // Desktop has one complete Nostr destination inside Network.
+    if (isDesktop && row.key === 'nostr') return false;
     if (row.key === 'faucet' && currentNetwork !== Network.CHIPNET)
       return false;
     if (
       !isDesktop &&
       [
+        'birthday',
         'app-lock',
         'rebuild-wallet',
         'export-archive',
         'console',
         'addons',
+        // Mobile builds are updated by their stores and the web build is
+        // whatever the server served, so only desktop has anything to check.
+        'updates',
       ].includes(String(row.key))
     ) {
       return false;
@@ -236,6 +260,7 @@ export function getParentSettingsGroup(
   currentNetwork: Network
 ): SettingsGroupKey | null {
   if (!panel || panel.startsWith('group:')) return null;
+  if (isDesktop && panel === 'nostr') panel = 'server';
   for (const group of SETTINGS_GROUPS) {
     const rows = getSettingsGroupRows(group.key, isDesktop, currentNetwork);
     if (rows.some((row) => row.target === panel || row.key === panel)) {
@@ -280,7 +305,15 @@ export const CONNECTION_ROWS: SettingsRowConfig[] = [
 ];
 
 export const ABOUT_ROWS: SettingsRowConfig[] = [
+  WALLET_ROWS.find((row) => row.key === 'appearance')!,
   WALLET_ROWS.find((row) => row.key === 'language')!,
+  {
+    key: 'updates',
+    title: 'Updates',
+    description: 'Check for a newer release · pre-release channels',
+    action: 'panel',
+    target: 'updates',
+  },
   {
     key: 'about',
     title: 'About OPTN',

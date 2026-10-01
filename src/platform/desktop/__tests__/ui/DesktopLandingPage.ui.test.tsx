@@ -2,7 +2,13 @@
 
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,6 +17,13 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   getAllWallets: vi.fn(),
   openWalletWithPassword: vi.fn(),
+  unlockWalletWithBiometric: vi.fn(),
+  isBiometricAvailable: vi.fn(),
+  hasWalletBiometric: vi.fn(),
+  importWalletFile: vi.fn(),
+  importColdData: vi.fn(),
+  engine: vi.fn(),
+  toast: vi.fn(),
 }));
 
 vi.mock('react-redux', () => ({
@@ -19,6 +32,7 @@ vi.mock('react-redux', () => ({
     selector({
       wallet_id: { currentWalletId: 0, networkType: 'mainnet' },
       network: { currentNetwork: 'mainnet' },
+      appLock: { autoLockMinutes: 30 },
       hardwareWallet: {
         type: 'none',
         connected: false,
@@ -83,11 +97,19 @@ vi.mock('@tauri-apps/api/webviewWindow', () => ({
 
 vi.mock('../../../../platform/desktop/DesktopWalletManager', () => ({
   openWalletWithPassword: mocks.openWalletWithPassword,
-  importWalletFile: vi.fn(),
-  isBiometricAvailable: vi.fn().mockResolvedValue(false),
-  hasWalletBiometric: vi.fn().mockResolvedValue(false),
-  unlockWalletWithBiometric: vi.fn(),
+  importWalletFile: mocks.importWalletFile,
+  isBiometricAvailable: mocks.isBiometricAvailable,
+  hasWalletBiometric: mocks.hasWalletBiometric,
+  unlockWalletWithBiometric: mocks.unlockWalletWithBiometric,
   getBiometricLabel: vi.fn(() => 'biometric'),
+}));
+
+vi.mock('../../engineWalletBridge', () => ({
+  openWalletInEngine: mocks.engine,
+}));
+vi.mock('../../toast', () => ({ Toast: { show: mocks.toast } }));
+vi.mock('../../WalletPackService', () => ({
+  importColdDataIntoOpenWallet: mocks.importColdData,
 }));
 
 vi.mock('../../../../platform/desktop/walletOpenRegistry', () => ({
@@ -142,6 +164,11 @@ describe('DesktopLandingPage UI', () => {
       },
     ]);
     mocks.openWalletWithPassword.mockReset();
+    mocks.isBiometricAvailable.mockResolvedValue(false);
+    mocks.hasWalletBiometric.mockResolvedValue(false);
+    mocks.engine.mockReset().mockResolvedValue({ opened: true });
+    mocks.toast.mockReset().mockResolvedValue(undefined);
+    mocks.importColdData.mockReset().mockResolvedValue({ labels: 0 });
   });
 
   it('keeps a wallet locked after a wrong password and opens it after retry', async () => {
@@ -177,6 +204,94 @@ describe('DesktopLandingPage UI', () => {
       await screen.findByRole('button', { name: 'Connect Hardware Wallet' })
     ).toBeInTheDocument();
   });
+
+  it.each([false, true])(
+    'keeps biometric unlock successful when engine warns (toast failure: %s)',
+    async (toastFails) => {
+      mocks.isBiometricAvailable.mockResolvedValue(true);
+      mocks.hasWalletBiometric.mockResolvedValue(true);
+      mocks.unlockWalletWithBiometric.mockResolvedValue({
+        networkType: 'mainnet',
+        walletType: 'standard',
+        engineWarning: 'HD inventory could not be imported.',
+      });
+      if (toastFails)
+        mocks.toast.mockRejectedValueOnce(new Error('toast unavailable'));
+      const user = userEvent.setup();
+      render(<DesktopLandingPage />);
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+      await user.click(
+        await screen.findByRole('button', {
+          name: 'desktopWallet.useBiometric',
+        })
+      );
+      await waitFor(() =>
+        expect(mocks.navigate).toHaveBeenCalledWith('/home/7')
+      );
+      expect(mocks.unlockWalletWithBiometric).toHaveBeenCalledExactlyOnceWith(
+        7,
+        30
+      );
+      expect(mocks.toast).toHaveBeenCalledWith({
+        text: 'HD inventory could not be imported.',
+        duration: 'long',
+      });
+      expect(mocks.engine).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([false, true])(
+    'hands off a file import after cold data (reused wallet: %s)',
+    async (reusedExisting) => {
+      mocks.importWalletFile.mockResolvedValue({
+        walletId: 11,
+        network: 'chipnet',
+        walletType: 'standard',
+        reusedExisting,
+      });
+      mocks.engine.mockResolvedValue({
+        opened: false,
+        reason: 'Inventory import failed.',
+      });
+      const user = userEvent.setup();
+      render(<DesktopLandingPage />);
+      await screen.findByText('Demo Wallet');
+      fireEvent(
+        window,
+        new CustomEvent('optn:import-wallet-file', {
+          detail: {
+            file: { name: 'Imported fixture', network: 'chipnet' },
+            coldArchiveText: 'synthetic-cold-data',
+          },
+        })
+      );
+      await user.type(
+        screen.getByPlaceholderText('Password'),
+        'synthetic-password'
+      );
+      await user.click(
+        screen.getByRole('button', { name: 'desktopWallet.open' })
+      );
+      await waitFor(() =>
+        expect(mocks.navigate).toHaveBeenCalledWith('/home/11')
+      );
+      expect(mocks.engine).toHaveBeenCalledExactlyOnceWith(
+        11,
+        'synthetic-password',
+        30
+      );
+      expect(mocks.importColdData.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.engine.mock.invocationCallOrder[0]
+      );
+      expect(mocks.engine.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.navigate.mock.invocationCallOrder[0]
+      );
+      expect(mocks.toast).toHaveBeenCalledWith({
+        text: 'Inventory import failed.',
+        duration: 'long',
+      });
+    }
+  );
 
   it('exposes the watch-only route from the wallet picker', async () => {
     const user = userEvent.setup();

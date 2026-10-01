@@ -14,7 +14,7 @@ use optn_runtime::chain_service::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -29,10 +29,14 @@ type DynIo = Box<dyn AsyncIo>;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 // Bound pending RPCs and peer-controlled response allocation on every transport.
-const MAX_PENDING_REQUESTS: usize = 16;
+const MAX_PENDING_REQUESTS: usize = 64;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PIPELINE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_WALLET_TRANSACTIONS: usize = 100_000;
+const MAX_SPENDER_TRANSACTIONS: usize = 128;
+const MAX_SPENDER_UTXO_CANDIDATES: usize = 30;
+const MAX_SPENDER_RAW_BYTES: usize = 2 * 1024 * 1024;
+const SPENDER_TIMEOUT: Duration = Duration::from_secs(20);
 const CLIENT_NAME: &str = "OPTN Wallet";
 const PROTOCOL_MIN: &str = "1.4";
 const PROTOCOL_MAX: &str = "1.6";
@@ -119,6 +123,7 @@ impl ElectrumBackend {
         );
         for capability in [
             Capability::FastHistory,
+            Capability::OutpointSpenderLookup,
             Capability::ScriptSubscriptions,
             Capability::UtxoQuery,
             Capability::TransactionQuery,
@@ -368,6 +373,155 @@ impl ElectrumBackend {
         })
     }
 
+    async fn outpoint_spender(
+        &self,
+        txid: [u8; 32],
+        vout: u32,
+        script_pubkey: &[u8],
+        from_height: Option<u32>,
+    ) -> Result<BackendObservation, ChainBackendError> {
+        let spender = match timeout(
+            SPENDER_TIMEOUT,
+            self.find_outpoint_spender(txid, vout, script_pubkey, from_height),
+        )
+        .await
+        {
+            Ok(Err(ChainBackendError::Timeout)) | Err(_) => None,
+            Ok(result) => result?,
+        };
+        Ok(BackendObservation {
+            payload: ChainPayload::OutpointSpender {
+                txid,
+                vout,
+                spender,
+            },
+            evidence: Evidence::ServerAssertion,
+            chain_tip: None,
+        })
+    }
+
+    async fn find_outpoint_spender(
+        &self,
+        txid: [u8; 32],
+        vout: u32,
+        script_pubkey: &[u8],
+        from_height: Option<u32>,
+    ) -> Result<Option<ObservedTransaction>, ChainBackendError> {
+        let mut session = self.session().await?;
+        let sh = electrum_scripthash(script_pubkey);
+        let mut downloaded = BTreeSet::new();
+        let mut raw_bytes = 0;
+        for heuristic in [true, false] {
+            let mut candidates = BTreeMap::new();
+            let limit = if heuristic {
+                // UTXO creators are only candidates. Absence says nothing about
+                // spentness, and a successor need not itself remain unspent.
+                merge_history(
+                    &mut candidates,
+                    &session
+                        .call("blockchain.scripthash.listunspent", json!([sh]))
+                        .await?,
+                )?;
+                MAX_SPENDER_UTXO_CANDIDATES
+            } else {
+                let params = if protocol_at_least(&session.protocol, 1, 5, 1) {
+                    json!([sh, from_height.unwrap_or(0), -1])
+                } else {
+                    json!([sh])
+                };
+                for response in session
+                    .call_many(&[
+                        ("blockchain.scripthash.get_history", params),
+                        ("blockchain.scripthash.get_mempool", json!([sh])),
+                    ])
+                    .await?
+                {
+                    merge_history(&mut candidates, &response)?;
+                }
+                usize::MAX
+            };
+            let candidates = candidates
+                .into_iter()
+                .filter(|(candidate_txid, height)| {
+                    *candidate_txid != txid
+                        && !downloaded.contains(candidate_txid)
+                        && (*height <= 0 || *height >= i64::from(from_height.unwrap_or(0)))
+                })
+                .take(limit.min(MAX_SPENDER_TRANSACTIONS - downloaded.len() + 1))
+                .collect::<Vec<_>>();
+            for group in candidates.chunks(MAX_PENDING_REQUESTS) {
+                let group = &group[..group.len().min(MAX_SPENDER_TRANSACTIONS - downloaded.len())];
+                if group.is_empty() || raw_bytes == MAX_SPENDER_RAW_BYTES {
+                    return Ok(None);
+                }
+                downloaded.extend(group.iter().map(|(txid, _)| *txid));
+                let requests = group
+                    .iter()
+                    .map(|(txid, _)| {
+                        (
+                            "blockchain.transaction.get",
+                            json!([display_hash(*txid), false]),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                // Include framing in the remaining hex budget so an oversized
+                // response is stopped on the wire, before allocating raw bytes.
+                let Some(responses) = session
+                    .call_many_bounded(&requests, Some((MAX_SPENDER_RAW_BYTES - raw_bytes) * 2))
+                    .await?
+                else {
+                    return Ok(None);
+                };
+                let mut spender = None;
+                for ((candidate_txid, height), response) in group.iter().zip(responses) {
+                    let raw_hex = response.as_str().ok_or_else(|| {
+                        ChainBackendError::InvalidResponse(
+                            "transaction.get did not return hex".into(),
+                        )
+                    })?;
+                    if raw_hex.len() / 2 > MAX_SPENDER_RAW_BYTES - raw_bytes {
+                        return Ok(None);
+                    }
+                    let raw = hex::decode(raw_hex).map_err(|error| {
+                        ChainBackendError::InvalidResponse(format!(
+                            "invalid transaction hex: {error}"
+                        ))
+                    })?;
+                    raw_bytes += raw.len();
+                    if sha256d(&raw) != *candidate_txid {
+                        return Err(ChainBackendError::InvalidResponse(
+                            "transaction bytes do not match requested txid".into(),
+                        ));
+                    }
+                    let decoded = optn_core::tx::decode(&raw).map_err(|error| {
+                        ChainBackendError::InvalidResponse(format!("invalid transaction: {error}"))
+                    })?;
+                    if decoded.inputs.iter().any(|(input_txid, input_vout, _)| {
+                        *input_txid == txid && *input_vout == vout
+                    }) {
+                        if spender.is_some() {
+                            return Err(ChainBackendError::InvalidResponse(
+                                "multiple transactions spend the requested outpoint".into(),
+                            ));
+                        }
+                        spender = Some(ObservedTransaction {
+                            txid: *candidate_txid,
+                            raw,
+                            block_height: (*height > 0).then_some(*height as u32),
+                        });
+                    }
+                }
+                // Discovery only: reject conflicts in this observed batch, then
+                // let the runtime validate the candidate without scanning more.
+                if spender.is_some() {
+                    return Ok(spender);
+                }
+            }
+        }
+        // A missing candidate or an exhausted budget is unknown, never unspent.
+        Ok(None)
+    }
+
     async fn broadcast(
         &self,
         raw_tx: &[u8],
@@ -505,11 +659,22 @@ impl ChainBackend for ElectrumBackend {
                     from_height,
                 } => self.wallet_refresh(interests, *from_height).await,
                 ChainRequest::TransactionLookup { txid } => self.transaction_lookup(*txid).await,
+                ChainRequest::OutpointSpender {
+                    txid,
+                    vout,
+                    script_pubkey,
+                    from_height,
+                } => {
+                    self.outpoint_spender(*txid, *vout, script_pubkey, *from_height)
+                        .await
+                }
+                ChainRequest::OutpointSpentness { .. } => Err(ChainBackendError::Unsupported),
                 ChainRequest::Broadcast { raw_tx, txid } => self.broadcast(raw_tx, *txid).await,
                 ChainRequest::HeaderSync {
                     start_height,
                     count,
                 } => self.header_sync(*start_height, *count).await,
+                ChainRequest::HeaderSyncFromLocator { .. } => Err(ChainBackendError::Unsupported),
                 ChainRequest::HistoricalHeaderProof {
                     height,
                     checkpoint_height,
@@ -526,6 +691,7 @@ struct Session {
     reader: BufReader<DynIo>,
     next_id: u64,
     request_timeout: Duration,
+    protocol: String,
 }
 impl Session {
     async fn connect(config: &ElectrumConfig) -> Result<Self, ChainBackendError> {
@@ -533,6 +699,7 @@ impl Session {
             reader: BufReader::new(connect_transport(config).await?),
             next_id: 1,
             request_timeout: config.request_timeout,
+            protocol: String::new(),
         })
     }
     async fn negotiate(
@@ -548,7 +715,7 @@ impl Session {
                 ]),
             )
             .await?;
-        match result {
+        let negotiated = match result {
             Value::Array(values) if values.len() >= 2 => {
                 let software = values.first().and_then(Value::as_str).map(str::to_owned);
                 let protocol = values
@@ -566,7 +733,9 @@ impl Session {
             _ => Err(ChainBackendError::InvalidResponse(
                 "unexpected server.version result".into(),
             )),
-        }
+        }?;
+        self.protocol.clone_from(&negotiated.1);
+        Ok(negotiated)
     }
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, ChainBackendError> {
         self.call_many(&[(method, params)])
@@ -584,6 +753,18 @@ impl Session {
         &mut self,
         requests: &[(&str, Value)],
     ) -> Result<Vec<Value>, ChainBackendError> {
+        self.call_many_bounded(requests, None)
+            .await?
+            .ok_or_else(|| {
+                ChainBackendError::InvalidResponse("Electrum response is missing".into())
+            })
+    }
+
+    async fn call_many_bounded(
+        &mut self,
+        requests: &[(&str, Value)],
+        byte_budget: Option<usize>,
+    ) -> Result<Option<Vec<Value>>, ChainBackendError> {
         if requests.is_empty() || requests.len() > MAX_PENDING_REQUESTS {
             return Err(ChainBackendError::Rejected(
                 "invalid Electrum request group size".into(),
@@ -615,11 +796,19 @@ impl Session {
             let mut total_bytes = 0usize;
             while received < requests.len() {
                 let mut line = Vec::new();
+                let read_limit = byte_budget
+                    .map(|budget| budget.saturating_sub(total_bytes))
+                    .unwrap_or(MAX_RESPONSE_BYTES + 1)
+                    .min(MAX_RESPONSE_BYTES + 1);
                 let read = (&mut self.reader)
-                    .take((MAX_RESPONSE_BYTES + 1) as u64)
+                    .take(read_limit as u64)
                     .read_until(b'\n', &mut line)
                     .await
                     .map_err(map_io)?;
+                if byte_budget.is_some_and(|budget| total_bytes + read >= budget) {
+                    // The caller must drop this session after a partial frame.
+                    return Ok(None);
+                }
                 if read == 0 {
                     return Err(ChainBackendError::Offline);
                 }
@@ -676,7 +865,8 @@ impl Session {
                         ChainBackendError::InvalidResponse("Electrum response is missing".into())
                     })
                 })
-                .collect()
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some)
         })
         .await
         .map_err(|_| ChainBackendError::Timeout)?
@@ -983,6 +1173,7 @@ mod tests {
                 reader: BufReader::new(Box::new(client)),
                 next_id: 1,
                 request_timeout: Duration::from_secs(2),
+                protocol: String::new(),
             };
             let peer = tokio::spawn(async move {
                 let mut server = BufReader::new(server);
@@ -1048,12 +1239,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn full_pipeline_preserves_all_reordered_replies_above_legacy_limit() {
+        const REQUEST_COUNT: usize = 64;
+        let (client, server) = tokio::io::duplex(8192);
+        let mut session = Session {
+            reader: BufReader::new(Box::new(client)),
+            next_id: 7,
+            request_timeout: Duration::from_secs(2),
+            protocol: String::new(),
+        };
+        let peer = tokio::spawn(async move {
+            let mut server = BufReader::new(server);
+            let mut ids = Vec::new();
+            // Require the whole window before replying, including requests beyond 16.
+            for index in 0..REQUEST_COUNT {
+                let mut line = String::new();
+                assert!(server.read_line(&mut line).await.unwrap() > 0);
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["id"], json!(7 + index));
+                assert_eq!(request["params"], json!([index]));
+                ids.push(request["id"].clone());
+            }
+            // The complete response group exceeds the duplex buffer size.
+            for index in (0..REQUEST_COUNT).rev() {
+                let response = json!({
+                    "id": ids[index],
+                    "result": [index, "x".repeat(256)],
+                });
+                server
+                    .get_mut()
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        let requests: Vec<_> = (0..REQUEST_COUNT)
+            .map(|index| ("fixture", json!([index])))
+            .collect();
+        let expected: Vec<_> = (0..REQUEST_COUNT)
+            .map(|index| json!([index, "x".repeat(256)]))
+            .collect();
+        assert_eq!(session.call_many(&requests).await.unwrap(), expected);
+        assert_eq!(session.next_id, 7 + REQUEST_COUNT as u64);
+        peer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_pipeline_is_rejected_before_io() {
+        let (client, mut server) = tokio::io::duplex(8192);
+        let mut session = Session {
+            reader: BufReader::new(Box::new(client)),
+            next_id: 7,
+            request_timeout: Duration::from_secs(2),
+            protocol: String::new(),
+        };
+        let requests = vec![("fixture", json!([])); MAX_PENDING_REQUESTS + 1];
+        assert!(matches!(
+            session.call_many(&requests).await,
+            Err(ChainBackendError::Rejected(message))
+                if message == "invalid Electrum request group size"
+        ));
+        assert_eq!(session.next_id, 7);
+        drop(session);
+        let mut written = Vec::new();
+        server.read_to_end(&mut written).await.unwrap();
+        assert!(written.is_empty());
+    }
+
+    #[tokio::test]
     async fn oversized_rpc_frame_is_rejected_before_parsing() {
         let (client, server) = tokio::io::duplex(8192);
         let mut session = Session {
             reader: BufReader::new(Box::new(client)),
             next_id: 1,
             request_timeout: Duration::from_secs(5),
+            protocol: String::new(),
         };
         let peer = tokio::spawn(async move {
             let mut server = BufReader::new(server);

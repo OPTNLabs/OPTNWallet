@@ -490,3 +490,149 @@ async fn a_spend_is_found_through_an_outpoint_the_receive_scan_discovered() {
         "the matched transaction must actually spend the discovered outpoint"
     );
 }
+
+/// Fetch one batch of headers straight off the node, without accepting them.
+///
+/// `sync_accepted_headers` always walks from genesis and accepts as it goes,
+/// which is what a fresh wallet does. A reorg needs the other shape: look at
+/// what the node is serving now and decide what to do with it.
+async fn headers_from(
+    backend: &NeutrinoBackend,
+    start_height: u32,
+    count: u32,
+) -> Vec<BlockHeaderBytes> {
+    let observation = backend
+        .execute(&ChainRequest::HeaderSync {
+            start_height,
+            count,
+        })
+        .await
+        .expect("the node answers getheaders");
+    let ChainPayload::Headers { headers, .. } = observation.payload else {
+        panic!("expected a Headers payload");
+    };
+    headers.into_iter().map(BlockHeaderBytes).collect()
+}
+
+/// A reorg is refused and then rewound, and pruning leaves the commitment
+/// intact.
+///
+/// Issue #75's row 13 claimed both and had only unit tests behind it: nothing
+/// had driven either against a node that actually reorganised. The two belong
+/// in one test because they are the same question asked twice -- what the
+/// accumulator still commits to after the chain underneath it changes.
+///
+/// The reorg is real: a block the wallet has already verified is invalidated
+/// on the node, and a longer branch is mined over it.
+#[tokio::test]
+#[ignore = "requires a local regtest node; see the module docs for how to start one"]
+async fn a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment() {
+    fixture::mine(30);
+    let store = seeded_store("regtest");
+    let backend = NeutrinoBackend::connect(
+        NeutrinoConfig::new(SourceId::new("regtest-reorg"), endpoint(), "regtest"),
+        store.clone() as Arc<dyn BlockHeaderSource>,
+    )
+    .await
+    .expect("the node accepts a connection");
+
+    let mut view = sync_accepted_headers(&backend, &store).await;
+    let (_, tip_height) = store.retained_span().expect("the chain has headers");
+    assert!(
+        tip_height >= 20,
+        "this test needs some depth to prune into, got {tip_height}"
+    );
+    let committed = view.checkpoint();
+
+    // Pruning is a storage decision, not a consensus one. The accumulator
+    // still commits to every header it ever accepted, so dropping the bodies
+    // must not move the root -- if it did, a pruned wallet could no longer
+    // say what chain it had verified.
+    let floor = tip_height - 8;
+    store.write(|retained| retained.prune_below(floor));
+    let (retained_from, _) = store
+        .retained_span()
+        .expect("headers remain above the floor");
+    assert_eq!(
+        retained_from, floor,
+        "pruning must drop everything below its floor"
+    );
+    assert!(
+        store.hash_at(floor - 1).is_none(),
+        "a header below the floor is still retained, so nothing was pruned"
+    );
+    assert_eq!(
+        view.checkpoint(),
+        committed,
+        "pruning moved the commitment; the wallet could no longer prove the \
+         chain it had already verified"
+    );
+
+    // Now reorganise under it. The node is told to drop a block the wallet has
+    // already accepted, and a longer branch is mined in its place.
+    let forked_at = tip_height - 2;
+    let doomed = store.hash_at(tip_height).expect("the tip is retained");
+    let display: String = doomed
+        .iter()
+        .rev()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    fixture::call("invalidateblock", &format!("[\"{display}\"]"));
+    fixture::mine(6);
+
+    // The replacement branch does not link onto what this view already holds,
+    // and that is the assertion: a verifier that extended here would carry a
+    // chain the node has abandoned.
+    let replacement = headers_from(&backend, forked_at + 1, 16).await;
+    assert!(
+        !replacement.is_empty(),
+        "the node served nothing after the reorg"
+    );
+    assert!(
+        view.extend(&replacement).is_err(),
+        "the view extended onto a forked branch instead of refusing it"
+    );
+
+    // Recovery is a rebuild, not an in-place rewind, and the view says so
+    // itself: "the accumulator cannot be rewound in place -- it is append-only
+    // -- so a reorg below the verified tip still requires rebuilding it from a
+    // checkpoint". Pinned here because the index half looks like a rollback
+    // and is easy to mistake for one.
+    view.rewind_to(forked_at);
+    assert!(
+        view.extend(&replacement).is_err(),
+        "rewinding the index alone let the accumulator extend onto the new          branch; if that ever works, this test is describing the wrong          recovery path and the view's own documentation is stale"
+    );
+
+    // The documented path: build again from the shipped anchor. The node's
+    // current branch verifies, and the commitment differs from the one taken
+    // before the reorg -- which is the difference between recovering and
+    // pretending nothing happened.
+    // A fresh store needs a fresh connection: the backend above reads the
+    // store this test pruned, so its `getheaders` locator no longer reaches
+    // back to genesis. A recovering wallet is starting over anyway.
+    let rebuilt_store = seeded_store("regtest");
+    let rebuilt_backend = NeutrinoBackend::connect(
+        NeutrinoConfig::new(SourceId::new("regtest-rebuilt"), endpoint(), "regtest"),
+        rebuilt_store.clone() as Arc<dyn BlockHeaderSource>,
+    )
+    .await
+    .expect("the node accepts the rebuild's connection");
+    let rebuilt = sync_accepted_headers(&rebuilt_backend, &rebuilt_store).await;
+    assert_ne!(
+        rebuilt.checkpoint(),
+        committed,
+        "the rebuilt commitment matches the pre-reorg one, so either the node          did not reorganise or the rebuild read the abandoned branch"
+    );
+    assert!(
+        rebuilt.checkpoint().height > forked_at,
+        "the rebuild did not reach past the fork point"
+    );
+    let (_, rebuilt_tip) = rebuilt_store
+        .retained_span()
+        .expect("the rebuilt store has headers");
+    assert!(
+        rebuilt_tip > tip_height,
+        "the replacement branch should be longer than the one it replaced:          was {tip_height}, now {rebuilt_tip}"
+    );
+}

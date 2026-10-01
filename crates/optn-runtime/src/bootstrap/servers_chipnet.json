@@ -1,0 +1,22 @@
+{
+    "blackie.c3-soft.com": {
+        "t": "64001",
+        "s": "64002"
+    },
+    "chipnet.c3-soft.com": {
+        "t": "64001",
+        "s": "64002"
+    },
+    "chipnet.imaginary.cash": {
+        "t": "50001",
+        "s": "50002"
+    },
+    "chipnet.bch.ninja": {
+        "t": "50001",
+        "s": "50002"
+    },
+    "cbch.loping.net": {
+        "t": "62101",
+        "s": "62102"
+    }
+}

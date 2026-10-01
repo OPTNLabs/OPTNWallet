@@ -10,3 +10,6 @@ optn-core = { path = "../optn-core", version = "=1.7.3" }
 optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
 tokio = { version = "1.53.1", features = ["sync"] }
 zeromq = { version = "0.6.0", default-features = false, features = ["tokio-runtime", "tcp-transport"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt", "time"] }
