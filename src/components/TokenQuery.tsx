@@ -13,6 +13,7 @@ import TokenIdentityBadge from './ui/TokenIdentityBadge';
 import { resolveTokenPresentation } from '../utils/tokenPresentation';
 import { type BcmrSnapshot } from '../types/bcmr';
 import { useI18n } from '../i18n/useI18n';
+import { isDesktopPlatform } from '../utils/platform';
 
 interface TokenQueryProps {
   tokenId: string;
@@ -25,15 +26,16 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
   prefetchedSnapshot = null,
   prefetchedIconDataUri = null,
 }) => {
+  const runtimeMetadata = isDesktopPlatform();
   const { t } = useI18n();
   const [totalSupply, setTotalSupply] = useState<number | null>(null);
   const [activeMinting, setActiveMinting] = useState<boolean | null>(null);
   const [nftSupply, setNftSupply] = useState<number | null>(null);
   const [authHead, setAuthHead] = useState<string | null>(null);
-  const [snapshot, setSnapshot] = useState<BcmrSnapshot | null>(
+  const [legacySnapshot, setSnapshot] = useState<BcmrSnapshot | null>(
     prefetchedSnapshot
   );
-  const [iconDataUri, setIconDataUri] = useState<string | null>(
+  const [legacyIconDataUri, setIconDataUri] = useState<string | null>(
     prefetchedIconDataUri
   );
   const [loading, setLoading] = useState<boolean>(true);
@@ -42,9 +44,14 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
   const tokenCategories = useMemo(() => [tokenId], [tokenId]);
   const sharedTokenMetadata = useSharedTokenMetadata(tokenCategories)[tokenId];
   const displaySnapshot: BcmrSnapshot | null =
-    sharedTokenMetadata?.snapshot ?? prefetchedSnapshot ?? null;
-  const displayIconDataUri =
-    sharedTokenMetadata?.iconUri ?? prefetchedIconDataUri ?? null;
+    sharedTokenMetadata?.snapshot ??
+    (runtimeMetadata ? null : prefetchedSnapshot) ??
+    null;
+  const displayIconDataUri = runtimeMetadata
+    ? null
+    : sharedTokenMetadata?.iconUri ?? prefetchedIconDataUri ?? null;
+  const snapshot = runtimeMetadata ? displaySnapshot : legacySnapshot;
+  const iconDataUri = runtimeMetadata ? null : legacyIconDataUri;
   const displayTokenMetadata = displaySnapshot
     ? {
         ...(sharedTokenMetadata ?? {
@@ -110,6 +117,17 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
       setBcmrError(null);
       setSnapshot(displaySnapshot);
       setIconDataUri(displayIconDataUri);
+
+      if (runtimeMetadata) {
+        // Owned identity is projected by Rust. Global statistics have no shared
+        // query contract here; mounting the details must not contact Chaingraph.
+        setTotalSupply(null);
+        setActiveMinting(null);
+        setNftSupply(null);
+        setAuthHead(null);
+        setLoading(false);
+        return;
+      }
 
       let failedCoreQueries = 0;
 
@@ -209,6 +227,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
 
     fetchData();
   }, [
+    runtimeMetadata,
     tokenId,
     prefetchedSnapshot,
     prefetchedIconDataUri,
@@ -268,7 +287,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
 
       {snapshot && (
         <div className="bcmr-meta p-4 border rounded-lg wallet-card max-h-64 overflow-y-auto">
-          {(iconDataUri || snapshot.uris?.icon) && (
+          {!runtimeMetadata && (iconDataUri || snapshot.uris?.icon) && (
             <img
               src={iconDataUri || snapshot.uris!.icon!}
               alt={`${snapshot.name} icon`}

@@ -230,9 +230,11 @@ pub fn encode(
     let mut payload = [0u8; PAYLOAD_LEN];
     payload[0] = match network {
         Network::Mainnet => VERSION_MAINNET,
-        // Regtest shares the testnet payload version, as it shares the
-        // testnet coin type.
-        Network::Chipnet | Network::Regtest => VERSION_TESTNET,
+        // Every test chain shares the testnet payload version, as they share
+        // the testnet coin type and address prefix.
+        Network::Testnet3 | Network::Testnet4 | Network::Chipnet | Network::Regtest => {
+            VERSION_TESTNET
+        }
     };
     payload[1] = prefix_bits;
     payload[2..35].copy_from_slice(scan_pubkey);
@@ -241,7 +243,9 @@ pub fn encode(
 
     let prefix = match network {
         Network::Mainnet => CASHCODE_MAINNET,
-        Network::Chipnet | Network::Regtest => CASHCODE_TESTNET,
+        Network::Testnet3 | Network::Testnet4 | Network::Chipnet | Network::Regtest => {
+            CASHCODE_TESTNET
+        }
     };
 
     // Leading kind byte, as the desktop wallet and Electron Cash both write.

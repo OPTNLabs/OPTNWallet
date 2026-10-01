@@ -52,6 +52,18 @@ pub const SPLIT_ID_MAINNET: &str =
 /// Split ID of chipnet, as listed by the specification.
 pub const SPLIT_ID_CHIPNET: &str =
     "00000000040ba9641ba98a37b2e5ceead38e4e2930ac8f145c8094f94c708727";
+/// Split ID of testnet4, as listed by the BCMR v2 schema.
+///
+/// This is the chain's identity after chipnet forked away from it, not
+/// testnet4's genesis hash. Using the genesis would publish a testnet4 token
+/// as if it lived on a chain the specification does not name.
+pub const SPLIT_ID_TESTNET4: &str =
+    "00000000ae25e85d9e22cd6c8d72c2f5d4b0222289d801b7f633aeae3f8c6367";
+/// Testnet3 has no split ID in the BCMR schema. A chain with no tracked split
+/// uses its genesis block, the same rule this module uses for regtest.
+/// Display order, the hash the header verifier already pins for testnet3.
+pub const SPLIT_ID_TESTNET3: &str =
+    "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943";
 /// Regtest has never split, so its split ID is its genesis block.
 pub const SPLIT_ID_REGTEST: &str =
     "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206";
@@ -94,6 +106,8 @@ const NFT_FIELD_ENCODINGS: [&str; 8] = [
 pub fn split_id(network: Network) -> &'static str {
     match network {
         Network::Mainnet => SPLIT_ID_MAINNET,
+        Network::Testnet3 => SPLIT_ID_TESTNET3,
+        Network::Testnet4 => SPLIT_ID_TESTNET4,
         Network::Chipnet => SPLIT_ID_CHIPNET,
         Network::Regtest => SPLIT_ID_REGTEST,
     }
@@ -1364,6 +1378,19 @@ mod tests {
             "Collection ab12cd"
         );
         assert!(suggest_identity("nope", false).is_err());
+    }
+
+    #[test]
+    fn every_network_names_its_own_split_id() {
+        let mut seen = BTreeMap::new();
+        for network in Network::ALL {
+            let id = split_id(network);
+            assert_eq!(id.len(), 64, "{network}");
+            assert!(seen.insert(id, network).is_none(), "{network} reuses {id}");
+        }
+        assert_eq!(split_id(Network::Testnet4), SPLIT_ID_TESTNET4);
+        assert_eq!(split_id(Network::Testnet3), SPLIT_ID_TESTNET3);
+        assert_ne!(split_id(Network::Testnet4), split_id(Network::Chipnet));
     }
 
     #[test]

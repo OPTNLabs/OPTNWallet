@@ -27,8 +27,10 @@ import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPane
 import CashConnectPanel from '../../components/cashconnect/CashConnectPanel';
 import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
 import { RebuildWalletSettings } from '../../platform/desktop/RebuildWalletSettings';
+import AppUpdateSettings from './AppUpdateSettings';
 import { ExportColdArchiveSettings } from '../../platform/desktop/ExportColdArchiveSettings';
 import { WalletInfoSettings } from './WalletInfoSettings';
+import { WalletBirthdaySettings } from './WalletBirthdaySettings';
 
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import { stopCashConnectThunk } from '../../state/slices/cashconnectSlice';
@@ -54,6 +56,7 @@ import { isDesktopPlatform } from '../../utils/platform';
 import { hasCapability } from '../../platform/capabilities';
 import { useI18n } from '../../i18n/useI18n';
 import { LanguageSettings } from './LanguageSettings';
+import { AppearanceSettings } from './AppearanceSettings';
 import { MerchantPaySettings } from './MerchantPaySettings';
 import type { TranslationKey } from '../../i18n/resources';
 
@@ -64,6 +67,7 @@ const CashFusionSettings = lazy(() =>
 );
 
 const Settings: React.FC = () => {
+  const serverBack = useRef<(() => void) | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -122,6 +126,8 @@ const Settings: React.FC = () => {
   };
 
   const getRowTitle = (row: SettingsRowConfig) => {
+    if (desktop && row.key === 'server') return 'Network';
+    if (desktop && row.key === 'network') return 'Blockchain network';
     const keys: Record<string, TranslationKey> = {
       language: 'settingsRows.language',
       network: 'settingsRows.network',
@@ -149,6 +155,8 @@ const Settings: React.FC = () => {
   };
 
   const getRowDescription = (row: SettingsRowConfig) => {
+    if (desktop && row.key === 'server')
+      return 'Sources · Routing · Privacy · Explorer';
     const keys: Record<string, TranslationKey> = {
       language: 'settingsRows.languageDescription',
       network: 'settingsRows.networkDescription',
@@ -245,6 +253,8 @@ const Settings: React.FC = () => {
         return <RecoveryPhrase />;
       case 'language':
         return <LanguageSettings />;
+      case 'appearance':
+        return <AppearanceSettings />;
       case 'about':
         return <AboutView />;
       case 'terms':
@@ -268,16 +278,27 @@ const Settings: React.FC = () => {
         return desktop ? <ExportColdArchiveSettings /> : null;
       case 'rebuild-wallet':
         return desktop ? <RebuildWalletSettings /> : null;
+      // Desktop only: the mobile builds are updated by their stores, and the
+      // web build is whatever the server served.
+      case 'updates':
+        return desktop ? <AppUpdateSettings /> : null;
       case 'network':
         return <NetworkSettings />;
       case 'faucet':
         return currentNetwork === Network.CHIPNET ? <FaucetView /> : null;
       case 'wallet-info':
         return <WalletInfoSettings />;
+      case 'birthday':
+        return desktop ? (
+          <WalletBirthdaySettings
+            key={currentWalletId}
+            walletId={currentWalletId}
+          />
+        ) : null;
       case 'derivation':
         return <DerivationPathSettings />;
       case 'server':
-        return <ServerSettings />;
+        return <ServerSettings backRef={serverBack} />;
       case 'console':
         return <ConsolePanel />;
       case 'experimental':
@@ -289,7 +310,11 @@ const Settings: React.FC = () => {
           </Suspense>
         ) : null;
       case 'nostr':
-        return <NostrSettings />;
+        return desktop ? (
+          <ServerSettings initialPage="nostr" backRef={serverBack} />
+        ) : (
+          <NostrSettings key={currentWalletId} />
+        );
       case 'addons':
         return <AddonsSettings />;
       default:
@@ -305,6 +330,8 @@ const Settings: React.FC = () => {
         return t('settings.about');
       case 'language':
         return t('settings.language');
+      case 'appearance':
+        return 'Appearance';
       case 'terms':
         return t('settings.terms');
       case 'contact':
@@ -318,9 +345,11 @@ const Settings: React.FC = () => {
       case 'rebuild-wallet':
         return t('settingsPanels.rebuildWallet');
       case 'server':
-        return t('settingsPanels.server');
+        return desktop ? 'Network' : t('settingsPanels.server');
       case 'wallet-info':
         return t('settingsPanels.walletInfo');
+      case 'birthday':
+        return 'Wallet birthday';
       case 'derivation':
         return t('settingsPanels.derivation');
       case 'console':
@@ -330,7 +359,7 @@ const Settings: React.FC = () => {
       case 'cashfusion':
         return t('settingsPanels.cashfusion');
       case 'nostr':
-        return t('settingsPanels.nostr');
+        return desktop ? 'Network' : t('settingsPanels.nostr');
       case 'addons':
         return t('settingsPanels.addons');
       case 'walletconnect':
@@ -345,12 +374,22 @@ const Settings: React.FC = () => {
         return t('settings.network');
       case 'faucet':
         return t('settingsPanels.faucet');
+      case 'updates':
+        return 'Updates';
       default:
         return '';
     }
   };
 
   const handleBack = () => {
+    if (
+      (selectedOption === 'server' ||
+        (desktop && selectedOption === 'nostr')) &&
+      serverBack.current
+    ) {
+      serverBack.current();
+      return;
+    }
     if (groupConfig) {
       setSelectedOption('');
       return;

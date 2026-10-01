@@ -185,9 +185,9 @@ pub struct AuthchainResolution {
 impl AuthchainResolution {
     /// Begin at the authbase.
     ///
-    /// For a token this is the transaction that created the category, which
-    /// the wallet already knows from the category id rather than from any
-    /// source's say-so.
+    /// `authbase` uses internal transaction-hash byte order, like transaction
+    /// inputs and chain-provider requests. Token categories use display order;
+    /// callers holding a token category must use [`Self::for_token_category`].
     pub fn begin(authbase: Hash32, budget: AuthchainBudget) -> Self {
         Self {
             current: authbase,
@@ -201,9 +201,28 @@ impl AuthchainResolution {
         }
     }
 
+    /// Start with the category carried by `optn_core::token::TokenData`.
+    /// Its display-order bytes are the reverse of the outpoint hash on wire.
+    pub fn for_token_category(mut category: [u8; 32], budget: AuthchainBudget) -> Self {
+        category.reverse();
+        Self::begin(category, budget)
+    }
+
     /// The transaction whose identity output needs an answer.
     pub const fn current(&self) -> Hash32 {
         self.current
+    }
+
+    /// Record the body of the transaction [`Self::next_step`] just named.
+    ///
+    /// A zero-hop authhead is the authbase itself. Without this, `Unspent`
+    /// would resolve with empty outputs and a publication sitting on that
+    /// transaction would be invisible.
+    pub fn inspect(&mut self, tx: &ChainTransaction) {
+        if tx.txid == self.current {
+            self.current_outputs = tx.outputs.clone();
+            self.current_height = tx.block_height;
+        }
     }
 
     pub const fn hops(&self) -> u32 {
@@ -367,6 +386,18 @@ mod tests {
         [byte; 32]
     }
 
+    #[test]
+    fn token_category_is_converted_to_internal_transaction_hash_order() {
+        let category = std::array::from_fn(|index| index as u8);
+        let expected = std::array::from_fn(|index| 31 - index as u8);
+        let walk = AuthchainResolution::for_token_category(category, AuthchainBudget::default());
+        assert_eq!(walk.next_step(), AuthchainStep::Query { txid: expected });
+        assert_eq!(
+            AuthchainResolution::begin(expected, AuthchainBudget::default()).current(),
+            expected
+        );
+    }
+
     fn p2pkh() -> Vec<u8> {
         vec![0x76, 0xa9, 0x14]
     }
@@ -391,6 +422,33 @@ mod tests {
             outputs,
             block_height: Some(100),
         }
+    }
+
+    #[test]
+    fn inspecting_the_authbase_keeps_its_outputs_on_a_zero_hop_head() {
+        let base = txid(1);
+        let outputs = vec![p2pkh(), publication([9; 32])];
+        let mut walk = AuthchainResolution::begin(base, AuthchainBudget::default());
+        walk.inspect(&ChainTransaction {
+            txid: base,
+            inputs: vec![],
+            outputs: outputs.clone(),
+            block_height: Some(1),
+        });
+        let AuthchainStep::Resolved(resolved) = walk.accept(IdentityStatus::Unspent {
+            evidence: Evidence::ServerAssertion,
+        }) else {
+            panic!("an unspent authbase is a zero-hop authhead");
+        };
+        assert_eq!(resolved.authhead, base);
+        assert_eq!(resolved.hops, 0);
+        assert_eq!(resolved.outputs, outputs);
+        assert_eq!(
+            publication_in(resolved.outputs.iter().map(Vec::as_slice))
+                .expect("publication")
+                .content_hash,
+            [9; 32]
+        );
     }
 
     #[test]

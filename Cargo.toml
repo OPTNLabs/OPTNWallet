@@ -8,6 +8,7 @@ members = [
   "crates/optn-chain-native",
   "crates/optn-chain-neutrino",
   "crates/optn-chain-zmq",
+  "crates/optn-fusion",
   # #65's deterministic multisig core. A member rather than an exclusion:
   # it has no lock file of its own and three pure dependencies, so there is
   # nothing to keep it out for -- and being a member is what puts it under
@@ -19,6 +20,7 @@ members = [
   "crates/optn-platform-apple",
   "crates/optn-runtime",
   "crates/optn-transport",
+  "crates/optn-transport-native",
   "crates/optn-transport-tauri",
   "crates/optn-ui",
   "crates/optn-ui-text",
@@ -27,6 +29,8 @@ members = [
 exclude = [
   "crates/optn-cli",
   "crates/optn-ui-egui",
+  "crates/optn-ui-dioxus",
+  "crates/optn-ui-slint",
   "crates/optn-core",
   "src-tauri",
 ]
@@ -38,11 +42,13 @@ default-members = [
   "crates/optn-chain-native",
   "crates/optn-chain-neutrino",
   "crates/optn-chain-zmq",
+  "crates/optn-fusion",
   "crates/optn-platform",
   "crates/optn-platform-native",
   "crates/optn-platform-apple",
   "crates/optn-runtime",
   "crates/optn-transport",
+  "crates/optn-transport-native",
   "crates/optn-transport-tauri",
   "crates/optn-ui",
   "crates/optn-ui-text",

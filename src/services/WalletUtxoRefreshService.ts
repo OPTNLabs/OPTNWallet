@@ -179,8 +179,8 @@ export async function fetchActiveWalletUtxos(
   // A known-address refresh is not proof that addresses omitted from the
   // current inventory are empty. This matters while onboarding is still
   // materializing key rows: a narrower pass must not erase a balance found by
-  // the worker's fuller pass. Addresses included in this fetch overwrite the
-  // cached values, including authoritative empty arrays.
+  // the worker's fuller pass. Returned address results replace cached values,
+  // including empty arrays; a missing response key is not proof of emptiness.
   const cachedSnapshot = getCachedWalletUtxoSnapshot(walletId);
   const reduxSnapshot = store.getState().utxos?.utxos;
   const snapshot: Record<string, UTXO[]> = cachedSnapshot
@@ -188,20 +188,7 @@ export async function fetchActiveWalletUtxos(
     : reduxSnapshot
       ? { ...reduxSnapshot }
       : {};
-  const previousAddressCount = Object.keys(snapshot).length;
-  const partialInventory =
-    previousAddressCount > 0 && addresses.length < previousAddressCount;
-  const snapshotAddresses = Array.from(
-    new Set([...addresses, ...Object.keys(fetched)])
-  );
-  for (const address of snapshotAddresses) {
-    const utxos = fetched[address] ?? [];
-    if (
-      partialInventory &&
-      Object.prototype.hasOwnProperty.call(snapshot, address)
-    ) {
-      continue;
-    }
+  for (const [address, utxos] of Object.entries(fetched)) {
     snapshot[address] = utxos;
     primeUTXOCache(address, utxos);
   }

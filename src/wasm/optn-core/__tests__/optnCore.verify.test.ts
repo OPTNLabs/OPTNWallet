@@ -116,16 +116,12 @@ describe('optn-core through wasm', () => {
       // No `legacy` field any more: nothing that decodes here is legacy.
       expect(decoded).not.toHaveProperty('legacy');
 
-      // The legacy PayCode fixture holds these same keys and is checksum
-      // valid, so it is precisely the string that must not cross the WASM
-      // boundary as a payable recipient.
       expect(looksLikeRpa(w.legacyPaycode)).toBe(false);
       expect(isLegacyPaycode(w.legacyPaycode)).toBe(true);
       expect(() => decodeCashcode(w.legacyPaycode)).toThrow(/not supported/i);
       expect(legacyPaycodeRejection()).toMatch(/not supported/i);
       expect(isLegacyPaycode(w.cashcode)).toBe(false);
 
-      // Neither form is offline-only nor prefix-0, so neither is blocked.
       expect(sendBlockReason(w.cashcode)).toBeUndefined();
 
       const secret = sharedSecret(

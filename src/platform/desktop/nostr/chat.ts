@@ -970,54 +970,6 @@ export async function storeLastRead(
 // are shown instantly, rather than reconstructed from relays every session.
 const CHAT_STORE_KEY = (pubkey: string) => `nostr-chat:${pubkey}`;
 
-/**
- * Check which relays are reachable right now by opening a WebSocket to each.
- * Returns a url→online map for the settings UI.
- *
- * This only probes reachability — it cannot force a third-party relay to stay
- * up. Fusion already treats the pool as multi-relay (first OK wins); a few red
- * dots are normal and do not block a round by themselves.
- *
- * @param timeoutMs per-relay open budget (Tor needs more than LAN; default 8s)
- * @param onProgress optional per-URL update as each socket finishes
- */
-export function checkRelayStatus(
-  relays: string[],
-  timeoutMs = 8_000,
-  onProgress?: (url: string, online: boolean) => void
-): Promise<Record<string, boolean>> {
-  return Promise.all(
-    relays.map(
-      (url) =>
-        new Promise<[string, boolean]>((resolve) => {
-          let done = false;
-          let ws: WebSocket | null = null;
-          const finish = (ok: boolean) => {
-            if (done) return;
-            done = true;
-            try {
-              ws?.close();
-            } catch {
-              /* ignore */
-            }
-            onProgress?.(url, ok);
-            resolve([url, ok]);
-          };
-          try {
-            ws = new WebSocket(url);
-          } catch {
-            onProgress?.(url, false);
-            resolve([url, false]);
-            return;
-          }
-          ws.onopen = () => finish(true);
-          ws.onerror = () => finish(false);
-          setTimeout(() => finish(false), timeoutMs);
-        })
-    )
-  ).then((entries) => Object.fromEntries(entries));
-}
-
 /** Load this identity's saved messages (contacts derive from them). */
 export async function loadStoredMessages(
   pubkey: string

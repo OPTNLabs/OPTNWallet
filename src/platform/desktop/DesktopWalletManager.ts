@@ -46,7 +46,9 @@ import {
   deriveBchStandardXpubs,
   getBchAccountPath,
   normalizeBchAccountPath,
+  parseBchAccountPath,
 } from '../../services/HdWalletService';
+import { openWalletInEngine } from './engineWalletBridge';
 import {
   autoSaveWalletFile,
   parseWalletFile,
@@ -789,7 +791,8 @@ export async function openWalletWithPassword(
   // derivation here.
   if (info.walletType === WalletType.STANDARD && net) {
     const { default: KeyService } = await import('../../services/KeyService');
-    await KeyService.bootstrapInitialAddressBatch(walletId, 0, 1);
+    const { accountIndex } = parseBchAccountPath(info.derivation_path);
+    await KeyService.bootstrapInitialAddressBatch(walletId, accountIndex, 1);
   }
   return info;
 }
@@ -1521,8 +1524,9 @@ export async function disableWalletBiometric(walletId: number): Promise<void> {
  * instead of a generic "cancelled or failed".
  */
 export async function unlockWalletWithBiometric(
-  walletId: number
-): Promise<WalletMetadata> {
+  walletId: number,
+  autoLockMinutes?: number
+): Promise<WalletMetadata & { engineWarning?: string }> {
   let result: Awaited<ReturnType<typeof bioGetData>>;
   try {
     result = await bioGetData({
@@ -1553,7 +1557,17 @@ export async function unlockWalletWithBiometric(
       'The saved password no longer opens this wallet. Turn biometric off and on again to re-save it.'
     );
   }
-  return info;
+  // Use the credential already released by this OS prompt; return public
+  // metadata and feedback only, never the credential or a cache accessor.
+  const engine = await openWalletInEngine(
+    walletId,
+    result.data,
+    autoLockMinutes
+  ).catch(() => ({
+    opened: false,
+    reason: 'Wallet opened, but the shared engine is unavailable.',
+  }));
+  return { ...info, engineWarning: engine.opened ? undefined : engine.reason };
 }
 
 /**

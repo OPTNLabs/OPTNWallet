@@ -234,39 +234,80 @@ describe('fetchActiveWalletUtxos', () => {
     ).resolves.toEqual({
       'bchtest:qomitted': [cachedUtxo],
       'bchtest:qwallet6': [],
-      'bchtest:pwallet6qr': [],
     });
   });
 
-  it('does not overwrite overlapping cached UTXOs during a narrower refresh', async () => {
+  it.each([false, true])(
+    'replaces covered cached UTXOs during a narrower refresh (empty: %s)',
+    async (empty) => {
+      const cachedUtxo = {
+        address: 'bchtest:qwallet6',
+        tx_hash: 'd'.repeat(64),
+        tx_pos: 0,
+        height: 1,
+        value: 300_000,
+      };
+      const omittedUtxo = { ...cachedUtxo, address: 'bchtest:qomitted' };
+      const refreshedUtxos = empty
+        ? []
+        : [{ ...cachedUtxo, tx_hash: 'e'.repeat(64), value: 100_000 }];
+      cacheWalletUtxoSnapshot(6, {
+        'bchtest:qwallet6': [cachedUtxo],
+        'bchtest:qomitted': [omittedUtxo],
+        'bchtest:qthird': [],
+      });
+      fetchAndStoreUTXOsManyMock.mockResolvedValue({
+        'bchtest:qwallet6': refreshedUtxos,
+        'bchtest:pwallet6qr': [],
+      });
+
+      const { captureActiveWalletSession, fetchActiveWalletUtxos } =
+        await import('../WalletUtxoRefreshService');
+
+      await expect(
+        fetchActiveWalletUtxos(captureActiveWalletSession(6)!, undefined, {
+          discover: false,
+        })
+      ).resolves.toEqual({
+        'bchtest:qwallet6': refreshedUtxos,
+        'bchtest:qomitted': [omittedUtxo],
+        'bchtest:qthird': [],
+        'bchtest:pwallet6qr': [],
+      });
+      expect(primeUTXOCacheMock).toHaveBeenCalledWith(
+        'bchtest:qwallet6',
+        refreshedUtxos
+      );
+      expect(primeUTXOCacheMock).not.toHaveBeenCalledWith(
+        'bchtest:qomitted',
+        expect.anything()
+      );
+    }
+  );
+
+  it('does not turn an omitted response for a requested address into an empty balance', async () => {
     const cachedUtxo = {
       address: 'bchtest:qwallet6',
-      tx_hash: 'd'.repeat(64),
+      tx_hash: 'f'.repeat(64),
       tx_pos: 0,
       height: 1,
       value: 300_000,
     };
-    cacheWalletUtxoSnapshot(6, {
-      'bchtest:qwallet6': [cachedUtxo],
-      'bchtest:qomitted': [],
-      'bchtest:qthird': [],
-    });
-    fetchAndStoreUTXOsManyMock.mockResolvedValue({
-      'bchtest:qwallet6': [],
-      'bchtest:pwallet6qr': [],
-    });
-
+    cacheWalletUtxoSnapshot(6, { 'bchtest:qwallet6': [cachedUtxo] });
+    fetchAndStoreUTXOsManyMock.mockResolvedValue({ 'bchtest:pwallet6qr': [] });
     const { captureActiveWalletSession, fetchActiveWalletUtxos } = await import(
       '../WalletUtxoRefreshService'
     );
-
     await expect(
-      fetchActiveWalletUtxos(captureActiveWalletSession(6)!, undefined, {
-        discover: false,
-      })
-    ).resolves.toMatchObject({
+      fetchActiveWalletUtxos(captureActiveWalletSession(6)!)
+    ).resolves.toEqual({
       'bchtest:qwallet6': [cachedUtxo],
+      'bchtest:pwallet6qr': [],
     });
+    expect(primeUTXOCacheMock).not.toHaveBeenCalledWith(
+      'bchtest:qwallet6',
+      expect.anything()
+    );
   });
 
   it('discards a result after closing and reopening the same wallet', async () => {

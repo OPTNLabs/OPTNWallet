@@ -68,11 +68,13 @@ sha2 = "0.10"
 # (RustCrypto, pure Rust) does, and matches Electron Cash's scheme byte-for-byte.
 k256 = "0.13"
 optn-core = { path = "../crates/optn-core", version = "=1.7.3" }
+optn-fusion = { path = "../crates/optn-fusion", version = "=1.7.3" }
 optn-app = { path = "../crates/optn-app", version = "=1.7.3" }
 optn-platform = { path = "../crates/optn-platform", version = "=1.7.3" }
 optn-runtime = { path = "../crates/optn-runtime", version = "=1.7.3" }
 optn-platform-native = { path = "../crates/optn-platform-native", version = "=1.7.3", features = ["wallet-storage"] }
 optn-transport = { path = "../crates/optn-transport", version = "=1.7.3" }
+optn-transport-native = { path = "../crates/optn-transport-native", version = "=1.7.3" }
 # Concrete chain transports are shell-owned. Runtime/application crates only see
 # provider-neutral capability/evidence traits.
 optn-chain-native = { path = "../crates/optn-chain-native", version = "=1.7.3" }
@@ -115,9 +117,16 @@ hex = "0.4"
 # is no external dylib to resolve and nothing for Library Validation to reject.
 # Fixes both halves of the launch failure rather than only the missing file.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-optn-platform-native = { path = "../crates/optn-platform-native", version = "=1.7.3", features = ["clipboard"] }
+optn-platform-native = { path = "../crates/optn-platform-native", version = "=1.7.3", features = ["clipboard", "secure-storage"] }
 hidapi = "2.6"
 tauri-plugin-keyring = "=0.1.0"
+# Signature-verified desktop updates. rustls rather than the platform TLS
+# stack, to match every other outbound path in this shell; `zip` is what the
+# Windows and macOS update archives are.
+tauri-plugin-updater = { version = "=2.11.0", default-features = false, features = [
+  "rustls-tls",
+  "zip",
+] }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-clipboard-manager = "=2.3.2"
