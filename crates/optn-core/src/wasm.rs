@@ -851,3 +851,83 @@ pub fn explorer_custom_url(
     )
     .map_err(|error| JsValue::from_str(&error.to_string()))
 }
+
+// ---------------------------------------------------------------------------
+// BCMR authoring.
+// ---------------------------------------------------------------------------
+
+fn bcmr_author_err(e: crate::bcmr_author::AuthorError) -> JsValue {
+    JsValue::from_str(&serde_json::to_string(&e).unwrap_or_else(|_| e.message.clone()))
+}
+
+#[wasm_bindgen(js_name = bcmrAuthorRegistry)]
+pub fn bcmr_author_registry(request_json: &str) -> Result<String, JsValue> {
+    use crate::bcmr_author::{author_registry, AuthorError, AuthorRequest, ErrorField};
+    let request: AuthorRequest = serde_json::from_str(request_json).map_err(|e| {
+        bcmr_author_err(AuthorError {
+            field: ErrorField::General,
+            message: format!("Invalid registry request: {e}"),
+        })
+    })?;
+    let authored = author_registry(&request).map_err(bcmr_author_err)?;
+    serde_json::to_string(&authored).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+#[wasm_bindgen(js_name = bcmrSuggestIdentity)]
+pub fn bcmr_suggest_identity(category: &str, has_nfts: bool) -> Result<String, JsValue> {
+    let suggested =
+        crate::bcmr_author::suggest_identity(category, has_nfts).map_err(bcmr_author_err)?;
+    serde_json::to_string(&suggested).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+#[wasm_bindgen(js_name = bcmrSymbolError)]
+pub fn bcmr_symbol_error(symbol: &str) -> Option<String> {
+    crate::bcmr_author::validate_symbol(symbol)
+        .err()
+        .map(|e| e.message)
+}
+
+#[wasm_bindgen(js_name = bcmrSequentialCommitment)]
+pub fn bcmr_sequential_commitment(number: f64) -> Result<String, JsValue> {
+    let number = crate::bcmr_author::checked_commitment_number(number, u32::MAX, "NFT number")
+        .map_err(bcmr_author_err)?;
+    Ok(crate::bcmr_author::to_hex(
+        &crate::bcmr_author::sequential_commitment(u64::from(number)),
+    ))
+}
+
+#[wasm_bindgen(js_name = bcmrParsableCommitment)]
+pub fn bcmr_parsable_commitment(type_byte: f64, serial: f64) -> Result<String, JsValue> {
+    let type_byte =
+        crate::bcmr_author::checked_commitment_number(type_byte, u32::from(u8::MAX), "NFT type")
+            .map_err(bcmr_author_err)?;
+    let serial = crate::bcmr_author::checked_commitment_number(serial, u32::MAX, "Serial number")
+        .map_err(bcmr_author_err)?;
+    Ok(crate::bcmr_author::to_hex(
+        &crate::bcmr_author::parsable_commitment(type_byte as u8, u64::from(serial)),
+    ))
+}
+
+#[wasm_bindgen(js_name = bcmrDefaultParseBytecode)]
+pub fn bcmr_default_parse_bytecode() -> String {
+    crate::bcmr_author::DEFAULT_PARSE_BYTECODE.to_owned()
+}
+
+#[wasm_bindgen(js_name = bcmrIpfsCid)]
+pub fn bcmr_ipfs_cid(content: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest: [u8; 32] = Sha256::digest(content).into();
+    crate::bcmr_author::ipfs_raw_cid(&digest)
+}
+
+#[wasm_bindgen(js_name = bcmrReadPublication)]
+pub fn bcmr_read_publication(locking_bytecode: &[u8]) -> Option<String> {
+    let publication = crate::bcmr::parse_publication(locking_bytecode)?;
+    Some(
+        serde_json::json!({
+            "sha256": crate::bcmr_author::to_hex(&publication.content_hash),
+            "uris": publication.uris,
+        })
+        .to_string(),
+    )
+}

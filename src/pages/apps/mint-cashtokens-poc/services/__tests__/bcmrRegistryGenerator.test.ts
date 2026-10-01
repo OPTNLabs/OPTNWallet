@@ -1,11 +1,77 @@
 import { describe, expect, it } from 'vitest';
 
 import { generateBcmrRegistryJson } from '../bcmrRegistryGenerator';
-import { importMetadataRegistry } from '@bitauth/libauth';
+import {
+  importMetadataRegistry,
+  type MetadataRegistry,
+} from '@bitauth/libauth';
+import { createHash } from 'node:crypto';
+import {
+  bcmrAuthorRegistry,
+  bcmrReadPublication,
+} from '../../../../../wasm/optn-core';
+import { buildBcmrPublicationOpReturn } from '../bcmrOpReturn';
 
 describe('bcmrRegistryGenerator', () => {
+  it.each(['mainnet', 'chipnet', 'regtest'] as const)(
+    'publishes the exact Rust-authored bytes for the selected %s network',
+    async (network) => {
+      const category = 'ab'.repeat(32);
+      const revision = '2026-09-30T00:00:00.000Z';
+      const json = generateBcmrRegistryJson({
+        network,
+        authbase: category,
+        tokenCategory: category,
+        tokenName: 'Demo',
+        tokenSymbol: 'DEMO',
+        tokenDecimals: 0,
+        latestRevision: revision,
+        nfts: { parse: { types: { '8000': { name: '#128' } } } },
+      });
+      const authored = JSON.parse(
+        bcmrAuthorRegistry(
+          JSON.stringify({
+            network,
+            revision,
+            identity: {
+              authbase: category,
+              category,
+              name: 'Demo',
+              symbol: 'DEMO',
+              nfts: {
+                kind: 'schema',
+                parse: { types: { '8000': { name: '#128' } } },
+              },
+            },
+          })
+        )
+      ) as { registryJson: string; sha256: string; ipfsUri: string };
+      expect(json).toBe(authored.registryJson);
+      const uploaded = new Uint8Array(
+        await new Blob([json], { type: 'application/json' }).arrayBuffer()
+      );
+      expect(createHash('sha256').update(uploaded).digest('hex')).toBe(
+        authored.sha256
+      );
+      const publication = buildBcmrPublicationOpReturn({
+        registryJson: json,
+        uris: [authored.ipfsUri],
+      });
+      expect(
+        JSON.parse(
+          bcmrReadPublication(Buffer.from(publication.scriptHex, 'hex'))!
+        )
+      ).toEqual({
+        sha256: authored.sha256,
+        uris: [authored.ipfsUri],
+      });
+      expect(typeof importMetadataRegistry(json)).toBe('object');
+    }
+  );
+
   it('generates a v2 registry with one identity snapshot', () => {
     const json = generateBcmrRegistryJson({
+      network: 'mainnet',
       authbase: 'a'.repeat(64),
       tokenCategory: 'a'.repeat(64),
       tokenName: 'Token A',
@@ -30,6 +96,7 @@ describe('bcmrRegistryGenerator', () => {
 
   it('includes web URI when provided', () => {
     const json = generateBcmrRegistryJson({
+      network: 'mainnet',
       authbase: 'a'.repeat(64),
       tokenCategory: 'a'.repeat(64),
       tokenName: 'Token A',
@@ -39,7 +106,10 @@ describe('bcmrRegistryGenerator', () => {
       latestRevision: '2026-01-01T00:00:00.000Z',
     });
     const parsed = JSON.parse(json) as {
-      identities: Record<string, Record<string, { uris?: Record<string, string> }>>;
+      identities: Record<
+        string,
+        Record<string, { uris?: Record<string, string> }>
+      >;
     };
     expect(
       parsed.identities['a'.repeat(64)]['2026-01-01T00:00:00.000Z'].uris?.web
@@ -48,6 +118,7 @@ describe('bcmrRegistryGenerator', () => {
 
   it('generates JSON accepted by BCMR schema validator', () => {
     const json = generateBcmrRegistryJson({
+      network: 'mainnet',
       authbase: 'a'.repeat(64),
       tokenCategory: 'a'.repeat(64),
       tokenName: 'Token A',
@@ -62,18 +133,20 @@ describe('bcmrRegistryGenerator', () => {
   it('throws if required values are missing', () => {
     expect(() =>
       generateBcmrRegistryJson({
+        network: 'mainnet',
         authbase: '',
         tokenCategory: 'a'.repeat(64),
         tokenName: 'Token A',
         tokenSymbol: 'TKA',
         tokenDecimals: 0,
       })
-    ).toThrow('Authbase is required.');
+    ).toThrow('Authbase must be 64 hex characters.');
   });
 
   it('throws for invalid hex ids', () => {
     expect(() =>
       generateBcmrRegistryJson({
+        network: 'mainnet',
         authbase: 'xyz',
         tokenCategory: 'a'.repeat(64),
         tokenName: 'Token A',
@@ -84,7 +157,7 @@ describe('bcmrRegistryGenerator', () => {
   });
 
   it('merges prior identities into the next registry publication', () => {
-    const baseRegistry = {
+    const baseRegistry: MetadataRegistry = {
       $schema: 'https://cashtokens.org/bcmr-v2.schema.json',
       version: { major: 0, minor: 0, patch: 4 },
       latestRevision: '2026-01-01T00:00:00.000Z',
@@ -108,6 +181,7 @@ describe('bcmrRegistryGenerator', () => {
     };
 
     const json = generateBcmrRegistryJson({
+      network: 'mainnet',
       authbase: 'a'.repeat(64),
       tokenCategory: 'a'.repeat(64),
       tokenName: 'Token A',
@@ -120,11 +194,11 @@ describe('bcmrRegistryGenerator', () => {
     });
 
     const parsed = JSON.parse(json) as {
-      version: { patch: number };
+      version: { minor: number; patch: number };
       identities: Record<string, Record<string, { name: string }>>;
     };
 
-    expect(parsed.version.patch).toBe(5);
+    expect(parsed.version).toMatchObject({ minor: 1, patch: 0 });
     expect(
       parsed.identities['b'.repeat(64)]['2026-01-01T00:00:00.000Z'].name
     ).toBe('Older Token');
@@ -135,6 +209,7 @@ describe('bcmrRegistryGenerator', () => {
 
   it('emits an nfts schema block for parsable NFT categories', () => {
     const json = generateBcmrRegistryJson({
+      network: 'mainnet',
       authbase: 'a'.repeat(64),
       tokenCategory: 'a'.repeat(64),
       tokenName: 'Token A',
@@ -208,6 +283,7 @@ describe('bcmrRegistryGenerator', () => {
 
   it('always emits the nfts block for NFT categories, even when empty', () => {
     const json = generateBcmrRegistryJson({
+      network: 'mainnet',
       authbase: 'a'.repeat(64),
       tokenCategory: 'a'.repeat(64),
       tokenName: 'Token A',
@@ -234,6 +310,7 @@ describe('bcmrRegistryGenerator', () => {
 
   it('omits bytecode for sequential NFT collections', () => {
     const json = generateBcmrRegistryJson({
+      network: 'mainnet',
       authbase: 'a'.repeat(64),
       tokenCategory: 'a'.repeat(64),
       tokenName: 'Token A',
@@ -253,7 +330,14 @@ describe('bcmrRegistryGenerator', () => {
     const parsed = JSON.parse(json) as {
       identities: Record<
         string,
-        Record<string, { token: { nfts: { parse: { types: Record<string, { name: string }> } } } }>
+        Record<
+          string,
+          {
+            token: {
+              nfts: { parse: { types: Record<string, { name: string }> } };
+            };
+          }
+        >
       >;
     };
     const nfts =
@@ -266,7 +350,7 @@ describe('bcmrRegistryGenerator', () => {
   });
 
   it('merges base registry nfts types, fields and bytecode into the next snapshot', () => {
-    const baseRegistry = {
+    const baseRegistry: MetadataRegistry = {
       $schema: 'https://cashtokens.org/bcmr-v2.schema.json',
       version: { major: 0, minor: 0, patch: 4 },
       latestRevision: '2026-01-01T00:00:00.000Z',
@@ -298,6 +382,7 @@ describe('bcmrRegistryGenerator', () => {
     };
 
     const json = generateBcmrRegistryJson({
+      network: 'mainnet',
       authbase: 'a'.repeat(64),
       tokenCategory: 'a'.repeat(64),
       tokenName: 'Token A',
@@ -351,6 +436,7 @@ describe('bcmrRegistryGenerator', () => {
   it('throws for invalid NFT schema input', () => {
     expect(() =>
       generateBcmrRegistryJson({
+        network: 'mainnet',
         authbase: 'a'.repeat(64),
         tokenCategory: 'a'.repeat(64),
         tokenName: 'Token A',
@@ -362,17 +448,19 @@ describe('bcmrRegistryGenerator', () => {
 
     expect(() =>
       generateBcmrRegistryJson({
+        network: 'mainnet',
         authbase: 'a'.repeat(64),
         tokenCategory: 'a'.repeat(64),
         tokenName: 'Token A',
         tokenSymbol: 'TKA',
         tokenDecimals: 0,
-        nfts: { parse: { types: { 'xyz': { name: 'Bad' } } } },
+        nfts: { parse: { types: { xyz: { name: 'Bad' } } } },
       })
-    ).toThrow('NFT type key must be even-length hex.');
+    ).toThrow('NFT type key "xyz" must be even-length hex.');
 
     expect(() =>
       generateBcmrRegistryJson({
+        network: 'mainnet',
         authbase: 'a'.repeat(64),
         tokenCategory: 'a'.repeat(64),
         tokenName: 'Token A',
@@ -380,10 +468,11 @@ describe('bcmrRegistryGenerator', () => {
         tokenDecimals: 0,
         nfts: { parse: { types: { '01': { name: '' } } } },
       })
-    ).toThrow('NFT type "01" name');
+    ).toThrow('NFT type "01" needs a name.');
 
     expect(() =>
       generateBcmrRegistryJson({
+        network: 'mainnet',
         authbase: 'a'.repeat(64),
         tokenCategory: 'a'.repeat(64),
         tokenName: 'Token A',
@@ -400,6 +489,7 @@ describe('bcmrRegistryGenerator', () => {
 
     expect(() =>
       generateBcmrRegistryJson({
+        network: 'mainnet',
         authbase: 'a'.repeat(64),
         tokenCategory: 'a'.repeat(64),
         tokenName: 'Token A',
