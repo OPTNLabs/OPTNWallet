@@ -892,6 +892,58 @@ export function paymentAddress(spend_pubkey, secret, network, index) {
 }
 
 /**
+ * Verify the signed return against the exact reviewed bytes. Never broadcasts.
+ * @param {Uint8Array} original
+ * @param {Uint8Array} signed
+ * @param {string} network
+ * @returns {Uint8Array}
+ */
+export function psbtFinalizeCashTokensP2pkh(original, signed, network) {
+    const ptr0 = passArray8ToWasm0(original, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(signed, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.psbtFinalizeCashTokensP2pkh(ptr0, len0, ptr1, len1, ptr2, len2);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v4;
+}
+
+/**
+ * Pure offline review. Does not authorize a spend or establish unspentness.
+ * @param {Uint8Array} raw
+ * @param {string} network
+ * @returns {string}
+ */
+export function psbtReviewP2pkh(raw, network) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passArray8ToWasm0(raw, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.psbtReviewP2pkh(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * `m/44'/<coin>'/<account>'/3/0` and `/3/1`, as a JSON object.
  * @param {number} coin_type
  * @param {number} account

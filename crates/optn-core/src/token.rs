@@ -28,6 +28,7 @@ const PREFIX_TOKEN: u8 = 0xef;
 const HAS_COMMITMENT_LENGTH: u8 = 0x40;
 const HAS_NFT: u8 = 0x20;
 const HAS_AMOUNT: u8 = 0x10;
+pub const MAX_FUNGIBLE_AMOUNT: u64 = i64::MAX as u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Capability {
@@ -96,6 +97,11 @@ impl TokenData {
 
     /// Serialize the prefix that precedes the locking script.
     pub fn encode_prefix(&self) -> Result<Vec<u8>> {
+        if self.amount > MAX_FUNGIBLE_AMOUNT {
+            return Err(CliError::Protocol(
+                "fungible amount exceeds the consensus limit".into(),
+            ));
+        }
         if self.amount == 0 && self.nft.is_none() {
             return Err(CliError::Internal(
                 "a token prefix must carry an amount, an NFT, or both".into(),
@@ -160,11 +166,22 @@ impl TokenData {
 
         let bitfield = bytes[i];
         i += 1;
+        if bitfield & 0x80 != 0
+            || bitfield & (HAS_NFT | HAS_AMOUNT) == 0
+            || (bitfield & HAS_NFT == 0 && bitfield & (HAS_COMMITMENT_LENGTH | 0x0f) != 0)
+        {
+            return Err(CliError::Protocol("invalid token bitfield".into()));
+        }
 
         let nft = if bitfield & HAS_NFT != 0 {
             let capability = Capability::from_bits(bitfield)?;
             let commitment = if bitfield & HAS_COMMITMENT_LENGTH != 0 {
                 let (len, used) = read_varint(&bytes[i..])?;
+                if !(1..=40).contains(&len) {
+                    return Err(CliError::Protocol(
+                        "NFT commitment length must be 1..=40".into(),
+                    ));
+                }
                 i += used;
                 let len = usize::try_from(len).map_err(|_| {
                     CliError::Protocol("commitment length exceeds this platform".into())
@@ -189,6 +206,9 @@ impl TokenData {
 
         let amount = if bitfield & HAS_AMOUNT != 0 {
             let (v, used) = read_varint(&bytes[i..])?;
+            if v == 0 || v > MAX_FUNGIBLE_AMOUNT {
+                return Err(CliError::Protocol("invalid fungible amount".into()));
+            }
             i += used;
             v
         } else {
@@ -221,7 +241,7 @@ fn read_varint(bytes: &[u8]) -> Result<(u64, usize)> {
         }
         Ok(())
     };
-    match first {
+    let decoded = match first {
         0..=0xfc => Ok((u64::from(first), 1)),
         0xfd => {
             need(2)?;
@@ -240,7 +260,11 @@ fn read_varint(bytes: &[u8]) -> Result<(u64, usize)> {
             b.copy_from_slice(&bytes[1..9]);
             Ok((u64::from_le_bytes(b), 9))
         }
+    }?;
+    if varint(decoded.0).len() != decoded.1 {
+        return Err(CliError::Protocol("non-canonical token CompactSize".into()));
     }
+    Ok(decoded)
 }
 
 /// Parse a 64-character category id in display order.
@@ -388,5 +412,41 @@ mod tests {
     fn category_parsing_rejects_the_wrong_length() {
         assert!(parse_category("abcd").is_err());
         assert!(parse_category(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn noncanonical_and_consensus_invalid_prefixes_are_refused() {
+        let header = [vec![0xef], vec![0xbb; 32]].concat();
+        let mut tails = vec![
+            vec![0x00],
+            vec![0x10, 0],
+            vec![0x90, 1],
+            vec![0x23],
+            vec![0x50, 1],
+            vec![0x11, 1],
+            vec![0x60, 0],
+            vec![0x10, 0xfd, 1, 0],
+            vec![0x10, 0xfe, 0xfd, 0, 0, 0],
+            vec![0x10, 0xff, 0, 0, 1, 0, 0, 0, 0, 0],
+            vec![0x60, 0xfd, 1, 0, 0xcc],
+        ];
+        tails.push([vec![0x60, 41], vec![0xcc; 41]].concat());
+        tails.push([vec![0x10], varint(MAX_FUNGIBLE_AMOUNT + 1)].concat());
+        for tail in tails {
+            assert!(
+                TokenData::decode_prefix(&[header.clone(), tail.clone()].concat()).is_err(),
+                "accepted {tail:x?}"
+            );
+        }
+        assert!(TokenData::fungible(category(), MAX_FUNGIBLE_AMOUNT + 1)
+            .encode_prefix()
+            .is_err());
+        let maximum = TokenData::fungible(category(), MAX_FUNGIBLE_AMOUNT);
+        assert_eq!(
+            TokenData::decode_prefix(&maximum.encode_prefix().unwrap())
+                .unwrap()
+                .0,
+            maximum
+        );
     }
 }

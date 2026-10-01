@@ -179,6 +179,17 @@ impl Transaction {
         index: usize,
         sequences: &[u32],
     ) -> Result<Vec<u8>> {
+        self.sighash_preimage_with_token(index, sequences, &[])
+    }
+
+    /// CashTokens commits the spent prefix before the scriptCode length.
+    /// The caller must obtain this prefix from the authenticated parent output.
+    pub(crate) fn sighash_preimage_with_token(
+        &self,
+        index: usize,
+        sequences: &[u32],
+        token_prefix: &[u8],
+    ) -> Result<Vec<u8>> {
         if sequences.len() != self.inputs.len() {
             return Err(CliError::Protocol("input sequence count mismatch".into()));
         }
@@ -193,6 +204,7 @@ impl Transaction {
         p.extend_from_slice(&self.hash_sequence(sequences));
         p.extend_from_slice(&input.txid);
         p.extend_from_slice(&input.vout.to_le_bytes());
+        p.extend_from_slice(token_prefix);
         p.extend_from_slice(&varint(input.script_pubkey.len() as u64));
         p.extend_from_slice(&input.script_pubkey);
         p.extend_from_slice(&input.value.to_le_bytes());
