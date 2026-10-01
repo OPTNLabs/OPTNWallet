@@ -33,6 +33,7 @@ import {
   resolveTokenPresentation,
 } from '../utils/tokenPresentation';
 import { useI18n } from '../i18n/useI18n';
+import { isDesktopPlatform } from '../utils/platform';
 
 type AssetTab = 'BCH' | 'Tokens' | 'NFTs';
 const isDev = import.meta.env.DEV;
@@ -42,6 +43,7 @@ type AssetsProps = {
 };
 
 const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
+  const runtimeMetadata = isDesktopPlatform();
   const navigate = useNavigate();
   const { t } = useI18n();
   const [tab, setTab] = useState<AssetTab>('BCH');
@@ -138,6 +140,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const tokenMetadata = useSharedTokenMetadata(tokenCategories);
   const tokenFallbackByCategory = useMemo(() => {
     const byCategory = new Map<string, TokenPresentationFallback>();
+    if (runtimeMetadata) return byCategory;
 
     for (const utxo of tokenUtxos) {
       const category = utxo.token?.category;
@@ -153,7 +156,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
     }
 
     return byCategory;
-  }, [tokenUtxos]);
+  }, [tokenUtxos, runtimeMetadata]);
   const selectedTokenMetadata = selectedTokenCategory
     ? tokenMetadata[selectedTokenCategory]
     : null;
@@ -445,7 +448,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                           }
                         >
                           <div className="flex items-center gap-2.5">
-                            {card.imageUri ? (
+                            {card.imageUri && !runtimeMetadata ? (
                               <img
                                 src={card.imageUri}
                                 alt={card.primaryLabel}

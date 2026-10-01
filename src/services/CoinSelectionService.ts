@@ -1,6 +1,7 @@
 // src/services/CoinSelectionService.ts
 
 import { UTXO } from '../types/types';
+import { holdKey } from '../platform/desktop/coinHoldsBridge';
 
 export type CoinSelectionOptions = {
   /**
@@ -15,6 +16,15 @@ export type CoinSelectionOptions = {
    * Skip UTXOs that carry CashTokens (BCH-only simple send safety). Default: true
    */
   skipTokenUtxos?: boolean;
+  /**
+   * Coins the wallet is not free to spend, as `txid:vout`.
+   *
+   * The set comes from the shared hold record, which is also what freezes a
+   * coin for a Flipstarter pledge or an in-flight Fusion round. Spending one
+   * of those would double-spend the round's own inputs, so the exclusion
+   * belongs in selection rather than in a warning after the fact.
+   */
+  heldOutpoints?: ReadonlySet<string>;
 };
 
 export type CoinSelectionResult = {
@@ -24,6 +34,11 @@ export type CoinSelectionResult = {
    */
   totalSelectedSats: bigint;
 };
+
+/** `txid:vout` for a UTXO, in the spelling the hold record uses. */
+function outpointOf(utxo: UTXO): string {
+  return holdKey(utxo.tx_hash, utxo.tx_pos);
+}
 
 function isSpendableP2PKH(utxo: UTXO, skipTokenUtxos: boolean): boolean {
   const isContract = !!utxo.abi || !!utxo.contractName;
@@ -59,8 +74,10 @@ export function selectForBch(
   const maxInputs = opts.maxInputs ?? 20;
   const skipTokenUtxos = opts.skipTokenUtxos ?? true;
 
+  const held = opts.heldOutpoints;
   const pool = utxos
     .filter((u) => isSpendableP2PKH(u, skipTokenUtxos))
+    .filter((u) => !held?.has(outpointOf(u)))
     .filter((u) => (preferConfirmed ? isConfirmed(u) : true))
     .sort((a, b) =>
       Number(BigInt(b.amount ?? b.value) - BigInt(a.amount ?? a.value))
@@ -96,13 +113,19 @@ export function selectTokenFtInputs(
   category: string,
   tokenUtxos: UTXO[],
   tokenAmount: bigint,
-  opts: { preferConfirmed?: boolean; maxInputs?: number } = {}
+  opts: {
+    preferConfirmed?: boolean;
+    maxInputs?: number;
+    heldOutpoints?: ReadonlySet<string>;
+  } = {}
 ): { tokenInputs: UTXO[]; totalTokenAmount: bigint } {
   const preferConfirmed = opts.preferConfirmed ?? true;
   const maxInputs = opts.maxInputs ?? 50;
+  const held = opts.heldOutpoints;
 
   const pool = tokenUtxos
     .filter((u) => u.token?.category === category)
+    .filter((u) => !held?.has(outpointOf(u)))
     .filter((u) => !u.token?.nft) // FT only
     .filter((u) => (preferConfirmed ? isConfirmed(u) : true))
     .sort((a, b) =>
@@ -132,13 +155,19 @@ export function selectTokenFtInputs(
 export function selectNftInput(
   category: string,
   tokenUtxos: UTXO[],
-  opts: { preferConfirmed?: boolean; commitmentHex?: string } = {}
+  opts: {
+    preferConfirmed?: boolean;
+    commitmentHex?: string;
+    heldOutpoints?: ReadonlySet<string>;
+  } = {}
 ): UTXO | null {
   const preferConfirmed = opts.preferConfirmed ?? true;
   const commitmentHex = opts.commitmentHex?.toLowerCase();
+  const held = opts.heldOutpoints;
 
   const pool = tokenUtxos
     .filter((u) => u.token?.category === category)
+    .filter((u) => !held?.has(outpointOf(u)))
     .filter((u) => !!u.token?.nft)
     .filter((u) => (preferConfirmed ? isConfirmed(u) : true));
 

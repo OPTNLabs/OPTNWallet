@@ -53,7 +53,8 @@ runLifecycleTest(
       expect(word).toBeDefined();
       const input = row.$('input');
       await input.setValue(word ?? '');
-      await expect(input).toHaveValue(word ?? '');
+      // A failed assertion must not print a seed word as its expected value.
+      expect((await input.getValue()) === word).toBe(true);
     }
 
     await $('button=Confirm').click();
@@ -61,6 +62,9 @@ runLifecycleTest(
 
     // Wallet creation E2E must stay on Chipnet/test funds.
     await $('[aria-label="Switch network. Current: Mainnet"]').click();
+    await expect(
+      $('[aria-label="Switch network. Current: Chipnet"]')
+    ).toBeDisplayed();
     await $('button=Continue').click();
     await $('h1=Name This Wallet').waitForDisplayed({ timeout: 10000 });
 
@@ -72,7 +76,42 @@ runLifecycleTest(
     await newPasswordFields[0].setValue(password);
     await newPasswordFields[1].setValue(password);
     await $('button=Create Wallet').click();
-    await $('h1=Home').waitForExist({ timeout: 30000 });
+    try {
+      await $('h1=Home').waitForExist({ timeout: 30000 });
+    } catch (error) {
+      // Allowlisted labels/booleans only. No DOM dumps, screenshots, form
+      // values, wallet names, raw errors, or URLs containing wallet identifiers.
+      const state = await browser
+        .execute(() => {
+          const button = document.querySelector<HTMLButtonElement>(
+            'button[data-create-stage]'
+          );
+          const stage = button?.getAttribute('data-create-stage');
+          return {
+            stage:
+              [
+                'idle',
+                'validation',
+                'wallet',
+                'addresses',
+                'runtime',
+                'navigation',
+                'rollback',
+              ].find((known) => known === stage) ?? 'unavailable',
+            submitting: button?.disabled ?? null,
+            hasError: button?.getAttribute('data-create-error') === 'true',
+            homeRoute: /^#\/home\/\d+\/?(?:\?|$)/.test(window.location.hash),
+            nameWalletHeading: Array.from(document.querySelectorAll('h1')).some(
+              (heading) => heading.textContent === 'Name This Wallet'
+            ),
+          };
+        })
+        .catch(() => ({ diagnosticsUnavailable: true }));
+      throw new Error(
+        `Create Wallet did not reach Home: ${JSON.stringify(state)}`,
+        { cause: error }
+      );
+    }
 
     // Ctrl+L is the desktop menu shortcut and exercises the same lock path as
     // the native Wallet → Lock Wallet menu action.

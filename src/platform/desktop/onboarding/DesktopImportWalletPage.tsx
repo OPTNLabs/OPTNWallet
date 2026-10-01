@@ -8,7 +8,10 @@ import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import ElectrumServer from '../../../apis/ElectrumServer/ElectrumServer';
 import KeyService from '../../../services/KeyService';
-import { normalizeBchAccountPath } from '../../../services/HdWalletService';
+import {
+  normalizeBchAccountPath,
+  parseBchAccountPath,
+} from '../../../services/HdWalletService';
 import { setNetwork } from '../../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
 import {
@@ -34,6 +37,8 @@ import {
 } from '../DesktopWalletManager';
 import { defaultDesktopAccountPath } from '../desktopDerivationDefaults';
 import { validateNewWalletPassword } from '../passwordPolicy';
+import { openWalletInEngine } from '../engineWalletBridge';
+import { Toast } from '../toast';
 import { useI18n } from '../../../i18n/useI18n';
 
 type Step = 'words' | 'path' | 'name';
@@ -62,6 +67,10 @@ const DesktopImportWalletPage = () => {
   const inputsRef = useRef<Array<HTMLInputElement | null>>([]);
   const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
+  const autoLockMinutes = useSelector(
+    (state: { appLock?: { autoLockMinutes?: number } }) =>
+      state.appLock?.autoLockMinutes
+  );
   const dispatch = useDispatch();
   const { t } = useI18n();
   const [derivationPath, setDerivationPath] = useState(() =>
@@ -205,6 +214,7 @@ const DesktopImportWalletPage = () => {
     let walletId: number | null = null;
     try {
       const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
+      const { accountIndex } = parseBchAccountPath(normalizedDerivationPath);
       walletId = await createWalletWithPassword({
         name: walletName.trim(),
         mnemonic: recoveryPhrase,
@@ -224,7 +234,23 @@ const DesktopImportWalletPage = () => {
       // One pair is enough to make the wallet usable. The desktop worker runs
       // the bounded discovery/top-up pass after navigation; waiting for all
       // 40 encrypted rows here makes import unnecessarily slow and fragile.
-      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 1);
+      await KeyService.bootstrapInitialAddressBatch(walletId, accountIndex, 1);
+
+      const engine = await openWalletInEngine(
+        walletId,
+        password,
+        autoLockMinutes
+      ).catch(() => ({
+        opened: false,
+        reason: 'Wallet opened, but the shared engine is unavailable.',
+      }));
+      if (!engine.opened && engine.reason) {
+        try {
+          await Toast.show({ text: engine.reason, duration: 'long' });
+        } catch {
+          // Feedback failure must not roll back the imported wallet.
+        }
+      }
 
       dispatch(setWalletId(walletId));
       dispatch(setWalletNetwork(currentNetwork));
@@ -239,14 +265,16 @@ const DesktopImportWalletPage = () => {
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       navigate(`/home/${walletId}`);
 
-      void KeyService.bootstrapInitialAddressBatch(walletId, 0, 20).catch(
-        (error) => {
-          console.error('[DesktopImportWalletPage] Address bootstrap failed', {
-            walletId,
-            error,
-          });
-        }
-      );
+      void KeyService.bootstrapInitialAddressBatch(
+        walletId,
+        accountIndex,
+        20
+      ).catch((error) => {
+        console.error('[DesktopImportWalletPage] Address bootstrap failed', {
+          walletId,
+          error,
+        });
+      });
     } catch (error) {
       if (walletId !== null) {
         try {

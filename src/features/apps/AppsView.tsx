@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSelector } from 'react-redux';
 import { MdChatBubbleOutline } from 'react-icons/md';
 import AddonsRegistry from '../../services/AddonsRegistry';
 import type { AddonAppDefinition, AddonManifest } from '../../types/addons';
@@ -22,7 +21,6 @@ import {
 } from './appsViewHelpers';
 import { Capacitor } from '@capacitor/core';
 import { hasCapability } from '../../platform/capabilities';
-import { selectNostrChatEnabled } from '../../state/slices/experimentalSlice';
 import { useI18n } from '../../i18n/useI18n';
 import {
   getLocalizedAddonAppDescription,
@@ -51,7 +49,6 @@ const AppsView = () => {
   const devMode = import.meta.env.DEV;
   const isNativeRuntime = Capacitor.isNativePlatform();
   const cashFusionEnabled = hasCapability('cashFusion');
-  const chatEnabled = useSelector(selectNostrChatEnabled);
   const [cards, setCards] = useState<AppCard[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('All');
@@ -119,15 +116,13 @@ const AppsView = () => {
           out.push(cashFusionApp);
         }
 
-        if (chatEnabled) {
-          out.push({
-            id: 'optn.wallet.nostr-chat',
-            name: 'Chat',
-            icon: DEFAULT_ICON,
-            description: t('apps.chatDescription'),
-            category: 'Utils',
-          });
-        }
+        out.push({
+          id: 'optn.wallet.nostr-chat',
+          name: 'Chat',
+          icon: DEFAULT_ICON,
+          description: t('apps.chatDescription'),
+          category: 'Utils',
+        });
 
         if (mounted) {
           setCards(
@@ -148,7 +143,7 @@ const AppsView = () => {
     return () => {
       mounted = false;
     };
-  }, [cashFusionEnabled, chatEnabled, devMode, locale, t]);
+  }, [cashFusionEnabled, devMode, locale, t]);
 
   const filteredCards = useMemo(
     () =>

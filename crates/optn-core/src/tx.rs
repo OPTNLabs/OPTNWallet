@@ -148,10 +148,10 @@ impl Transaction {
         double_sha256(&buf)
     }
 
-    fn hash_sequence(&self) -> [u8; 32] {
+    fn hash_sequence(&self, sequences: &[u32]) -> [u8; 32] {
         let mut buf = Vec::with_capacity(self.inputs.len() * 4);
-        for _ in &self.inputs {
-            buf.extend_from_slice(&self.sequence.to_le_bytes());
+        for sequence in sequences {
+            buf.extend_from_slice(&sequence.to_le_bytes());
         }
         double_sha256(&buf)
     }
@@ -171,6 +171,17 @@ impl Transaction {
     ///
     /// `scriptCode` is the UTXO's own output script for P2PKH.
     pub fn sighash_preimage(&self, index: usize) -> Result<Vec<u8>> {
+        self.sighash_preimage_with_sequences(index, &vec![self.sequence; self.inputs.len()])
+    }
+
+    pub(crate) fn sighash_preimage_with_sequences(
+        &self,
+        index: usize,
+        sequences: &[u32],
+    ) -> Result<Vec<u8>> {
+        if sequences.len() != self.inputs.len() {
+            return Err(CliError::Protocol("input sequence count mismatch".into()));
+        }
         let input = self
             .inputs
             .get(index)
@@ -179,13 +190,13 @@ impl Transaction {
         let mut p = Vec::with_capacity(256);
         p.extend_from_slice(&self.version.to_le_bytes());
         p.extend_from_slice(&self.hash_prevouts());
-        p.extend_from_slice(&self.hash_sequence());
+        p.extend_from_slice(&self.hash_sequence(sequences));
         p.extend_from_slice(&input.txid);
         p.extend_from_slice(&input.vout.to_le_bytes());
         p.extend_from_slice(&varint(input.script_pubkey.len() as u64));
         p.extend_from_slice(&input.script_pubkey);
         p.extend_from_slice(&input.value.to_le_bytes());
-        p.extend_from_slice(&self.sequence.to_le_bytes());
+        p.extend_from_slice(&sequences[index].to_le_bytes());
         p.extend_from_slice(&self.hash_outputs());
         p.extend_from_slice(&self.locktime.to_le_bytes());
         p.extend_from_slice(&SIGHASH_ALL_FORKID.to_le_bytes());
@@ -256,6 +267,23 @@ impl Transaction {
     }
 
     fn serialize(&self, script_sigs: &[Vec<u8>]) -> Vec<u8> {
+        self.serialize_using(script_sigs, &vec![self.sequence; self.inputs.len()])
+    }
+
+    pub(crate) fn serialize_with_sequences(
+        &self,
+        script_sigs: &[Vec<u8>],
+        sequences: &[u32],
+    ) -> Result<Vec<u8>> {
+        if sequences.len() != self.inputs.len() || script_sigs.len() != self.inputs.len() {
+            return Err(CliError::Protocol(
+                "input script or sequence count mismatch".into(),
+            ));
+        }
+        Ok(self.serialize_using(script_sigs, sequences))
+    }
+
+    fn serialize_using(&self, script_sigs: &[Vec<u8>], sequences: &[u32]) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&self.version.to_le_bytes());
         out.extend_from_slice(&varint(self.inputs.len() as u64));
@@ -266,7 +294,7 @@ impl Transaction {
             let sig = script_sigs.get(i).unwrap_or(&empty);
             out.extend_from_slice(&varint(sig.len() as u64));
             out.extend_from_slice(sig);
-            out.extend_from_slice(&self.sequence.to_le_bytes());
+            out.extend_from_slice(&sequences[i].to_le_bytes());
         }
         out.extend_from_slice(&varint(self.outputs.len() as u64));
         for o in &self.outputs {
@@ -278,6 +306,36 @@ impl Transaction {
         out.extend_from_slice(&self.locktime.to_le_bytes());
         out
     }
+}
+
+/// Verify the BCH signature (including its hash-type byte) before constructing
+/// the two minimal pushes of a P2PKH scriptSig. This is BCH Schnorr, not BIP340.
+pub(crate) fn verified_p2pkh_script_sig(
+    pubkey: &[u8],
+    signature: &[u8],
+    digest: &[u8; 32],
+) -> Result<Vec<u8>> {
+    use k256::ecdsa::{signature::hazmat::PrehashVerifier, VerifyingKey};
+
+    let invalid = || CliError::Protocol("invalid P2PKH signature or public key".into());
+    let (hash_type, signature_bytes) = signature.split_last().ok_or_else(invalid)?;
+    if *hash_type != SIGHASH_ALL_FORKID as u8 || pubkey.len() != 33 {
+        return Err(invalid());
+    }
+    let key = VerifyingKey::from_sec1_bytes(pubkey).map_err(|_| invalid())?;
+    if let Ok(schnorr) = <&[u8; 64]>::try_from(signature_bytes) {
+        if !crate::fusion::schnorr::verify(pubkey, schnorr, digest) {
+            return Err(invalid());
+        }
+    } else {
+        let der = Signature::from_der(signature_bytes).map_err(|_| invalid())?;
+        if der.normalize_s().is_some() || key.verify_prehash(digest, &der).is_err() {
+            return Err(invalid());
+        }
+    }
+    let mut script = push_data(signature);
+    script.extend_from_slice(&push_data(pubkey));
+    Ok(script)
 }
 
 /// Serialized size of a signed P2PKH transaction, for fee estimation.

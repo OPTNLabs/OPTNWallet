@@ -16,4 +16,5 @@ serde_json = "1.0.145"
 tokio = { version = "1.53.1", features = ["rt", "sync", "time", "macros"] }
 
 [dev-dependencies]
+getrandom = "0.2"
 tokio = { version = "1.53.1", features = ["macros", "rt", "time"] }

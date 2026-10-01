@@ -1,14 +1,24 @@
 /** @vitest-environment jsdom */
 
-import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   navigate: vi.fn(),
+  create: vi.fn(),
+  rollback: vi.fn(),
+  bootstrap: vi.fn(),
+  engine: vi.fn(),
+  toast: vi.fn(),
 }));
 
 vi.mock('react-redux', () => ({
@@ -17,6 +27,7 @@ vi.mock('react-redux', () => ({
     selector({
       wallet_id: { currentWalletId: 0 },
       network: { currentNetwork: 'mainnet' },
+      appLock: { autoLockMinutes: 30 },
     }),
 }));
 
@@ -26,6 +37,7 @@ vi.mock('react-router-dom', () => ({
 
 vi.mock('../../../../i18n/useI18n', () => ({
   useI18n: () => ({
+    locale: 'en',
     t: (key: string) =>
       key === 'onboarding.missingWord' ? 'Word {number} is missing.' : key,
   }),
@@ -36,11 +48,20 @@ vi.mock('../../../../apis/DatabaseManager/DatabaseService', () => ({
 }));
 
 vi.mock('../../../../platform/desktop/DesktopWalletManager', () => ({
-  createWalletWithPassword: vi.fn(),
+  createWalletWithPassword: mocks.create,
+  rollbackCreatedWallet: mocks.rollback,
 }));
 
 vi.mock('../../../../services/KeyService', () => ({
-  default: { bootstrapInitialAddressBatch: vi.fn() },
+  default: { bootstrapInitialAddressBatch: mocks.bootstrap },
+}));
+
+vi.mock('../../engineWalletBridge', () => ({
+  openWalletInEngine: mocks.engine,
+}));
+vi.mock('../../toast', () => ({ Toast: { show: mocks.toast } }));
+vi.mock('../../../../apis/ElectrumServer/ElectrumServer', () => ({
+  default: () => ({ ensureFreshConnection: async () => {} }),
 }));
 
 import DesktopImportWalletPage from '../../onboarding/DesktopImportWalletPage';
@@ -54,6 +75,90 @@ afterEach(() => {
 });
 
 describe('DesktopImportWalletPage UI', () => {
+  beforeEach(() => {
+    mocks.create.mockReset().mockResolvedValue(42);
+    mocks.bootstrap.mockReset().mockResolvedValue(undefined);
+    mocks.engine.mockReset().mockResolvedValue({ opened: true });
+    mocks.toast.mockReset().mockResolvedValue(undefined);
+  });
+
+  it.each([0, 4])(
+    'hands off imported account %s after bootstrap and keeps import success on engine failure',
+    async (accountIndex) => {
+      mocks.engine.mockResolvedValueOnce({
+        opened: false,
+        reason: 'HD inventory import failed.',
+      });
+      if (accountIndex === 4)
+        mocks.toast.mockRejectedValueOnce(new Error('toast unavailable'));
+      const user = userEvent.setup();
+      render(<DesktopImportWalletPage />);
+      const words = screen.getAllByRole('textbox');
+      VALID_MNEMONIC.split(' ').forEach((word, index) => {
+        fireEvent.change(words[index], { target: { value: word } });
+      });
+      await user.click(
+        screen.getByRole('button', { name: 'onboarding.continue' })
+      );
+      if (accountIndex !== 0) {
+        await user.click(
+          screen.getByRole('checkbox', { name: 'derivation.customize' })
+        );
+        fireEvent.change(
+          screen.getByRole('textbox', { name: 'derivation.bip44AccountIndex' }),
+          {
+            target: { value: String(accountIndex) },
+          }
+        );
+      }
+      await user.click(
+        screen.getByRole('button', { name: 'onboarding.continue' })
+      );
+      await user.type(
+        screen.getByPlaceholderText('onboarding.walletNamePlaceholder'),
+        'Imported fixture'
+      );
+      await user.type(
+        screen.getByPlaceholderText('onboarding.passwordPlaceholder'),
+        'synthetic-password'
+      );
+      await user.type(
+        screen.getByPlaceholderText('onboarding.confirmPasswordPlaceholder'),
+        'synthetic-password'
+      );
+      await user.click(
+        screen.getByRole('button', { name: 'onboarding.importWallet' })
+      );
+      await waitFor(() =>
+        expect(mocks.navigate).toHaveBeenCalledWith('/home/42')
+      );
+      expect(mocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          derivationPath: `m/44'/145'/${accountIndex}'`,
+          password: 'synthetic-password',
+        })
+      );
+      expect(mocks.bootstrap).toHaveBeenNthCalledWith(1, 42, accountIndex, 1);
+      expect(mocks.bootstrap).toHaveBeenNthCalledWith(2, 42, accountIndex, 20);
+      expect(mocks.engine).toHaveBeenCalledExactlyOnceWith(
+        42,
+        'synthetic-password',
+        30
+      );
+      expect(mocks.bootstrap.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.engine.mock.invocationCallOrder[0]
+      );
+      expect(mocks.engine.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.navigate.mock.invocationCallOrder[0]
+      );
+      expect(mocks.toast).toHaveBeenCalledWith({
+        text: 'HD inventory import failed.',
+        duration: 'long',
+      });
+      expect(mocks.rollback).not.toHaveBeenCalled();
+    }
+  );
+
   it('changes the phrase length and focuses the first missing word', async () => {
     const user = userEvent.setup();
     render(<DesktopImportWalletPage />);

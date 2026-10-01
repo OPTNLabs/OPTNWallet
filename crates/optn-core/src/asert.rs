@@ -64,11 +64,12 @@ impl AsertParams {
         }
     }
 
-    /// Chipnet follows the testnet half-life, same as Electron Cash `ChipNet`.
+    /// Every test chain follows the testnet half-life, same as Electron Cash
+    /// where `ChipNet` inherits `TestNet4` inherits `TestNet`.
     pub const fn for_network(network: Network) -> Self {
         match network {
             Network::Mainnet => Self::mainnet(),
-            Network::Chipnet => Self::testnet(),
+            Network::Testnet3 | Network::Testnet4 | Network::Chipnet => Self::testnet(),
             Network::Regtest => Self::regtest(),
         }
     }
@@ -86,7 +87,11 @@ impl AsertAnchor {
     /// Published ASERTI3-2d anchors used by Electron Cash / BCHN.
     ///
     /// Mainnet: height 661647, bits 402971390, prev_time 1605447844.
-    /// Chipnet (testnet4): height 16844, bits 486604799, prev_time 1605451779.
+    /// Testnet3: height 1421481, bits 486604799, prev_time 1605445400.
+    /// Testnet4 and chipnet: height 16844, bits 486604799, prev_time 1605451779.
+    ///
+    /// Chipnet shares testnet4's anchor because it *is* testnet4 with later
+    /// rules; the two are indistinguishable by difficulty alone.
     pub const fn for_network(network: Network) -> Self {
         match network {
             Network::Mainnet => Self {
@@ -94,7 +99,12 @@ impl AsertAnchor {
                 bits: 402_971_390,
                 prev_time: 1_605_447_844,
             },
-            Network::Chipnet => Self {
+            Network::Testnet3 => Self {
+                height: 1_421_481,
+                bits: 486_604_799,
+                prev_time: 1_605_445_400,
+            },
+            Network::Testnet4 | Network::Chipnet => Self {
                 height: 16_844,
                 bits: 486_604_799,
                 prev_time: 1_605_451_779,

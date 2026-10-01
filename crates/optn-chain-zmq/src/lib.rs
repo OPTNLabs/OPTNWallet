@@ -216,13 +216,31 @@ fn parse_event(topic: &str, body: &[u8]) -> Result<ChainEventKind, ChainEventErr
     }
 }
 
+/// Read a hash frame into this crate's internal byte order.
+///
+/// The `hash*` topics do **not** carry the same byte order as everything else
+/// on this socket. BCHN's publisher writes the uint256 out reversed --
+/// `data[31 - i] = hash.begin()[i]` -- so the frame holds the display order a
+/// person reads in an explorer, while `sha256d` over a `rawtx` or `rawblock`
+/// body yields the internal order the wallet stores. Taking the frame as-is
+/// made the same transaction arrive under two different txids depending on
+/// which topic reported it, and the one from `hashtx` matched nothing in the
+/// wallet: a wake-up about a payment, byte-reversed into a payment that does
+/// not exist.
+///
+/// It was invisible to unit tests because the obvious fixture -- 32 equal
+/// bytes -- is its own reversal. Found by driving BCHN 29.1.0 and comparing a
+/// `hashblock` against the hash computed from the `rawblock` of the same
+/// block: see `tests/bchn_live.rs`.
 fn parse_hash(body: &[u8], topic: &str) -> Result<[u8; 32], ChainEventError> {
-    body.try_into().map_err(|_| {
+    let mut hash: [u8; 32] = body.try_into().map_err(|_| {
         ChainEventError::InvalidMessage(format!(
             "{topic} body must be exactly 32 hash bytes, got {}",
             body.len()
         ))
-    })
+    })?;
+    hash.reverse();
+    Ok(hash)
 }
 
 #[cfg(test)]
@@ -255,13 +273,44 @@ mod tests {
     }
 
     #[test]
-    fn hash_topics_preserve_bchn_uint256_wire_bytes() {
-        let hash = [9u8; 32];
+    fn hash_topics_are_reversed_into_internal_order() {
+        // Deliberately not 32 equal bytes. The previous fixture was, which is
+        // its own reversal, so it passed while the bytes were being kept in
+        // the wrong order -- see `parse_hash`.
+        let mut frame = [0u8; 32];
+        for (index, byte) in frame.iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let mut expected = frame;
+        expected.reverse();
         assert_eq!(
-            parse_event("hashtx", &hash).unwrap(),
+            parse_event("hashtx", &frame).unwrap(),
             ChainEventKind::TransactionSeen {
-                txid: hash,
+                txid: expected,
                 raw: None,
+            }
+        );
+    }
+
+    #[test]
+    fn the_two_transaction_topics_agree_on_one_txid() {
+        // The property the live test checks against BCHN, pinned here so a
+        // regression fails without a node running. A consumer woken by
+        // `hashtx` must be able to match what `rawtx` would have reported.
+        let raw = [1u8, 2, 3, 4];
+        let txid = sha256d(&raw);
+        // What BCHN would put in the `hashtx` frame for this transaction.
+        let mut frame = txid;
+        frame.reverse();
+        assert_eq!(
+            parse_event("hashtx", &frame).unwrap(),
+            ChainEventKind::TransactionSeen { txid, raw: None }
+        );
+        assert_eq!(
+            parse_event("rawtx", &raw).unwrap(),
+            ChainEventKind::TransactionSeen {
+                txid,
+                raw: Some(raw.to_vec()),
             }
         );
     }

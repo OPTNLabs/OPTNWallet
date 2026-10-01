@@ -62,11 +62,6 @@ export function clampFuseDepth(value: unknown): number {
 interface ExperimentalState {
   rpaEnabled: boolean;
   cashFusionEnabled: boolean;
-  nostrChatEnabled: boolean;
-  // One-time migration marker: legacy persisted state stored the old default
-  // as `false`. Once migrated to the new default-on behavior, an explicit user
-  // opt-out must remain respected on later launches.
-  nostrChatDefaultOnApplied: boolean;
   nostrRelays: string[];
   // ONE auto-fusion policy shared by both transports. Whichever Fusion mode is
   // selected is the one the engine may run — the modes are mutually exclusive
@@ -98,8 +93,6 @@ interface ExperimentalState {
 const initialState: ExperimentalState = {
   rpaEnabled: false,
   cashFusionEnabled: false,
-  nostrChatEnabled: true,
-  nostrChatDefaultOnApplied: true,
   nostrRelays: DEFAULT_NOSTR_RELAYS,
   // Automatic Fusion is opt-in and also requires an explicit Fusion start in
   // the current app session before the background engine can continue rounds.
@@ -131,11 +124,13 @@ export function normalizeExperimentalPersistedState(
     return undefined;
 
   const persisted = state as Record<string, unknown>;
-  const defaultOnAlreadyApplied = persisted.nostrChatDefaultOnApplied === true;
   // Protocol player floors/caps/timings are not wallet settings. Drop any
   // leftover persisted overlay so it cannot re-enter redux.
   const persistedWithoutProtocolKnobs = { ...persisted };
   delete persistedWithoutProtocolKnobs.p2pKnobs;
+  // Chat is now a normal wallet feature, with no separate enable switch.
+  delete persistedWithoutProtocolKnobs.nostrChatEnabled;
+  delete persistedWithoutProtocolKnobs.nostrChatDefaultOnApplied;
 
   return {
     autoFuseEnabled: false,
@@ -144,15 +139,9 @@ export function normalizeExperimentalPersistedState(
     // Spread first, then clamp: a wallet persisted before this field existed
     // gets the default, and a persisted out-of-range value is pulled back into
     // bounds rather than letting the engine loop on a 0 or negative depth.
-    fuseDepth: clampFuseDepth(
-      persisted.fuseDepth ?? DEFAULT_FUSE_DEPTH
-    ),
+    fuseDepth: clampFuseDepth(persisted.fuseDepth ?? DEFAULT_FUSE_DEPTH),
     // Default false unless user explicitly opted in (must follow ...persisted).
     spendOnlyFusedCoins: persisted.spendOnlyFusedCoins === true,
-    nostrChatEnabled: defaultOnAlreadyApplied
-      ? persisted.nostrChatEnabled !== false
-      : true,
-    nostrChatDefaultOnApplied: true,
     // Ensure expanded bootstrap relays appear for older persisted 3-relay lists.
     nostrRelays: mergeWithDefaultRelays(
       Array.isArray(persisted.nostrRelays)
@@ -175,9 +164,6 @@ const experimentalSlice = createSlice({
     },
     setCashFusionEnabled(state, action: PayloadAction<boolean>) {
       state.cashFusionEnabled = action.payload;
-    },
-    setNostrChatEnabled(state, action: PayloadAction<boolean>) {
-      state.nostrChatEnabled = action.payload;
     },
     addNostrRelay(state, action: PayloadAction<string>) {
       const relay = action.payload.trim();
@@ -279,7 +265,6 @@ const experimentalSlice = createSlice({
 export const {
   setRpaEnabled,
   setCashFusionEnabled,
-  setNostrChatEnabled,
   addNostrRelay,
   removeNostrRelay,
   setAutoFuseEnabled,
@@ -309,8 +294,6 @@ export const selectRpaEnabled = (state: RootState) =>
   state.experimental.rpaEnabled;
 export const selectCashFusionEnabled = (state: RootState) =>
   state.experimental.cashFusionEnabled;
-export const selectNostrChatEnabled = (state: RootState) =>
-  state.experimental.nostrChatEnabled !== false;
 export const selectNostrRelays = createSelector(
   [(state: RootState) => state.experimental.nostrRelays],
   (relays): string[] => mergeWithDefaultRelays(relays)
@@ -358,8 +341,7 @@ export const selectFusionServers = createSelector(
     // Offer the other servers we know about for this network, so switching to
     // one is a selection rather than retyping a host from memory. Listed after
     // the default and before user additions; the Set keeps order and dedupes.
-    const alsoKnown =
-      network === 'chipnet' ? KNOWN_CHIPNET_FUSION_SERVERS : [];
+    const alsoKnown = network === 'chipnet' ? KNOWN_CHIPNET_FUSION_SERVERS : [];
     return Array.from(new Set([networkDefault, ...alsoKnown, ...userAdded]));
   }
 );

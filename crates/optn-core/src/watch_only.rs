@@ -14,6 +14,7 @@ use crate::hd::{account_path, hash160};
 use crate::network::Network;
 
 const MAX_XPUB_LENGTH: usize = 256;
+const MAX_INVENTORY_ADDRESS_LENGTH: usize = 256;
 
 /// Shared bound on the number of addresses in each ordinary HD branch.
 pub const MAX_HD_ADDRESSES_PER_BRANCH: u32 = 10_000;
@@ -47,6 +48,14 @@ impl HdBranch {
     }
 }
 
+/// A materialized legacy address, not evidence of observed transaction history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HdInventoryAddress {
+    pub branch: u32,
+    pub index: u32,
+    pub address: String,
+}
+
 /// Local allocation, independent of prederived scan inventory and coin balance.
 /// An issued or reserved index is consumed even if its intended payment fails.
 /// The runtime must durably store an updated candidate before exposing its address.
@@ -55,6 +64,7 @@ impl HdBranch {
 pub struct HdAddressAllocation {
     next: [u32; 3],
     current_receive: Option<u32>,
+    compatibility_horizon: u32,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +72,8 @@ pub struct HdAddressAllocation {
 struct StoredHdAddressAllocation {
     next: [u32; 3],
     current_receive: Option<u32>,
+    #[serde(default)]
+    compatibility_horizon: u32,
 }
 
 impl TryFrom<StoredHdAddressAllocation> for HdAddressAllocation {
@@ -72,6 +84,7 @@ impl TryFrom<StoredHdAddressAllocation> for HdAddressAllocation {
             .next
             .iter()
             .any(|&next| next > MAX_HD_ADDRESSES_PER_BRANCH)
+            || stored.compatibility_horizon > MAX_HD_ADDRESSES_PER_BRANCH
         {
             return Err(CliError::Usage(
                 "HD allocation counter exceeds the branch limit".into(),
@@ -88,6 +101,7 @@ impl TryFrom<StoredHdAddressAllocation> for HdAddressAllocation {
         Ok(Self {
             next: stored.next,
             current_receive: stored.current_receive,
+            compatibility_horizon: stored.compatibility_horizon,
         })
     }
 }
@@ -95,6 +109,70 @@ impl TryFrom<StoredHdAddressAllocation> for HdAddressAllocation {
 impl HdAddressAllocation {
     pub const fn next_indexes(&self) -> [u32; 3] {
         self.next
+    }
+
+    /// Exclusive scan horizons in `HD_SCAN_BRANCHES` order. Compatibility chain
+    /// 2 is scanned but never allocates; no horizon implies transaction history.
+    pub const fn scan_horizons(&self) -> [u32; 4] {
+        [
+            self.next[0],
+            self.next[1],
+            self.next[2],
+            self.compatibility_horizon,
+        ]
+    }
+
+    /// Validate at most one materialized address per scan branch, then reserve
+    /// through its index without changing observed history or current receive.
+    /// Invalid entries leave all counters unchanged; an empty import is a no-op.
+    pub fn import_inventory(
+        &mut self,
+        network: Network,
+        account_xpub: &str,
+        addresses: &[HdInventoryAddress],
+    ) -> Result<()> {
+        if addresses.len() > HD_SCAN_BRANCHES.len() {
+            return Err(CliError::Usage(
+                "HD inventory exceeds the scan branch count".into(),
+            ));
+        }
+        let mut horizons = self.scan_horizons();
+        let mut seen = [false; 4];
+        for entry in addresses {
+            let slot = HD_SCAN_BRANCHES
+                .iter()
+                .position(|&branch| branch == entry.branch)
+                .ok_or_else(|| CliError::Usage("unsupported HD inventory branch".into()))?;
+            if seen[slot] {
+                return Err(CliError::Usage("duplicate HD inventory branch".into()));
+            }
+            if entry.index >= MAX_HD_ADDRESSES_PER_BRANCH {
+                return Err(CliError::Usage(
+                    "HD inventory index exceeds the branch limit".into(),
+                ));
+            }
+            if entry.address.len() > MAX_INVENTORY_ADDRESS_LENGTH {
+                return Err(CliError::Usage("HD inventory address is too long".into()));
+            }
+            let address = Address::decode(&entry.address).map_err(CliError::Usage)?;
+            if address.prefix != network.prefix() {
+                return Err(CliError::Usage(
+                    "HD inventory address belongs to another network".into(),
+                ));
+            }
+            let expected = address_under_account(network, account_xpub, entry.branch, entry.index)?;
+            let expected = Address::decode(&expected.address).map_err(CliError::Usage)?;
+            if address.script_pubkey() != expected.script_pubkey() {
+                return Err(CliError::Usage(
+                    "HD inventory address does not match its account and derivation".into(),
+                ));
+            }
+            horizons[slot] = horizons[slot].max(entry.index + 1);
+            seen[slot] = true;
+        }
+        self.next = [horizons[0], horizons[1], horizons[2]];
+        self.compatibility_horizon = horizons[3];
+        Ok(())
     }
 
     /// The most recently allocated receive index. None also permits a nonzero
@@ -673,9 +751,173 @@ mod tests {
     }
 
     #[test]
+    fn allocation_inventory_is_validated_atomic_monotonic_and_not_history() {
+        let network = Network::Chipnet;
+        let xpub = account_xpub(network, 0);
+        let entry = |branch, index| HdInventoryAddress {
+            branch,
+            index,
+            address: address_under_account(network, &xpub, branch, index)
+                .unwrap()
+                .address,
+        };
+        let mut inventory = [entry(0, 24), entry(1, 8), entry(7, 4), entry(2, 29)];
+        inventory[1].address = address_under_account(network, &xpub, 1, 8)
+            .unwrap()
+            .token_address
+            .to_ascii_uppercase();
+        inventory[2].address = format!(" {} ", inventory[2].address);
+        assert_eq!(
+            serde_json::from_value::<[HdInventoryAddress; 4]>(
+                serde_json::to_value(&inventory).unwrap()
+            )
+            .unwrap(),
+            inventory
+        );
+
+        let mut allocation = HdAddressAllocation::default();
+        allocation.import_inventory(network, "", &[]).unwrap();
+        assert_eq!(allocation, HdAddressAllocation::default());
+        let mut unissued = allocation.clone();
+        unissued
+            .import_inventory(network, &xpub, &inventory)
+            .unwrap();
+        assert_eq!(unissued.current_receive(), None);
+        allocation
+            .allocate(HdBranch::Receive, [None; 3], false)
+            .unwrap();
+        let before = allocation.clone();
+        let compatibility = Address::decode(&inventory[3].address).unwrap();
+        for (branch, index, address) in [
+            (3, 29, inventory[3].address.clone()),
+            (u32::MAX, 29, inventory[3].address.clone()),
+            (2, MAX_HD_ADDRESSES_PER_BRANCH, inventory[3].address.clone()),
+            (2, u32::MAX, inventory[3].address.clone()),
+            (
+                2,
+                29,
+                format!("{}{}", inventory[3].address, " ".repeat(256)),
+            ),
+            (2, 29, "invalid".into()),
+            (2, 29, entry(2, 28).address),
+            (
+                2,
+                29,
+                address_under_account(network, &account_xpub(network, 1), 2, 29)
+                    .unwrap()
+                    .address,
+            ),
+            (
+                2,
+                29,
+                Address::from_hash(network.prefix(), AddressKind::P2sh, compatibility.hash)
+                    .encode(),
+            ),
+            (
+                2,
+                29,
+                Address::from_hash("bitcoincash", compatibility.kind, compatibility.hash).encode(),
+            ),
+            (
+                2,
+                29,
+                Address::from_hash("bchreg", compatibility.kind, compatibility.hash).encode(),
+            ),
+            (
+                2,
+                29,
+                Address::from_hash("foreign", compatibility.kind, compatibility.hash).encode(),
+            ),
+        ] {
+            let invalid = HdInventoryAddress {
+                branch,
+                index,
+                address,
+            };
+            assert!(allocation
+                .import_inventory(network, &xpub, &[inventory[0].clone(), invalid])
+                .is_err());
+            assert_eq!(allocation, before, "a later invalid entry must be atomic");
+        }
+        for address in &inventory {
+            let duplicate = [address.clone(), entry(address.branch, address.index + 1)];
+            assert!(allocation
+                .import_inventory(network, &xpub, &duplicate)
+                .is_err());
+            assert_eq!(allocation, before);
+        }
+        let mut oversized = inventory.to_vec();
+        oversized.push(inventory[0].clone());
+        assert!(allocation
+            .import_inventory(network, &xpub, &oversized)
+            .is_err());
+        assert!(allocation
+            .import_inventory(network, "invalid", &inventory)
+            .is_err());
+        assert_eq!(allocation, before);
+
+        allocation
+            .import_inventory(network, &xpub, &inventory)
+            .unwrap();
+        assert_eq!(allocation.next_indexes(), [25, 9, 5]);
+        assert_eq!(allocation.scan_horizons(), [25, 9, 5, 30]);
+        assert_eq!(allocation.current_receive(), Some(0));
+        let imported = allocation.clone();
+        for entries in [HD_SCAN_BRANCHES.map(|branch| entry(branch, 0)), inventory] {
+            allocation
+                .import_inventory(network, &xpub, &entries)
+                .unwrap();
+            assert_eq!(allocation, imported, "imports cannot lower any horizon");
+        }
+        allocation.observe([None; 3]).unwrap();
+        let error = allocation
+            .allocate(HdBranch::Receive, [None; 3], false)
+            .unwrap_err();
+        assert!(matches!(error, CliError::Usage(ref message) if message.contains("acknowledge")));
+        assert_eq!(allocation, imported, "inventory is not observed history");
+
+        let encoded = serde_json::to_value(&allocation).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({"next": [25, 9, 5], "current_receive": 0, "compatibility_horizon": 30})
+        );
+        assert_eq!(
+            serde_json::from_value::<HdAddressAllocation>(encoded.clone()).unwrap(),
+            allocation
+        );
+        let mut legacy = encoded.clone();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("compatibility_horizon");
+        let legacy = serde_json::from_value::<HdAddressAllocation>(legacy).unwrap();
+        assert_eq!(legacy.scan_horizons(), [25, 9, 5, 0]);
+        assert_eq!(legacy.current_receive(), Some(0));
+        for invalid in [MAX_HD_ADDRESSES_PER_BRANCH + 1, u32::MAX] {
+            let mut invalid_stored = encoded.clone();
+            invalid_stored["compatibility_horizon"] = invalid.into();
+            assert!(serde_json::from_value::<HdAddressAllocation>(invalid_stored).is_err());
+        }
+
+        let maximum = HD_SCAN_BRANCHES.map(|branch| entry(branch, MAX_HD_ADDRESSES_PER_BRANCH - 1));
+        allocation
+            .import_inventory(network, &xpub, &maximum)
+            .unwrap();
+        assert_eq!(allocation.scan_horizons(), [MAX_HD_ADDRESSES_PER_BRANCH; 4]);
+        assert_eq!(allocation.current_receive(), Some(0));
+        assert_eq!(
+            serde_json::from_value::<HdAddressAllocation>(
+                serde_json::to_value(&allocation).unwrap()
+            )
+            .unwrap(),
+            allocation
+        );
+    }
+
+    #[test]
     fn allocation_serialization_preserves_history_only_and_issued_state() {
         let mut allocation = HdAddressAllocation::default();
-        let empty = serde_json::json!({"next": [0, 0, 0], "current_receive": null});
+        let empty = serde_json::json!({"next": [0, 0, 0], "current_receive": null, "compatibility_horizon": 0});
         assert_eq!(serde_json::to_value(&allocation).unwrap(), empty);
         assert_eq!(
             serde_json::from_value::<HdAddressAllocation>(empty).unwrap(),
@@ -690,7 +932,7 @@ mod tests {
         allocation
             .allocate(HdBranch::Receive, [None; 3], false)
             .unwrap();
-        let issued = serde_json::json!({"next": [7, 8, 0], "current_receive": 6});
+        let issued = serde_json::json!({"next": [7, 8, 0], "current_receive": 6, "compatibility_horizon": 0});
         assert_eq!(serde_json::to_value(&allocation).unwrap(), issued);
         let mut restored = serde_json::from_value::<HdAddressAllocation>(issued).unwrap();
         assert_eq!(

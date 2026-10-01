@@ -3,7 +3,7 @@ name: Security analysis
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, staging, dev]
   schedule:
     - cron: '37 3 * * 1'
   workflow_dispatch:
@@ -88,9 +88,6 @@ jobs:
       - name: Audit Rust dependencies
         working-directory: src-tauri
         run: cargo audit
-
-      - name: Audit shared connector core without advisory exceptions
-        run: cargo audit --file crates/optn-core/Cargo.lock
 
       - name: Audit shared connector core without advisory exceptions
         run: cargo audit --file crates/optn-core/Cargo.lock
