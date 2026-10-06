@@ -683,7 +683,7 @@ async function androidImportWallet(client) {
     await androidSetInput(client, 'input[placeholder="word"]', index, word);
   }
   await androidClickText(client, 'button', 'Import Wallet');
-  await androidWaitHeading(client, 'Home', 120_000);
+  await androidWait(client, `document.body?.innerText?.includes('Home') === true`, 'Android wallet home did not load.', 120_000);
   console.log('[merchant-pay-desktop-mobile] mobile buyer wallet ready');
 }
 
