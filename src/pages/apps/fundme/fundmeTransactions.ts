@@ -78,8 +78,7 @@ function campaignUtxoMatches(campaignId: number) {
 function makeContract(network: string | null | undefined, artifact: unknown) {
   return new Contract(artifact as never, [] as never, {
     provider: toCashscriptProvider(network),
-    addressType: 'p2sh32',
-  });
+      });
 }
 
 async function getPrimaryAddress(sdk: AddonSDK): Promise<string> {
@@ -228,7 +227,7 @@ export async function refundPledge(args: {
   if (!refundUtxo) throw new Error('Refund contract UTXO not found.');
 
   const p2pkhUnlocker: Unlocker = {
-    generateLockingBytecode: () => {
+    generateUnlockingBytecode: () => {
       const result = cashAddressToLockingBytecode(primaryAddress);
       if (typeof result === 'string') throw new Error(result);
       return result.bytecode;
@@ -362,7 +361,7 @@ export async function cancelCampaign(args: {
   );
   if (!userUtxo) throw new Error('No BCH fee UTXO available.');
   const p2pkhUnlocker: Unlocker = {
-    generateLockingBytecode: () => {
+    generateUnlockingBytecode: () => {
       const result = cashAddressToLockingBytecode(primaryAddress);
       if (typeof result === 'string') throw new Error(result);
       return result.bytecode;
@@ -429,7 +428,7 @@ export async function claimCampaign(args: {
   const servicePKH = 'cda49032545f60a188bec92cbce5806ecfd65348';
   const serviceFee = (campaignUtxo.satoshis * 15n) / 1000n;
   const p2pkhUnlocker: Unlocker = {
-    generateLockingBytecode: () => {
+    generateUnlockingBytecode: () => {
       const result = cashAddressToLockingBytecode(primaryAddress);
       if (typeof result === 'string') throw new Error(result);
       return result.bytecode;

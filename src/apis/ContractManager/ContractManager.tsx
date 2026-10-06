@@ -118,7 +118,6 @@ export default function ContractManager(): ContractManagerApi {
       }
 
       const provider = new ElectrumNetworkProvider(currentNetwork);
-      const addressType = 'p2sh32';
       const prefix =
         currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 
@@ -137,7 +136,6 @@ export default function ContractManager(): ContractManagerApi {
 
       const contract = new Contract(artifact as ContractCtorArtifact, parsedArgs, {
         provider,
-        addressType,
       });
 
       const balance = await contract.getBalance();
@@ -176,7 +174,7 @@ export default function ContractManager(): ContractManagerApi {
         balance,
         utxos: formattedUTXOs,
         abi: artifact.abi,
-        redeemScript: contract.redeemScript,
+        redeemScript: contract.bytecode,
         unlock: serializeUnlockFunctions(contract.unlock),
       };
     } catch (error) {
@@ -256,7 +254,7 @@ export default function ContractManager(): ContractManagerApi {
       new Date().toISOString(),
       JSON.stringify(artifact),
       JSON.stringify(abi),
-      JSON.stringify(contract.redeemScript),
+      JSON.stringify(contract.bytecode),
       JSON.stringify(serializeUnlockFunctions(contract.unlock)),
     ];
 
@@ -705,8 +703,7 @@ export default function ContractManager(): ContractManagerApi {
       parsedConstructorArgs,
       {
         provider: new ElectrumNetworkProvider(state.network.currentNetwork),
-        addressType: 'p2sh32',
-      }
+              }
     );
 
     const abiFunction = contractInstance.abi.find(
@@ -766,7 +763,7 @@ export default function ContractManager(): ContractManagerApi {
     const unlocker = contract.unlock[contractFunction](...args);
 
     return {
-      lockingBytecode: contract.redeemScript,
+      lockingBytecode: contract.bytecode,
       unlocker,
     };
   }

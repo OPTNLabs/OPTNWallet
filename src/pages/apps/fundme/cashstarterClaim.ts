@@ -154,14 +154,6 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
     }
 
     const p2pkhUnlocker: Unlocker = {
-      generateLockingBytecode: () => {    // Return the locking bytecode (scriptPubKey) for the P2PKH output
-        const result = cashAddressToLockingBytecode(usersAddress);
-
-        if (typeof result === 'string') {
-          throw new Error(`Failed to convert CashAddress to locking bytecode: ${result}`);
-        }
-        return result.bytecode;
-      },
       generateUnlockingBytecode: () => {    // Return an empty array or a placeholder for the unlocking bytecode (scriptSig)
         return Uint8Array.from([]);
       }
@@ -176,9 +168,9 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
       provider,
       maximumFeeSatoshis: 2000n,
     })
-      .addInput(claimContractUTXO, contractCashStarterClaim.unlock.claim(servicePKH, serviceFee))
-      .addInput(campaignUTXO, contractCashStarter.unlock.externalFunction())
-      .addInput(userUTXO, p2pkhUnlocker)
+      .addInput(claimContractUTXO as any, contractCashStarterClaim.unlock.claim(servicePKH, serviceFee))
+      .addInput(campaignUTXO as any, contractCashStarter.unlock.externalFunction())
+      .addInput(userUTXO as any, p2pkhUnlocker)
       .addOutput({
         to: contractCashStarterClaim.tokenAddress,  
         amount: claimContractUTXO.satoshis,
@@ -227,7 +219,7 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
         valueSatoshis: BigInt(claimContractUTXO.satoshis),
         contract: {
           abiFunction: contractCashStarterClaim.artifact.abi,
-          redeemScript: contractCashStarterClaim.redeemScript,
+          redeemScript: contractCashStarterClaim.bytecode,
           artifact: contractCashStarterClaim.artifact, 
         },
         token: {
@@ -244,7 +236,7 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
         valueSatoshis: BigInt(campaignUTXO.satoshis),
         contract: {
           abiFunction: contractCashStarter.artifact.abi,
-          redeemScript: contractCashStarter.redeemScript,
+          redeemScript: contractCashStarter.bytecode,
           artifact: contractCashStarter.artifact,
         },
         token: {

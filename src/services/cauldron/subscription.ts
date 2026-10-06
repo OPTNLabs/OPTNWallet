@@ -141,7 +141,7 @@ export class CauldronSubscriptionService {
         const client = new ElectrumClient<ElectrumClientEvents>(
           'OPTNWallet-Cauldron',
           '1.4',
-          socket
+          socket as any
         );
 
         try {
