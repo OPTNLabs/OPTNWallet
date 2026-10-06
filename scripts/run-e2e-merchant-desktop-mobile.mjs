@@ -666,11 +666,16 @@ async function androidWaitHeading(client, text, timeout = 60_000) {
 }
 
 async function androidImportWallet(client) {
-  await androidWait(
-    client,
-    `document.body?.innerText?.includes('Powered with Bitcoin Covenants for Bitcoin Cash') === true || document.body?.innerText?.includes('Home') === true`,
-    'Android wallet startup screen did not load.'
-  );
+  try {
+    await androidWait(
+      client,
+      `document.body?.innerText?.includes('Powered with Bitcoin Covenants for Bitcoin Cash') === true || document.body?.innerText?.includes('Home') === true`,
+      'Android wallet startup screen did not load.'
+    );
+  } catch (error) {
+    const state = await client.evaluate(`({ url: location.href, ready: document.readyState, body: document.body?.innerText?.replace(/\\s+/g, ' ').slice(-2400) ?? '' })`).catch(() => null);
+    throw new Error(`Android wallet startup screen did not load: ${JSON.stringify(state)}`, { cause: error });
+  }
   const alreadyImported = await client.evaluate(
     `document.body?.innerText?.includes('Home') === true`
   );
@@ -680,7 +685,12 @@ async function androidImportWallet(client) {
   }
   await androidClickText(client, 'a', 'Import Wallet');
   await androidWaitHeading(client, 'Import Wallet');
-  await androidClickSelector(client, 'button[aria-label*="Current: Mainnet"]');
+  const mainnetSelectorPresent = await client.evaluate(
+    `Boolean(document.querySelector('button[aria-label*="Current: Mainnet"]'))`
+  );
+  if (mainnetSelectorPresent) {
+    await androidClickSelector(client, 'button[aria-label*="Current: Mainnet"]');
+  }
   await androidWait(
     client,
     `document.querySelectorAll('input[placeholder="word"]').length === 12`,
