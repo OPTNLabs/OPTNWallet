@@ -910,16 +910,8 @@ try {
   ]);
   const target = await waitForWebViewTarget(cdpPort);
   androidClient = await CdpClient.connect(target.webSocketDebuggerUrl);
-  let runtimeEnabled = false;
-  for (let attempt = 1; attempt <= 3 && !runtimeEnabled; attempt += 1) {
-    try {
-      await androidClient.command('Runtime.enable');
-      runtimeEnabled = true;
-    } catch (error) {
-      if (attempt === 3) throw error;
-      await sleep(2_000);
-    }
-  }
+  // Runtime.evaluate works without enabling the Runtime domain. Avoid making
+  // startup depend on a WebView event that can be lost during cold launch.
   await androidImportWallet(androidClient);
   await exerciseAddonContractDemoAndroid(androidClient);
 
