@@ -910,7 +910,16 @@ try {
   ]);
   const target = await waitForWebViewTarget(cdpPort);
   androidClient = await CdpClient.connect(target.webSocketDebuggerUrl);
-  await androidClient.command('Runtime.enable');
+  let runtimeEnabled = false;
+  for (let attempt = 1; attempt <= 3 && !runtimeEnabled; attempt += 1) {
+    try {
+      await androidClient.command('Runtime.enable');
+      runtimeEnabled = true;
+    } catch (error) {
+      if (attempt === 3) throw error;
+      await sleep(2_000);
+    }
+  }
   await androidImportWallet(androidClient);
   await exerciseAddonContractDemoAndroid(androidClient);
 
