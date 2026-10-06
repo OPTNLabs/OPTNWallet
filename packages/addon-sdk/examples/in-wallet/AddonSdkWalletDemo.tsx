@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { binToHex, cashAddressToLockingBytecode } from '@bitauth/libauth';
 
 /**
  * This example is mounted by OPTN Wallet's built-in add-on host. It uses the
@@ -22,6 +23,15 @@ export default function AddonSdkWalletDemo({ sdk }: { sdk: any }) {
   const [status, setStatus] = useState('Loading through the add-on SDK…');
   const [contractAddress, setContractAddress] = useState('');
   const [contractUtxo, setContractUtxo] = useState<any>(null);
+
+  const constructorPkh = () => {
+    if (!state.address) throw new Error('Wallet address is not available');
+    const locking = cashAddressToLockingBytecode(state.address);
+    if (typeof locking === 'string' || locking.bytecode.length < 23) {
+      throw new Error('Primary wallet address is not a P2PKH address');
+    }
+    return binToHex(locking.bytecode.slice(3, 23));
+  };
 
   const demoArtifact = {
     contractName: 'AddonSdkDemoP2PKH',
@@ -79,7 +89,7 @@ export default function AddonSdkWalletDemo({ sdk }: { sdk: any }) {
           try {
             const address = await sdk.contracts.deriveAddress({
               artifact: demoArtifact,
-              constructorArgs: [{ type: 'bytes20', value: '00'.repeat(20) }],
+              constructorArgs: [{ type: 'bytes20', value: constructorPkh() }],
               contractType: 'p2sh32',
             });
             setContractAddress(address);
@@ -103,13 +113,13 @@ export default function AddonSdkWalletDemo({ sdk }: { sdk: any }) {
             try {
               const contract = await sdk.contracts.instantiate({
                 artifact: demoArtifact,
-                constructorArgs: [{ type: 'bytes20', value: '00'.repeat(20) }],
+                constructorArgs: [{ type: 'bytes20', value: constructorPkh() }],
                 contractType: 'p2sh32',
               });
               await sdk.contracts.propose({
                 contract,
                 artifact: demoArtifact,
-                constructorArgs: [{ type: 'bytes20', value: '00'.repeat(20) }],
+                constructorArgs: [{ type: 'bytes20', value: constructorPkh() }],
                 function: { name: 'spend', args: [{ type: 'sig', signer: { address: contractAddress, purpose: 'wallet-spend' } }] },
                 inputs: [contractUtxo],
                 contractInputIndexes: [0],

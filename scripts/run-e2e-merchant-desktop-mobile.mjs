@@ -318,6 +318,12 @@ async function exerciseAddonContractDemo(session) {
     const body = await (await session.$('body')).getText().catch(() => 'unavailable');
     throw new Error(`SDK contract derivation did not complete: ${body.replace(/\s+/g, ' ').slice(-500)}`, { cause: error });
   }
+  const proposalButton = await session.$('button*=Propose contract spend for review');
+  if (await proposalButton.isDisplayed().catch(() => false) && await proposalButton.isEnabled().catch(() => false)) {
+    await proposalButton.click();
+    await waitFor(session, 'div*=Contract proposal submitted for wallet review');
+    console.log('[addon-sdk-desktop-mobile] desktop contract proposal review passed');
+  }
   console.log('[addon-sdk-desktop-mobile] desktop contract derivation passed');
 }
 
@@ -700,6 +706,11 @@ async function exerciseAddonContractDemoAndroid(client) {
     `document.body?.innerText?.includes('Contract address:') === true`,
     'Android SDK contract derivation did not complete.'
   );
+  const proposalReady = await client.evaluate(`(() => { const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Propose contract spend for review') && !candidate.disabled); if (!button) return false; button.click(); return true; })()`);
+  if (proposalReady) {
+    await androidWait(client, `document.body?.innerText?.includes('Contract proposal submitted for wallet review') === true`, 'Android contract proposal review did not complete.');
+    console.log('[addon-sdk-desktop-mobile] Android contract proposal review passed');
+  }
   console.log('[addon-sdk-desktop-mobile] Android contract derivation passed');
 }
 
