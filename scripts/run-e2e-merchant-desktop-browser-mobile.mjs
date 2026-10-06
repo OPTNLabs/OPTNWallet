@@ -13,17 +13,17 @@ const captureDirectory = process.env.MERCHANT_E2E_CAPTURE_DIR?.trim() || '';
 // The mnemonic stays in this Node process and is entered through the two
 // isolated wallet UIs. It is never passed to Vite, Tauri, Firefox, or logged.
 loadDotenv({ path: path.join(projectRoot, '.env'), override: false });
-const mnemonic = process.env.OPTN_MERCHANT_E2E_MNEMONIC?.trim() ?? '';
+const mnemonic = process.env.OPTN_E2E_MNEMONIC?.trim() ?? '';
 if (!mnemonic) {
   console.error(
-    'OPTN_MERCHANT_E2E_MNEMONIC is required. This runner never prints it.'
+    'OPTN_E2E_MNEMONIC is required. This runner never prints it.'
   );
   process.exit(2);
 }
 assert.equal(
   bip39.validateMnemonic(mnemonic, bip39.wordlists.english),
   true,
-  'OPTN_MERCHANT_E2E_MNEMONIC is not a valid English mnemonic'
+  'OPTN_E2E_MNEMONIC is not a valid English mnemonic'
 );
 
 const appBinary =
@@ -86,7 +86,7 @@ function sanitizedEnvironment(profileRoot) {
       delete environment[key];
     }
   }
-  delete environment.OPTN_MERCHANT_E2E_MNEMONIC;
+  delete environment.OPTN_E2E_MNEMONIC;
   environment.XDG_DATA_HOME = path.join(profileRoot, 'data');
   environment.XDG_CONFIG_HOME = path.join(profileRoot, 'config');
   environment.XDG_CACHE_HOME = path.join(profileRoot, 'cache');

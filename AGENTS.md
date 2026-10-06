@@ -58,7 +58,7 @@ Reference wallets are behavioral and architectural oracles, not implementation-s
   application-data directories, except for the narrowly scoped local Chipnet
   E2E exception below.
 - When a task explicitly authorizes local Chipnet E2E testing, the test harness
-  may read only `OPTN_MERCHANT_E2E_MNEMONIC` from the local environment. Never
+  may read only `OPTN_E2E_MNEMONIC` from the local environment. Never
   open, print, log, copy, persist, or expose the mnemonic; keep derived wallet
   state ephemeral and restrict the test to Chipnet data-fetch behavior.
 - Do not access production credentials. Do not expose, generate, log, or copy

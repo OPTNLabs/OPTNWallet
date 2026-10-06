@@ -1,11 +1,12 @@
 /**
  * Direct generic CashScript Chipnet E2E.
  *
- * Uses only OPTN_MERCHANT_E2E_MNEMONIC from the local environment. The
+ * Uses only OPTN_E2E_MNEMONIC from the local environment. The
  * mnemonic and private keys remain in this process and are never logged or
  * written. Set ADDON_CASHSCRIPT_LIVE=1 to authorize the two Chipnet spends.
  */
 import { config as loadDotenv } from 'dotenv';
+import { readFileSync } from 'node:fs';
 import { decodeTransaction, hexToBin, createVirtualMachineBCH, secp256k1, encodeCashAddress, cashAddressToLockingBytecode, binToHex, sha256 } from '@bitauth/libauth';
 import { Contract, ElectrumNetworkProvider, HashType, SignatureTemplate, TransactionBuilder } from 'cashscript';
 import { Network } from '../src/state/slices/networkSlice';
@@ -14,8 +15,8 @@ import { hash160 } from '@cashscript/utils';
 import { anyServer } from '../test-support/chipnetElectrum';
 
 loadDotenv({ path: '.env', override: false });
-const mnemonic = process.env.OPTN_MERCHANT_E2E_MNEMONIC?.trim() ?? '';
-if (!mnemonic) throw new Error('OPTN_MERCHANT_E2E_MNEMONIC is required');
+const mnemonic = process.env.OPTN_E2E_MNEMONIC?.trim() ?? '';
+if (!mnemonic) throw new Error('OPTN_E2E_MNEMONIC is required');
 if (process.env.ADDON_CASHSCRIPT_LIVE !== '1') {
   throw new Error('Set ADDON_CASHSCRIPT_LIVE=1 to authorize Chipnet broadcasts');
 }
@@ -28,6 +29,9 @@ const artifact = {
   bytecode: 'OP_OVER OP_HASH160 OP_EQUALVERIFY OP_CHECKSIG',
   compiler: { name: 'cashc', version: '0.13.0-next.3' },
 };
+const transferWithTimeoutArtifact = JSON.parse(
+  readFileSync(new URL('../src/apis/ContractManager/artifacts/transfer_with_timeout.json', import.meta.url), 'utf8'),
+);
 
 function addressFor(pubkey: Uint8Array): string {
   const encoded = encodeCashAddress({ prefix: 'bchtest', type: 'p2pkh', payload: hash160(pubkey) });
@@ -105,3 +109,34 @@ const spendTxid = await broadcast(spendHex);
 console.log(`contract spend txid: ${spendTxid}`);
 await waitForUtxo(source.address, spendTxid, 0);
 console.log('generic CashScript Chipnet E2E passed: build, VM validation, broadcast, and mempool/provider visibility');
+
+// Exercise a second deterministic contract shape using the same wallet-derived
+// public key for both constructor identities, then return its BCH to the wallet.
+const secondSource = await findCoin();
+const secondPubkey = secp256k1.derivePublicKeyCompressed(secondSource.privkey);
+if (typeof secondPubkey === 'string') throw new Error(secondPubkey);
+const secondContract = new Contract(
+  transferWithTimeoutArtifact,
+  [binToHex(Uint8Array.from(secondPubkey)), binToHex(Uint8Array.from(secondPubkey)), 0n],
+  { provider, contractType: 'p2sh32', addressType: 'p2sh32' } as never,
+);
+const secondFunding = new TransactionBuilder({ provider });
+secondFunding.addInput(
+  { txid: secondSource.coin.tx_hash, vout: secondSource.coin.tx_pos, satoshis: BigInt(secondSource.coin.value) },
+  new SignatureTemplate(secondSource.privkey, HashType.SIGHASH_ALL).unlockP2PKH(),
+);
+secondFunding.addOutputs([
+  { to: secondContract.address, amount: 10_000n },
+  { to: secondSource.address, amount: BigInt(secondSource.coin.value - 10_000 - 1_000) },
+]);
+const secondFundingTxid = await broadcast(secondFunding.build());
+const secondUtxo = await waitForUtxo(secondContract.address, secondFundingTxid, 0);
+const secondSpend = new TransactionBuilder({ provider });
+secondSpend.addInput(
+  secondUtxo,
+  secondContract.unlock.transfer(new SignatureTemplate(secondSource.privkey, HashType.SIGHASH_ALL)),
+);
+secondSpend.addOutput({ to: secondSource.address, amount: secondUtxo.satoshis - 1_000n });
+const secondSpendTxid = await broadcast(secondSpend.build());
+await waitForUtxo(secondSource.address, secondSpendTxid, 0);
+console.log(`second deterministic contract (${secondContract.address}) returned funds: ${secondSpendTxid}`);
