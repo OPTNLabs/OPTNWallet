@@ -527,7 +527,7 @@ class CdpClient {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Timed out waiting for CDP command ${method}.`));
-      }, 10_000);
+      }, 30_000);
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timeout);
