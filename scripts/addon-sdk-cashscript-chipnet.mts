@@ -8,7 +8,7 @@
 import { config as loadDotenv } from 'dotenv';
 import { readFileSync } from 'node:fs';
 import { decodeTransaction, hexToBin, createVirtualMachineBCH, secp256k1, encodeCashAddress, cashAddressToLockingBytecode, binToHex, sha256 } from '@bitauth/libauth';
-import { Contract, ElectrumNetworkProvider, HashType, SignatureTemplate, TransactionBuilder } from 'cashscript';
+import { Contract, ElectrumNetworkProvider, SighashType, SignatureTemplate, TransactionBuilder } from 'cashscript';
 import { Network } from '../src/state/slices/networkSlice';
 import { derivePrivateKeyAtPath, getBchAddressPath } from '../src/services/HdWalletService';
 import { hash160 } from '@cashscript/utils';
@@ -27,7 +27,7 @@ const artifact = {
   constructorInputs: [{ name: 'pkh', type: 'bytes20' }],
   abi: [{ name: 'spend', inputs: [{ name: 'pk', type: 'pubkey' }, { name: 's', type: 'sig' }] }],
   bytecode: 'OP_OVER OP_HASH160 OP_EQUALVERIFY OP_CHECKSIG',
-  compiler: { name: 'cashc', version: '0.13.0-next.3' },
+  compiler: { name: 'cashc', version: '0.14.0' },
 };
 const transferWithTimeoutArtifact = JSON.parse(
   readFileSync(new URL('../src/apis/ContractManager/artifacts/transfer_with_timeout.json', import.meta.url), 'utf8'),
@@ -83,7 +83,7 @@ if (typeof pubkey === 'string') throw new Error(pubkey);
 const contract = new Contract(artifact, [binToHex(hash160(Uint8Array.from(pubkey)))], { provider, contractType: 'p2sh32', addressType: 'p2sh32' } as never);
 const existingContractUtxo = (await provider.getUtxos(contract.address)).find((utxo) => utxo.satoshis >= 2_000n);
 const funding = new TransactionBuilder({ provider });
-funding.addInput({ txid: source.coin.tx_hash, vout: source.coin.tx_pos, satoshis: BigInt(source.coin.value) }, new SignatureTemplate(source.privkey, HashType.SIGHASH_ALL).unlockP2PKH());
+  funding.addInput({ txid: source.coin.tx_hash, vout: source.coin.tx_pos, satoshis: BigInt(source.coin.value), lockingBytecode: binToHex(cashAddressToLockingBytecode(source.address).bytecode) }, new SignatureTemplate(source.privkey, SighashType.SIGHASH_ALL).unlockP2PKH());
 funding.addOutputs([
   { to: contract.address, amount: 10_000n },
   { to: source.address, amount: BigInt(source.coin.value - 10_000 - 1_000) },
@@ -102,7 +102,7 @@ if (process.env.ADDON_CASHSCRIPT_FUND_ONLY === '1') {
 }
 
 const spend = new TransactionBuilder({ provider });
-spend.addInput(contractUtxo, contract.unlock.spend(Uint8Array.from(pubkey), new SignatureTemplate(source.privkey, HashType.SIGHASH_ALL)));
+  spend.addInput(contractUtxo, contract.unlock.spend(Uint8Array.from(pubkey), new SignatureTemplate(source.privkey, SighashType.SIGHASH_ALL)));
 spend.addOutput({ to: source.address, amount: contractUtxo.satoshis - 1_000n });
 const spendHex = spend.build();
 const spendTxid = await broadcast(spendHex);
@@ -122,8 +122,8 @@ const secondContract = new Contract(
 );
 const secondFunding = new TransactionBuilder({ provider });
 secondFunding.addInput(
-  { txid: secondSource.coin.tx_hash, vout: secondSource.coin.tx_pos, satoshis: BigInt(secondSource.coin.value) },
-  new SignatureTemplate(secondSource.privkey, HashType.SIGHASH_ALL).unlockP2PKH(),
+  { txid: secondSource.coin.tx_hash, vout: secondSource.coin.tx_pos, satoshis: BigInt(secondSource.coin.value), lockingBytecode: binToHex(cashAddressToLockingBytecode(secondSource.address).bytecode) },
+  new SignatureTemplate(secondSource.privkey, SighashType.SIGHASH_ALL).unlockP2PKH(),
 );
 secondFunding.addOutputs([
   { to: secondContract.address, amount: 10_000n },
@@ -134,7 +134,7 @@ const secondUtxo = await waitForUtxo(secondContract.address, secondFundingTxid, 
 const secondSpend = new TransactionBuilder({ provider });
 secondSpend.addInput(
   secondUtxo,
-  secondContract.unlock.transfer(new SignatureTemplate(secondSource.privkey, HashType.SIGHASH_ALL)),
+  secondContract.unlock.transfer(new SignatureTemplate(secondSource.privkey, SighashType.SIGHASH_ALL)),
 );
 secondSpend.addOutput({ to: secondSource.address, amount: secondUtxo.satoshis - 1_000n });
 const secondSpendTxid = await broadcast(secondSpend.build());

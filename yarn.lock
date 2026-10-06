@@ -226,10 +226,10 @@
     "@cashconnect-js/core" "1.0.0-alpha.31"
     zod "^4.4.3"
 
-"@cashscript/utils@0.13.0-next.3":
-  version "0.13.0-next.3"
-  resolved "https://registry.npmjs.org/@cashscript/utils/-/utils-0.13.0-next.3.tgz"
-  integrity sha512-fXZ4aDXi8gymMBn60j6tf4+cMCc9b28UYaGct7KHpaJJeE/fWKAg0cHLjzB/tihK+EgTcwe0GoWNkZsa9Oz2Xw==
+"@cashscript/utils@0.14.0":
+  version "0.14.0"
+  resolved "https://registry.npmjs.org/@cashscript/utils/-/utils-0.14.0.tgz"
+  integrity sha512-gPCImBQAOyPu8ndHxvciiqBz5cjTneSWqzQdQoPOZH5zNQnAdzZ4bYykzgI7DOfCGum32DHFmusqm5GrAyiT4A==
   dependencies:
     "@bitauth/libauth" "^3.1.0-next.8"
 
@@ -300,17 +300,23 @@
   dependencies:
     debug "^4.3.7"
 
-"@electrum-cash/network@^4.1.3":
-  version "4.1.3"
-  resolved "https://registry.npmjs.org/@electrum-cash/network/-/network-4.1.3.tgz"
-  integrity sha512-amMvdcEfHhquoUkhN7x/H04KPYfqd5LilOGcg6O1OdUks1Mcrcah8WfHICHW/qyZ3Rgoos9o7Wx8gKz8qcSNzg==
+"@electrum-cash/network@^4.1.3", "@electrum-cash/network@^4.4.0":
+  version "4.4.8"
+  resolved "https://registry.npmjs.org/@electrum-cash/network/-/network-4.4.8.tgz"
+  integrity sha512-fo/03qopaYdweO3JO5J2OL3gQz7fyil8NJaKg8Kid2bmF4uYulVuu9Q1W1bi4lRql5Dq9q7Z9LByShTi6pRbFg==
   dependencies:
     "@electrum-cash/debug-logs" "^1.0.0"
-    "@electrum-cash/web-socket" "^1.0.0"
+    "@electrum-cash/socket" "^4.1.0"
+    "@electrum-cash/web-socket" "^4.1.0"
     async-mutex "^0.5.0"
     debug "^4.3.2"
     eventemitter3 "^5.0.1"
     lossless-json "^4.0.1"
+
+"@electrum-cash/socket@^4.1.0", "@electrum-cash/socket@^4.2.0":
+  version "4.2.0"
+  resolved "https://registry.npmjs.org/@electrum-cash/socket/-/socket-4.2.0.tgz"
+  integrity sha512-xYqFLDc+eRTgAykAtHXOUfE6xvqfqWgTFLjSaLXwNMJ+iBH2vgZoMOH7K0uvgzdnM8TP84s64tup7TWpHkIA8w==
 
 "@electrum-cash/web-socket@^1.0.0":
   version "1.0.0"
@@ -318,6 +324,20 @@
   integrity sha512-+VQ6aPE7nUysyDn9SB7/uqKuVJmjrhvr0LRK2ANTeR1DfmXBnv5z29e/0zK5A7ZoAz0gdZZuLDzN46r8S5Cxig==
   dependencies:
     "@electrum-cash/debug-logs" "^1.0.0"
+    "@monsterbitar/isomorphic-ws" "^5.3.0"
+    "@types/ws" "^8.5.5"
+    async-mutex "^0.5.0"
+    eventemitter3 "^5.0.1"
+    lossless-json "^4.0.1"
+    ws "^8.13.0"
+
+"@electrum-cash/web-socket@^4.1.0":
+  version "4.2.0"
+  resolved "https://registry.npmjs.org/@electrum-cash/web-socket/-/web-socket-4.2.0.tgz"
+  integrity sha512-Zu0jme7KUB3tT90u9YdpGUa1dX/IE4fyMTEmicpezEtxg9lXp5vGoqqvN32Ww/leJXN/ZmVHgMoXKuOeylGULQ==
+  dependencies:
+    "@electrum-cash/debug-logs" "^1.0.0"
+    "@electrum-cash/socket" "^4.2.0"
     "@monsterbitar/isomorphic-ws" "^5.3.0"
     "@types/ws" "^8.5.5"
     async-mutex "^0.5.0"
@@ -1086,11 +1106,6 @@
   dependencies:
     "@motionone/dom" "^10.16.4"
     tslib "^2.3.1"
-
-"@mr-zwets/bchn-api-wrapper@^1.0.1":
-  version "1.0.1"
-  resolved "https://registry.npmjs.org/@mr-zwets/bchn-api-wrapper/-/bchn-api-wrapper-1.0.1.tgz"
-  integrity sha512-EyKT6zgXh31JqTRsi+KCX04WPDjIqs80nfsafrKiUZTg8FgWzql1wSyYdggmeByB74yLHD0LouC40S8PMmvcZA==
 
 "@msgpack/msgpack@3.1.3":
   version "3.1.3"
@@ -3389,28 +3404,27 @@ caniuse-lite@^1.0.30001599, caniuse-lite@^1.0.30001810:
   resolved "https://registry.npmjs.org/caniuse-lite/-/caniuse-lite-1.0.30001810.tgz"
   integrity sha512-TITQPUkaz+aVk5GL6NhOdwk1aEaNTSDPsGFWrTuhKGtjTF70jL/Oht2W4c6rXUe5fu7Ie19VIahAXHIIiWWNeg==
 
-cashc@0.13.0-next.3:
-  version "0.13.0-next.3"
-  resolved "https://registry.npmjs.org/cashc/-/cashc-0.13.0-next.3.tgz"
-  integrity sha512-XAPMGvwXk0tNigS6ct65bkRpY0fjEvUMKwA8+ARTlM+b9PYaWlBc2l5Fd2kaiOxLkOJUlM8UXarW8q41ObBpyA==
+cashc@0.14.0:
+  version "0.14.0"
+  resolved "https://registry.npmjs.org/cashc/-/cashc-0.14.0.tgz"
+  integrity sha512-+9uP2auBiLs3Vp0OxioiylRFX5gOrmVb7fQQNz3hLjV7hKuWjpKTBgARusdzQI1yZwVDDe8HqzovsAmxC8MYDw==
   dependencies:
     "@bitauth/libauth" "^3.1.0-next.8"
-    "@cashscript/utils" "^0.13.0-next.3"
+    "@cashscript/utils" "^0.14.0"
     antlr4 "^4.13.2"
     commander "^14.0.0"
-    semver "^7.7.2"
+    semver "^7.8.5"
 
-cashscript@0.13.0-next.3:
-  version "0.13.0-next.3"
-  resolved "https://registry.npmjs.org/cashscript/-/cashscript-0.13.0-next.3.tgz"
-  integrity sha512-Lcw6fFxNje5+ZRN3AAdslaMDpfsNkuDXMd/pAOtne/jJFrsnK5EOZXf0k6D+evVzylTP8nAO/eAawAjcpAcPzg==
+cashscript@0.14.0:
+  version "0.14.0"
+  resolved "https://registry.npmjs.org/cashscript/-/cashscript-0.14.0.tgz"
+  integrity sha512-9EWS4p7cXagg0PDBh9e+D/TKEayb4/jeDTjy6xvcB3VUru6SQc4k66fyg55uihxVkY1ME8WgbguTsEDeb7SVTw==
   dependencies:
     "@bitauth/libauth" "^3.1.0-next.8"
-    "@cashscript/utils" "^0.13.0-next.3"
-    "@electrum-cash/network" "^4.1.3"
-    "@mr-zwets/bchn-api-wrapper" "^1.0.1"
-    fflate "^0.8.2"
-    semver "^7.7.2"
+    "@cashscript/utils" "^0.14.0"
+    "@electrum-cash/network" "^4.4.0"
+    fflate "^0.8.3"
+    semver "^7.8.5"
 
 cbor-sync@^1.0.4:
   version "1.0.4"
@@ -4670,7 +4684,7 @@ fdir@^6.5.0:
   resolved "https://registry.npmjs.org/fdir/-/fdir-6.5.0.tgz"
   integrity sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==
 
-fflate@^0.8.2:
+fflate@^0.8.3:
   version "0.8.3"
   resolved "https://registry.npmjs.org/fflate/-/fflate-0.8.3.tgz"
   integrity sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==
@@ -7665,10 +7679,15 @@ secure-json-parse@^4.0.0:
   resolved "https://registry.npmjs.org/secure-json-parse/-/secure-json-parse-4.1.0.tgz"
   integrity sha512-l4KnYfEyqYJxDwlNVyRfO2E4NTHfMKAWdUuA8J0yve2Dz/E/PdBepY03RvyJpssIpRFwJoCD55wA+mEDs6ByWA==
 
-semver@^7.3.5, semver@^7.3.7, semver@^7.5.3, semver@^7.6.0, semver@^7.6.3, semver@^7.7.2, semver@7.7.3:
+semver@^7.3.5, semver@^7.3.7, semver@^7.5.3, semver@^7.6.0, semver@^7.6.3, semver@7.7.3:
   version "7.7.3"
   resolved "https://registry.npmjs.org/semver/-/semver-7.7.3.tgz"
   integrity sha512-SdsKMrI9TdgjdweUSR9MweHA4EJ8YxHn8DFaDisvhVlUOe4BF1tLD7GAj0lIqWVl+dPb/rExr0Btby5loQm20Q==
+
+semver@^7.8.5:
+  version "7.8.5"
+  resolved "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz"
+  integrity sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==
 
 semver@7.7.2:
   version "7.7.2"
