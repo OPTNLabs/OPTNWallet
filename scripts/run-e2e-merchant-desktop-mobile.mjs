@@ -882,7 +882,9 @@ try {
   }
   waitForDevice(androidSerial);
   runAdb(['-s', androidSerial, 'install', '-r', '-g', apk]);
-  runAdb(['-s', androidSerial, 'shell', 'pm', 'clear', packageName], true);
+  if (process.env.ANDROID_E2E_RESET === '1') {
+    runAdb(['-s', androidSerial, 'shell', 'pm', 'clear', packageName], true);
+  }
   runAdb(
     [
       '-s',
