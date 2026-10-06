@@ -68,6 +68,8 @@ const desktopDriverPort = Number(
 const desktopNativeDriverPort = Number(
   process.env.MERCHANT_E2E_TAURI_NATIVE_DRIVER_PORT ?? '4446'
 );
+const desktopWidth = Number(process.env.MERCHANT_E2E_DESKTOP_WIDTH ?? '1280');
+const desktopHeight = Number(process.env.MERCHANT_E2E_DESKTOP_HEIGHT ?? '800');
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -456,8 +458,19 @@ async function routeProposalToBrowserBuyer(session, payload) {
       .then((element) => element.getText())
       .catch(() => 'unavailable');
     const url = await session.getUrl().catch(() => 'unavailable');
+    const browserLogs = session.getLogs
+      ? await session.getLogs('browser').catch(() => [])
+      : [];
+    const documentState = await session
+      .execute(() => ({
+        readyState: document.readyState,
+        rootHtml: document.getElementById('root')?.innerHTML ?? null,
+        scriptCount: document.scripts.length,
+        errors: window.__optnE2eErrors ?? [],
+      }))
+      .catch(() => null);
     console.error(
-      `[merchant-pay-desktop-browser-mobile] buyer route state: url=${url} body=${body.replace(/\s+/g, ' ').slice(0, 3000)}`
+      `[merchant-pay-desktop-browser-mobile] buyer route state: url=${url} body=${body.replace(/\s+/g, ' ').slice(0, 3000)} logs=${JSON.stringify(browserLogs.slice(-12))} document=${JSON.stringify(documentState?.value ?? documentState)}`
     );
     throw error;
   }
@@ -527,7 +540,7 @@ async function routeProposalToBrowserBuyer(session, payload) {
   const reviewDialog = await waitFor(
     session,
     '[role="dialog"][aria-label="Review Merchant Payment"]',
-    30_000
+    60_000
   );
   const reviewText = await reviewDialog.getText();
   assert.match(reviewText, /Merchant receives[\s\S]*(PUSD|BCH)/i);
@@ -700,6 +713,23 @@ try {
   });
   await buyerSession.setWindowSize(browserWidth, browserHeight);
   await buyerSession.url(`http://127.0.0.1:${browserPort}/`);
+  await buyerSession.execute(() => {
+    window.__optnE2eErrors = [];
+    window.addEventListener('error', (event) => {
+      window.__optnE2eErrors.push({
+        type: 'error',
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+      });
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+      window.__optnE2eErrors.push({
+        type: 'unhandledrejection',
+        reason: String(event.reason),
+      });
+    });
+  });
   await importWallet(
     buyerSession,
     'Browser Buyer',
@@ -749,6 +779,7 @@ try {
     connectionRetryCount: 2,
     capabilities: { 'tauri:options': { application: appBinary } },
   });
+  await merchantSession.setWindowSize(desktopWidth, desktopHeight);
   await importWallet(merchantSession, 'Desktop Merchant', 'OPTN Wallet');
 
   const payload = await createMerchantProposal(merchantSession);

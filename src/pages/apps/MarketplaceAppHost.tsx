@@ -11,15 +11,46 @@ import AddonsRegistry from '../../services/AddonsRegistry';
 import { getAddonGrantedCapabilities } from '../../services/AddonsAllowlist';
 import { resolveParyonWorkspaceSnapshot } from '../../services/paryon/ParyonService';
 import KeyService from '../../services/KeyService';
+import TransactionService from '../../services/TransactionService';
+import UTXOService from '../../services/UTXOService';
+import ElectrumService from '../../services/ElectrumService';
+import {
+  ElectrumNetworkProvider,
+  HashType,
+  SignatureTemplate,
+  TransactionBuilder,
+} from 'cashscript';
 
 import type {
   AddonManifest,
   AddonAppDefinition,
   AddonCapability,
 } from '../../types/addons';
-import { createAddonSDK, type AddonSDK } from '../../services/AddonsSDK';
+import {
+  createAddonSDK,
+  createPublicAddonSDK,
+  type AddonSDK,
+  type AddonTransactionProposal,
+} from '../../services/AddonsSDK';
+import type { UTXO } from '../../types/types';
 import { renderDeclarativeScreen } from './marketplaceScreenResolver';
 import AddonIframeHost from './AddonIframeHost';
+import {
+  createP2pkhExecutionAuthority,
+  isP2pkhCashAddress,
+} from '../../services/addons/P2pkhExecutionAdapter';
+import { createCashTokenExecutionAuthority } from '../../services/addons/CashTokenExecutionAuthority';
+import {
+  createAddonExecutionRouter,
+  hasCashTokenProposalState,
+  hasContractProposalState,
+} from '../../services/addons/AddonExecutionRouter';
+import { createContractExecutionAuthority } from '../../services/addons/ContractExecutionAuthority';
+import { createWalletCashScriptContract } from '../../services/addons/CashScriptCompatibility';
+import { assertAddonWalletInputState } from '../../services/addons/AddonInputStateVerifier';
+import { createAddonDurableStores } from '../../services/addons/AddonDurableStorage';
+import { recoverPersistedAddonOperations } from '../../services/addons/AddonOperationRecoveryCoordinator';
+import { createAddonTransactionVisibilityRecoveryResolver } from '../../services/addons/AddonTransactionVisibilityRecovery';
 import { getReturnPath } from '../../utils/navigation';
 import {
   isComingSoonApp,
@@ -242,6 +273,17 @@ export default function MarketplaceAppHost() {
   const activeResolverRef = useRef<((decision: PromptDecision) => void) | null>(
     null
   );
+  const sdkSessionId = useMemo(() => {
+    const randomId =
+      typeof globalThis.crypto?.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return `addon-session-v1:${randomId}`;
+  }, [walletId, resolved?.manifest.id, resolved?.app.id]);
+  const sdkSessionExpiresAt = useMemo(
+    () => new Date(Date.now() + 30 * 60_000).toISOString(),
+    [sdkSessionId]
+  );
 
   const parsed = useMemo(() => {
     const key = parseAppKey(appIdParam);
@@ -291,6 +333,10 @@ export default function MarketplaceAppHost() {
     if (!resolved || !walletId) return '';
     return `${walletId}:${resolved.manifest.id}:${resolved.app.id}`;
   }, [resolved, walletId]);
+  const grantRevision = useMemo(
+    () => Object.keys(persistedConsent[appConsentKey] ?? {}).length,
+    [appConsentKey, persistedConsent]
+  );
 
   const hasPersistedCapabilityGrant = useCallback(
     (appKey: string, capability: AddonCapability) =>
@@ -580,14 +626,342 @@ export default function MarketplaceAppHost() {
     if (!resolved || !walletId) return null;
     if (!trustedAddon && !launchApproved) return null;
 
-    return createAddonSDK(resolved.manifest, {
+    const createSdk = trustedAddon ? createAddonSDK : createPublicAddonSDK;
+    const transactionService = TransactionService;
+    const durableStores = createAddonDurableStores({
+      walletId,
+      addonId: resolved.manifest.id,
+      network,
+    });
+    const isOwnedP2pkhAddress = (address: string) =>
+      isP2pkhCashAddress(address) &&
+      Boolean(allowedWalletAddresses?.has(address));
+    const verifyInputs = async ({
+      proposal,
+      inputs,
+    }: {
+      proposal: AddonTransactionProposal;
+      inputs: UTXO[];
+    }) => {
+      if (!allowedWalletAddresses || allowedWalletAddresses.size === 0) {
+        throw new Error('Wallet input allowlist is unavailable');
+      }
+      const addresses = Array.from(new Set(proposal.inputs.map((input) => input.address)));
+      const contractIndexes = new Set(proposal.contract?.contractInputIndexes ?? []);
+      if (proposal.contract?.contractAddress) {
+        for (const index of contractIndexes) {
+          const input = proposal.inputs[index];
+          if (input && input.address !== proposal.contract.contractAddress && input.tokenAddress !== proposal.contract.contractAddress) {
+            throw new Error('Contract input does not match the declared contract address');
+          }
+        }
+      }
+      const nonContractAddresses = proposal.inputs
+        .filter((_, index) => !contractIndexes.has(index))
+        .map((input) => input.address);
+      if (nonContractAddresses.some((address) => !allowedWalletAddresses.has(address))) {
+        throw new Error('Addon proposal input is outside the wallet allowlist');
+      }
+      const byAddress = await UTXOService.fetchAndStoreUTXOsMany(
+        walletId,
+        addresses,
+        { discover: false, chainAuthoritative: true }
+      );
+      assertAddonWalletInputState({
+        proposal,
+        actualInputs: addresses.flatMap((address) => byAddress[address] ?? []),
+      });
+    };
+    const p2pkhAuthority = createP2pkhExecutionAuthority({
+      isP2pkhAddress: isOwnedP2pkhAddress,
+      verifyInputs,
+      resolveChangeAddress: async () => {
+        const changeAddress = Array.from(allowedWalletAddresses ?? []).find(
+          isP2pkhCashAddress
+        );
+        if (!changeAddress) {
+          throw new Error('No P2PKH wallet change address is available');
+        }
+        return changeAddress;
+      },
+      buildTransaction: async ({ inputs, outputs, changeAddress }) => {
+        const built = await transactionService.buildTransaction(
+          outputs,
+          null,
+          changeAddress,
+          inputs
+        );
+        return {
+          finalTransaction: built.finalTransaction,
+          errorMsg: built.errorMsg,
+        };
+      },
+      sendTransaction: async (rawTransaction, inputs) =>
+        await transactionService.sendTransaction(rawTransaction, inputs, {
+          walletId,
+        }),
+    });
+    const cashTokenAuthority = createCashTokenExecutionAuthority({
+      isSupportedAddress: isOwnedP2pkhAddress,
+      verifyInputs,
+      resolveChangeAddress: async () => {
+        const changeAddress = Array.from(allowedWalletAddresses ?? []).find(
+          isP2pkhCashAddress
+        );
+        if (!changeAddress) {
+          throw new Error('No P2PKH wallet change address is available');
+        }
+        return changeAddress;
+      },
+      buildTransaction: async ({
+        inputs,
+        outputs,
+        changeAddress,
+        allowImplicitFungibleTokenBurn,
+      }) => {
+        const built = await transactionService.buildTransaction(
+          outputs,
+          null,
+          changeAddress,
+          inputs,
+          allowImplicitFungibleTokenBurn
+        );
+        return {
+          finalTransaction: built.finalTransaction,
+          errorMsg: built.errorMsg,
+        };
+      },
+      sendTransaction: async (rawTransaction, inputs) =>
+        await transactionService.sendTransaction(rawTransaction, inputs, {
+          walletId,
+        }),
+    });
+    const contractAuthority = createContractExecutionAuthority({
+      verifyInputs,
+      buildAndSend: async ({ proposal }) => {
+        const metadata = proposal.contract;
+        if (!metadata) throw new Error('Contract metadata is required');
+        const indexes = metadata.contractInputIndexes;
+        if (!Array.isArray(indexes) || indexes.length === 0) {
+          throw new Error('Contract input indexes are required');
+        }
+        const contract = createWalletCashScriptContract({
+          artifact: metadata.artifact,
+          constructorArgs: (metadata.constructorArgs ?? []).map((arg: any) => arg?.value ?? arg),
+          provider: new ElectrumNetworkProvider(network),
+          contractType: metadata.contractType ?? 'p2sh32',
+        });
+        const derivedLockingBytecode = typeof contract.lockingBytecode === 'string'
+          ? contract.lockingBytecode
+          : Array.from(contract.lockingBytecode as Uint8Array, (byte: number) => byte.toString(16).padStart(2, '0')).join('');
+        if (metadata.contractLockingBytecode && derivedLockingBytecode !== metadata.contractLockingBytecode) {
+          throw new Error('Contract constructor arguments or type do not match the declared locking bytecode');
+        }
+        if (metadata.contractAddress && metadata.contractType !== 'p2s') {
+          const derivedAddress = metadata.contractType === 'p2sh20' ? contract.address : contract.tokenAddress ?? contract.address;
+          if (derivedAddress !== metadata.contractAddress) throw new Error('Contract identity does not match the declared address');
+        }
+        const signerTemplates = new Map<string, any>();
+        for (const binding of metadata.signerBindings ?? []) {
+          const key = await KeyService.fetchAddressPrivateKey(binding.address, 'spend');
+          if (!key) throw new Error(`Wallet signing key unavailable for ${binding.address}`);
+          signerTemplates.set(
+            `${binding.purpose}:${binding.address}`,
+            new SignatureTemplate(key, HashType.SIGHASH_ALL)
+          );
+        }
+        const functionArgs = (metadata.functionArgs ?? []).map((arg: any) => {
+          if (arg?.type === 'sig' && arg.signer) {
+            const template = signerTemplates.get(`${arg.signer.purpose}:${arg.signer.address}`);
+            if (!template) throw new Error('Contract signer binding was not resolved by the wallet');
+            return template;
+          }
+          return arg?.value ?? arg;
+        });
+        const builder = new TransactionBuilder({
+          provider: new ElectrumNetworkProvider(network),
+        });
+        const contractIndexSet = new Set(indexes);
+        for (let index = 0; index < proposal.inputs.length; index += 1) {
+          const input = proposal.inputs[index];
+          const utxo: any = {
+            txid: input.txid,
+            vout: input.vout,
+            satoshis: BigInt(input.valueSats),
+            ...(input.tokenCategory
+              ? { token: { category: input.tokenCategory, amount: BigInt(input.tokenAmount ?? '0'), ...(input.tokenNft ? { nft: input.tokenNft } : {}) } }
+              : {}),
+          };
+          const unlocker = contractIndexSet.has(index)
+            ? contract.unlock[metadata.functionName](...functionArgs)
+            : (() => {
+                if (!input.address) throw new Error('Wallet input address is required');
+                return KeyService.fetchAddressPrivateKey(input.address, 'spend');
+              })();
+          if (unlocker instanceof Promise) {
+            const key = await unlocker;
+            if (!key) throw new Error(`Wallet signing key unavailable for ${input.address}`);
+            builder.addInput(utxo, new SignatureTemplate(key, HashType.SIGHASH_ALL).unlockP2PKH());
+            continue;
+          }
+          builder.addInput(utxo, unlocker);
+        }
+        for (const output of proposal.outputs) {
+          if ('opReturn' in output && output.opReturn) {
+            builder.addOpReturnOutput(output.opReturn);
+          } else {
+            builder.addOutput({
+              to: output.recipientAddress,
+              amount: BigInt(output.amount),
+              ...(output.token
+                ? { token: { category: output.token.category, amount: BigInt(output.token.amount), ...(output.token.nft ? { nft: output.token.nft } : {}) } }
+                : {}),
+            });
+          }
+        }
+        const changeAddress = Array.from(allowedWalletAddresses ?? []).find(isP2pkhCashAddress);
+        if (!changeAddress) throw new Error('No P2PKH wallet change address is available');
+        const categories = new Set(
+          proposal.inputs.map((input) => input.tokenCategory).filter(Boolean)
+        );
+        for (const category of categories) {
+          const inputAmount = proposal.inputs
+            .filter((input) => input.tokenCategory === category)
+            .reduce((total, input) => total + BigInt(input.tokenAmount ?? '0'), 0n);
+          const outputAmount = proposal.outputs
+            .filter((output) => !('opReturn' in output) && output.token?.category === category)
+            .reduce((total, output) => total + BigInt(output.token?.amount ?? 0), 0n);
+          if (inputAmount > outputAmount) {
+            const nftInput = proposal.inputs.find(
+              (input) => input.tokenCategory === category && input.tokenNft
+            );
+            const nftOutput = proposal.outputs.some(
+              (output) => !('opReturn' in output) && output.token?.category === category && output.token?.nft
+            );
+            builder.addOutput({
+              to: changeAddress,
+              amount: 546n,
+              token: {
+                category,
+                amount: inputAmount - outputAmount,
+                ...(nftInput?.tokenNft && !nftOutput ? { nft: nftInput.tokenNft } : {}),
+              },
+            });
+          }
+        }
+        // Include a tentative BCH output when estimating size, then replace it
+        // with the exact fee-aware amount. CashScript 0.13 exposes the builder
+        // output list but not the 0.14 change helpers.
+        builder.addOutput({ to: changeAddress, amount: 546n });
+        const preliminaryHex = builder.build();
+        builder.outputs.pop();
+        const inputSats = proposal.inputs.reduce((total, input) => total + BigInt(input.valueSats), 0n);
+        const outputSats = proposal.outputs.reduce(
+          (total, output) => total + ('opReturn' in output ? 0n : BigInt(output.amount)),
+          0n
+        ) + BigInt([...categories].reduce((count, category) => {
+          const inputAmount = proposal.inputs.filter((input) => input.tokenCategory === category).reduce((total, input) => total + BigInt(input.tokenAmount ?? '0'), 0n);
+          const outputAmount = proposal.outputs.filter((output) => !('opReturn' in output) && output.token?.category === category).reduce((total, output) => total + BigInt(output.token?.amount ?? 0), 0n);
+          return count + (inputAmount > outputAmount ? 546 : 0);
+        }, 0));
+        const fee = BigInt(Math.ceil((preliminaryHex.length / 2) * 1));
+        const bchChange = inputSats - outputSats - fee;
+        if (bchChange < 0n) {
+          throw new Error('Contract transaction does not have enough BCH for outputs and fees');
+        }
+        if (bchChange >= 546n) {
+          builder.addOutput({ to: changeAddress, amount: bchChange });
+        }
+        const rawTransaction = await builder.build();
+        const spentInputs = proposal.inputs.map((input: any) => ({
+          ...input,
+          tx_hash: input.txid,
+          tx_pos: input.vout,
+          value: Number(input.valueSats),
+        }));
+        const sent = await transactionService.sendTransaction(rawTransaction, spentInputs, { walletId });
+        return {
+          txid: sent.txid ?? null,
+          errorMessage: sent.errorMessage ?? null,
+          broadcastState: sent.txid ? 'broadcasted' : 'submitted',
+        };
+      },
+    });
+    const executionAuthority = createAddonExecutionRouter([
+      {
+        name: 'cashscript-contract',
+        matches: hasContractProposalState,
+        authority: contractAuthority,
+      },
+      {
+        name: 'cashtoken',
+        matches: hasCashTokenProposalState,
+        authority: cashTokenAuthority,
+      },
+      {
+        name: 'p2pkh-bch',
+        matches: (proposal) => !hasCashTokenProposalState(proposal),
+        authority: p2pkhAuthority,
+      },
+    ]);
+    return createSdk(resolved.manifest, {
       walletId,
       network,
+      sessionId: sdkSessionId,
+      sessionExpiresAt: sdkSessionExpiresAt,
+      grantRevision,
+      requireAddressAllowlist: true,
       walletAddresses: allowedWalletAddresses ?? undefined,
       allowedCapabilities: resolved.app.requiredCapabilities
         ? new Set(resolved.app.requiredCapabilities)
         : undefined,
       authorizeCapability: trustedAddon ? undefined : authorizeCapability,
+      // The SDK receives only the signed response. KeyService and its private
+      // key handling remain inside the wallet host process.
+      signMessage: async ({ address, message }) =>
+        await KeyService.signMessageForAddress(address, message),
+      approveMessageSigning: async ({ address, message }) => {
+        if (trustedAddon) return true;
+        const decision = await requestPrompt({
+          mode: 'runtime',
+          appKey: appConsentKey,
+          title: t('apps.allowSensitiveAction'),
+          message: `${t('apps.capabilityRequested', {
+            name: localizedAppName,
+            capability: 'message signing',
+          })} ${address}\n\nMessage:\n${message.slice(0, 2048)}${message.length > 2048 ? '…' : ''}`,
+        });
+        return decision !== 'deny';
+      },
+      approveExecution: async ({ proposal, mode }) => {
+        if (trustedAddon) return true;
+        const contractReview = proposal.contract
+          ? `\n\nContract: ${proposal.contract.contractAddress ?? proposal.contract.contractId}\nFunction: ${proposal.contract.functionName}\nContract inputs: ${(proposal.contract.contractInputIndexes ?? []).join(', ')}`
+          : '';
+        const tokenReview = proposal.tokenIntent
+          ? `\nToken intent: ${proposal.tokenIntent.kind}`
+          : '';
+        const decision = await requestPrompt({
+          mode: 'runtime',
+          appKey: appConsentKey,
+          title: t('apps.allowSensitiveAction'),
+          message: `${t('apps.capabilityRequested', {
+            name: localizedAppName,
+            capability: `transaction execution (${mode})`,
+          })} ${proposal.proposalId}${contractReview}${tokenReview}`,
+        });
+        return decision !== 'deny';
+      },
+      validateProposalAuthority: (proposal) =>
+        proposal.sessionId === sdkSessionId &&
+        proposal.grantRevision === grantRevision,
+      executionAuthority,
+      proposalStore: durableStores.proposalStore,
+      operationStore: durableStores.operationStore,
+      allowLegacyKeyBearingSigning:
+        trustedAddon && resolved.app.kind === 'declarative',
+      allowLegacyTransactionExecution:
+        trustedAddon && resolved.app.kind === 'declarative',
     });
   }, [
     authorizeCapability,
@@ -597,7 +971,67 @@ export default function MarketplaceAppHost() {
     allowedWalletAddresses,
     walletId,
     network,
+    sdkSessionId,
+    sdkSessionExpiresAt,
+    grantRevision,
+    appConsentKey,
+    requestPrompt,
+    t,
+    localizedAppName,
   ]);
+
+  // Reconcile ambiguous submissions before exposing the durable SDK session.
+  // The resolver stays host-owned and returns only a bounded lifecycle state.
+  useEffect(() => {
+    if (!resolved || !walletId) return;
+    let cancelled = false;
+    const stores = createAddonDurableStores({
+      walletId,
+      addonId: resolved.manifest.id,
+      network,
+    });
+    void recoverPersistedAddonOperations(
+      stores.operationStore,
+      createAddonTransactionVisibilityRecoveryResolver((txid) =>
+        cancelled
+          ? Promise.resolve({ seen: false, confirmed: false })
+          : ElectrumService.getTransactionVisibility(txid)
+      )
+    ).catch(() => {
+      // Recovery is best effort; the persisted unknown state remains visible
+      // until a later wallet-owned reconciliation succeeds.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [network, resolved, walletId]);
+
+  const onAddonConnectRequest = useCallback(
+    async ({
+      addonId,
+      requestedCapabilities,
+    }: {
+      addonId: string;
+      requestedCapabilities: string[];
+    }) => {
+      if (!resolved || addonId !== resolved.manifest.id) return null;
+      const declared = new Set(resolved.app.requiredCapabilities ?? []);
+      if (requestedCapabilities.some((capability) => !declared.has(capability)))
+        return null;
+      for (const capability of requestedCapabilities) {
+        await authorizeCapability({
+          addonId,
+          capability: capability as AddonCapability,
+        });
+      }
+      return {
+        sessionId: sdkSessionId,
+        expiresAt: sdkSessionExpiresAt,
+        capabilities: requestedCapabilities.slice(),
+      };
+    },
+    [authorizeCapability, resolved, sdkSessionExpiresAt, sdkSessionId]
+  );
 
   const loadWalletAddresses = async () => {
     if (!walletId) return new Set<string>();
@@ -630,6 +1064,8 @@ export default function MarketplaceAppHost() {
           manifest={resolved.manifest}
           app={resolved.app}
           sdk={sdk}
+          sessionId={sdkSessionId}
+          onConnectRequest={onAddonConnectRequest}
         />
       );
     }

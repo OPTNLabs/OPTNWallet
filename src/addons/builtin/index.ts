@@ -28,6 +28,7 @@ const BUILTIN_ADDONS_BASE: AddonManifest[] = [
           'tx:build',
           'tx:broadcast',
           'contracts:derive',
+          'contracts:propose',
           'ui:confirm',
           'http:fetch_json',
         ],
@@ -50,6 +51,22 @@ const BUILTIN_ADDONS_BASE: AddonManifest[] = [
         config: {
           screen: 'AuthGuardApp',
         },
+      },
+      {
+        id: 'addonSdkWalletDemo',
+        name: 'Add-on SDK Demo',
+        description: 'Live example of a public add-on reading wallet state.',
+        iconUri: null,
+        kind: 'declarative',
+        requiredCapabilities: [
+          'wallet:context:read',
+          'wallet:addresses:read',
+          'utxo:wallet:read',
+          'ui:confirm',
+          'contracts:derive',
+          'contracts:propose',
+        ],
+        config: { screen: 'AddonSdkWalletDemo' },
       },
       {
         id: 'cauldronSwapApp',

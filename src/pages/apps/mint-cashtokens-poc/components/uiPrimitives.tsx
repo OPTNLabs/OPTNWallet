@@ -362,6 +362,7 @@ export const ContainedSwipeConfirmModal: React.FC<{
 
             <div
               ref={trackRef}
+              data-testid="swipe-confirm-track"
               className={`relative w-full h-14 rounded-[18px] border overflow-hidden transition-colors ${
                 slideCompleted ? 'bg-emerald-50 border-emerald-200' : ''
               }`}
@@ -425,6 +426,7 @@ export const ContainedSwipeConfirmModal: React.FC<{
                 disabled={loading || slideCompleted || maxX <= 0}
               >
                 <div
+                  data-testid="swipe-confirm-handle"
                   className={`absolute left-0 top-0 h-14 w-14 rounded-[18px] flex items-center justify-center text-white text-xl select-none transition-colors ${
                     slideCompleted
                       ? 'bg-emerald-600 shadow-[0_8px_24px_rgba(5,150,105,0.35)]'

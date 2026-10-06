@@ -36,10 +36,14 @@ const BASE_LIMITS: Record<AddonCapability, number> = {
   'chain:query': 120,
   'bcmr:token:read': 120,
   'tokenindex:holders:read': 60,
+  'tx:propose': 60,
+  'tx:execute': 10,
+  'tx:operation:read': 120,
   'tx:build': 90,
   'tx:add_output': 300,
   'tx:broadcast': 20,
   'contracts:derive': 120,
+  'contracts:propose': 20,
   'ui:confirm': 120,
   'signing:message_sign': 20,
   'signing:signature_template': 20,
@@ -70,7 +74,10 @@ export function createAddonPolicyEngine(options: AddonPolicyEngineOptions) {
   const tier = resolveTier(options.manifest);
   const usageByCapability = new Map<AddonCapability, number[]>();
   const auditEvents: AddonPolicyAuditEvent[] = [];
-  const maxAuditEvents = Math.max(50, options.maxAuditEvents ?? DEFAULT_MAX_AUDIT_EVENTS);
+  const maxAuditEvents = Math.max(
+    50,
+    options.maxAuditEvents ?? DEFAULT_MAX_AUDIT_EVENTS
+  );
 
   const emitAudit = (event: AddonPolicyAuditEvent) => {
     auditEvents.push(event);

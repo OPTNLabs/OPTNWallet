@@ -306,6 +306,21 @@ async function createMerchantProposal(session) {
   return payload;
 }
 
+async function exerciseAddonContractDemo(session) {
+  await click(session, 'a[href="#/apps"]');
+  await waitFor(session, 'h1=Apps');
+  await clickButtonContaining(session, 'Add-on SDK Demo');
+  await waitFor(session, 'h2=Add-on SDK wallet demo');
+  await click(session, 'button*=Derive CashScript contract address');
+  try {
+    await waitFor(session, 'div*=Contract address:');
+  } catch (error) {
+    const body = await (await session.$('body')).getText().catch(() => 'unavailable');
+    throw new Error(`SDK contract derivation did not complete: ${body.replace(/\s+/g, ' ').slice(-500)}`, { cause: error });
+  }
+  console.log('[addon-sdk-desktop-mobile] desktop contract derivation passed');
+}
+
 function resolveSdkRoot() {
   const configured = process.env.ANDROID_SDK_ROOT ?? process.env.ANDROID_HOME;
   if (configured) return configured;
@@ -666,6 +681,28 @@ async function androidImportWallet(client) {
   console.log('[merchant-pay-desktop-mobile] mobile buyer wallet ready');
 }
 
+async function exerciseAddonContractDemoAndroid(client) {
+  await client.evaluate(`(() => { window.location.hash = '#/apps'; return true; })()`);
+  await androidWait(client, `document.body?.innerText?.includes('Add-on SDK Demo') === true`, 'Android Apps view did not load.');
+  try {
+    await androidClickText(client, 'button', 'Add-on SDK Demo');
+  } catch (error) {
+    const clicked = await client.evaluate(`(() => { const node = [...document.querySelectorAll('*')].find((candidate) => candidate.textContent?.trim() === 'Add-on SDK Demo'); if (!node) return false; (node.closest('button,a,[role="button"]') ?? node).click(); return true; })()`);
+    if (!clicked) {
+      const state = await client.evaluate(`({ url: location.href, body: document.body?.innerText?.replace(/\\s+/g, ' ').slice(0, 1800) ?? '' })`).catch(() => null);
+      throw new Error(`Android SDK demo was not listed: ${JSON.stringify(state)}`, { cause: error });
+    }
+  }
+  await androidWait(client, `document.body?.innerText?.includes('Add-on SDK wallet demo') === true`, 'Android SDK demo did not open.');
+  await androidClickText(client, 'button', 'Derive CashScript contract address');
+  await androidWait(
+    client,
+    `document.body?.innerText?.includes('Contract address:') === true`,
+    'Android SDK contract derivation did not complete.'
+  );
+  console.log('[addon-sdk-desktop-mobile] Android contract derivation passed');
+}
+
 async function routeProposalToMobile(client, payload) {
   await androidClickSelector(client, 'button[aria-label="Scan QR"]');
   await androidWait(
@@ -732,15 +769,28 @@ async function routeProposalToMobile(client, payload) {
     );
     throw error;
   }
-  const payButtonText = await client.evaluate(
-    `([...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim().startsWith('Pay '))?.textContent?.trim() ?? '')`
-  );
-  await androidClickText(client, 'button', payButtonText);
   await androidWait(
     client,
-    `Boolean(document.querySelector('[role="dialog"][aria-label="Review Merchant Payment"]'))`,
-    'Android merchant review dialog did not open.'
+    `(() => { const el = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim().startsWith('Pay ') && !candidate.disabled); if (!el) return false; el.scrollIntoView({ block: 'center' }); el.click(); return true; })()`,
+    'Could not click the Android merchant payment button.'
   );
+  try {
+    await androidWait(
+      client,
+      `Boolean(document.querySelector('[role="dialog"][aria-label="Review Merchant Payment"]'))`,
+      'Android merchant review dialog did not open.'
+    );
+  } catch (error) {
+    const state = await client
+      .evaluate(
+        `({ body: document.body?.innerText?.replace(/\\s+/g, ' ').slice(0, 1800) ?? '', dialogs: [...document.querySelectorAll('[role="dialog"]')].map((dialog) => dialog.getAttribute('aria-label')), buttons: [...document.querySelectorAll('button')].map((button) => ({ text: button.textContent?.trim() ?? '', disabled: button.disabled })).filter((button) => button.text.startsWith('Pay ') || button.text.includes('Preparing'))) })`
+      )
+      .catch(() => null);
+    console.error(
+      `[merchant-pay-desktop-mobile] Android review dialog state: ${JSON.stringify(state)}`
+    );
+    throw error;
+  }
   const reviewText = await client.evaluate(
     `document.querySelector('[role="dialog"][aria-label="Review Merchant Payment"]')?.innerText ?? ''`
   );
@@ -838,6 +888,7 @@ try {
   androidClient = await CdpClient.connect(target.webSocketDebuggerUrl);
   await androidClient.command('Runtime.enable');
   await androidImportWallet(androidClient);
+  await exerciseAddonContractDemoAndroid(androidClient);
 
   desktopViteProcess = spawn(
     viteBinary,
@@ -868,7 +919,10 @@ try {
     capabilities: { 'tauri:options': { application: appBinary } },
   });
   await importDesktopWallet(desktopSession);
+  await exerciseAddonContractDemo(desktopSession);
   const payload = await createMerchantProposal(desktopSession);
+  await androidClient.evaluate(`(() => { window.location.hash = '#/'; return true; })()`);
+  await androidWaitHeading(androidClient, 'Home', 30_000);
   await routeProposalToMobile(androidClient, payload);
   console.log(
     '[merchant-pay-desktop-mobile] PASS: desktop merchant + Android buyer reached review; no broadcast performed'

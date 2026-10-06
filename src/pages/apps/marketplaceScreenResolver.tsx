@@ -9,6 +9,7 @@ import CauldronSwapApp from './cauldron/CauldronSwapApp';
 import ParyonWorkspaceApp from './paryon/ParyonWorkspaceApp';
 import MintCashTokensPoCApp from './mint-cashtokens-poc/MintCashTokensPoCApp';
 import MerchantPayApp from './merchant-pay/MerchantPayApp';
+import AddonSdkWalletDemo from '../../../packages/addon-sdk/examples/in-wallet/AddonSdkWalletDemo';
 
 type ResolvedAppLike = {
   manifest: AddonManifest;
@@ -35,6 +36,9 @@ export function renderDeclarativeScreen(params: {
           loadWalletAddresses={loadWalletAddresses}
         />
       );
+
+    case 'AddonSdkWalletDemo':
+      return <AddonSdkWalletDemo sdk={sdk} />;
 
     case 'MemoCashReaderApp':
     case 'memoCashReaderApp':

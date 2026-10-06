@@ -60,7 +60,9 @@ export default function AddonsRegistry() {
     // manifest is a real bug in this repo and should fail loudly.
     const installedManifests: AddonManifest[] = [];
     try {
-      const { loadInstalledAddonManifests } = await import('./addons/AddonInstallService');
+      const { loadInstalledAddonManifests } = await import(
+        './addons/AddonInstallService'
+      );
       const loaded = await loadInstalledAddonManifests();
       for (const m of loaded) {
         try {
@@ -69,7 +71,9 @@ export default function AddonsRegistry() {
           const schemaErrors = validateAddonManifestAgainstSchema(m);
           if (schemaErrors.length) throw new Error(schemaErrors.join('; '));
           validateAddonPermissions(m);
-          installedManifests.push(m);
+          // Installed package metadata is untrusted input. A package cannot
+          // self-assign the host-only `internal` tier.
+          installedManifests.push({ ...m, trustTier: 'restricted' });
         } catch (err) {
           console.warn('[AddonsRegistry] Skipping invalid installed addon', {
             addonId: m?.id,
@@ -114,16 +118,12 @@ export default function AddonsRegistry() {
             throw new Error(`Addon "${m.id}" app missing id`);
           }
           if (seenAppIds.has(a.id)) {
-            throw new Error(
-              `Duplicate app id within addon "${m.id}": ${a.id}`
-            );
+            throw new Error(`Duplicate app id within addon "${m.id}": ${a.id}`);
           }
           seenAppIds.add(a.id);
 
           if (typeof a.name !== 'string' || !a.name.trim()) {
-            throw new Error(
-              `Addon "${m.id}" app "${a.id}" missing name`
-            );
+            throw new Error(`Addon "${m.id}" app "${a.id}" missing name`);
           }
           if (a.kind !== 'declarative' && a.kind !== 'iframe-bundle') {
             throw new Error(

@@ -4,6 +4,7 @@ import { useSelector } from 'react-redux';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { RootState } from '../state/store';
 import KeyService from '../services/KeyService';
+import WalletManager from '../apis/WalletManager/WalletManager';
 import { Toast } from '@capacitor/toast';
 import { shortenTxHash } from '../utils/shortenHash';
 import { PREFIX, SATSINBITCOIN } from '../utils/constants';
@@ -158,8 +159,12 @@ const Receive: React.FC = () => {
   const walletType = useSelector(
     (state: RootState) => state.wallet_id.walletType
   );
+  const [persistedWalletType, setPersistedWalletType] = useState<string | null>(
+    null
+  );
+  const effectiveWalletType = persistedWalletType ?? walletType;
   const canRevealPrivateKey =
-    ALLOW_PRIVATE_KEY_VIEW && canSignLocally(walletType);
+    ALLOW_PRIVATE_KEY_VIEW && canSignLocally(effectiveWalletType);
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
@@ -169,6 +174,25 @@ const Receive: React.FC = () => {
   const wallet_id = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!currentWalletId) {
+      setPersistedWalletType(null);
+      return;
+    }
+    void WalletManager()
+      .getWalletMetadata(currentWalletId)
+      .then((metadata) => {
+        if (!cancelled) setPersistedWalletType(metadata?.walletType ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setPersistedWalletType(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWalletId]);
 
   useEffect(() => {
     const fetchKeys = async () => {

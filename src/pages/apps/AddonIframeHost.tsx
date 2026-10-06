@@ -16,12 +16,23 @@ type AddonIframeHostProps = {
   manifest: AddonManifest;
   app: AddonAppDefinition;
   sdk: AddonSDK;
+  sessionId: string;
+  onConnectRequest?: (request: {
+    addonId: string;
+    requestedCapabilities: string[];
+  }) => Promise<{
+    sessionId: string;
+    expiresAt: string;
+    capabilities: string[];
+  } | null>;
 };
 
 export default function AddonIframeHost({
   manifest,
   app,
   sdk,
+  sessionId,
+  onConnectRequest,
 }: AddonIframeHostProps) {
   const { t, locale } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -58,6 +69,8 @@ export default function AddonIframeHost({
           container: containerRef.current,
           bundleSource,
           sdk,
+          sessionId,
+          onConnectRequest,
           locale: localeRef.current.locale,
           localeMessages: localeRef.current.messages,
           onInitError: (message) => {
@@ -79,7 +92,7 @@ export default function AddonIframeHost({
       handleRef.current = null;
       handle?.destroy();
     };
-  }, [manifest.id, app.id, app.entryFile, sdk]);
+  }, [manifest.id, app.id, app.entryFile, sdk, sessionId, onConnectRequest]);
 
   useEffect(() => {
     handleRef.current?.setLocale(locale, localeRef.current.messages);

@@ -20,6 +20,7 @@ import {
   setWalletNetwork,
   setWalletType,
 } from '../../state/slices/walletSlice';
+import { persistor } from '../../state/store';
 import {
   createWatchOnlyWallet,
   WATCH_ONLY_WALLET_TYPE,
@@ -110,6 +111,10 @@ const WatchOnlyWalletPage = () => {
         })
       );
       dispatch(setNetwork(resolvedNetwork));
+      // The Android process-death path can terminate immediately after the
+      // onboarding click returns. Ensure the selected wallet is durable before
+      // navigating away so a force-stop cannot lose the active wallet id/type.
+      await persistor.flush();
       navigate(homeRoute(walletId));
     } catch (createError) {
       setError(
