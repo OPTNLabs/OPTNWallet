@@ -271,8 +271,14 @@ function buildBatchMessage(
   );
 }
 
+type RawBatchClient = {
+  requestId: number;
+  requestResolvers: Record<number, (error?: Error, data?: RequestResponse) => void>;
+  connection: { send(message: string): boolean };
+};
+
 function canUseRawBatch(client: ECClient): boolean {
-  const candidate = client as any;
+  const candidate = client as unknown as Partial<RawBatchClient>;
 
   return (
     typeof candidate.requestId === 'number' &&
@@ -314,7 +320,7 @@ async function sendBatch(
     return results;
   }
 
-  const rawClient = client as any;
+  const rawClient = client as unknown as RawBatchClient;
   const batchCalls = calls.map(({ method, params = [] }) => {
     rawClient.requestId += 1;
     return {
@@ -536,7 +542,7 @@ export default function ElectrumServer(networkOverride?: Network) {
           const client = new ElectrumClient<ElectrumClientEvents>(
             'OPTNWallet',
             '1.5.1',
-            socket as any
+            socket as unknown as ConstructorParameters<typeof ElectrumClient>[2]
           );
 
           try {
