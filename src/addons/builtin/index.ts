@@ -62,6 +62,7 @@ const BUILTIN_ADDONS_BASE: AddonManifest[] = [
           'wallet:context:read',
           'wallet:addresses:read',
           'utxo:wallet:read',
+          'utxo:address:read',
           'ui:confirm',
           'contracts:derive',
           'contracts:propose',
