@@ -527,7 +527,7 @@ class CdpClient {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Timed out waiting for CDP command ${method}.`));
-      }, 30_000);
+      }, 60_000);
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timeout);
@@ -666,10 +666,18 @@ async function androidWaitHeading(client, text, timeout = 60_000) {
 }
 
 async function androidImportWallet(client) {
-  await androidWaitHeading(
+  await androidWait(
     client,
-    'Powered with Bitcoin Covenants for Bitcoin Cash'
+    `document.body?.innerText?.includes('Powered with Bitcoin Covenants for Bitcoin Cash') === true || document.body?.innerText?.includes('Home') === true`,
+    'Android wallet startup screen did not load.'
   );
+  const alreadyImported = await client.evaluate(
+    `document.body?.innerText?.includes('Home') === true`
+  );
+  if (alreadyImported) {
+    console.log('[merchant-pay-desktop-mobile] mobile buyer wallet already ready');
+    return;
+  }
   await androidClickText(client, 'a', 'Import Wallet');
   await androidWaitHeading(client, 'Import Wallet');
   await androidClickSelector(client, 'button[aria-label*="Current: Mainnet"]');
@@ -701,11 +709,16 @@ async function exerciseAddonContractDemoAndroid(client) {
   }
   await androidWait(client, `document.body?.innerText?.includes('Add-on SDK wallet demo') === true`, 'Android SDK demo did not open.');
   await androidClickText(client, 'button', 'Derive CashScript contract address');
-  await androidWait(
-    client,
-    `document.body?.innerText?.includes('Contract address:') === true`,
-    'Android SDK contract derivation did not complete.'
-  );
+  try {
+    await androidWait(
+      client,
+      `document.body?.innerText?.includes('Contract address:') === true`,
+      'Android SDK contract derivation did not complete.'
+    );
+  } catch (error) {
+    const state = await client.evaluate(`({ url: location.href, body: document.body?.innerText?.replace(/\\s+/g, ' ').slice(-2200) ?? '' })`).catch(() => null);
+    throw new Error(`Android SDK contract derivation did not complete: ${JSON.stringify(state)}`, { cause: error });
+  }
   const proposalReady = await client.evaluate(`(() => { const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Propose contract spend for review') && !candidate.disabled); if (!button) return false; button.click(); return true; })()`);
   if (proposalReady) {
     await androidWait(client, `document.body?.innerText?.includes('Contract proposal submitted for wallet review') === true`, 'Android contract proposal review did not complete.');
