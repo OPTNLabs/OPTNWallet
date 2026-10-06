@@ -93,7 +93,7 @@ export default function AddonSdkWalletDemo({ sdk }: { sdk: any }) {
               contractType: 'p2sh32',
             });
             setContractAddress(address);
-            const utxos = await sdk.utxos.listForAddress(address);
+            const utxos = await sdk.utxos.refreshAndStore(address);
             setContractUtxo(utxos.find((utxo: any) => !utxo.token && utxo.value >= 2000) ?? null);
             setStatus('Generic CashScript contract identity derived by the wallet');
           } catch (error) {

@@ -831,7 +831,11 @@ const PUBLIC_FORBIDDEN_CAPABILITIES = new Set<AddonCapability>([
 const MAX_IN_MEMORY_PROPOSALS = 512;
 const MAX_IN_MEMORY_OPERATIONS = 512;
 
-function assertAddressAllowed(ctx: AddonSDKContext, address: string) {
+function assertAddressAllowed(
+  ctx: AddonSDKContext,
+  address: string,
+  derivedContractAddresses?: ReadonlySet<string>
+) {
   if (
     typeof address !== 'string' ||
     address.trim().length === 0 ||
@@ -843,7 +847,11 @@ function assertAddressAllowed(ctx: AddonSDKContext, address: string) {
       'Address allowlist unavailable; refusing addon address-scoped access'
     );
   }
-  if (ctx.walletAddresses && !ctx.walletAddresses.has(address)) {
+  if (
+    ctx.walletAddresses &&
+    !ctx.walletAddresses.has(address) &&
+    !derivedContractAddresses?.has(address)
+  ) {
     throw new Error(`Addon attempted access to non-wallet address: ${address}`);
   }
 }
@@ -858,6 +866,9 @@ export function createAddonSDK(
       `Addon "${manifest?.id ?? '(unknown)'}" failed schema checks: ${schemaErrors.join('; ')}`
     );
   }
+  // Addresses derived through this SDK instance are narrowly authorized for
+  // contract UTXO discovery. This does not grant arbitrary address reads.
+  const derivedContractAddresses = new Set<string>();
   validateAddonPermissions(manifest);
 
   const txMgr = TransactionManager();
@@ -1232,7 +1243,7 @@ export function createAddonSDK(
     utxos: {
       async listForAddress(address: string) {
         await authorizeCapability('utxo:address:read');
-        assertAddressAllowed(ctx, address);
+        assertAddressAllowed(ctx, address, derivedContractAddresses);
         // read-only electrum fetch (no DB)
         const utxos = await withPolicyTimeout(
           'utxos.listForAddress',
@@ -1408,7 +1419,11 @@ export function createAddonSDK(
           if (!address) {
             throw new Error('Transaction proposal input requires an address');
           }
-          if (ctx.walletAddresses && !ctx.walletAddresses.has(address)) {
+          if (
+            ctx.walletAddresses &&
+            !ctx.walletAddresses.has(address) &&
+            !derivedContractAddresses.has(address)
+          ) {
             throw new Error(
               `Transaction proposal input is outside the wallet address allowlist: ${address}`
             );
@@ -1976,7 +1991,9 @@ export function createAddonSDK(
           parseInputValue(raw, getConstructorInputType(artifact, idx))
         );
         const contract = createWalletCashScriptContract({ artifact, constructorArgs: args, provider, contractType });
-        return contract.tokenAddress || contract.address;
+        const address = contract.tokenAddress || contract.address;
+        derivedContractAddresses.add(address);
+        return address;
       },
 
       deriveLockingBytecodeHex({ artifact, constructorInputs, contractType = 'p2sh32' }) {

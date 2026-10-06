@@ -23,11 +23,11 @@ if (process.env.ADDON_CASHSCRIPT_LIVE !== '1') {
 
 const provider = new ElectrumNetworkProvider(Network.CHIPNET);
 const artifact = {
-  contractName: 'AddonSdkChipnetP2PKH',
+  contractName: 'AddonSdkDemoP2PKH',
   constructorInputs: [{ name: 'pkh', type: 'bytes20' }],
   abi: [{ name: 'spend', inputs: [{ name: 'pk', type: 'pubkey' }, { name: 's', type: 'sig' }] }],
   bytecode: 'OP_OVER OP_HASH160 OP_EQUALVERIFY OP_CHECKSIG',
-  compiler: { name: 'cashc', version: '0.14.0' },
+  compiler: { name: 'cashc', version: '0.13.0' },
 };
 const transferWithTimeoutArtifact = JSON.parse(
   readFileSync(new URL('../src/apis/ContractManager/artifacts/transfer_with_timeout.json', import.meta.url), 'utf8'),
@@ -85,12 +85,15 @@ const primaryPath = getBchAddressPath(Network.CHIPNET, 0, 0, 0);
 const primaryPrivkey = await derivePrivateKeyAtPath(mnemonic, '', primaryPath);
 const pubkey = secp256k1.derivePublicKeyCompressed(primaryPrivkey);
 if (typeof pubkey === 'string') throw new Error(pubkey);
+const primaryAddress = addressFor(Uint8Array.from(pubkey));
+console.log(`contract constructor wallet address: ${primaryAddress}`);
 const contract = new Contract(artifact, [binToHex(hash160(Uint8Array.from(pubkey)))], { provider, contractType: 'p2sh32', addressType: 'p2sh32' } as never);
-const existingContractUtxo = (await provider.getUtxos(contract.address)).find((utxo) => utxo.satoshis >= 2_000n);
+const contractAddress = contract.tokenAddress || contract.address;
+const existingContractUtxo = (await provider.getUtxos(contractAddress)).find((utxo) => utxo.satoshis >= 2_000n);
 const funding = new TransactionBuilder({ provider });
   funding.addInput({ txid: source.coin.tx_hash, vout: source.coin.tx_pos, satoshis: BigInt(source.coin.value), lockingBytecode: binToHex(cashAddressToLockingBytecode(source.address).bytecode) }, new SignatureTemplate(source.privkey, SighashType.SIGHASH_ALL).unlockP2PKH());
 funding.addOutputs([
-  { to: contract.address, amount: 10_000n },
+  { to: contractAddress, amount: 10_000n },
   { to: source.address, amount: BigInt(source.coin.value - 10_000 - 1_000) },
 ]);
 const fundingHex = funding.build();
@@ -100,9 +103,9 @@ if (!createVirtualMachineBCH().verify({ sourceOutputs: [{ lockingBytecode: cashA
 const providedFundingTxid = process.env.ADDON_CASHSCRIPT_FUNDING_TXID?.trim() || '';
 const fundingTxid = existingContractUtxo || providedFundingTxid ? null : await broadcast(fundingHex);
 if (fundingTxid) console.log(`funding txid: ${fundingTxid}`);
-const contractUtxo = existingContractUtxo ?? await waitForUtxo(contract.address, providedFundingTxid || fundingTxid!, 0);
+const contractUtxo = existingContractUtxo ?? await waitForUtxo(contractAddress, providedFundingTxid || fundingTxid!, 0);
 if (process.env.ADDON_CASHSCRIPT_FUND_ONLY === '1') {
-  console.log(`generic CashScript contract funding visible at ${contract.address}`);
+  console.log(`generic CashScript contract funding visible at ${contractAddress}`);
   process.exit(0);
 }
 
