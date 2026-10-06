@@ -78,7 +78,12 @@ async function broadcast(raw: string): Promise<string> {
 }
 
 const source = await findCoin();
-const pubkey = secp256k1.derivePublicKeyCompressed(source.privkey);
+// Contract identity follows the wallet's primary receive address. Funding may
+// come from any discovered UTXO, but constructor derivation must remain stable
+// and match the SDK demo's wallet address.
+const primaryPath = getBchAddressPath(Network.CHIPNET, 0, 0, 0);
+const primaryPrivkey = await derivePrivateKeyAtPath(mnemonic, '', primaryPath);
+const pubkey = secp256k1.derivePublicKeyCompressed(primaryPrivkey);
 if (typeof pubkey === 'string') throw new Error(pubkey);
 const contract = new Contract(artifact, [binToHex(hash160(Uint8Array.from(pubkey)))], { provider, contractType: 'p2sh32', addressType: 'p2sh32' } as never);
 const existingContractUtxo = (await provider.getUtxos(contract.address)).find((utxo) => utxo.satoshis >= 2_000n);
@@ -113,7 +118,7 @@ console.log('generic CashScript Chipnet E2E passed: build, VM validation, broadc
 // Exercise a second deterministic contract shape using the same wallet-derived
 // public key for both constructor identities, then return its BCH to the wallet.
 const secondSource = await findCoin();
-const secondPubkey = secp256k1.derivePublicKeyCompressed(secondSource.privkey);
+const secondPubkey = secp256k1.derivePublicKeyCompressed(primaryPrivkey);
 if (typeof secondPubkey === 'string') throw new Error(secondPubkey);
 const secondContract = new Contract(
   transferWithTimeoutArtifact,

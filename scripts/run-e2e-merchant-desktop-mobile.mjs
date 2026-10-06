@@ -725,7 +725,8 @@ async function exerciseAddonContractDemoAndroid(client) {
     }
   }
   await androidWait(client, `document.body?.innerText?.includes('Add-on SDK wallet demo') === true`, 'Android SDK demo did not open.');
-  await androidClickText(client, 'button', 'Derive CashScript contract address');
+  const deriveClicked = await client.evaluate(`(() => { const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Derive CashScript contract address'); if (!button) return false; button.click(); return true; })()`);
+  if (!deriveClicked) throw new Error('Android SDK contract derivation button was not found.');
   try {
     await androidWait(
       client,
