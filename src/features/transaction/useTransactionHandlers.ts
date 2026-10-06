@@ -1,4 +1,4 @@
-import { HashType, SignatureTemplate } from 'cashscript';
+import { SighashType, SignatureTemplate } from 'cashscript';
 import { Dispatch, SetStateAction, useCallback } from 'react';
 import ContractManager from '../../apis/ContractManager/ContractManager';
 import { setInputValues, setSelectedFunction, resetContract } from '../../state/slices/contractSlice';
@@ -322,7 +322,7 @@ export function useTransactionHandlers({
 
             const pk = await KeyService.fetchAddressPrivateKey(address, 'spend');
             if (!pk) throw new Error(`Missing private key for address: ${address}`);
-            return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
+            return new SignatureTemplate(pk, SighashType.SIGHASH_ALL);
           }
 
           return raw;

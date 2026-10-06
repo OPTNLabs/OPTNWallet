@@ -4,7 +4,7 @@ import {
   ElectrumNetworkProvider,
   TransactionBuilder,
   SignatureTemplate,
-  HashType,
+  SighashType,
 } from 'cashscript';
 import ContractManager from '../ContractManager/ContractManager';
 import { UTXO, TransactionOutput } from '../../types/types';
@@ -312,7 +312,7 @@ export default function TransactionBuilderHelper(
 
           const signatureTemplate = new SignatureTemplate(
             signingKey,
-            HashType.SIGHASH_ALL
+            SighashType.SIGHASH_ALL
           );
           unlocker = signatureTemplate.unlockP2PKH();
         } else {
