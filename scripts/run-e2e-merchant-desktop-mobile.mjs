@@ -691,7 +691,12 @@ async function androidImportWallet(client) {
     await androidSetInput(client, 'input[placeholder="word"]', index, word);
   }
   await androidClickText(client, 'button', 'Import Wallet');
-  await androidWait(client, `document.body?.innerText?.includes('Home') === true`, 'Android wallet home did not load.', 120_000);
+  try {
+    await androidWait(client, `document.body?.innerText?.includes('Home') === true`, 'Android wallet home did not load.', 120_000);
+  } catch (error) {
+    const state = await client.evaluate(`({ url: location.href, body: document.body?.innerText?.replace(/\\s+/g, ' ').slice(-2400) ?? '' })`).catch(() => null);
+    throw new Error(`Android wallet home did not load: ${JSON.stringify(state)}`, { cause: error });
+  }
   console.log('[merchant-pay-desktop-mobile] mobile buyer wallet ready');
 }
 
