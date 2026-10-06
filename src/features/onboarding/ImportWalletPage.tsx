@@ -245,13 +245,6 @@ const ImportWalletPage = () => {
             ? Network.CHIPNET
             : currentNetwork;
 
-      // Make the first receive/change pair available before activating the
-      // wallet. The mobile worker starts syncing as soon as the wallet ID is
-      // dispatched, so navigating first can make it query an empty inventory
-      // and publish a zero balance.
-      importStage = 'deriving initial address';
-      await KeyService.bootstrapInitialAddressBatch(walletID, 0, 1);
-
       importStage = 'opening wallet';
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));
@@ -268,8 +261,9 @@ const ImportWalletPage = () => {
       dispatch(setNetwork(resolvedNetwork));
       navigate(`/home/${walletID}`);
 
-      // Keep the initial key window consistent with desktop. The worker then
-      // performs the bounded history-based branch discovery pass.
+      // Bootstrap after activation so a slow local key/database operation
+      // cannot strand mobile users on the import screen. The sync worker can
+      // tolerate the short empty window and the operation is idempotent.
       void KeyService.bootstrapInitialAddressBatch(walletID, 0, 20).catch(
         (error) => {
           console.error('[ImportWalletPage] Initial address bootstrap failed', {

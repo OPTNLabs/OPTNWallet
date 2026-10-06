@@ -116,18 +116,7 @@ describe('ImportWalletPage', () => {
 
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/home/7'));
     expect(mocks.createWallet).toHaveBeenCalledTimes(1);
-    expect(mocks.bootstrapInitialAddressBatch).toHaveBeenNthCalledWith(
-      1,
-      7,
-      0,
-      1
-    );
-    expect(mocks.bootstrapInitialAddressBatch).toHaveBeenNthCalledWith(
-      2,
-      7,
-      0,
-      20
-    );
+    expect(mocks.bootstrapInitialAddressBatch).toHaveBeenCalledWith(7, 0, 20);
   });
 
   it('keeps checksum failures visible instead of only flashing a toast', async () => {
