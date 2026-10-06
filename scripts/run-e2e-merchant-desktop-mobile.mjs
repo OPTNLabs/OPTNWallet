@@ -323,6 +323,8 @@ async function exerciseAddonContractDemo(session) {
     await proposalButton.click();
     await waitFor(session, 'div*=Contract proposal submitted for wallet review');
     console.log('[addon-sdk-desktop-mobile] desktop contract proposal review passed');
+  } else {
+    console.log(`[addon-sdk-desktop-mobile] desktop contract proposal unavailable: ${JSON.stringify(await (await session.$('body')).getText().catch(() => 'unavailable'))}`);
   }
   console.log('[addon-sdk-desktop-mobile] desktop contract derivation passed');
 }
@@ -738,6 +740,8 @@ async function exerciseAddonContractDemoAndroid(client) {
   if (proposalReady) {
     await androidWait(client, `document.body?.innerText?.includes('Contract proposal submitted for wallet review') === true`, 'Android contract proposal review did not complete.');
     console.log('[addon-sdk-desktop-mobile] Android contract proposal review passed');
+  } else {
+    console.log(`[addon-sdk-desktop-mobile] Android contract proposal unavailable: ${JSON.stringify(await client.evaluate('document.body?.innerText ?? ""'))}`);
   }
   console.log('[addon-sdk-desktop-mobile] Android contract derivation passed');
 }
@@ -962,6 +966,9 @@ try {
   });
   await importDesktopWallet(desktopSession);
   await exerciseAddonContractDemo(desktopSession);
+  if (process.env.ADDON_SDK_CONTRACT_ONLY === '1') {
+    console.log('[addon-sdk-desktop-mobile] PASS: Android + desktop contract adapter flow completed');
+  } else {
   const payload = await createMerchantProposal(desktopSession);
   await androidClient.evaluate(`(() => { window.location.hash = '#/'; return true; })()`);
   await androidWaitHeading(androidClient, 'Home', 30_000);
@@ -969,6 +976,7 @@ try {
   console.log(
     '[merchant-pay-desktop-mobile] PASS: desktop merchant + Android buyer reached review; no broadcast performed'
   );
+  }
 } finally {
   await desktopSession?.deleteSession().catch(() => undefined);
   if (desktopDriver && desktopDriver.exitCode == null)
