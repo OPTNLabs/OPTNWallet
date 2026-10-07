@@ -12,6 +12,15 @@ is the lockfile used by CI and release builds; contributors must use `npm ci`
 for clean installs and commit lockfile changes together with `package.json`
 changes.
 
+Capacitor core, CLI, Android and iOS start at 7.6.9. This is the compatible
+7.x fix for [GHSA-rvm3-566m-v7fv](https://github.com/advisories/GHSA-rvm3-566m-v7fv):
+remote documents must not acquire the wallet origin through the internal HTTP
+proxy. Keep both lockfiles patched and rebuild mobile packages before release;
+changing a web bundle alone does not replace vulnerable native code. The Android
+patch retains only Gradle configuration adjustments, never compiled classes or
+generated build output. The packaged Android regression exercises the actual
+navigation guard and document proxy rejection on both Play and F-Droid builds.
+
 CI uses Node.js 22.23.2. Node.js 22.12 or a supported newer LTS is required by
 the maintained browser-download tooling; Node 20 is no longer a supported build
 runtime. This build-tool requirement does not change wallet platform targets.
