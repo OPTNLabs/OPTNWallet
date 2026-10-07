@@ -853,3 +853,38 @@ freshness-checked. Checkpoint test nonces use OS randomness and missing biometri
 credentials are explicitly refused with regression coverage. Remote scans and
 platform builds must still succeed for the pushed revision; no security alerts
 were dismissed in this continuation.
+
+### 2026-10-07: x402 BCH Rust SDK integration draft on dev
+
+The `feat/x402-rust-sdk` branch starts at merged `dev` revision
+`c45be9b70a87198a08fea2c0ad1dc79b8c812d39`. It depends on
+[OPTNLabs/x402-bch#2](https://github.com/OPTNLabs/x402-bch/pull/2), currently pinned
+to its immutable source revision `a6e50946f95ce6e65bb3d08071eb49584786fba9`.
+Merge the SDK PR first, move the dependency and locks to the upstream merged
+revision, then complete review/checks before merging this wallet PR into `dev`.
+
+For #71/#83, protocol encoding sits in `optn-x402`; native HTTP sits in the CLI;
+shared runtime owns authorization, HD change, signing, bounded durable outbox and
+input reservations. The same reconciled spendable-coin extractor now serves the
+native GUI and this runtime flow. Signed transaction import receives independent
+core signature/value validation and SDK verification. Raw signed bytes never enter
+the renderer/add-on `WireState`. For #75, chain data comes from shared selected
+sources; SDK source access is an immutable snapshot, and merchant HTTP uses the
+existing outbound/Tor policy without redirects or implicit proxy/public fallback.
+
+Windows local evidence so far: three runtime persistence/retry/CAS/import tests,
+three SDK protocol/interoperability tests, TypeScript core typecheck, and generated
+WASM rebuild pass. The real CLI process test is still under investigation for a
+Windows debug stack overflow; it is not passing evidence yet. Broader tests,
+strict Clippy, architecture, connector checks and remote/platform CI are pending.
+This draft is not merge-ready and includes no live-network or mainnet spend proof.
+
+The scope is native BCH from runtime-managed HD saved wallets, plus finalized
+P2PKH import (including watch-only). Migrated desktop wallets, token/RPA/contract/
+multisig spending and the common lifecycle for other signing commands remain
+unfinished. Legacy CLI signing is refused after this outbox exists, and a CLI
+session lease serializes access to that wallet directory. Reservations never expire
+on HTTP success or timeout; there is no automatic cancellation/pruning, and the
+outbox is capped at 256 records / 8 MiB. Server receipts are reported as claims,
+not chain confirmation. The earlier shared outbox/reconciliation gap remains open
+for those other surfaces and retirement behavior.

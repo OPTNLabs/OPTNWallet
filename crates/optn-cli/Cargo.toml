@@ -6,7 +6,7 @@ authors = ["OPTNLabs"]
 license = "GPL-3.0-only"
 repository = "https://github.com/OPTNLabs/OPTNWallet"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.93"
 
 [[bin]]
 name = "optn"
@@ -20,6 +20,7 @@ path = "src/main.rs"
 # Versions are pinned to match src-tauri/Cargo.toml so the two trees resolve to
 # the same dependency versions and the audit baseline stays meaningful.
 [dependencies]
+optn-x402 = { path = "../optn-x402", version = "=1.7.3" }
 optn-core = { path = "../optn-core", version = "=1.7.3" }
 optn-app = { path = "../optn-app", version = "=1.7.3" }
 optn-ui-text = { path = "../optn-ui-text", version = "=1.7.3" }
@@ -80,7 +81,7 @@ keyring = { version = "3", default-features = false, features = [
   "linux-native",
 ] }
 
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json", "socks"] }
 
 [dev-dependencies]
 optn-platform = { path = "../optn-platform", version = "=1.7.3" }

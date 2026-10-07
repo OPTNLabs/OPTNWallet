@@ -8,6 +8,7 @@ use std::{
 
 pub struct NativeWalletStorage {
     root: PathBuf,
+    session_lock: Option<std::sync::Arc<File>>,
 }
 
 fn error(_: impl std::fmt::Display) -> PlatformError {
@@ -16,7 +17,46 @@ fn error(_: impl std::fmt::Display) -> PlatformError {
 
 impl NativeWalletStorage {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            session_lock: None,
+        }
+    }
+
+    /// Serialize CLI sessions that still contain legacy spending adapters. The
+    /// file remains locked for this storage owner's lifetime, including signing
+    /// and submission; a checkpoint write lock alone cannot protect that interval.
+    pub fn with_exclusive_session(mut self) -> PlatformResult<Self> {
+        fs::create_dir_all(&self.root).map_err(error)?;
+        use std::sync::{Arc, Mutex, OnceLock, Weak};
+        static SESSIONS: OnceLock<Mutex<std::collections::BTreeMap<PathBuf, Weak<File>>>> =
+            OnceLock::new();
+        let path = fs::canonicalize(&self.root)
+            .map_err(error)?
+            .join(".wallet-session.lock");
+        let mut sessions = SESSIONS.get_or_init(Mutex::default).lock().map_err(error)?;
+        sessions.retain(|_, file| file.strong_count() != 0);
+        if let Some(file) = sessions.get(&path).and_then(Weak::upgrade) {
+            self.session_lock = Some(file);
+            return Ok(self);
+        }
+        if fs::symlink_metadata(&path).is_ok_and(|m| !m.file_type().is_file()) {
+            return Err(PlatformError::PermissionDenied);
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(error)?;
+        file.try_lock().map_err(|_| {
+            PlatformError::Other("Another CLI session is using this wallet directory.".into())
+        })?;
+        let file = Arc::new(file);
+        sessions.insert(path, Arc::downgrade(&file));
+        self.session_lock = Some(file);
+        Ok(self)
     }
 
     fn path(&self, handle: &str) -> PlatformResult<PathBuf> {

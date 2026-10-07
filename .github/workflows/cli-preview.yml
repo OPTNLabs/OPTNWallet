@@ -146,6 +146,14 @@ jobs:
         working-directory: crates/optn-cli
         run: cargo test --target ${{ matrix.target }}
 
+      - name: Validate BCH SDK adapter
+        if: env.CLI_PRESENT == 'true' && matrix.cross-package == ''
+        working-directory: crates/optn-x402
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
       - name: Test shared Rust core on the native target
         if: env.CLI_PRESENT == 'true' && matrix.cross-package == ''
         working-directory: crates/optn-core
