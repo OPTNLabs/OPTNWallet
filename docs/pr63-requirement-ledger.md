@@ -935,3 +935,17 @@ six security tests pass locally. Existing development-only audit and transitive
 license-metadata warnings remain visible; no audit threshold or gate changed.
 Android/iOS package and device evidence still depends on their respective CI
 jobs, and the SDK PR #2 remains unmerged at this validation point.
+
+The full-graph audit subsequently reached the development dependencies. Its
+`source-map-js` finding (GHSA-68fv-2mgg-jv7q) is fixed by updating the single
+locked package from 1.2.1 to the upstream 1.2.2 release. Dependency policy,
+TypeScript core typecheck, production web build and all 49 UI tests pass; the
+production audit still reports zero vulnerabilities.
+
+The full audit remains red: all 13 high-severity entries trace to
+`braces@3.0.3` (GHSA-vfj7-8cjw-p6xm) through existing development tools.
+As checked on 2026-10-07, npm has no patched braces release and upstream
+micromatch/braces PRs #78 and #79 remain open. The audit exit code is still 1;
+no finding is suppressed and no threshold changed. This is an additional
+merge blocker alongside the unmerged SDK dependency and required review.
+The source-map update does not constitute full-audit or merge-readiness proof.
