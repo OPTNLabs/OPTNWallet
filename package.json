@@ -168,6 +168,7 @@
     "ts-mls": "file:vendor/ts-mls"
   },
   "overrides": {
+    "braces": "$braces",
     "@cashscript/utils": "0.13.0-next.3",
     "anymatch": {
       "picomatch": "^2.3.2"
@@ -217,6 +218,7 @@
     "@wdio/mocha-framework": "^9.31.7",
     "@wdio/spec-reporter": "^9.31.2",
     "autoprefixer": "^10.4.19",
+    "braces": "file:vendor/braces",
     "cross-env": "^10.1.0",
     "dotenv-cli": "^8.0.0",
     "eslint": "^8.57.0",
@@ -242,6 +244,7 @@
     "webdriverio": "^9.31.7"
   },
   "resolutions": {
+    "**/braces": "file:vendor/braces",
     "**/@cashscript/utils": "0.13.0-next.3",
     "**/js-yaml": "4.3.2",
     "**/ws": "^8.21.0",
