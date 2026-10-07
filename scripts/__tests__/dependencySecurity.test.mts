@@ -5,6 +5,28 @@ import { expect, it } from 'vitest';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
+it('compiles closing AST nodes without writing to stdout', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--eval',
+      String.raw`
+        const assert = require('node:assert/strict');
+        const braces = require('braces');
+        const closing = { type: 'close', isClose: true, value: '}' };
+        const tree = { type: 'root', nodes: [{ type: 'text', value: 'literal' }, closing] };
+        assert.equal(braces.compile(closing), '}');
+        assert.equal(braces.compile(tree), 'literal}');
+        assert.equal(braces.compile(tree, { escapeInvalid: true }), 'literal\\}');
+      `,
+    ],
+    { cwd: repoRoot, encoding: 'utf8', timeout: 10_000 }
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe('');
+});
+
 it('retains the upstream input-length and imbalanced-brace resource bounds', () => {
   const result = spawnSync(
     process.execPath,
