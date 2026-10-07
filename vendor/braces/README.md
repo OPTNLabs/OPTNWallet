@@ -7,6 +7,11 @@ registry integrity, original source hashes and advisory. The original authors
 and license are retained. This private package is named `@optn/build-braces`
 and versioned `3.0.4-optn.1`; it is **not an upstream fixed release**.
 
+One additional local deviation removes the inherited `console.log` in the
+`node.isClose` branch of `lib/compile.js`. Compilation returns the same literal
+or escaped closing text without writing to stdout. The parser and depth guards
+are unchanged; a focused regression covers the return values and stdout.
+
 The local patch version sorts after its upstream 3.0.3 baseline. The initial
 `3.0.3-optn.1` incorrectly sorted before that baseline under SemVer. Yarn v1
 records the consumer name `braces` for a local file replacement rather than
