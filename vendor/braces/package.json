@@ -16,7 +16,7 @@
     "fill-range": "^7.1.1"
   },
   "name": "@optn/build-braces",
-  "version": "3.0.3-optn.1",
+  "version": "3.0.4-optn.1",
   "private": true,
   "description": "Build-only braces 3.0.3 fork with bounded parser and AST recursion; see README.md",
   "files": [

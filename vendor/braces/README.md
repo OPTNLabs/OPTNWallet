@@ -5,7 +5,18 @@ changes from [upstream PR #78](https://github.com/micromatch/braces/pull/78),
 commit `97308a01d091b211cf015314a2d0696da28a5392`. `UPSTREAM.json` records the
 registry integrity, original source hashes and advisory. The original authors
 and license are retained. This private package is named `@optn/build-braces`
-and versioned `3.0.3-optn.1`; it is **not an upstream fixed release**.
+and versioned `3.0.4-optn.1`; it is **not an upstream fixed release**.
+
+The local patch version sorts after its upstream 3.0.3 baseline. The initial
+`3.0.3-optn.1` incorrectly sorted before that baseline under SemVer. Yarn v1
+records the consumer name `braces` for a local file replacement rather than
+this package's scoped name, so dependency review misidentified that version
+as unpatched upstream code. Correcting the fork version does not certify the
+source: the actual nesting fix is the PR78 backport above, and the original
+3.0.3 input-length/imbalanced-brace fix for
+[GHSA-grv7-fg5c-xmjg](https://github.com/advisories/GHSA-grv7-fg5c-xmjg)
+is retained and separately regression-tested. Upstream identity, version and
+hashes remain recorded in `UPSTREAM.json` for future advisory review.
 
 As of 2026-10-07, upstream has no release fixing
 [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm).
