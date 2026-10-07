@@ -5,6 +5,77 @@ import { expect, it } from 'vitest';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
+it('bounds brace patterns and caller-supplied AST recursion before stack exhaustion', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--stack_size=512',
+      '--eval',
+      `
+        const assert = require('node:assert/strict');
+        const braces = require('braces');
+        const bounded = error => error instanceof SyntaxError && /nesting depth exceeds/.test(error.message);
+        for (const [open, close] of [['{', '}'], ['(', ')'], ['{(', ')}']]) {
+          const pattern = open.repeat(2000) + 'a,b' + close.repeat(2000);
+          for (const operation of [braces, braces.create, braces.parse, braces.compile, braces.expand, braces.stringify]) {
+            assert.throws(() => operation(pattern), bounded);
+          }
+        }
+        const ast = depth => {
+          let tree = { type: 'root', nodes: [] };
+          for (let i = 0; i < depth; i++) tree = { type: 'root', nodes: [tree] };
+          return tree;
+        };
+        for (const method of ['compile', 'expand', 'stringify']) {
+          assert.deepEqual(braces[method](ast(100)), method === 'expand' ? [] : '');
+          assert.throws(() => braces[method](ast(101)), bounded);
+          assert.throws(() => braces[method](ast(4000)), bounded);
+          const cyclic = { type: 'root', nodes: [] };
+          cyclic.nodes.push(cyclic);
+          assert.throws(() => braces[method](cyclic), bounded);
+        }
+      `,
+    ],
+    { cwd: repoRoot, encoding: 'utf8', timeout: 10_000 }
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+});
+
+it('preserves ordinary brace syntax and installs the bounded implementation for glob consumers', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--eval',
+      String.raw`
+        const assert = require('node:assert/strict');
+        const { createRequire } = require('node:module');
+        const braces = require('braces');
+        assert.equal(require('braces/package.json').name, '@optn/build-braces');
+        assert.equal(braces.compile('app/{reading,writing}/**/*.{js,jsx}'), 'app/(reading|writing)/**/*.(js|jsx)');
+        assert.deepEqual(braces.expand('page-{1..3}.js'), ['page-1.js', 'page-2.js', 'page-3.js']);
+        assert.deepEqual(braces.expand('a\\{b,c\\}'), ['a{b,c}']);
+        assert.deepEqual(braces.expand('a{b,{c,{d,e}}}f'), ['abf', 'acf', 'adf', 'aef']);
+        assert.equal(braces.compile(braces.parse('a/{b,c}/d')), 'a/(b|c)/d');
+        const nested = '{'.repeat(99) + 'x' + '}'.repeat(99);
+        assert.equal(braces.stringify(nested), nested);
+        assert.deepEqual(braces.expand(nested), [nested]);
+        for (const consumer of ['micromatch', 'fast-glob', 'tailwindcss', 'patch-package']) {
+          const consumerRequire = createRequire(require.resolve(consumer));
+          assert.equal(consumerRequire('braces/package.json').name, '@optn/build-braces', consumer);
+        }
+        const micromatch = require('micromatch');
+        assert.deepEqual(micromatch(['src/a.ts', 'src/b.tsx', 'src/c.rs'], 'src/*.{ts,tsx}'), ['src/a.ts', 'src/b.tsx']);
+        const files = require('fast-glob').sync('vendor/braces/{index,lib/utils}.js').sort();
+        assert.deepEqual(files, ['vendor/braces/index.js', 'vendor/braces/lib/utils.js']);
+      `,
+    ],
+    { cwd: repoRoot, encoding: 'utf8', timeout: 10_000 }
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+});
+
 it('bounds indexed source-map offsets before mapping work', () => {
   const result = spawnSync(
     process.execPath,
