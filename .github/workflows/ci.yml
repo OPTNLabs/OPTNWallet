@@ -115,6 +115,8 @@ jobs:
 
       - name: Dependency policy
         run: npm run deps:check
+      - name: Dependency security regressions
+        run: npx vitest run scripts/__tests__/dependencySecurity.test.mts
       - name: Dependency audit (prod, critical+)
         run: npm audit --omit=dev --audit-level=critical
       - name: Dependency audit (all, high+)
