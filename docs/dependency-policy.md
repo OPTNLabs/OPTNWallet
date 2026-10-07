@@ -45,6 +45,31 @@ The hardware codec test checks BCH address requests and 64-bit transaction
 amounts without connecting to a device. Audit both lockfiles after changing
 these pins; a clean npm audit does not validate `yarn.lock`.
 
+The development-only `braces` consumers use the exact npm alias
+`@dieub/braces-depth-guard@3.0.3-pn.3`, mirrored in Yarn resolutions, while
+upstream has no release fixing
+[GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm).
+This is a third-party MIT backport, not an upstream release. Its ten published
+files were compared byte-for-byte with provenance commit
+[`305a2e4bfe324bb53c336c1b03387ee1251c926f`](https://github.com/dieub/braces-depth-guard/tree/305a2e4bfe324bb53c336c1b03387ee1251c926f),
+and npm verified its registry signature and attestation. The runtime diff from
+upstream 3.0.3 adds a mandatory depth ceiling of 100 for brace/parenthesis
+parsing and AST traversal, validates limit options, and detects expansion
+parent cycles. It retains the original license, API and sole `fill-range`
+dependency, with no install hook or new runtime dependency.
+
+The immutable integrity in both lockfiles and behavioral regressions in
+`scripts/__tests__/bracesSecurity.test.mts` accompany this temporary pin. Those
+tests must reject deep strings and direct ASTs through the installed consumers;
+a changed audit package name alone is not evidence of a fix. This guard does
+not bound expansion cardinality or make arbitrary malformed ASTs safe. Replace
+the alias with a reviewed upstream fix when one is published, rerunning the
+security regressions and glob/build compatibility checks.
+
+Both managers also pin `source-map-js` 1.2.2 for its indexed-source-map
+denial-of-service fix. The secondary Yarn lock includes the same Capacitor
+7.6.9 security update as the canonical npm lock.
+
 ## Required checks
 
 - `npm run deps:check` verifies package-manager metadata, lockfile format, and

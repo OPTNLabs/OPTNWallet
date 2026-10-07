@@ -949,3 +949,35 @@ micromatch/braces PRs #78 and #79 remain open. The audit exit code is still 1;
 no finding is suppressed and no threshold changed. This is an additional
 merge blocker alongside the unmerged SDK dependency and required review.
 The source-map update does not constitute full-audit or merge-readiness proof.
+
+Further PR #105 dependency repair on 2026-10-07: the development `braces`
+consumers now use the exact published MIT backport
+`@dieub/braces-depth-guard@3.0.3-pn.3`. It is a third-party release while the
+upstream fix remains unpublished. All ten published files match provenance
+commit `305a2e4bfe324bb53c336c1b03387ee1251c926f`; npm verified its registry
+signature and attestation. The reviewed runtime diff adds bounded parsing and
+AST traversal, option validation and expansion-parent cycle detection, without
+new runtime dependencies or install hooks. The unchanged upstream 3.0.3 test
+suite passes all 764 cases against the patched runtime; the fork's extended
+suite passes all 799. The dependency policy records the temporary pin and its
+limits, including that expansion cardinality is not bounded by this fix.
+
+Three new repository regressions fail against the original package and pass
+against the installed replacement, covering deep brace/parenthesis strings,
+direct and cyclic ASTs, normal glob behavior, actual Micromatch/Chokidar
+consumers and every locked copy. Both lockfiles retain published integrity
+hashes. Yarn was regenerated with Yarn 1.22.22 and also brought forward the
+existing Capacitor 7.6.9 and source-map-js 1.2.2 fixes. Its installed-consumer
+checks pass. Both managers report zero high/critical findings: npm retains
+6 low / 4 moderate findings and Yarn retains 1 low / 4 moderate findings.
+The production npm audit reports zero vulnerabilities. No advisory, audit
+threshold, workflow or required check was suppressed or weakened.
+
+A clean install with the declared npm 10.9.2 applies all repository patches.
+Dependency/license policy, formatting, core TypeScript typecheck, strict core
+lint, five focused dependency regressions, the production web build and all
+49 UI tests pass. The broad core run passed 1,927 tests with 10 skipped and
+five Git Bash subprocess timeouts on Windows. Both affected workflow-test
+files then passed all 54 tests with one worker, without changing their
+timeouts or assertions. Fresh current-head remote CI is still required;
+SDK PR #2 remains open and the wallet PR still requires human approval.
