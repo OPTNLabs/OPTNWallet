@@ -21,6 +21,8 @@ use optn_core::network::Network;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod historical;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletNetworkSnapshot {
     /// Runtime-derived public account scope; never supplied by a provider.
@@ -323,6 +325,10 @@ pub struct ProgressiveSyncConfig {
     /// a single real batch is enough to advance the MMR without walking the
     /// whole chain on every refresh.
     pub max_verified_headers_per_pass: Option<u32>,
+    /// Recent full headers retained after a durable wallet sync. Ordinary
+    /// peers keep older locator hashes; SHV-capable BIP37 routes can recover
+    /// those hashes on demand and retain only this window.
+    pub retained_header_window: u32,
 }
 
 impl Default for ProgressiveSyncConfig {
@@ -332,6 +338,7 @@ impl Default for ProgressiveSyncConfig {
             header_batch_size: 2_000,
             max_header_batches: 1_000,
             max_verified_headers_per_pass: None,
+            retained_header_window: 2_016,
         }
     }
 }
@@ -433,6 +440,9 @@ pub struct ProgressiveSyncWorker {
     /// run, so a host that verifies headers but never publishes them has a
     /// wallet that cannot sync.
     accepted: Option<Arc<SharedHeaders>>,
+    /// A route that supplied a proof authenticated by this worker. Mere SHV
+    /// advertisement never authorizes dropping the compatibility hash index.
+    proven_shv_route: Option<CapabilityRoute>,
 }
 
 /// A restored checkpoint is public progress, so a current chain may require a
@@ -447,6 +457,7 @@ impl ProgressiveSyncWorker {
             reconciliation: ReconciliationState::default(),
             header_view: None,
             accepted: None,
+            proven_shv_route: None,
         }
     }
 
@@ -584,7 +595,10 @@ impl ProgressiveSyncWorker {
 
         for route in routes {
             if self.header_view.is_some() {
-                if let Err(error) = self.prime_headers_on_same_route(service, &route).await {
+                if let Err(error) = self
+                    .prime_headers_for_scope(service, &route, from_height)
+                    .await
+                {
                     self.reconciliation
                         .record_failure(format!("header prerequisite failed: {error:?}"));
                     continue;
@@ -684,7 +698,17 @@ impl ProgressiveSyncWorker {
         service: &mut ChainService,
         wallet_route: &CapabilityRoute,
     ) -> Result<(), ProgressiveSyncError> {
-        self.restore_historical_store_on_same_route(service, wallet_route)
+        self.prime_headers_for_scope(service, wallet_route, None)
+            .await
+    }
+
+    async fn prime_headers_for_scope(
+        &mut self,
+        service: &mut ChainService,
+        wallet_route: &CapabilityRoute,
+        floor: Option<u32>,
+    ) -> Result<(), ProgressiveSyncError> {
+        self.restore_historical_store_on_same_route(service, wallet_route, floor)
             .await?;
         // Work on a candidate so a failed route cannot poison another route's
         // trusted cursor. Publish only after the complete bounded header pass.
@@ -692,6 +716,13 @@ impl ProgressiveSyncWorker {
             .header_view
             .clone()
             .ok_or(ProgressiveSyncError::MissingTrustedHeaderVerifier)?;
+        let snapshot = self
+            .accepted
+            .as_ref()
+            .map(|store| store.write(|retained| retained.clone()));
+        if let Some(retained) = &snapshot {
+            historical::reauthenticate_time_windows(&mut view, retained)?;
+        }
         let header_route = service
             .routes_for_operation(ChainOperation::HeaderSync)
             .into_iter()
@@ -743,7 +774,7 @@ impl ProgressiveSyncWorker {
                 return Err(ProgressiveSyncError::InvalidHeaderRange);
             }
             if headers.is_empty() {
-                return self.publish_headers(view, staged);
+                return self.publish_headers(view, staged, snapshot.as_ref(), service);
             }
             let returned = u32::try_from(headers.len())
                 .map_err(|_| ProgressiveSyncError::HeaderSafetyLimit)?;
@@ -767,7 +798,7 @@ impl ProgressiveSyncWorker {
             if returned < self.config.header_batch_size.max(1)
                 || pass_limit.is_some_and(|limit| advanced >= limit)
             {
-                return self.publish_headers(view, staged);
+                return self.publish_headers(view, staged, snapshot.as_ref(), service);
             }
         }
         Err(ProgressiveSyncError::HeaderSafetyLimit)
@@ -784,26 +815,31 @@ impl ProgressiveSyncWorker {
         &mut self,
         view: VerifiedHeaderView,
         staged: Vec<(u32, BlockHeaderBytes)>,
+        snapshot: Option<&RetainedHeaders>,
+        service: &ChainService,
     ) -> Result<(), ProgressiveSyncError> {
+        if service.revocation().is_revoked() {
+            return Err(ProgressiveSyncError::HeaderRecovery(
+                "source changed during header acquisition".into(),
+            ));
+        }
         if let Some(store) = self.accepted.as_ref() {
-            store
-                .write(|retained| {
-                    if let Some((height, header)) = staged.first() {
-                        if let Some(parent) = height
-                            .checked_sub(1)
-                            .and_then(|before| retained.hash_at(before))
-                        {
-                            if header.0[4..36] != parent {
-                                return Err(HeaderStoreError::Linkage { height: *height });
-                            }
-                        }
-                    }
-                    for (height, header) in staged {
-                        retained.insert_verified(height, header)?;
-                    }
-                    Ok(())
-                })
-                .map_err(ProgressiveSyncError::HeaderStore)?;
+            let snapshot = snapshot.ok_or_else(|| {
+                ProgressiveSyncError::HeaderRecovery("missing accepted-store snapshot".into())
+            })?;
+            let mut candidate = snapshot.clone();
+            for (height, header) in staged {
+                historical::insert_recovered(&mut candidate, height, header)?;
+            }
+            store.write(|retained| {
+                if service.revocation().is_revoked() || retained != snapshot {
+                    return Err(ProgressiveSyncError::HeaderRecovery(
+                        "accepted headers or source changed during header acquisition".into(),
+                    ));
+                }
+                *retained = candidate;
+                Ok(())
+            })?;
         }
         self.header_view = Some(view);
         Ok(())
@@ -814,9 +850,10 @@ impl ProgressiveSyncWorker {
     /// locators and block ranges; restoring only the MMR cursor leaves them
     /// unable to scan the wallet's historical floor.
     async fn restore_historical_store_on_same_route(
-        &self,
+        &mut self,
         service: &mut ChainService,
         wallet_route: &CapabilityRoute,
+        floor: Option<u32>,
     ) -> Result<(), ProgressiveSyncError> {
         if !matches!(
             wallet_route.protocol,
@@ -841,8 +878,29 @@ impl ProgressiveSyncWorker {
         let target_hash = view.tip().map(|(_, hash)| hash).ok_or_else(|| {
             ProgressiveSyncError::HeaderRecovery("restored view has no tip".into())
         })?;
-        if store.range_inclusive(0, target.height).is_ok()
+        // BIP37 needs its requested scan range and a recent retention window.
+        // Neutrino also builds filter-header commitments from genesis, so it
+        // still needs earlier block hashes even for a recent wallet birthday.
+        let start = if wallet_route.protocol == ProtocolFamily::Bip37 {
+            floor.unwrap_or(0).saturating_sub(1).min(
+                target
+                    .height
+                    .saturating_sub(self.config.retained_header_window.max(1) - 1),
+            )
+        } else {
+            0
+        };
+        if store.range_inclusive(start, target.height).is_ok()
             && store.hash_at(target.height) == Some(target_hash)
+            && (floor.is_some()
+                || !store.write(|retained| historical::missing_time_windows(&view, retained)))
+        {
+            return Ok(());
+        }
+
+        if self
+            .restore_with_shv(service, wallet_route, &view, &store, start)
+            .await?
         {
             return Ok(());
         }
@@ -944,13 +1002,7 @@ impl ProgressiveSyncWorker {
         // complete authenticated candidate under one write lock, and refuse
         // to overwrite a concurrent runtime update made while replay ran.
         store.write(|retained| {
-            let unchanged = retained.generation() == snapshot.generation()
-                && retained.retained_span() == snapshot.retained_span()
-                && !snapshot.retained_span().is_some_and(|(start, end)| {
-                    retained.range_inclusive(start, end).ok()
-                        != snapshot.range_inclusive(start, end).ok()
-                });
-            if !unchanged {
+            if *retained != snapshot || service.revocation().is_revoked() {
                 return Err(ProgressiveSyncError::HeaderRecovery(
                     "accepted store changed during historical replay".into(),
                 ));
@@ -1614,7 +1666,7 @@ pub(crate) mod tests {
         worker = worker.with_accepted_headers(store.clone());
 
         worker
-            .restore_historical_store_on_same_route(&mut service, &route)
+            .restore_historical_store_on_same_route(&mut service, &route, None)
             .await
             .expect("authenticated replay commits the dense store");
 
@@ -1747,6 +1799,7 @@ pub(crate) mod tests {
             header_batch_size: 2,
             max_header_batches: 8,
             max_verified_headers_per_pass: None,
+            ..Default::default()
         })
         .with_header_verifier(Network::Chipnet, verifier)
         .expect("a trusted verifier enables verified P2P sync");

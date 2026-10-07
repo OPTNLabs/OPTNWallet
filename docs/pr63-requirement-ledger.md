@@ -109,8 +109,8 @@ still integration work; model/transport tests do not prove paid rounds run.
 | Neutrino off private block-header state | **PROVEN** | `optn-chain-neutrino` holds `Arc<dyn BlockHeaderSource>`; filter hashes/headers remain its own | — |
 | Duplicate network maps audited | **PROVEN** | Three copies now cross-check: `bip37_and_neutrino_agree_about_every_network`, `this_copy_agrees_with_the_accepted_header_store` | — |
 | BIP37 merkle proofs bound to the accepted chain | **PROVEN** | `optn-chain-bip37/src/lib.rs` merkle-binding tests; a forged block is refused | — |
-| Header checkpoint persistence | **PROVEN** (runtime/GUI/CLI integration tests) | Guarded wallet/header checkpoint publication; shared `with_stored_header_progress`; native `accepted_chain` restores a sealed view after wallet open | Live GUI checkpoint reopen is proven for Electrum wallet state; a live P2P/MMR checkpoint restart still needs evidence |
-| Authenticated historical replay | **PROVEN** (connected runtime regression) | `sync_worker::restore_historical_store_on_same_route` calls `header_recovery`; typed private locators acquire on the same route, then an atomic authenticated commit publishes the dense store | Live P2P restart and interruption/resume performance remain to verify; missing dense history may require replay from genesis |
+| Header checkpoint persistence | **PROVEN** (runtime/GUI/CLI integration tests; live local P2P runtime/CLI restart) | Guarded wallet/header checkpoint publication; shared `with_stored_header_progress`; native `accepted_chain` restores a sealed view after wallet open. `optn-cli/tests/shv_regtest.rs` reopens an encrypted HD wallet against two peered real nodes, preserving balance/history and the accepted MMR commitment | Packaged GUI P2P restart and public-network scale remain separate from the local runtime/CLI result |
+| Authenticated historical replay | **PROVEN** (connected runtime and live local P2P) | `sync_worker::historical` authenticates a starting header against the runtime's saved MMR root, then recovers linked hashes through the accepted tip on the same selected route. Ordinary peers retain authenticated genesis replay. Real-node encrypted reopen, prune/recover and CLI source switching are covered by `shv_regtest` | Normal HD refresh still rechecks its configured floor. Ordinary peers retain the hash index and may need genesis replay after process restart; this is not constant-memory full-chain synchronization |
 | SHV P2P root/peak proofs | **PROVEN** | `optn-chain-bip37/src/shv.rs`; live against BCHN `e6d380373` with `-mmrindex=1`, proof accepted only against OPTN's own root | — |
 | BCHD-correct compact filters | **PROVEN** | `optn-chain-neutrino/src/filter.rs`; live BCHD scan agrees with the Bloom path on the same coins | Independent BCHD-produced filter fixtures not yet vendored |
 | Sequential receive → spend lifecycle | **PROVEN** | `a_spend_is_found_through_an_outpoint_the_receive_scan_discovered`; spend invisible to a script-only scan | CashTokens/NFT/OP_RETURN/reorg/restart cases not covered |
@@ -853,3 +853,36 @@ freshness-checked. Checkpoint test nonces use OS randomness and missing biometri
 credentials are explicitly refused with regression coverage. Remote scans and
 platform builds must still succeed for the pushed revision; no security alerts
 were dismissed in this continuation.
+
+### 2026-10-07: production SHV recovery, bounded retention and date restart
+
+The follow-up based on merged `dev` at `c45be9b7` connects historical proof
+requests to normal shared wallet refresh. Proofs bind to the runtime's existing
+MMR commitment and selected route; recovered linked ranges remain private until
+the complete range reaches the accepted tip and the source/store guards pass.
+An optional SHV timeout/refusal preserves ordinary same-peer replay. Invalid
+proofs cannot promote wallet evidence or expand source policy.
+
+Accepted wallet checkpoint publication now triggers retention: a recent 2,016
+raw-header window by default, with older compatibility hashes retained unless
+the same BIP37 route has actually proved SHV service. Neutrino keeps the hashes
+needed for filter-header reconstruction. Ordinary header updates also refuse
+concurrent store changes and conflicting previously accepted heights. Restored
+date anchors are reauthenticated from their raw header windows before resolving
+a birthday; hash-only history cannot substitute for timestamp evidence.
+
+Live evidence in `docs/chain-interop-evidence.md` and the opt-in
+`optn-cli/tests/shv_regtest.rs` covers two peered local BCHN nodes, encrypted HD
+reopen, actual SHV recovery, repeated pruning/recovery, unchanged balance/history
+on ordinary-peer fallback, both real CLI routes, and saved-date actor refresh
+after restart at an unchanged tip. This closes the former **local P2P restart
+evidence** gap and the restored-date connection for these P2P paths. Host-created
+birthday anchors, packaged GUI/mobile interactions, public-network scale and
+automatic wallet reorg recovery are not established by this fixture. The broader
+RPA/contract union, durable outbox, Fusion and category-indexer gaps remain
+separate work; this follow-up does not claim all of #71/#75/#83 complete.
+
+Validation: 356 runtime library tests pass, including 15 recovery/retention/date
+regressions. The connected real-node runtime/CLI test passes; strict CLI Clippy,
+Rust formatting and the architecture boundary check pass. Remote platform
+packages and security scans remain independent checks on the pushed revision.

@@ -73,7 +73,7 @@ struct Retained {
 }
 
 /// Dense, bounded, authoritative height/hash storage for one accepted chain.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RetainedHeaders {
     by_height: BTreeMap<u32, Retained>,
     by_hash: HashMap<Hash32, u32>,
