@@ -922,3 +922,16 @@ frontend checks, and the architecture boundary check pass locally. The core
 WASM was rebuilt and freshness-checked; all 21 connector/BCH VM tests pass.
 This resolves the source errors seen in desktop, iOS, Android and architecture
 jobs; complete packaged-platform validation remains a remote CI requirement.
+
+The dependency-audit and supply-chain gates also found
+[GHSA-rvm3-566m-v7fv](https://github.com/advisories/GHSA-rvm3-566m-v7fv) in the
+inherited Capacitor Android/iOS 7.4.2 dependencies. Android, iOS, core and CLI now
+resolve to the patched 7.6.9 release. The Android Gradle compatibility patch was
+regenerated for that release, retaining the existing settings and omitting old
+generated build-cache entries. A clean locked install applies all patches;
+the production dependency audit reports zero vulnerabilities. Dependency and
+direct-license policy, core TypeScript typecheck, production web build and all
+six security tests pass locally. Existing development-only audit and transitive
+license-metadata warnings remain visible; no audit threshold or gate changed.
+Android/iOS package and device evidence still depends on their respective CI
+jobs, and the SDK PR #2 remains unmerged at this validation point.
