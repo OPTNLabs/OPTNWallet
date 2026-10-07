@@ -901,3 +901,13 @@ on HTTP success or timeout; there is no automatic cancellation/pruning, and the
 outbox is capped at 256 records / 8 MiB. Server receipts are reported as claims,
 not chain confirmation. The earlier shared outbox/reconciliation gap remains open
 for those other surfaces and retirement behavior.
+
+PR #105 continuation: the initial Linux desktop jobs failed while fetching
+deleted AppImage plugin assets, before compiling wallet code. Both architectures
+now pin the versioned upstream `1-alpha-20250213-1` release rather than assets
+from its replaceable continuous release. Both downloaded binaries match the
+committed SHA256 values, and all 52 release-workflow regression tests pass.
+The checksum enforcement and full package matrix remain intact. This is the
+same packaging repair already proposed independently in
+PR #103; it does not import that PR's wallet-sync changes. Full remote builds and
+security gates must pass for the new head before readiness is reported.
