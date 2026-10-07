@@ -6,6 +6,13 @@
   "baseline_fixed_advisories": ["GHSA-grv7-fg5c-xmjg"],
   "patch_url": "https://github.com/micromatch/braces/pull/78",
   "patch_commit": "97308a01d091b211cf015314a2d0696da28a5392",
+  "local_deviations": [
+    {
+      "file": "lib/compile.js",
+      "removed_statement": "console.log('node.isClose', prefix, node.value);",
+      "reason": "Avoid stdout output when compiling closing AST nodes; preserve return values and security guards."
+    }
+  ],
   "upstream_sha256": {
     "index.js": "332ea07c7b006361aad12aa994ca75dc1db8e8382b884909e2f38f10b85c88a4",
     "LICENSE": "35bdd8a44339719441900fb50fbefc5e2dca1ca662cbaed7a687de842c8b70f2",
