@@ -69,6 +69,30 @@ jobs:
           echo "Dependency graph: $status (HTTP ${code})"
           echo "status=$status" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Require complete dependency snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Dependency review can return success when GitHub has only indexed
+          # the base graph. Treat a missing PR-head snapshot as incomplete.
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          headers="$(mktemp)"
+          trap 'rm -f "$headers"' EXIT
+          curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 \
+            --dump-header "$headers" --output /dev/null \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/dependency-graph/compare/$BASE_SHA...$HEAD_SHA?per_page=5"
+          warning="$(awk 'tolower($1) == "x-github-dependency-graph-snapshot-warnings:" { sub(/^[^:]*:[[:space:]]*/, ""); gsub(/\r/, ""); value = $0 } END { print value }' "$headers")"
+          if [[ -n "$warning" ]]; then
+            detail="$(printf '%s' "$warning" | base64 --decode 2>/dev/null || true)"
+            echo "::error::Dependency review lacks a complete base/head snapshot comparison: ${detail:-$warning}"
+            exit 1
+          fi
+          echo "Dependency graph has complete snapshots for the PR base and head."
       - name: Dependency review
         if: steps.dependency-graph.outputs.status == 'enabled'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
