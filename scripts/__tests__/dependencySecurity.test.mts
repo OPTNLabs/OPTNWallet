@@ -5,6 +5,39 @@ import { expect, it } from 'vitest';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
+it('retains the upstream input-length and imbalanced-brace resource bounds', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--max-old-space-size=64',
+      '--eval',
+      `
+        const assert = require('node:assert/strict');
+        const braces = require('braces');
+        // GHSA-grv7-fg5c-xmjg: malformed patterns must not amplify heap usage.
+        // Keep this separate from the newer recursive-walker regression below.
+        const tooLong = '{' + 'a'.repeat(10000);
+        const lengthBounded = error => error instanceof SyntaxError && /exceeds max characters/.test(error.message);
+        for (const operation of [braces, braces.create, braces.parse, braces.compile, braces.expand, braces.stringify]) {
+          assert.throws(() => operation(tooLong), lengthBounded);
+          assert.throws(() => operation(tooLong, { maxLength: Infinity }), lengthBounded);
+        }
+        for (const pattern of [
+          '{'.repeat(99) + 'a'.repeat(9803) + '}'.repeat(98),
+          '{a,'.repeat(99)
+        ]) {
+          assert.equal(braces.compile(pattern), pattern);
+          assert.equal(braces.stringify(pattern), pattern);
+          assert.deepEqual(braces.expand(pattern), [pattern]);
+        }
+      `,
+    ],
+    { cwd: repoRoot, encoding: 'utf8', timeout: 10_000 }
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+});
+
 it('bounds brace patterns and caller-supplied AST recursion before stack exhaustion', () => {
   const result = spawnSync(
     process.execPath,

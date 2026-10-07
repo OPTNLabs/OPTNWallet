@@ -3,6 +3,7 @@
   "version": "3.0.3",
   "integrity": "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==",
   "advisory": "GHSA-vfj7-8cjw-p6xm",
+  "baseline_fixed_advisories": ["GHSA-grv7-fg5c-xmjg"],
   "patch_url": "https://github.com/micromatch/braces/pull/78",
   "patch_commit": "97308a01d091b211cf015314a2d0696da28a5392",
   "upstream_sha256": {
