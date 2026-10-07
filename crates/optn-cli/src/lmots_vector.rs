@@ -34,7 +34,7 @@ mod quantumroot_vector {
     }
 
     fn unhex(s: &str) -> Vec<u8> {
-        assert!(s.len() % 2 == 0, "hex must be even length");
+        assert!(s.len().is_multiple_of(2), "hex must be even length");
         (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("valid hex"))

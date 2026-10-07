@@ -6,7 +6,7 @@ authors = ["OPTNLabs"]
 license = "GPL-3.0-only"
 repository = "https://github.com/OPTNLabs/OPTNWallet"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.93"
 
 [[bin]]
 name = "optn"
@@ -20,6 +20,7 @@ path = "src/main.rs"
 # Versions are pinned to match src-tauri/Cargo.toml so the two trees resolve to
 # the same dependency versions and the audit baseline stays meaningful.
 [dependencies]
+optn-x402 = { path = "../optn-x402", version = "=1.7.3" }
 optn-core = { path = "../optn-core", version = "=1.7.3" }
 optn-app = { path = "../optn-app", version = "=1.7.3" }
 optn-ui-text = { path = "../optn-ui-text", version = "=1.7.3" }
@@ -45,8 +46,9 @@ ripemd = "0.1"
 hmac = "0.12"
 # Same version src-tauri pins. ECDSA over secp256k1 in pure Rust, so it crosses.
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
-# BIP32 with the pure-Rust k256 backend — the same curve crate src-tauri
-# already uses. A C-backed secp256k1 would not cross-compile to riscv64.
+# BIP32 with the pure-Rust k256 backend — the same curve crate src-tauri uses.
+# The separate x402 SDK also brings libsecp256k1; CI's target C toolchains
+# compile it alongside ring for the RISC-V and ARM cross-builds.
 bip32 = { version = "0.5", default-features = false, features = ["alloc", "secp256k1", "std"] }
 # Mnemonics come from rust-bitcoin's bip39, not bip32's built-in one. bip32
 # checks `entropy.len() != KEY_SIZE + 1`, which accepts 24-word phrases and
@@ -80,7 +82,7 @@ keyring = { version = "3", default-features = false, features = [
   "linux-native",
 ] }
 
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json", "socks"] }
 
 [dev-dependencies]
 optn-platform = { path = "../optn-platform", version = "=1.7.3" }

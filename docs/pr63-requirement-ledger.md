@@ -853,3 +853,51 @@ freshness-checked. Checkpoint test nonces use OS randomness and missing biometri
 credentials are explicitly refused with regression coverage. Remote scans and
 platform builds must still succeed for the pushed revision; no security alerts
 were dismissed in this continuation.
+
+### 2026-10-07: x402 BCH Rust SDK integration draft on dev
+
+The `feat/cli-x402-bch-sdk` branch starts at merged `dev` revision
+`c45be9b70a87198a08fea2c0ad1dc79b8c812d39`. It depends on
+[OPTNLabs/x402-bch#2](https://github.com/OPTNLabs/x402-bch/pull/2), currently pinned
+to its immutable source revision `a6e50946f95ce6e65bb3d08071eb49584786fba9`.
+Merge the SDK PR first, move the dependency and locks to the upstream merged
+revision, then complete review/checks before merging this wallet PR into `dev`.
+
+For #71/#83, protocol encoding sits in `optn-x402`; native HTTP sits in the CLI;
+shared runtime owns authorization, HD change, signing, bounded durable outbox and
+input reservations. The same reconciled spendable-coin extractor now serves the
+native GUI and this runtime flow. Signed transaction import receives independent
+core signature/value validation and SDK verification. Raw signed bytes never enter
+the renderer/add-on `WireState`. For #75, chain data comes from shared selected
+sources; SDK source access is an immutable snapshot, and merchant HTTP uses the
+existing outbound/Tor policy without redirects or implicit proxy/public fallback.
+
+Windows local evidence: 979 shared core/application/runtime/transport tests,
+149 CLI tests (two opt-in live/credential-store tests ignored), three SDK tests,
+and two native storage tests pass. The CLI test covers a lost HTTP response,
+identical-byte retry, held-input refusal, changed quote refusal and signed import.
+Four runtime tests cover encrypted restart, CAS/storage failure, signature/fee
+validation, watch-only import and legacy-wallet refusal. Windows CLI binaries
+reserve a 4 MiB stack to prevent the debug HTTP/signing flow overflowing the
+default 1 MiB stack; the complete CLI suite passes in a fresh build directory.
+
+Strict Clippy passes for affected shared crates, CLI, SDK adapter and desktop
+library. Rust formatting, architecture, TypeScript core typecheck/lint,
+dependency policy, six security tests, addon validation, 21 connector tests and
+the generated WASM rebuild/freshness checks pass. Repository formatting passes
+after normalizing this Windows checkout to the committed LF line endings.
+The broader core suite has 1,928 passing tests; its one Windows Bash process
+timeout in the unchanged release-assembly fixture passes on a focused rerun.
+All 49 UI tests pass. The lockfile fixture now covers the new SDK adapter.
+Remote scans and packaged/cross-target CI remain pending. This draft is not
+merge-ready and includes no live-network or mainnet spend proof.
+
+The scope is native BCH from runtime-managed HD saved wallets, plus finalized
+P2PKH import (including watch-only). Migrated desktop wallets, token/RPA/contract/
+multisig spending and the common lifecycle for other signing commands remain
+unfinished. Legacy CLI signing is refused after this outbox exists, and a CLI
+session lease serializes access to that wallet directory. Reservations never expire
+on HTTP success or timeout; there is no automatic cancellation/pruning, and the
+outbox is capped at 256 records / 8 MiB. Server receipts are reported as claims,
+not chain confirmation. The earlier shared outbox/reconciliation gap remains open
+for those other surfaces and retirement behavior.
