@@ -149,6 +149,7 @@ enum Fault {
     WrongCheckpoint,
     WrongSibling,
     WrongProofHeader,
+    WrongProofAndOtherTip,
     EmptyTail,
     WrongTailHeight,
     UnlinkedTail,
@@ -350,7 +351,7 @@ impl ChainBackend for Peer {
                     if fault == Fault::WrongRoot {
                         root[0] ^= 1;
                     }
-                    if fault == Fault::WrongSibling {
+                    if matches!(fault, Fault::WrongSibling | Fault::WrongProofAndOtherTip) {
                         siblings[0][0] ^= 1;
                     }
                     if fault == Fault::WrongProofHeader {
@@ -385,7 +386,7 @@ impl ChainBackend for Peer {
                         match fault {
                             Fault::EmptyTail => headers.clear(),
                             Fault::UnlinkedTail => headers[0][4] ^= 1,
-                            Fault::OtherTip => {
+                            Fault::OtherTip | Fault::WrongProofAndOtherTip => {
                                 headers[0][36] ^= 1;
                                 headers[0] = mine(headers[0]).0;
                             }
@@ -483,7 +484,7 @@ fn scope(floor: u32) -> RefreshScope {
 }
 
 fn snapshot(store: &SharedHeaders) -> RetainedHeaders {
-    store.write(|retained| retained.clone())
+    store.read(|retained| retained.clone())
 }
 
 async fn accepted_refresh(
@@ -744,16 +745,10 @@ async fn pruning_requires_a_proven_still_allowed_exact_route_and_neutrino_keeps_
 }
 
 #[tokio::test]
-async fn malformed_proof_fields_roots_and_branches_never_publish_or_accept_a_wallet() {
+async fn malformed_proof_request_bindings_never_publish_or_accept_a_wallet() {
     let fixture = Fixture::new();
     for protocol in PROTOCOLS {
-        for fault in [
-            Fault::WrongRoot,
-            Fault::WrongHeight,
-            Fault::WrongCheckpoint,
-            Fault::WrongSibling,
-            Fault::WrongProofHeader,
-        ] {
+        for fault in [Fault::WrongHeight, Fault::WrongCheckpoint] {
             let store = fixture.store([0]);
             let before = snapshot(&store);
             let (mut service, peer) = fixture.service(protocol, true, store.clone());
@@ -842,10 +837,16 @@ async fn peers_without_shv_replay_from_genesis_and_keep_compatibility_hashes() {
 }
 
 #[tokio::test]
-async fn optional_proof_unsupported_or_timeout_falls_back_on_the_same_ordinary_route() {
+async fn unavailable_or_invalid_proof_replays_independently_on_the_same_route() {
     let fixture = Fixture::new();
     for protocol in PROTOCOLS {
-        for fault in [Fault::Unsupported, Fault::Timeout] {
+        for fault in [
+            Fault::Unsupported,
+            Fault::Timeout,
+            Fault::WrongRoot,
+            Fault::WrongSibling,
+            Fault::WrongProofHeader,
+        ] {
             let store = fixture.store([0]);
             let before = snapshot(&store);
             let (mut service, peer) = fixture.service(protocol, true, store.clone());
@@ -880,6 +881,52 @@ async fn optional_proof_unsupported_or_timeout_falls_back_on_the_same_ordinary_r
 }
 
 #[tokio::test]
+async fn invalid_proof_fallback_still_rejects_wrong_commitment_revocation_and_store_change() {
+    let fixture = Fixture::new();
+    for protocol in PROTOCOLS {
+        let store = fixture.store([TIP]);
+        let before = snapshot(&store);
+        let (mut service, peer) = fixture.service(protocol, true, store.clone());
+        peer.fail_with(Fault::WrongProofAndOtherTip);
+        let mut worker = fixture.worker(&store);
+        refused_refresh(&mut worker, &mut service, &peer, FLOOR, &before).await;
+        assert!(peer.requests().iter().any(|r| matches!(
+            r,
+            ChainRequest::HeaderSyncFromLocator {
+                start_height: 1,
+                ..
+            }
+        )));
+        assert!(worker
+            .reconciliation()
+            .sync
+            .degraded_reason
+            .as_ref()
+            .unwrap()
+            .contains("CommitmentMismatch"));
+
+        for revoke in [false, true] {
+            let store = fixture.store([TIP]);
+            let mut expected = snapshot(&store);
+            let (mut service, peer) = fixture.service(protocol, true, store.clone());
+            peer.fail_with(Fault::WrongSibling);
+            *peer.interrupt.lock().unwrap() = Some(Interrupt {
+                at: InterruptAt::Proof,
+                revoke: revoke.then(|| service.revocation()),
+            });
+            if !revoke {
+                expected.drop_headers_below(TIP + 1);
+            }
+            let mut worker = fixture.worker(&store);
+            refused_refresh(&mut worker, &mut service, &peer, FLOOR, &expected).await;
+            if revoke {
+                assert_eq!(peer.requests().len(), 1, "revocation must not start replay");
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn selected_source_bans_and_endpoint_scoping_never_borrow_another_peers_proof() {
     let fixture = Fixture::new();
     for protocol in PROTOCOLS {
@@ -902,8 +949,13 @@ async fn selected_source_bans_and_endpoint_scoping_never_borrow_another_peers_pr
                 assert!(peer.requests().is_empty());
             } else if shv {
                 peer.fail_with(Fault::WrongRoot);
-                refused_refresh(&mut worker, &mut service, &peer, FLOOR, &before).await;
-                assert_eq!(peer.requests().len(), 1);
+                let route = accepted_refresh(&fixture, &mut worker, &mut service, FLOOR).await;
+                assert_eq!(route.endpoint.as_ref(), Some(&peer.endpoint));
+                assert!(worker.proven_shv_route.is_none());
+                assert_eq!(
+                    peer.requests().len(),
+                    expected_requests(&fixture, 0, false, FLOOR).len() + 1
+                );
             } else {
                 // Even an allowed SHV endpoint belonging to this same source
                 // cannot provide a proof for the chosen non-SHV wallet route.
@@ -1107,14 +1159,14 @@ async fn ordinary_publication_rechecks_revocation_and_stages_every_insert() {
                 assert_ne!(sha256d(&fork.0), advanced.hash(TIP + 2));
                 store.write(|retained| retained.insert_hash_only(TIP + 2, sha256d(&fork.0)));
             }
-            let before = snapshot(&store);
+            let (revision, before) = store.snapshot(Clone::clone);
             if !conflict {
                 // Exercise cancellation after acquisition/verification, beyond
                 // ChainService's post-response check, without timing or sleeps.
                 service.revocation().revoke();
             }
             assert!(worker
-                .publish_headers(candidate_view, staged, Some(&before), &service)
+                .publish_headers(candidate_view, staged, Some(&revision), &service)
                 .is_err());
             assert_eq!(snapshot(&store), before);
             assert!(store.hash_at(TIP + 1).is_none());

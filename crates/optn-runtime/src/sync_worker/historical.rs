@@ -41,8 +41,8 @@ impl ProgressiveSyncWorker {
         if start > target || target - start >= MAX_HISTORICAL_REPLAY_HEADERS {
             return Err(ProgressiveSyncError::HeaderSafetyLimit);
         }
-        let snapshot = store.write(|retained| retained.clone());
-        if snapshot.tip().is_some_and(|(height, hash)| {
+        let (snapshot, accepted_tip) = store.snapshot(RetainedHeaders::tip);
+        if accepted_tip.is_some_and(|(height, hash)| {
             height > target || (height == target && hash != target_hash)
         }) {
             return Err(ProgressiveSyncError::HeaderRecovery(
@@ -93,10 +93,17 @@ impl ProgressiveSyncWorker {
             proof: siblings,
             target: root,
         };
-        view.accept_historical_proof(view.network(), &proof)
-            .map_err(ProgressiveSyncError::HeaderView)?;
+        if let Err(error) = view.accept_historical_proof(view.network(), &proof) {
+            if service.revocation().is_revoked() {
+                return Err(ProgressiveSyncError::HeaderView(error));
+            }
+            // Discard the entire untrusted proof. Only a fresh, bounded replay
+            // from genesis to our existing commitment may recover this route;
+            // the bad proof grants neither trust nor hash-pruning authority.
+            return Ok(false);
+        }
 
-        let mut staged = snapshot.clone();
+        let mut staged = RetainedHeaders::new();
         insert_recovered(&mut staged, start, proof.header)?;
         let mut next = start
             .checked_add(1)
@@ -145,19 +152,26 @@ impl ProgressiveSyncWorker {
                 "proof-backed history does not end at the accepted tip".into(),
             ));
         }
-        staged
-            .range_inclusive(start, target)
-            .map_err(ProgressiveSyncError::HeaderStore)?;
+        if !staged.covers_range(start, target) {
+            return Err(ProgressiveSyncError::InvalidHeaderRange);
+        }
         let revocation = service.revocation();
-        store.write(|retained| {
-            if revocation.is_revoked() || *retained != snapshot {
-                return Err(ProgressiveSyncError::HeaderRecovery(
-                    "accepted headers or source changed during proof recovery".into(),
-                ));
-            }
-            *retained = staged;
-            Ok(())
-        })?;
+        store
+            .write_if_current(&snapshot, |retained| {
+                if revocation.is_revoked() {
+                    return Err(ProgressiveSyncError::HeaderRecovery(
+                        "accepted headers or source changed during proof recovery".into(),
+                    ));
+                }
+                retained
+                    .merge_verified(staged, || !revocation.is_revoked())
+                    .map_err(ProgressiveSyncError::HeaderStore)
+            })
+            .ok_or_else(|| {
+                ProgressiveSyncError::HeaderRecovery(
+                    "accepted headers changed during proof recovery".into(),
+                )
+            })??;
         self.proven_shv_route = Some(wallet_route.clone());
         Ok(true)
     }

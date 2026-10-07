@@ -11,7 +11,9 @@ use crate::chain_service::{
     ChainTip, ObservedTransaction, WalletInterest,
 };
 use crate::header_recovery::{AcceptedCommitment, HistoricalReplay, ReplayBudget, ReplayStep};
-use crate::header_store::{BlockHeaderSource, HeaderStoreError, RetainedHeaders, SharedHeaders};
+#[cfg(test)]
+use crate::header_store::BlockHeaderSource;
+use crate::header_store::{HeaderStoreError, HeaderStoreRevision, RetainedHeaders, SharedHeaders};
 use crate::header_verifier::{shipped_header_verifier, ShvMmrError, ShvMmrHeaderVerifier};
 use crate::header_view::{HeaderViewError, VerifiedHeaderView};
 use crate::reconciliation::{evidence_strength, ReconciliationDecision, ReconciliationState};
@@ -719,10 +721,13 @@ impl ProgressiveSyncWorker {
         let snapshot = self
             .accepted
             .as_ref()
-            .map(|store| store.write(|retained| retained.clone()));
-        if let Some(retained) = &snapshot {
-            historical::reauthenticate_time_windows(&mut view, retained)?;
-        }
+            .map(|store| {
+                let (revision, result) = store.snapshot(|retained| {
+                    historical::reauthenticate_time_windows(&mut view, retained)
+                });
+                result.map(|()| revision)
+            })
+            .transpose()?;
         let header_route = service
             .routes_for_operation(ChainOperation::HeaderSync)
             .into_iter()
@@ -815,7 +820,7 @@ impl ProgressiveSyncWorker {
         &mut self,
         view: VerifiedHeaderView,
         staged: Vec<(u32, BlockHeaderBytes)>,
-        snapshot: Option<&RetainedHeaders>,
+        snapshot: Option<&HeaderStoreRevision>,
         service: &ChainService,
     ) -> Result<(), ProgressiveSyncError> {
         if service.revocation().is_revoked() {
@@ -827,19 +832,26 @@ impl ProgressiveSyncWorker {
             let snapshot = snapshot.ok_or_else(|| {
                 ProgressiveSyncError::HeaderRecovery("missing accepted-store snapshot".into())
             })?;
-            let mut candidate = snapshot.clone();
+            let mut candidate = RetainedHeaders::new();
             for (height, header) in staged {
                 historical::insert_recovered(&mut candidate, height, header)?;
             }
-            store.write(|retained| {
-                if service.revocation().is_revoked() || retained != snapshot {
-                    return Err(ProgressiveSyncError::HeaderRecovery(
-                        "accepted headers or source changed during header acquisition".into(),
-                    ));
-                }
-                *retained = candidate;
-                Ok(())
-            })?;
+            store
+                .write_if_current(snapshot, |retained| {
+                    if service.revocation().is_revoked() {
+                        return Err(ProgressiveSyncError::HeaderRecovery(
+                            "accepted headers or source changed during header acquisition".into(),
+                        ));
+                    }
+                    retained
+                        .merge_verified(candidate, || !service.revocation().is_revoked())
+                        .map_err(ProgressiveSyncError::HeaderStore)
+                })
+                .ok_or_else(|| {
+                    ProgressiveSyncError::HeaderRecovery(
+                        "accepted headers changed during header acquisition".into(),
+                    )
+                })??;
         }
         self.header_view = Some(view);
         Ok(())
@@ -890,14 +902,17 @@ impl ProgressiveSyncWorker {
         } else {
             0
         };
-        if store.range_inclusive(start, target.height).is_ok()
-            && store.hash_at(target.height) == Some(target_hash)
-            && (floor.is_some()
-                || !store.write(|retained| historical::missing_time_windows(&view, retained)))
-        {
+        if store.read(|retained| {
+            retained.covers_range(start, target.height)
+                && retained.hash_at(target.height) == Some(target_hash)
+                && (floor.is_some() || !historical::missing_time_windows(&view, retained))
+        }) {
             return Ok(());
         }
 
+        // Keep the fallback bound to the store that existed before the proof
+        // attempt too. A failed proof cannot hide an intervening store write.
+        let (snapshot, accepted_genesis) = store.snapshot(|retained| retained.hash_at(0));
         if self
             .restore_with_shv(service, wallet_route, &view, &store, start)
             .await?
@@ -961,13 +976,12 @@ impl ProgressiveSyncWorker {
                 ProgressiveSyncError::HeaderRecovery("missing shipped genesis header".into())
             })?;
         let genesis_hash = sha256d(&genesis.0);
-        let snapshot = store.write(|retained| retained.clone());
-        if snapshot.hash_at(0).is_some_and(|hash| hash != genesis_hash) {
+        if accepted_genesis.is_some_and(|hash| hash != genesis_hash) {
             return Err(ProgressiveSyncError::HeaderRecovery(
                 "accepted store has a different network genesis".into(),
             ));
         }
-        let mut staged = snapshot.clone();
+        let mut staged = RetainedHeaders::new();
         staged
             .insert_verified(0, genesis.clone())
             .map_err(ProgressiveSyncError::HeaderStore)?;
@@ -989,10 +1003,9 @@ impl ProgressiveSyncWorker {
             max_batches,
         )
         .await?;
-        staged
-            .range_inclusive(0, target.height)
-            .map_err(ProgressiveSyncError::HeaderStore)?;
-        if staged.hash_at(target.height) != Some(target_hash) {
+        if !staged.covers_range(0, target.height)
+            || staged.hash_at(target.height) != Some(target_hash)
+        {
             return Err(ProgressiveSyncError::HeaderRecovery(
                 "staged headers do not end at the restored tip".into(),
             ));
@@ -1001,15 +1014,22 @@ impl ProgressiveSyncWorker {
         // No accepted-store reader can observe a replay batch. Commit the
         // complete authenticated candidate under one write lock, and refuse
         // to overwrite a concurrent runtime update made while replay ran.
-        store.write(|retained| {
-            if *retained != snapshot || service.revocation().is_revoked() {
-                return Err(ProgressiveSyncError::HeaderRecovery(
+        store
+            .write_if_current(&snapshot, |retained| {
+                if service.revocation().is_revoked() {
+                    return Err(ProgressiveSyncError::HeaderRecovery(
+                        "accepted store changed during historical replay".into(),
+                    ));
+                }
+                retained
+                    .merge_verified(staged, || !service.revocation().is_revoked())
+                    .map_err(ProgressiveSyncError::HeaderStore)
+            })
+            .ok_or_else(|| {
+                ProgressiveSyncError::HeaderRecovery(
                     "accepted store changed during historical replay".into(),
-                ));
-            }
-            *retained = staged;
-            Ok(())
-        })
+                )
+            })?
     }
 
     async fn replay_headers_into_store(
@@ -1081,9 +1101,9 @@ impl ProgressiveSyncWorker {
             match step {
                 ReplayStep::NeedHeaders { from_height } if from_height > start => {}
                 ReplayStep::Authenticated { .. } => {
-                    store
-                        .range_inclusive(0, target_height)
-                        .map_err(ProgressiveSyncError::HeaderStore)?;
+                    if !store.covers_range(0, target_height) {
+                        return Err(ProgressiveSyncError::InvalidHeaderRange);
+                    }
                     return Ok(());
                 }
                 ReplayStep::NeedHeaders { .. } => {

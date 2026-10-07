@@ -571,7 +571,11 @@ requests a historical proof on the selected wallet route, verifies it against
 the runtime's saved MMR commitment, and privately rebuilds the linked range up
 to the accepted tip. Only a complete, unchanged-source/store result is published.
 An unsupported or timed-out optional SHV request uses the same peer's existing
-authenticated genesis replay. Malformed proofs do not authorize that shortcut.
+authenticated genesis replay. A structurally valid proof that fails cryptographic
+verification is discarded and takes that same replay path. Replay must still
+reach the already accepted MMR commitment; the failed proof grants no trust or
+hash-pruning authority. Wrong heights/checkpoints, malformed proof structure and
+invalid linked tails remain hard failures.
 
 Pruning runs after the actor accepts the wallet checkpoint. The default recent
 window is 2,016 headers. Ordinary BIP37 and Neutrino keep earlier locator/filter
@@ -602,7 +606,8 @@ tracked source files found only line-ending and executable-mode differences;
 the historical cause of its dirty suffix is not established. This is source
 comparison and executable identification, not a reproducible-build attestation.
 
-`crates/optn-cli/tests/shv_regtest.rs` passed against those peers. It uses a
+`crates/optn-cli/tests/shv_regtest.rs` passed against those peers, including a
+rerun after the review fixes below. It uses a
 randomly protected encrypted watch-only record for the published BIP39 fixture,
 never a normal wallet profile. It verifies:
 
@@ -635,8 +640,20 @@ cargo test --manifest-path crates/optn-cli/Cargo.toml --test shv_regtest --locke
 Deterministic worker regressions additionally cover invalid proof roots,
 heights, checkpoints and paths; broken/empty tails; same-source fallback;
 source bans; revoked requests; concurrent store mutations; unchanged-tip date
-recovery; and invalid restored medians. Normal header publication has the same
-snapshot/revocation guard as historical recovery and stages all insertions.
+recovery; and invalid restored medians. Invalid-proof fallback is tested for
+both BIP37 and Neutrino, including replay that ends at the wrong commitment and
+revocation or store mutation during the failed proof request.
+
+Normal header publication and both recovery paths now capture a store revision
+and stage only incoming headers, without cloning or comparing the entire
+accepted history. Publication checks the revision under the write lock, validates
+the whole batch and both retained boundaries, and rechecks revocation before any
+insertion. Every write invalidates the revision, including pruning, rewinds and
+whole-store replacement; replacing identical contents cannot revive an old
+revision. Empty batches still check publication permission. Tests cover late
+conflicts leaving all accepted entries unchanged and preservation of unrelated
+history and the chain generation. These changes passed all 361 runtime library
+tests and strict runtime/CLI Clippy. This is not a mainnet-scale memory benchmark.
 
 This is live local-node runtime and CLI evidence. It is not a new packaged GUI,
 mobile, Tor, public Chipnet or mainnet run, nor automatic wallet reorg recovery.

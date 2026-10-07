@@ -860,8 +860,12 @@ The follow-up based on merged `dev` at `c45be9b7` connects historical proof
 requests to normal shared wallet refresh. Proofs bind to the runtime's existing
 MMR commitment and selected route; recovered linked ranges remain private until
 the complete range reaches the accepted tip and the source/store guards pass.
-An optional SHV timeout/refusal preserves ordinary same-peer replay. Invalid
-proofs cannot promote wallet evidence or expand source policy.
+An optional SHV timeout/refusal preserves ordinary same-peer replay. A
+structurally valid proof that fails cryptographic verification is discarded and
+also falls back to authenticated replay against the existing MMR commitment.
+Wrong heights/checkpoints, malformed structure and invalid tails still fail.
+Invalid proofs cannot promote wallet evidence, grant pruning authority or expand
+source policy.
 
 Accepted wallet checkpoint publication now triggers retention: a recent 2,016
 raw-header window by default, with older compatibility hashes retained unless
@@ -870,6 +874,13 @@ needed for filter-header reconstruction. Ordinary header updates also refuse
 concurrent store changes and conflicting previously accepted heights. Restored
 date anchors are reauthenticated from their raw header windows before resolving
 a birthday; hash-only history cannot substitute for timestamp evidence.
+
+Review fixes remove full accepted-store clones from normal refresh and recovery.
+A write-locked revision check guards publication; only incoming headers are
+staged, with whole-batch conflict/link checks and a final revocation check before
+insertion. Pruning, rewinds, empty publications and whole-store replacement all
+invalidate the prior revision. Existing chain generation and unrelated entries
+remain intact.
 
 Live evidence in `docs/chain-interop-evidence.md` and the opt-in
 `optn-cli/tests/shv_regtest.rs` covers two peered local BCHN nodes, encrypted HD
@@ -882,7 +893,8 @@ automatic wallet reorg recovery are not established by this fixture. The broader
 RPA/contract union, durable outbox, Fusion and category-indexer gaps remain
 separate work; this follow-up does not claim all of #71/#75/#83 complete.
 
-Validation: 356 runtime library tests pass, including 15 recovery/retention/date
-regressions. The connected real-node runtime/CLI test passes; strict CLI Clippy,
+Validation: 361 runtime library tests pass, including 16 recovery/retention/date
+regressions and four new store publication tests. The connected real-node
+runtime/CLI test passes after the review fixes; strict runtime and CLI Clippy,
 Rust formatting and the architecture boundary check pass. Remote platform
 packages and security scans remain independent checks on the pushed revision.
