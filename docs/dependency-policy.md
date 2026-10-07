@@ -53,6 +53,15 @@ Axios starts at 1.20.0 for its request-option security fixes; the serializer
 starts at 7.1.2 for the function-body script-escaping fix. The dependency security
 regressions exercise inherited HTTP methods and script-closing tags without
 contacting a server.
+The build-only `braces` dependency is a reviewed local fork while upstream has
+no release fixing GHSA-vfj7-8cjw-p6xm. See
+[`vendor/braces/README.md`](../vendor/braces/README.md) for exact provenance,
+the mandatory depth guards and the upstream replacement condition. Its explicit
+private package name/version must not be mistaken for an upstream release.
+Registry auditing does not certify vendored source: the dependency audit job
+also requires adversarial and glob-consumer regressions. Both dependency graphs
+must resolve all `braces` consumers to that patched source. No audit advisory is
+excluded, and wallet logic is not added to this build dependency.
 The hardware codec test checks BCH address requests and 64-bit transaction
 amounts without connecting to a device. Audit both lockfiles after changing
 these pins; a clean npm audit does not validate `yarn.lock`.
@@ -78,7 +87,9 @@ these pins; a clean npm audit does not validate `yarn.lock`.
    integrity metadata.
 2. Keep direct specs reviewable; do not use `latest`, wildcard, URL, or Git
    references in `package.json`. An in-tree `file:vendor/...` pin is allowed
-   when npm does not publish the required MLS-extensions-draft APIs.
+   for the required MLS-extensions-draft APIs or a documented security backport
+   with no fixed upstream release. Preserve the upstream license and source
+   provenance, test the actual fix, and record when to remove the local fork.
 3. Put runtime packages in `dependencies` and test/build-only packages in
    `devDependencies`.
 4. For crypto, wallet transport, transaction, and native packages, include a
