@@ -911,3 +911,14 @@ The checksum enforcement and full package matrix remain intact. This is the
 same packaging repair already proposed independently in
 PR #103; it does not import that PR's wallet-sync changes. Full remote builds and
 security gates must pass for the new head before readiness is reported.
+
+The next PR #105 CI run exposed a standalone-core Clippy error and missing
+`ExternalPayment` handling in the Leptos coin row. Hex decoding now uses typed
+two-byte chunks after its existing even-length guard. The coin row labels
+payment reservations and consults the shared `is_user_reversible` policy before
+offering unfreeze. The policy regression includes external-payment holds.
+All 438 core tests, strict standalone-core Clippy, both browser and Tauri WASM
+frontend checks, and the architecture boundary check pass locally. The core
+WASM was rebuilt and freshness-checked; all 21 connector/BCH VM tests pass.
+This resolves the source errors seen in desktop, iOS, Android and architecture
+jobs; complete packaged-platform validation remains a remote CI requirement.

@@ -854,6 +854,7 @@ mod tests {
             FreezeReason::FlipstarterPledge,
             FreezeReason::Authhead,
             FreezeReason::FusionInFlight,
+            FreezeReason::ExternalPayment,
         ] {
             assert!(!held.is_user_reversible(), "{held:?}");
             // And each stays distinguishable, so releasing one never releases
