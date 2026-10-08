@@ -24,6 +24,7 @@ pub mod platform;
 #[cfg(mobile)]
 pub mod platform_mobile;
 pub mod spv;
+mod token_images;
 mod wallet_security;
 mod wallet_spend;
 
@@ -1334,6 +1335,7 @@ pub fn run() {
             wallet_spend::optn_wallet_send,
             wallet_spend::optn_wallet_broadcast,
             app_transport::optn_app_snapshot,
+            token_images::optn_token_image,
             app_transport::optn_wallet_refresh,
             app_transport::optn_wallet_rescan,
             app_transport::optn_wallet_security,

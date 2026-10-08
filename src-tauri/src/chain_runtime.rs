@@ -230,7 +230,7 @@ fn shipped_header_verifier(network: Network) -> Result<ShvMmrHeaderVerifier, Str
 /// Process-owned chain stack. Old routes are retired before replacement probes;
 /// a policy change during probing cancels that build before publication.
 pub struct NativeChainRuntime {
-    owner: AppRuntime,
+    pub(crate) owner: AppRuntime,
     stack: RwLock<Option<InstalledStack>>,
     wallet_refresh: WalletRefresh,
     generation: AtomicU64,

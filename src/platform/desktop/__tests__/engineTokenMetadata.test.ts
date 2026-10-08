@@ -69,10 +69,72 @@ describe('authenticated desktop metadata adapter', () => {
       uris: identity.presentation!.uris,
       token: { category, nfts: identity.presentation!.nfts },
     });
-    expect(mocks.invoke.mock.calls).toEqual([
+    // The read itself is exactly these two calls; an image follows on its own.
+    expect(mocks.invoke.mock.calls.slice(0, 2)).toEqual([
       ['optn_app_snapshot'],
       ['optn_wallet_security', { request: { command: 'status' } }],
     ]);
+  });
+
+  it('shows a host-fetched image once it arrives, and only an image', async () => {
+    const pngCategory = 'cd'.repeat(32);
+    const snapshot = {
+      version: 1,
+      wallet: {},
+      network: 'chipnet',
+      unlock_epoch: 7,
+      token_identities: { [pngCategory]: identity },
+    };
+    const image = 'data:image/png;base64,iVBORw0KGgo=';
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'optn_app_snapshot') return snapshot;
+      if (command === 'optn_wallet_security') return { active: 'test.optn', epoch: 7 };
+      if (command === 'optn_token_image') return image;
+      throw new Error(`unexpected ${command}`);
+    });
+    const first = (await readEngineTokenMetadata(1, 'chipnet', [pngCategory]))!;
+    expect(first[pngCategory].name).toBe(identity.name);
+    expect(first[pngCategory].iconUri).toBeNull();
+    expect(mocks.invoke).toHaveBeenCalledWith('optn_token_image', {
+      category: pngCategory,
+      uri: identity.presentation!.uris.icon,
+    });
+    await vi.waitFor(async () => {
+      const next = (await readEngineTokenMetadata(1, 'chipnet', [pngCategory]))!;
+      expect(resolveTokenPresentation(pngCategory, next[pngCategory]).iconUri).toBe(
+        image
+      );
+    });
+    // A runtime identity never shows a remote URI the webview would fetch.
+    expect(
+      resolveTokenPresentation(pngCategory, {
+        ...first[pngCategory],
+        iconUri: 'https://tracker.example/pixel.png',
+      }).iconUri
+    ).toBeNull();
+    mocks.invoke.mockReset();
+  });
+
+  it('keeps names when the image port fails', async () => {
+    const failingCategory = 'ef'.repeat(32);
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'optn_app_snapshot')
+        return {
+          version: 1,
+          wallet: {},
+          network: 'chipnet',
+          unlock_epoch: 7,
+          token_identities: { [failingCategory]: identity },
+        };
+      if (command === 'optn_wallet_security') return { active: 'test.optn', epoch: 7 };
+      throw new Error('image transport unavailable');
+    });
+    const metadata = (await readEngineTokenMetadata(1, 'chipnet', [
+      failingCategory,
+    ]))!;
+    expect(metadata[failingCategory].name).toBe(identity.name);
+    expect(metadata[failingCategory].iconUri).toBeNull();
+    mocks.invoke.mockReset();
   });
 
   it.each([
@@ -120,6 +182,53 @@ describe('authenticated desktop metadata adapter', () => {
     mocks.desktop.mockReturnValue(false);
     expect(await readEngineTokenMetadata(1, 'chipnet', [category])).toBeNull();
     expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [{}, 'Verified'],
+    [{ assurance: 'node-validated' }, 'Verified'],
+    [{ assurance: 'server-reported' }, 'Verified via server'],
+    [{ assurance: 'notarised-by-someone' }, 'Verified'],
+    [{ assurance: 'server-reported', burned: true }, 'Verified via server · final'],
+    [{ burned: true }, 'Verified · final'],
+  ])(
+    'says who vouched for a verified identity: %j',
+    (fields, label) => {
+      const metadata = projectEngineTokenMetadata(category, {
+        ...identity,
+        ...fields,
+      });
+      const presentation = resolveTokenPresentation(category, metadata);
+      expect(presentation.statusLabel).toBe(label);
+      expect(presentation.statusTone).toBe('accent');
+      expect(metadata.identityAssurance).toBe(
+        fields.assurance === 'node-validated' ||
+          fields.assurance === 'server-reported'
+          ? fields.assurance
+          : undefined
+      );
+    }
+  );
+
+  it('never lets assurance or finality decorate a name that is not current', () => {
+    for (const status of ['unpublished', 'unresolved', 'future-status']) {
+      const metadata = projectEngineTokenMetadata(category, {
+        ...identity,
+        status,
+        assurance: 'node-validated',
+        burned: true,
+      });
+      expect(metadata.identityAssurance).toBeUndefined();
+      expect(metadata.identityFinal).toBe(false);
+    }
+    const stale = projectEngineTokenMetadata(category, {
+      ...identity,
+      status: 'stale',
+      assurance: 'server-reported',
+    });
+    expect(resolveTokenPresentation(category, stale).statusLabel).toBe(
+      'Last known'
+    );
   });
 
   it.each(['stale', 'unpublished', 'unresolved', 'future-status'])(

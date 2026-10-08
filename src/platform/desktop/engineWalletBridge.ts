@@ -257,6 +257,9 @@ export type EngineTokenIdentity = {
     uris: Record<string, string>;
     nfts: NftCategory | null;
   };
+  /** `node-validated` | `server-reported`; anything else is not recorded. */
+  assurance?: string;
+  burned?: boolean;
 };
 
 export function projectEngineTokenMetadata(
@@ -270,8 +273,17 @@ export function projectEngineTokenMetadata(
       ? identity.status
       : 'unresolved';
   const known = identityStatus === 'verified' || identityStatus === 'stale';
+  // An assurance this build does not know is not the stronger claim.
+  const identityAssurance =
+    known &&
+    (identity?.assurance === 'node-validated' ||
+      identity?.assurance === 'server-reported')
+      ? identity.assurance
+      : undefined;
   return {
     identityStatus,
+    identityAssurance,
+    identityFinal: known && identity?.burned === true,
     status: 'ready',
     freshness:
       identityStatus === 'verified'
@@ -333,15 +345,65 @@ export async function readEngineTokenMetadata(
     )
       return null;
     return Object.fromEntries(
-      categories.map((category) => [
-        category,
-        projectEngineTokenMetadata(
-          category,
-          snapshot.token_identities?.[category]
-        ),
-      ])
+      categories.map((category) => {
+        const identity = snapshot.token_identities?.[category];
+        const metadata = projectEngineTokenMetadata(category, identity);
+        const uri =
+          metadata.identityStatus === 'verified' ||
+          metadata.identityStatus === 'stale'
+            ? identity?.presentation?.uris?.icon ??
+              identity?.presentation?.uris?.image
+            : undefined;
+        if (uri) metadata.iconUri = engineTokenIcon(network, category, uri);
+        return [category, metadata];
+      })
     );
   } catch {
     return null;
   }
+}
+
+/** A failed image is asked for again after this long, not on every poll. */
+const ICON_RETRY_MS = 5 * 60_000;
+const engineIcons = new Map<string, { url: string | null; at: number }>();
+const engineIconsInflight = new Set<string>();
+
+/**
+ * The host-fetched image for a verified token, if it has arrived.
+ *
+ * The bytes come through the wallet's metadata transport, never the webview,
+ * so the image host learns nothing about this wallet that the wallet's own
+ * policy would not tell it. Fetching starts in the background; until it lands
+ * the token shows its placeholder, and a later read picks the image up.
+ */
+function engineTokenIcon(
+  network: string,
+  category: string,
+  uri: string
+): string | null {
+  const key = `${network}\u0000${category}\u0000${uri}`;
+  const known = engineIcons.get(key);
+  if (known && (known.url || Date.now() - known.at < ICON_RETRY_MS)) {
+    return known.url;
+  }
+  if (!engineIconsInflight.has(key)) {
+    engineIconsInflight.add(key);
+    // Never part of the metadata read: whatever the image does, names show.
+    void Promise.resolve()
+      .then(() => invoke<string | null>('optn_token_image', { category, uri }))
+      .then((url) => {
+        engineIcons.set(key, {
+          url:
+            typeof url === 'string' && url.startsWith('data:image/') ? url : null,
+          at: Date.now(),
+        });
+      })
+      .catch(() => {
+        engineIcons.set(key, { url: null, at: Date.now() });
+      })
+      .finally(() => {
+        engineIconsInflight.delete(key);
+      });
+  }
+  return known?.url ?? null;
 }
