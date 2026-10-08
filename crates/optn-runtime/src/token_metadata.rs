@@ -117,69 +117,149 @@ impl CachedBcmrIdentity {
     }
 
     fn resume(&self, category: [u8; 32]) -> Option<AuthchainResolution> {
-        if self.chain.is_empty() || self.chain.len() > MAX_AUTHCHAIN_HOPS as usize {
-            return None;
-        }
-        let mut walk = AuthchainResolution::for_token_category(category, identity_budget());
-        let mut seen = BTreeSet::new();
-        let mut latest = None;
-        for (index, raw) in self.chain.iter().enumerate() {
-            let txid = optn_core::header_hash::sha256d(raw);
-            if !seen.insert(txid) {
-                return None;
-            }
-            let decoded = optn_core::tx::decode(raw).ok()?;
-            if decoded.outputs.is_empty() {
-                return None;
-            }
-            let transaction = ChainTransaction {
-                txid,
-                inputs: decoded
-                    .inputs
-                    .into_iter()
-                    .map(|(txid, vout, _)| (txid, vout))
-                    .collect(),
-                outputs: decoded
-                    .outputs
-                    .into_iter()
-                    .map(|output| output.script_pubkey)
-                    .collect(),
-                // Cached inclusion height is not live inclusion evidence.
-                block_height: None,
-            };
-            if index == 0 {
-                if txid != walk.current() {
-                    return None;
-                }
-                walk.inspect(&transaction);
-            } else if !matches!(
-                walk.accept(authchain::IdentityStatus::SpentBy(transaction.clone())),
-                AuthchainStep::Query { txid: next } if next == txid
-            ) {
-                return None;
-            }
-            // A burned identity output ends the chain: only the head may carry
-            // one, and nothing follows it.
-            match optn_core::bcmr::identity_output_state(
-                transaction.outputs.first().map(Vec::as_slice),
-            ) {
-                optn_core::bcmr::IdentityOutputState::Live => {}
-                optn_core::bcmr::IdentityOutputState::Burned if index + 1 == self.chain.len() => {}
-                _ => return None,
-            }
-            if let Some(publication) = publication_in(transaction.outputs.iter().map(Vec::as_slice))
-            {
-                latest = Some(publication);
-            }
-        }
+        let (walk, latest) = resume_chain(category, &self.chain)?;
         if let Some(registry) = &self.registry {
             if !latest.as_ref()?.matches(&registry.contents) {
                 return None;
             }
         }
-        // No accept(Unspent) call occurs here: local restoration can only ask
-        // for the cached head, never return Resolved.
         Some(walk)
+    }
+}
+
+/// Rebuild a walk from raw transactions, authbase first, checking every link
+/// locally: the first hashes to the category's authbase, each spends output 0
+/// of the one before, and only the last may be burned. Returns the walk
+/// positioned at the last transaction and the newest publication on the chain.
+///
+/// Nothing here is evidence. The resolver still looks the last transaction up
+/// on the selected route and asks whether its identity output is unspent; the
+/// hash links are what make an earlier hop as good as that live answer.
+fn resume_chain(
+    category: [u8; 32],
+    chain: &[Vec<u8>],
+) -> Option<(AuthchainResolution, Option<RegistryPublication>)> {
+    if chain.is_empty() || chain.len() > MAX_AUTHCHAIN_HOPS as usize {
+        return None;
+    }
+    let mut walk = AuthchainResolution::for_token_category(category, identity_budget());
+    let mut seen = BTreeSet::new();
+    let mut latest = None;
+    for (index, raw) in chain.iter().enumerate() {
+        let txid = optn_core::header_hash::sha256d(raw);
+        if !seen.insert(txid) {
+            return None;
+        }
+        let decoded = optn_core::tx::decode(raw).ok()?;
+        if decoded.outputs.is_empty() {
+            return None;
+        }
+        let transaction = ChainTransaction {
+            txid,
+            inputs: decoded
+                .inputs
+                .into_iter()
+                .map(|(txid, vout, _)| (txid, vout))
+                .collect(),
+            outputs: decoded
+                .outputs
+                .into_iter()
+                .map(|output| output.script_pubkey)
+                .collect(),
+            // Stored inclusion height is not live inclusion evidence.
+            block_height: None,
+        };
+        if index == 0 {
+            if txid != walk.current() {
+                return None;
+            }
+            walk.inspect(&transaction);
+        } else if !matches!(
+            walk.accept(authchain::IdentityStatus::SpentBy(transaction.clone())),
+            AuthchainStep::Query { txid: next } if next == txid
+        ) {
+            return None;
+        }
+        // A burned identity output ends the chain: only the head may carry
+        // one, and nothing follows it.
+        match optn_core::bcmr::identity_output_state(transaction.outputs.first().map(Vec::as_slice))
+        {
+            optn_core::bcmr::IdentityOutputState::Live => {}
+            optn_core::bcmr::IdentityOutputState::Burned if index + 1 == chain.len() => {}
+            _ => return None,
+        }
+        if let Some(publication) = publication_in(transaction.outputs.iter().map(Vec::as_slice)) {
+            latest = Some(publication);
+        }
+    }
+    // No accept(Unspent) call occurs here: local restoration can only ask
+    // for the last transaction, never return Resolved.
+    Some((walk, latest))
+}
+
+/// The authchains a verified registry carries for the given categories.
+///
+/// BCMR's `authchain` extension lists an identity's chain as raw transactions,
+/// authbase first, keyed `"0"`, `"1"`, ... in an identity snapshot. A registry
+/// listing several identities can carry chains for all of them, which saves a
+/// first walk for each. Untrusted: a chain is only a restart point, checked by
+/// [`resume_chain`] before use. Where snapshots disagree the longest wins, and
+/// the link checks decide whether it is usable at all.
+fn registry_authchains(
+    contents: &[u8],
+    wanted: &BTreeSet<[u8; 32]>,
+) -> BTreeMap<[u8; 32], Vec<Vec<u8>>> {
+    let mut chains = BTreeMap::new();
+    let Ok(registry) = serde_json::from_slice::<serde_json::Value>(contents) else {
+        return chains;
+    };
+    let Some(identities) = registry
+        .get("identities")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return chains;
+    };
+    for (authbase, history) in identities {
+        let Some(category) = parse_category_key(&authbase.to_ascii_lowercase()) else {
+            continue;
+        };
+        if !wanted.contains(&category) {
+            continue;
+        }
+        let longest = history
+            .as_object()
+            .into_iter()
+            .flat_map(|snapshots| snapshots.values())
+            .filter_map(|snapshot| snapshot.get("extensions")?.get("authchain")?.as_object())
+            .filter_map(|links| {
+                if links.is_empty() || links.len() > MAX_AUTHCHAIN_HOPS as usize {
+                    return None;
+                }
+                (0..links.len())
+                    .map(|index| {
+                        optn_core::payment::decode_hex(links.get(&index.to_string())?.as_str()?)
+                            .ok()
+                    })
+                    .collect::<Option<Vec<_>>>()
+            })
+            .max_by_key(Vec::len);
+        if let Some(chain) = longest {
+            chains.insert(category, chain);
+        }
+    }
+    chains
+}
+
+/// Keep the longer of two candidate chains for each category.
+fn merge_authchains(
+    into: &mut BTreeMap<[u8; 32], Vec<Vec<u8>>>,
+    from: BTreeMap<[u8; 32], Vec<Vec<u8>>>,
+) {
+    for (category, chain) in from {
+        let known = into.entry(category).or_default();
+        if chain.len() > known.len() {
+            *known = chain;
+        }
     }
 }
 
@@ -746,6 +826,23 @@ async fn resolve_selected_identities_inner(
         IdentityCollection::from_observed(transactions, vec![], Evidence::ServerAssertion);
     let fetcher = service.registry_fetcher();
     let mut bytes_left = FetchLimits::default().max_bytes;
+    // Chains other registries carry for these categories: from registries
+    // cached by earlier refreshes, and from those verified as this one runs.
+    let wanted = categories.clone();
+    let mut authchains = BTreeMap::new();
+    if let Some(context) = context.as_ref().filter(|_| cache_valid) {
+        for registry in context
+            .cache
+            .0
+            .values()
+            .filter_map(|entry| entry.registry.as_ref())
+        {
+            merge_authchains(
+                &mut authchains,
+                registry_authchains(&registry.contents, &wanted),
+            );
+        }
+    }
     // Bound optional metadata work for a refresh. Unfinished categories remain
     // unresolved without withholding the wallet's accepted coins or history.
     let work = async {
@@ -765,24 +862,31 @@ async fn resolve_selected_identities_inner(
                     .filter(|hint| {
                         hint.source == route.source && Some(hint.route) == route_binding(&route)
                     });
-                let mut walk = hint
-                    .and_then(|hint| hint.resume(category))
-                    .unwrap_or_else(|| {
-                        AuthchainResolution::for_token_category(category, identity_budget())
-                    });
-                let mut path = context
-                    .as_ref()
-                    .map(|_| hint.map_or_else(Vec::new, |hint| hint.chain.clone()));
+                // Restart from this route's own hint, or else from a chain a
+                // verified registry carries. Either is checked link by link,
+                // and its last transaction is still established live below.
+                let restart = match hint {
+                    Some(hint) => hint.resume(category).map(|walk| (hint.chain.clone(), walk)),
+                    None => authchains.get(&category).and_then(|chain| {
+                        resume_chain(category, chain).map(|(walk, _)| (chain.clone(), walk))
+                    }),
+                };
+                let (start, mut walk) = match restart {
+                    Some((chain, walk)) => (chain, walk),
+                    None => (
+                        Vec::new(),
+                        AuthchainResolution::for_token_category(category, identity_budget()),
+                    ),
+                };
+                let mut path = context.as_ref().map(|_| start.clone());
                 let mut path_bytes = path
                     .as_ref()
                     .map_or(0, |path| path.iter().map(Vec::len).sum::<usize>());
-                let mut seen = hint.map_or_else(BTreeSet::new, |hint| {
-                    hint.chain
-                        .iter()
-                        .take(hint.chain.len().saturating_sub(1))
-                        .map(|raw| optn_core::header_hash::sha256d(raw))
-                        .collect()
-                });
+                let mut seen: BTreeSet<Hash32> = start
+                    .iter()
+                    .take(start.len().saturating_sub(1))
+                    .map(|raw| optn_core::header_hash::sha256d(raw))
+                    .collect();
                 // The weakest evidence any accepted step rested on. It starts at
                 // the strongest and only ever falls.
                 let mut assurance = IdentityAssurance::NodeValidated;
@@ -794,10 +898,8 @@ async fn resolve_selected_identities_inner(
                 let mut hinted: BTreeMap<Hash32, Hint> = BTreeMap::new();
                 let mut burned = false;
                 // The newest registry published anywhere on the chain so far. A
-                // restart hint's earlier hops count; its head is read again live.
-                let mut latest = hint.and_then(|hint| {
-                    latest_publication(&hint.chain[..hint.chain.len().saturating_sub(1)])
-                });
+                // restart chain's earlier hops count; its head is read again live.
+                let mut latest = latest_publication(&start[..start.len().saturating_sub(1)]);
                 let mut step = walk.next_step();
                 while let AuthchainStep::Query { txid } = step {
                     if !seen.insert(txid) {
@@ -1108,6 +1210,17 @@ async fn resolve_selected_identities_inner(
                                     break;
                                 }
                             }
+                        }
+                        if let Some(contents) = attempts.iter().find_map(|(_, attempt)| {
+                            attempt
+                                .as_ref()
+                                .ok()
+                                .filter(|contents| publication.matches(contents))
+                        }) {
+                            merge_authchains(
+                                &mut authchains,
+                                registry_authchains(contents, &wanted),
+                            );
                         }
                         // An indexer's bytes are accepted by the same publication hash
                         // gate as publisher bytes. Keep the actual source URI for evidence.
@@ -2566,6 +2679,184 @@ pub(crate) mod tests {
             );
             assert_eq!(fetches.load(Ordering::SeqCst), 1);
         }
+    }
+
+    fn hex_of(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// A second identity whose chain another registry can carry: an authbase
+    /// of its own, a hop that publishes its registry, and a quiet head.
+    fn beta_chain() -> ([u8; 32], Vec<ObservedTransaction>, Vec<u8>) {
+        let base = cache_transaction(Some([0x42; 32]), None);
+        let mut category = base.txid;
+        category.reverse();
+        let body = registry_body("Beta", category);
+        let published = cache_transaction(Some(base.txid), Some(&body));
+        let head = cache_transaction(Some(published.txid), None);
+        (category, vec![base, published, head], body)
+    }
+
+    fn registry_with_authchain(
+        alpha: [u8; 32],
+        beta: [u8; 32],
+        chain: &[ObservedTransaction],
+    ) -> Vec<u8> {
+        let links: serde_json::Map<String, serde_json::Value> = chain
+            .iter()
+            .enumerate()
+            .map(|(index, tx)| (index.to_string(), serde_json::json!(hex_of(&tx.raw))))
+            .collect();
+        serde_json::to_vec(&serde_json::json!({"identities": {
+            category_hex(&alpha): {"2023-11-14T22:13:20.000Z": {"name": "Alpha",
+                "token": {"category": category_hex(&alpha), "symbol": "ALPHA", "decimals": 0}}},
+            category_hex(&beta): {"2023-11-14T22:13:20.000Z": {"name": "Beta (as Alpha lists it)",
+                "extensions": {"authchain": links}}}
+        }}))
+        .unwrap()
+    }
+
+    #[test]
+    fn registry_authchains_reads_only_wanted_contiguous_chains() {
+        let (beta, chain, _) = beta_chain();
+        let (alpha, ..) = cache_fixture();
+        let body = registry_with_authchain(alpha, beta, &chain);
+        let wanted = BTreeSet::from([beta]);
+        let chains = registry_authchains(&body, &wanted);
+        assert_eq!(
+            chains[&beta],
+            chain.iter().map(|tx| tx.raw.clone()).collect::<Vec<_>>()
+        );
+        assert!(registry_authchains(&body, &BTreeSet::new()).is_empty());
+        // A gap in the indexes, bad hex or a non-object is not a chain.
+        for links in [
+            serde_json::json!({"0": hex_of(&chain[0].raw), "2": hex_of(&chain[2].raw)}),
+            serde_json::json!({"0": "zz"}),
+            serde_json::json!(["not", "an", "object"]),
+            serde_json::json!({}),
+        ] {
+            let body = serde_json::to_vec(&serde_json::json!({"identities": {
+                category_hex(&beta): {"2023-11-14T22:13:20.000Z": {"name": "Beta",
+                    "extensions": {"authchain": links}}}
+            }}))
+            .unwrap();
+            assert!(registry_authchains(&body, &wanted).is_empty());
+        }
+        assert!(registry_authchains(b"not json", &wanted).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_verified_registry_carrying_anothers_authchain_saves_its_walk() {
+        // Run 1: Alpha's registry lists Beta's chain, and is cached with it.
+        let (beta, chain, beta_body) = beta_chain();
+        let (alpha, alpha_base, _, _) = cache_fixture();
+        let alpha_body = registry_with_authchain(alpha, beta, &chain);
+        let alpha_head = cache_transaction(Some(alpha_base.txid), Some(&alpha_body));
+        let (mut service, _, _) = cache_service(
+            cache_backend(vec![alpha_base, alpha_head.clone()], Some(alpha_head.txid)),
+            Some(alpha_body),
+        );
+        let first = run_cached(
+            &mut service,
+            alpha,
+            &BcmrIdentityCache::default(),
+            Some(CACHE_CLOCK),
+        )
+        .await;
+        assert_eq!(projected_identity(&first, alpha).name, "Alpha");
+
+        // Run 2: the node holds only Beta's head. Nothing earlier is asked for.
+        let head = chain[2].clone();
+        let (mut service, requests, _) = cache_service(
+            cache_backend(vec![head.clone()], Some(head.txid)),
+            Some(beta_body),
+        );
+        let resolved = resolve_selected_identities_with_cache(
+            &mut service,
+            BTreeSet::from([alpha, beta]),
+            &[],
+            IdentityResolutionContext {
+                network: Network::Chipnet,
+                tip: Some(CACHE_TIP),
+                now_unix_ms: Some(CACHE_CLOCK),
+                cache: &first.cache,
+            },
+        )
+        .await;
+        let mut app = wallet_with(vec![coin(
+            1,
+            1000,
+            Some(optn_core::token::TokenData::fungible(beta, 1)),
+        )]);
+        resolved.apply(&mut app);
+        let identity = &app.token_identities[&category_hex(&beta)];
+        assert_eq!(identity.status, IdentityStatus::Verified);
+        assert_eq!(identity.name, "Beta");
+        assert_eq!(identity.basis.assurance, IdentityAssurance::NodeValidated);
+        let beta_requests: Vec<_> = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| {
+                !matches!(request, ChainRequest::TransactionLookup { txid } if *txid == alpha_head.txid)
+                    && !matches!(request, ChainRequest::OutpointSpentness { txid, .. } if *txid == alpha_head.txid)
+            })
+            .cloned()
+            .collect();
+        assert_eq!(
+            beta_requests,
+            vec![
+                ChainRequest::TransactionLookup { txid: head.txid },
+                ChainRequest::OutpointSpentness {
+                    txid: head.txid,
+                    vout: 0
+                },
+            ]
+        );
+        resolved.cache.validate(Network::Chipnet).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_broken_registry_authchain_is_ignored_for_a_cold_walk() {
+        let (beta, chain, _) = beta_chain();
+        let (alpha, alpha_base, _, _) = cache_fixture();
+        // Out of order: the links do not connect, so it cannot start a walk.
+        let shuffled = vec![chain[0].clone(), chain[2].clone(), chain[1].clone()];
+        let alpha_body = registry_with_authchain(alpha, beta, &shuffled);
+        let alpha_head = cache_transaction(Some(alpha_base.txid), Some(&alpha_body));
+        let (mut service, _, _) = cache_service(
+            cache_backend(vec![alpha_base, alpha_head.clone()], Some(alpha_head.txid)),
+            Some(alpha_body),
+        );
+        let first = run_cached(
+            &mut service,
+            alpha,
+            &BcmrIdentityCache::default(),
+            Some(CACHE_CLOCK),
+        )
+        .await;
+        let (mut service, requests, _) = cache_service(
+            cache_backend(vec![chain[2].clone()], Some(chain[2].txid)),
+            None,
+        );
+        resolve_selected_identities_with_cache(
+            &mut service,
+            BTreeSet::from([beta]),
+            &[],
+            IdentityResolutionContext {
+                network: Network::Chipnet,
+                tip: Some(CACHE_TIP),
+                now_unix_ms: Some(CACHE_CLOCK),
+                cache: &first.cache,
+            },
+        )
+        .await;
+        assert_eq!(
+            requests.lock().unwrap().first(),
+            Some(&ChainRequest::TransactionLookup {
+                txid: chain[0].txid
+            })
+        );
     }
 
     #[test]

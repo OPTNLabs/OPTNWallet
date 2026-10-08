@@ -116,7 +116,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | Sequential receive → spend lifecycle | **PROVEN** | `a_spend_is_found_through_an_outpoint_the_receive_scan_discovered`; spend invisible to a script-only scan | CashTokens/NFT/OP_RETURN/reorg/restart cases not covered |
 | Manual rescan, encrypted restart, GUI/CLI routing | **PROVEN** (runtime/CLI; bounded Windows GUI refresh/reopen) | `request_wallet_rescan`, encrypted checkpoints, Settings `rescan_wallet_from`, CLI `rescan --from-height`; CLI live floor checks and Windows GUI offline restart/online resume on 2026-09-19 | GUI custom-height interaction and current Android/macOS packages still need separate verification; normal HD refresh rechecks the configured floor, not only a suffix |
 | Wallet birthday | **PARTIAL** (durable imported hints connected) | Shared `SetBirthday`/`ClearRescan`, sealed checkpoint, atomic `BeginHd` floor resolution; CLI process restart and Windows GUI height/date reopen and manual-override clearing verified on 2026-09-19. Unknown imports explicitly scan from genesis; missing authenticated date evidence fails closed; legacy manual floors migrate | Automatic same-route header acquisition is connected and tested; requests retain their runtime generation across header I/O. Host-generated creation-anchor capture, restored historical-date evidence and live date acquisition remain to verify. Imported mnemonic input is never treated as proof of fresh wallet creation |
-| Local BCMR / authchain | **PARTIAL** | HD sync invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Electrum routes resolve at a labelled server-reported assurance; burned heads and quiet heads follow the 2026-10-08 entry; Moria USD and Furu resolve live on mainnet through public Fulcrum | The registry `authchain` extension is not used yet. Packaged GUI rendering of a live token is not yet observed. The web/Android React app still resolves through its legacy TypeScript path |
+| Local BCMR / authchain | **PARTIAL** | HD sync invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Electrum routes resolve at a labelled server-reported assurance; burned heads and quiet heads follow the 2026-10-08 entry; Moria USD and Furu resolve live on mainnet through public Fulcrum | Packaged GUI rendering of a live token is not yet observed. The web/Android React app still resolves through its legacy TypeScript path |
 | Token capability execution | **INTEGRATION** | `optn-runtime/src/token_capability.rs`; refuses global totals from partial data | Planner and executor exist; no provider adapter routes through them |
 | Broadcast lifecycle | **PARTIAL** | `optn-runtime/src/tx_broadcast.rs`; retained desktop `TransactionManager` now submits signed bytes through the authenticated native command | Desktop single-account Send/CashTokens has guarded submission and preserves ambiguous outbox records. Durable shared outbox, uncovered contract/RPA/multisig inputs, and the other submission paths still need integration; see 2026-09-27 evidence below |
 
@@ -1111,6 +1111,13 @@ resolver showed its name. Withdrawal is still a newer publication or a burn.
 The shipped catalog had one IPFS gateway, and it rate-limited during the live run
 (HTTP 429). Four path gateways that served the exact committed bytes now ship on
 every network but regtest: OPTN's own, ipfs.io, Filebase and Pinata.
+
+A verified registry's `authchain` extension now serves as a restart point for
+the identities it lists: from registries cached by earlier refreshes and from
+those verified during the current one. It gets the same link checks as a
+restart hint. Its last transaction is still looked up live, and its
+unspent state is asked for live. A tampered or out-of-order chain is ignored, and
+the walk starts cold.
 
 Desktop token icons come through `optn_token_image`. The renderer names a
 category and one image URI from that category's authenticated presentation; the
