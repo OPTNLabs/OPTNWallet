@@ -473,7 +473,8 @@ mod tests {
             tip: None,
         };
 
-        let coins = super::spendable_coins(&snapshot, network).unwrap();
+        let coins =
+            optn_runtime::wallet_spend::snapshot_spendable_coins(&snapshot, network).unwrap();
         assert_eq!(
             coins.len(),
             1,
