@@ -186,20 +186,49 @@ pub fn shipped_bootstrap_catalog(network: optn_core::network::Network) -> Bootst
             BootstrapProject::Paytaca,
             format!("https://github.com/paytaca/bitcoincash-explorer/blob/fa85e5017b405b0999a0b266c2db797e34ae8386/{deployment}"),
         );
-        // IPFS content addressing is network independent; the runtime checks
-        // returned bytes against this chain's locally authenticated publication.
-        catalog.ingest(
-            Endpoint {
-                kind: EndpointKind::IpfsGatewayHttps,
-                host: "ipfs.io".into(),
-                port: Some(443),
-            },
-            BootstrapProject::Ipfs,
-            "https://docs.ipfs.tech/concepts/public-utilities/",
-        );
+    }
+    // IPFS content addressing is network independent, and the runtime checks
+    // every byte against this chain's own publication hash, so a gateway is an
+    // untrusted transport and more of them only add reachability. One is not
+    // enough: public gateways rate-limit, Tor exits most of all, and a registry
+    // published only on IPFS is otherwise unreadable while one is refusing.
+    if network != Network::Regtest {
+        for (host, provenance) in IPFS_GATEWAYS {
+            catalog.ingest(
+                Endpoint {
+                    kind: EndpointKind::IpfsGatewayHttps,
+                    host: (*host).into(),
+                    port: Some(443),
+                },
+                BootstrapProject::Ipfs,
+                *provenance,
+            );
+        }
     }
     catalog
 }
+
+/// Path-style gateways that answered `/ipfs/<cid>` with the exact committed
+/// bytes when reviewed (2026-10-08). Subdomain-redirecting gateways are left
+/// out: the registry fetcher stays on the origin it was given.
+const IPFS_GATEWAYS: &[(&str, &str)] = &[
+    (
+        "ipfs.optnlabs.com",
+        "OPTN Labs gateway, the legacy app's first default (src/utils/servers/InfraUrls.ts)",
+    ),
+    (
+        "ipfs.io",
+        "https://docs.ipfs.tech/concepts/public-utilities/",
+    ),
+    (
+        "ipfs.filebase.io",
+        "https://docs.filebase.com/ipfs-concepts/what-is-an-ipfs-gateway",
+    ),
+    (
+        "gateway.pinata.cloud",
+        "https://docs.pinata.cloud/gateways/retrieving-files",
+    ),
+];
 
 /// One host entry in a pinned Electrum server snapshot. Only the TLS port is
 /// read; plain-TCP (`t`) entries are not enabled by this loader.
@@ -529,7 +558,7 @@ mod shipped {
                 base.iter()
                     .filter(|source| source.endpoints[0].kind == EndpointKind::IpfsGatewayHttps)
                     .count(),
-                1
+                IPFS_GATEWAYS.len()
             );
         }
         for network in [Network::Testnet3, Network::Testnet4, Network::Regtest] {
@@ -537,6 +566,40 @@ mod shipped {
                 .iter()
                 .all(|source| source.endpoints[0].kind != EndpointKind::BcmrIndexerHttps));
         }
+    }
+
+    /// Content addressing does not depend on the chain, so every network but
+    /// regtest can read an IPFS-published registry -- through more than one
+    /// gateway, each an unverified hint like any other shipped entry.
+    #[test]
+    fn ipfs_gateways_ship_on_every_public_network_as_unverified_hints() {
+        for network in [
+            Network::Mainnet,
+            Network::Chipnet,
+            Network::Testnet3,
+            Network::Testnet4,
+        ] {
+            let catalog = shipped_source_catalog(network);
+            let gateways: Vec<_> = catalog
+                .iter()
+                .filter(|source| source.endpoints[0].kind == EndpointKind::IpfsGatewayHttps)
+                .collect();
+            assert_eq!(gateways.len(), IPFS_GATEWAYS.len(), "{network:?}");
+            for gateway in &gateways {
+                assert_eq!(gateway.endpoints[0].port, Some(443));
+                assert!(gateway.capabilities.iter().next().is_none());
+                assert!(matches!(
+                    gateway.origin,
+                    SourceOrigin::Bootstrap {
+                        project: BootstrapProject::Ipfs,
+                        ..
+                    }
+                ));
+            }
+        }
+        assert!(shipped_source_catalog(Network::Regtest)
+            .iter()
+            .all(|source| source.endpoints[0].kind != EndpointKind::IpfsGatewayHttps));
     }
 
     /// Shipped entries are hints, not trust. They arrive enabled and unprobed.

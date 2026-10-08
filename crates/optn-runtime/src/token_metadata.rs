@@ -26,7 +26,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use optn_app::{AppAction, AppState, IdentityStatus, TokenIdentity};
+use optn_app::{
+    AppAction, AppState, IdentityAssurance, IdentityBasis, IdentityStatus, TokenIdentity,
+};
 use optn_core::bcmr::{publication_in, RegistryPublication};
 use optn_core::network::Network;
 use serde::{Deserialize, Serialize};
@@ -120,7 +122,7 @@ impl CachedBcmrIdentity {
         }
         let mut walk = AuthchainResolution::for_token_category(category, identity_budget());
         let mut seen = BTreeSet::new();
-        let mut head_outputs = Vec::new();
+        let mut latest = None;
         for (index, raw) in self.chain.iter().enumerate() {
             let txid = optn_core::header_hash::sha256d(raw);
             if !seen.insert(txid) {
@@ -156,20 +158,22 @@ impl CachedBcmrIdentity {
             ) {
                 return None;
             }
-            // Burned identities cannot have successors or terminal UTXOs.
-            if !matches!(
-                optn_core::bcmr::identity_output_state(
-                    transaction.outputs.first().map(Vec::as_slice)
-                ),
-                optn_core::bcmr::IdentityOutputState::Live
+            // A burned identity output ends the chain: only the head may carry
+            // one, and nothing follows it.
+            match optn_core::bcmr::identity_output_state(
+                transaction.outputs.first().map(Vec::as_slice),
             ) {
-                return None;
+                optn_core::bcmr::IdentityOutputState::Live => {}
+                optn_core::bcmr::IdentityOutputState::Burned if index + 1 == self.chain.len() => {}
+                _ => return None,
             }
-            head_outputs = transaction.outputs;
+            if let Some(publication) = publication_in(transaction.outputs.iter().map(Vec::as_slice))
+            {
+                latest = Some(publication);
+            }
         }
         if let Some(registry) = &self.registry {
-            let publication = publication_in(head_outputs.iter().map(Vec::as_slice))?;
-            if !publication.matches(&registry.contents) {
+            if !latest.as_ref()?.matches(&registry.contents) {
                 return None;
             }
         }
@@ -306,11 +310,10 @@ pub enum IdentityMetadata {
         authhead: [u8; 32],
         reason: StaleReason,
     },
-    /// The authhead publishes nothing.
+    /// Nothing on the authchain publishes a registry.
     ///
-    /// Not a failure: the owner removed the publication, and the
-    /// specification is explicit that an ancestor's does not carry forward.
-    /// The token still exists and is still owned.
+    /// Not a failure: the identity has never been given a chain-resolved
+    /// registry. The token still exists and is still owned.
     Unpublished,
     /// Nothing could be verified. The token is still owned.
     Unresolved { reason: UnresolvedReason },
@@ -447,6 +450,46 @@ fn parse_category_key(category: &str) -> Option<[u8; 32]> {
     Some(bytes)
 }
 
+/// The most recent publication on a chain of raw transactions, oldest first.
+///
+/// A head that publishes nothing leaves the identity's latest registry in
+/// effect: issuers move identity outputs for other reasons, and a newer
+/// publication -- including one that withdraws the token -- is how a registry
+/// changes. This is how Electron Cash and OPTN's legacy resolver read a chain.
+fn latest_publication(chain: &[Vec<u8>]) -> Option<RegistryPublication> {
+    chain.iter().rev().find_map(|raw| {
+        let decoded = optn_core::tx::decode(raw).ok()?;
+        publication_in(
+            decoded
+                .outputs
+                .iter()
+                .map(|output| output.script_pubkey.as_slice()),
+        )
+    })
+}
+
+/// A transaction a spender search supplied along with its answer.
+struct Hint {
+    transaction: ChainTransaction,
+    observed: ObservedTransaction,
+    source: SourceId,
+    evidence: Evidence,
+}
+
+/// What one observation on the selected route can support. That route's own
+/// validating node settles a step; its server can only report one. A claim
+/// attributed to another source, or evidence this path does not rank, supports
+/// nothing.
+fn assurance_of(evidence: &Evidence, route: &CapabilityRoute) -> Option<IdentityAssurance> {
+    match evidence {
+        Evidence::FullNodeValidated { source } if source == &route.source => {
+            Some(IdentityAssurance::NodeValidated)
+        }
+        Evidence::ServerAssertion => Some(IdentityAssurance::ServerReported),
+        _ => None,
+    }
+}
+
 fn transient_chain_failure(error: &crate::chain_service::ChainServiceError) -> bool {
     use crate::chain_service::{ChainBackendError, ChainServiceError};
     match error {
@@ -495,6 +538,7 @@ fn observe_identity_at(
             decimals: names.decimals,
             status: IdentityStatus::Verified,
             presentation: names.presentation,
+            basis: IdentityBasis::default(),
         },
         (IdentityMetadata::LastKnown { .. }, Some(names)) => TokenIdentity {
             name: names.name,
@@ -502,6 +546,7 @@ fn observe_identity_at(
             decimals: names.decimals,
             status: IdentityStatus::Stale,
             presentation: names.presentation,
+            basis: IdentityBasis::default(),
         },
         (IdentityMetadata::Unpublished, _) => TokenIdentity {
             name: category_hex.clone(),
@@ -509,6 +554,7 @@ fn observe_identity_at(
             decimals: 0,
             status: IdentityStatus::Unpublished,
             presentation: Default::default(),
+            basis: IdentityBasis::default(),
         },
         (IdentityMetadata::Unresolved { .. }, _) | (_, None) => TokenIdentity {
             name: category_hex.clone(),
@@ -516,6 +562,7 @@ fn observe_identity_at(
             decimals: 0,
             status: IdentityStatus::Unresolved,
             presentation: Default::default(),
+            basis: IdentityBasis::default(),
         },
     };
     AppAction::SetTokenIdentity {
@@ -546,8 +593,11 @@ pub enum OwnedCategoryIdentity {
     Observed {
         publication: RegistryPublication,
         attempts: Vec<(String, FetchAttempt)>,
+        /// How the authhead carrying the publication was established.
+        basis: IdentityBasis,
     },
-    /// The authhead publishes nothing. Distinct from an incomplete walk.
+    /// No transaction on the authchain publishes a registry. Distinct from an
+    /// incomplete walk.
     Unpublished,
     /// The walk did not reach an authhead. Never Current.
     Unresolved,
@@ -733,38 +783,69 @@ async fn resolve_selected_identities_inner(
                         .map(|raw| optn_core::header_hash::sha256d(raw))
                         .collect()
                 });
+                // The weakest evidence any accepted step rested on. It starts at
+                // the strongest and only ever falls.
+                let mut assurance = IdentityAssurance::NodeValidated;
+                // Transactions a spender search passed through on its way back.
+                // Candidates only: each must still continue the chain when the
+                // walk reaches it. Its bytes stand in for a lookup only when they
+                // came from this route's own source and would not weaken what
+                // the walk already rests on; otherwise the route is asked.
+                let mut hinted: BTreeMap<Hash32, Hint> = BTreeMap::new();
+                let mut burned = false;
+                // The newest registry published anywhere on the chain so far. A
+                // restart hint's earlier hops count; its head is read again live.
+                let mut latest = hint.and_then(|hint| {
+                    latest_publication(&hint.chain[..hint.chain.len().saturating_sub(1)])
+                });
                 let mut step = walk.next_step();
                 while let AuthchainStep::Query { txid } = step {
                     if !seen.insert(txid) {
                         result.cache.0.remove(&category_key);
                         break;
                     }
-                    let observed = match service
-                        .execute_on_route(
-                            &transaction_route,
-                            &ChainRequest::TransactionLookup { txid },
-                        )
-                        .await
-                    {
-                        Ok(observed) => observed,
-                        Err(error) => {
-                            if !transient_chain_failure(&error) {
+                    let supplied = hinted
+                        .remove(&txid)
+                        .filter(|hint| {
+                            hint.source == route.source
+                                && assurance_of(&hint.evidence, &route)
+                                    .is_some_and(|level| level >= assurance)
+                        })
+                        .map(|hint| (hint.observed, hint.evidence));
+                    let (transaction, evidence) = match supplied {
+                        Some(supplied) => supplied,
+                        None => {
+                            let observed = match service
+                                .execute_optional_on_route(
+                                    &transaction_route,
+                                    &ChainRequest::TransactionLookup { txid },
+                                )
+                                .await
+                            {
+                                Ok(observed) => observed,
+                                Err(error) => {
+                                    if !transient_chain_failure(&error) {
+                                        result.cache.0.remove(&category_key);
+                                    }
+                                    break;
+                                }
+                            };
+                            if observed.source != route.source || !tip_matches(observed.chain_tip) {
                                 result.cache.0.remove(&category_key);
+                                break;
                             }
-                            break;
+                            let ChainPayload::Transaction(transaction) = observed.value else {
+                                result.cache.0.remove(&category_key);
+                                break;
+                            };
+                            (transaction, observed.evidence)
                         }
                     };
-                    if observed.source != route.source
-                        || !tip_matches(observed.chain_tip)
-                        || !matches!(&observed.evidence, Evidence::FullNodeValidated { source } if source == &route.source)
-                    {
-                        result.cache.0.remove(&category_key);
-                        break;
-                    }
-                    let ChainPayload::Transaction(transaction) = observed.value else {
+                    let Some(level) = assurance_of(&evidence, &route) else {
                         result.cache.0.remove(&category_key);
                         break;
                     };
+                    assurance = assurance.min(level);
                     let Ok(decoded) = optn_core::tx::decode(&transaction.raw) else {
                         result.cache.0.remove(&category_key);
                         break;
@@ -790,32 +871,40 @@ async fn resolve_selected_identities_inner(
                             }
                         }
                     }
-                    let current = IdentityCollection::from_observed(
-                        &[transaction],
-                        vec![],
-                        observed.evidence,
-                    );
+                    let current =
+                        IdentityCollection::from_observed(&[transaction], vec![], evidence);
                     let Some(current) = current.transactions.first() else {
                         result.cache.0.remove(&category_key);
                         break;
                     };
                     walk.inspect(current);
+                    if let Some(publication) =
+                        publication_in(current.outputs.iter().map(Vec::as_slice))
+                    {
+                        latest = Some(publication);
+                    }
                     if matches!(
                         optn_core::bcmr::identity_output_state(
                             current.outputs.first().map(Vec::as_slice)
                         ),
                         optn_core::bcmr::IdentityOutputState::Burned
                     ) {
-                        result.cache.0.remove(&category_key);
-                        identity = OwnedCategoryIdentity::Unpublished;
+                        // An `OP_RETURN` identity output cannot be spent, so this
+                        // is the head on the chain's own terms: no server has to
+                        // say so. A burned head is still the head, and its outputs
+                        // carry its registry -- often the burning output itself.
+                        burned = true;
                         break;
                     }
                     let mut successors = collection
                         .transactions
                         .iter()
+                        .chain(hinted.values().map(|hint| &hint.transaction))
                         .filter(|candidate| candidate.inputs.contains(&(txid, 0)));
                     if let Some(successor) = successors.next() {
-                        if successors.next().is_some() {
+                        // Wallet history and a search's hints may hold the same
+                        // transaction; only two different spenders conflict.
+                        if successors.any(|other| other.txid != successor.txid) {
                             result.cache.0.remove(&category_key);
                             break;
                         }
@@ -823,7 +912,7 @@ async fn resolve_selected_identities_inner(
                         continue;
                     }
                     let unspent = match service
-                        .execute_on_route(
+                        .execute_optional_on_route(
                             &route,
                             &ChainRequest::OutpointSpentness { txid, vout: 0 },
                         )
@@ -837,9 +926,10 @@ async fn resolve_selected_identities_inner(
                             break;
                         }
                     };
+                    let level = assurance_of(&unspent.evidence, &route);
                     if unspent.source != route.source
                         || !tip_matches(unspent.chain_tip)
-                        || !matches!(&unspent.evidence, Evidence::FullNodeValidated { source } if source == &route.source)
+                        || level.is_none()
                     {
                         result.cache.0.remove(&category_key);
                         break;
@@ -854,8 +944,9 @@ async fn resolve_selected_identities_inner(
                     else {
                         // An absent UTXO is not a terminal authhead. Discovery may
                         // nominate the exact spender, including outside this wallet's
-                        // history. It must then be fetched from the validating node
-                        // on the next iteration, before any of its claims are used.
+                        // history. Its bytes are used as a lookup only when they came
+                        // from this route's own server; otherwise the next iteration
+                        // fetches them from the selected route before believing them.
                         let Some(output) = decoded.outputs.first() else {
                             result.cache.0.remove(&category_key);
                             break;
@@ -866,7 +957,7 @@ async fn resolve_selected_identities_inner(
                             service.routes_for_operation(ChainOperation::OutpointSpender)
                         {
                             let Ok(candidate) = service
-                                .execute_on_route(
+                                .execute_optional_on_route(
                                     &discovery,
                                     &ChainRequest::OutpointSpender {
                                         txid,
@@ -881,15 +972,16 @@ async fn resolve_selected_identities_inner(
                             };
                             let ChainPayload::OutpointSpender {
                                 spender: Some(spender),
+                                descendants,
                                 ..
                             } = candidate.value
                             else {
                                 continue;
                             };
                             let discovered = IdentityCollection::from_observed(
-                                &[spender],
+                                std::slice::from_ref(&spender),
                                 vec![],
-                                candidate.evidence,
+                                candidate.evidence.clone(),
                             );
                             if let Some(successor) = discovered.transactions.first() {
                                 if discovered_successor
@@ -900,6 +992,26 @@ async fn resolve_selected_identities_inner(
                                     break;
                                 }
                                 discovered_successor = Some(successor.clone());
+                                for observed in std::iter::once(spender).chain(descendants) {
+                                    let decoded = IdentityCollection::from_observed(
+                                        std::slice::from_ref(&observed),
+                                        vec![],
+                                        candidate.evidence.clone(),
+                                    );
+                                    if let Some(transaction) =
+                                        decoded.transactions.into_iter().next()
+                                    {
+                                        hinted.insert(
+                                            transaction.txid,
+                                            Hint {
+                                                transaction,
+                                                observed,
+                                                source: discovery.source.clone(),
+                                                evidence: candidate.evidence.clone(),
+                                            },
+                                        );
+                                    }
+                                }
                             }
                         }
                         if ambiguous {
@@ -926,19 +1038,24 @@ async fn resolve_selected_identities_inner(
                         result.cache.0.remove(&category_key);
                         break;
                     }
+                    if let Some(level) = level {
+                        assurance = assurance.min(level);
+                    }
                     step = walk.accept(authchain::IdentityStatus::Unspent {
                         evidence: unspent.evidence,
                     });
                 }
-                if let AuthchainStep::Resolved(head) = step {
-                    let mut resolved = IdentityCollection {
-                        transactions: vec![],
-                        fetch_attempts: vec![],
-                        evidence: head.evidence.clone(),
-                    };
-                    if let Some(publication) =
-                        publication_in(head.outputs.iter().map(Vec::as_slice))
-                    {
+                let terminal = match step {
+                    AuthchainStep::Resolved(_) => Some(false),
+                    _ if burned => Some(true),
+                    _ => None,
+                };
+                if let Some(burned) = terminal {
+                    let basis = IdentityBasis { assurance, burned };
+                    // The head's own publication when it has one, otherwise the
+                    // newest earlier one: still in effect until superseded.
+                    if let Some(publication) = latest.take() {
+                        let mut attempts = Vec::new();
                         // Reuse committed bytes only after the current head and
                         // terminal output passed the same live gates as a cold
                         // walk. The registry is reparsed by apply() at this run's
@@ -951,8 +1068,7 @@ async fn resolve_selected_identities_inner(
                                 })
                         {
                             bytes_left -= registry.contents.len();
-                            resolved
-                                .fetch_attempts
+                            attempts
                                 .push((registry.source_uri.clone(), Ok(registry.contents.clone())));
                         } else if let Some(fetcher) = fetcher.as_ref() {
                             let candidates = fetcher.registry_candidates(category);
@@ -987,7 +1103,7 @@ async fn resolve_selected_identities_inner(
                                 if let Ok(bytes) = &attempt {
                                     bytes_left = bytes_left.saturating_sub(bytes.len());
                                 }
-                                resolved.fetch_attempts.push((uri.clone(), attempt));
+                                attempts.push((uri.clone(), attempt));
                                 if matches {
                                     break;
                                 }
@@ -997,10 +1113,11 @@ async fn resolve_selected_identities_inner(
                         // gate as publisher bytes. Keep the actual source URI for evidence.
                         identity = OwnedCategoryIdentity::Observed {
                             publication,
-                            attempts: resolved.fetch_attempts,
+                            attempts,
+                            basis,
                         };
                     } else {
-                        identity = identity_from_step(AuthchainStep::Resolved(head), &resolved);
+                        identity = OwnedCategoryIdentity::Unpublished;
                     }
                     result.cache.0.remove(&category_key);
                     if let (Some(context), Some(chain), Some(binding)) =
@@ -1011,6 +1128,7 @@ async fn resolve_selected_identities_inner(
                                 OwnedCategoryIdentity::Observed {
                                     publication,
                                     attempts,
+                                    ..
                                 } => attempts.iter().find_map(|(uri, attempt)| {
                                     attempt
                                         .as_ref()
@@ -1036,9 +1154,6 @@ async fn resolve_selected_identities_inner(
                             );
                         }
                     }
-                    break;
-                }
-                if matches!(identity, OwnedCategoryIdentity::Unpublished) {
                     break;
                 }
             }
@@ -1176,6 +1291,11 @@ fn identity_from_outputs(
     OwnedCategoryIdentity::Observed {
         publication,
         attempts,
+        // Only reached for a head the route's own node established.
+        basis: IdentityBasis {
+            assurance: IdentityAssurance::NodeValidated,
+            burned: false,
+        },
     }
 }
 
@@ -1193,26 +1313,73 @@ pub fn apply_owned_token_identities(
     apply_owned_token_identities_at(app, observations, checked_unix_ms());
 }
 
+/// The identity one observation supports, as the action that publishes it.
+fn project_identity(
+    category: [u8; 32],
+    observation: Option<&OwnedCategoryIdentity>,
+    now_unix_ms: Option<i64>,
+) -> (AppAction, bool) {
+    let (metadata, basis) = match observation {
+        Some(OwnedCategoryIdentity::Observed {
+            publication,
+            attempts,
+            basis,
+        }) => (resolve(publication, attempts), *basis),
+        Some(OwnedCategoryIdentity::Unpublished) => {
+            (IdentityMetadata::Unpublished, IdentityBasis::default())
+        }
+        Some(OwnedCategoryIdentity::Unresolved) | None => (
+            IdentityMetadata::Unresolved {
+                reason: UnresolvedReason::AuthchainIncomplete,
+            },
+            IdentityBasis::default(),
+        ),
+    };
+    let current = metadata.is_current();
+    let mut action = observe_identity_at(category, metadata, now_unix_ms);
+    if let AppAction::SetTokenIdentity { identity, .. } = &mut action {
+        if identity.status == IdentityStatus::Verified {
+            identity.basis = basis;
+        }
+    }
+    (action, current)
+}
+
+/// Resolve token identities over the service's selected routes, the way a
+/// wallet refresh does, for categories nothing here holds.
+///
+/// For diagnostics and live checks: no restart hint is read or written, no
+/// wallet state is touched, and the result is exactly what a holder of each
+/// category would be shown. Identities are judged against the routes' own
+/// answers, as a refresh without an accepted tip would.
+pub async fn resolve_category_identities(
+    service: &mut crate::chain_service::ChainService,
+    categories: BTreeSet<[u8; 32]>,
+) -> BTreeMap<[u8; 32], TokenIdentity> {
+    let resolved = resolve_selected_identities_inner(service, categories.clone(), &[], None).await;
+    let now = checked_unix_ms();
+    categories
+        .into_iter()
+        .filter_map(|category| {
+            match project_identity(category, resolved.identities.get(&category), now) {
+                (AppAction::SetTokenIdentity { identity, .. }, _) => Some((category, identity)),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn apply_owned_token_identities_at(
     app: &mut AppState,
     observations: &BTreeMap<[u8; 32], OwnedCategoryIdentity>,
     now_unix_ms: Option<i64>,
 ) {
     for category in owned_token_categories(app) {
-        let metadata = match observations.get(&category) {
-            Some(OwnedCategoryIdentity::Observed {
-                publication,
-                attempts,
-            }) => resolve(publication, attempts),
-            Some(OwnedCategoryIdentity::Unpublished) => IdentityMetadata::Unpublished,
-            Some(OwnedCategoryIdentity::Unresolved) | None => IdentityMetadata::Unresolved {
-                reason: UnresolvedReason::AuthchainIncomplete,
-            },
-        };
         // Fresh authenticated bytes supersede cached claims, including token
         // removal or an invalid current snapshot. Neither may revive old data.
-        let allow_cached = !metadata.is_current();
-        let mut action = observe_identity_at(category, metadata, now_unix_ms);
+        let (mut action, current) =
+            project_identity(category, observations.get(&category), now_unix_ms);
+        let allow_cached = !current;
         if let AppAction::SetTokenIdentity {
             category_hex,
             identity,
@@ -1290,6 +1457,11 @@ pub(crate) mod tests {
         transactions: Vec<ObservedTransaction>,
         terminal: Option<OutpointSpentness>,
         terminal_evidence: Evidence,
+        /// `None` answers lookups as the source's own node.
+        lookup_evidence: Option<Evidence>,
+        /// Returned with any spender this backend discovers.
+        descendants: Vec<ObservedTransaction>,
+        protocol: ProtocolFamily,
         raw_tip: Option<(u32, Hash32)>,
         failure: Option<ChainBackendError>,
         requests: Arc<Mutex<Vec<ChainRequest>>>,
@@ -1300,7 +1472,7 @@ pub(crate) mod tests {
             &self.source
         }
         fn protocol(&self) -> ProtocolFamily {
-            ProtocolFamily::BchnRpc
+            self.protocol
         }
         fn endpoint(&self) -> Option<&Endpoint> {
             Some(&self.endpoint)
@@ -1328,7 +1500,7 @@ pub(crate) mod tests {
                 let (payload, evidence, chain_tip) = match request {
                     ChainRequest::TransactionLookup { txid } => (
                         ChainPayload::Transaction(self.transactions.iter().find(|tx| tx.txid == *txid).cloned().ok_or(ChainBackendError::Unsupported)?),
-                        Evidence::FullNodeValidated { source: self.source.clone() },
+                        self.lookup_evidence.clone().unwrap_or_else(|| Evidence::FullNodeValidated { source: self.source.clone() }),
                         self.raw_tip,
                     ),
                     ChainRequest::OutpointSpentness { txid, vout } => (
@@ -1343,6 +1515,7 @@ pub(crate) mod tests {
                             spender: self.transactions.iter().find(|tx| {
                                 optn_core::tx::decode(&tx.raw).unwrap().inputs.iter().any(|(parent, index, _)| parent == txid && index == vout)
                             }).cloned(),
+                            descendants: self.descendants.clone(),
                         }, Evidence::ServerAssertion, None,
                     ),
                     _ => return Err(ChainBackendError::Unsupported),
@@ -1447,6 +1620,9 @@ pub(crate) mod tests {
             terminal_evidence: Evidence::FullNodeValidated {
                 source: source.clone(),
             },
+            lookup_evidence: None,
+            descendants: Vec::new(),
+            protocol: ProtocolFamily::BchnRpc,
             source,
             endpoint: Endpoint {
                 kind: EndpointKind::BchnRpc,
@@ -1733,7 +1909,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn spent_cached_head_continues_to_advanced_or_withdrawn_publication() {
+    async fn spent_cached_head_continues_to_an_advanced_or_a_quiet_head() {
         let (category, cache) = resolved_cache_fixture().await;
         let (_, _, head, _) = cache_fixture();
         let next_body = registry_body("Advanced", category);
@@ -1746,21 +1922,14 @@ pub(crate) mod tests {
             );
             let resolved = run_cached(&mut service, category, &cache, Some(CACHE_CLOCK)).await;
             let identity = projected_identity(&resolved, category);
-            assert_eq!(
-                identity.status,
-                if publishes {
-                    IdentityStatus::Verified
-                } else {
-                    IdentityStatus::Unpublished
-                }
-            );
-            if publishes {
-                assert_eq!(identity.name, "Advanced");
-            }
+            // A new head that publishes nothing leaves the previous registry in
+            // effect, and its cached bytes still match without a refetch.
+            assert_eq!(identity.status, IdentityStatus::Verified);
+            assert_eq!(identity.name, if publishes { "Advanced" } else { "Cached" });
             assert_eq!(fetches.load(Ordering::SeqCst), usize::from(publishes));
             let entry = &resolved.cache.0[&category_hex(&category)];
             assert_eq!(entry.chain.len(), 3);
-            assert_eq!(entry.registry.is_some(), publishes);
+            assert!(entry.registry.is_some());
             assert!(requests.lock().unwrap().iter().any(|request| matches!(request, ChainRequest::OutpointSpender { txid, vout: 0, .. } if *txid == head.txid)));
             resolved.cache.validate(Network::Chipnet).unwrap();
         }
@@ -1774,7 +1943,16 @@ pub(crate) mod tests {
             let mut backend = cache_backend(vec![head.clone()], Some(head.txid));
             match case {
                 0 => backend.terminal = None,
-                1 => backend.terminal_evidence = Evidence::ServerAssertion,
+                // A server's word about the terminal output is a labelled,
+                // weaker answer (see `a_server_reported_head_...`). A proof of
+                // inclusion says nothing at all about whether it is unspent.
+                1 => {
+                    backend.terminal_evidence = Evidence::MerkleTransactionIncluded {
+                        txid: head.txid,
+                        block_hash: CACHE_TIP.1,
+                        height: 91,
+                    }
+                }
                 2 => {
                     backend.terminal_evidence = Evidence::MerkleTransactionIncluded {
                         txid: head.txid,
@@ -1927,7 +2105,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_live_burn_removes_the_retained_publication_hint() {
+    async fn a_burn_without_a_new_publication_freezes_the_last_registry() {
         let (category, cache) = resolved_cache_fixture().await;
         let (_, _, head, _) = cache_fixture();
         let mut burned = cache_transaction(Some(head.txid), None);
@@ -1936,14 +2114,353 @@ pub(crate) mod tests {
         burned.raw[script_start] = 0x6a;
         burned.txid = optn_core::header_hash::sha256d(&burned.raw);
         let (mut service, _, fetches) =
-            cache_service(cache_backend(vec![head, burned], None), None);
+            cache_service(cache_backend(vec![head, burned.clone()], None), None);
         let resolved = run_cached(&mut service, category, &cache, Some(CACHE_CLOCK)).await;
-        assert_eq!(
-            projected_identity(&resolved, category).status,
-            IdentityStatus::Unpublished
-        );
-        assert!(resolved.cache.0.is_empty());
+        let identity = projected_identity(&resolved, category);
+        // Nobody can publish for this identity again: its last registry is final.
+        assert_eq!(identity.status, IdentityStatus::Verified);
+        assert_eq!(identity.name, "Cached");
+        assert!(identity.basis.burned);
+        let entry = &resolved.cache.0[&category_hex(&category)];
+        assert!(entry.registry.is_some());
+        assert_eq!(entry.chain.last(), Some(&burned.raw));
+        resolved.cache.validate(Network::Chipnet).unwrap();
         assert_eq!(fetches.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn the_newest_publication_on_the_chain_is_in_effect() {
+        // Moria USD's shape on mainnet: a registry published mid-chain, then
+        // identity moves that publish nothing.
+        let base = cache_transaction(None, None);
+        let mut category = base.txid;
+        category.reverse();
+        let first = registry_body("First", category);
+        let second = registry_body("Second", category);
+        for (bodies, expected) in [
+            (vec![Some(&first), None, None], Some("First")),
+            (vec![Some(&first), Some(&second), None], Some("Second")),
+            (vec![None, None, None], None),
+        ] {
+            let mut chain = vec![base.clone()];
+            for body in &bodies {
+                let parent = chain.last().unwrap().txid;
+                chain.push(cache_transaction(Some(parent), body.map(Vec::as_slice)));
+            }
+            let head = chain.last().unwrap().txid;
+            let (mut service, _, fetches) = cache_service(
+                server_backend(chain, Some(head)),
+                expected.map(|name| registry_body(name, category)),
+            );
+            let resolved = run_cached(
+                &mut service,
+                category,
+                &BcmrIdentityCache::default(),
+                Some(CACHE_CLOCK),
+            )
+            .await;
+            let identity = projected_identity(&resolved, category);
+            match expected {
+                Some(name) => {
+                    assert_eq!(identity.status, IdentityStatus::Verified);
+                    assert_eq!(identity.name, name);
+                    assert_eq!(fetches.load(Ordering::SeqCst), 1);
+                }
+                None => assert_eq!(identity.status, IdentityStatus::Unpublished),
+            }
+            resolved.cache.validate(Network::Chipnet).unwrap();
+        }
+    }
+
+    fn server_backend(
+        transactions: Vec<ObservedTransaction>,
+        terminal: Option<Hash32>,
+    ) -> CacheBackend {
+        let mut backend = cache_backend(transactions, terminal);
+        backend.lookup_evidence = Some(Evidence::ServerAssertion);
+        backend.terminal_evidence = Evidence::ServerAssertion;
+        backend
+    }
+
+    #[tokio::test]
+    async fn a_server_reported_head_is_current_at_its_own_assurance() {
+        let (category, base, head, body) = cache_fixture();
+        let (mut service, _, fetches) = cache_service(
+            server_backend(vec![base, head.clone()], Some(head.txid)),
+            Some(body),
+        );
+        let resolved = run_cached(
+            &mut service,
+            category,
+            &BcmrIdentityCache::default(),
+            Some(CACHE_CLOCK),
+        )
+        .await;
+        let identity = projected_identity(&resolved, category);
+        assert_eq!(identity.status, IdentityStatus::Verified);
+        assert_eq!(identity.name, "Cached");
+        assert_eq!(
+            identity.basis,
+            IdentityBasis {
+                assurance: IdentityAssurance::ServerReported,
+                burned: false,
+            }
+        );
+        assert_eq!(identity.caveat(), Some("as reported by server"));
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+        resolved.cache.validate(Network::Chipnet).unwrap();
+
+        // One server-level step is enough to lower the whole result: the
+        // node's own lookups cannot vouch for a terminal it only heard about.
+        let (category, base, head, body) = cache_fixture();
+        let mut mixed = cache_backend(vec![base, head.clone()], Some(head.txid));
+        mixed.terminal_evidence = Evidence::ServerAssertion;
+        let (mut service, _, _) = cache_service(mixed, Some(body));
+        let resolved = run_cached(
+            &mut service,
+            category,
+            &BcmrIdentityCache::default(),
+            Some(CACHE_CLOCK),
+        )
+        .await;
+        assert_eq!(
+            projected_identity(&resolved, category).basis.assurance,
+            IdentityAssurance::ServerReported
+        );
+    }
+
+    #[tokio::test]
+    async fn a_node_validated_head_says_so() {
+        let (category, cache) = resolved_cache_fixture().await;
+        let _ = cache;
+        let (_, base, head, body) = cache_fixture();
+        let (mut service, _, _) = cache_service(
+            cache_backend(vec![base, head.clone()], Some(head.txid)),
+            Some(body),
+        );
+        let resolved = run_cached(
+            &mut service,
+            category,
+            &BcmrIdentityCache::default(),
+            Some(CACHE_CLOCK),
+        )
+        .await;
+        let identity = projected_identity(&resolved, category);
+        assert_eq!(identity.basis.assurance, IdentityAssurance::NodeValidated);
+        assert!(!identity.basis.burned);
+        assert_eq!(identity.caveat(), None);
+    }
+
+    /// A genesis whose identity output is the BCMR publication itself: the
+    /// identity is burned at birth, and that output is its registry.
+    fn burned_genesis(parent: Hash32, body: &[u8]) -> ObservedTransaction {
+        let script = publication_script(body, "example.test");
+        let mut raw = vec![2, 0, 0, 0, 1];
+        raw.extend_from_slice(&parent);
+        raw.extend_from_slice(&0u32.to_le_bytes());
+        raw.push(0);
+        raw.extend_from_slice(&u32::MAX.to_le_bytes());
+        raw.push(2);
+        raw.extend_from_slice(&0u64.to_le_bytes());
+        raw.extend_from_slice(&optn_core::tx::varint(script.len() as u64));
+        raw.extend_from_slice(&script);
+        raw.extend_from_slice(&546u64.to_le_bytes());
+        raw.extend_from_slice(&optn_core::tx::varint(p2pkh().len() as u64));
+        raw.extend_from_slice(&p2pkh());
+        raw.extend_from_slice(&0u32.to_le_bytes());
+        ObservedTransaction {
+            txid: optn_core::header_hash::sha256d(&raw),
+            raw,
+            block_height: Some(91),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_burned_head_publishes_its_own_registry_without_asking_anyone_it_is_current() {
+        let (category, base, _, _) = cache_fixture();
+        let body = registry_body("Frozen", category);
+        let genesis = burned_genesis(base.txid, &body);
+        for server_only in [false, true] {
+            // Nobody reports the burned output unspent: none is needed.
+            let mut backend = cache_backend(vec![base.clone(), genesis.clone()], None);
+            if server_only {
+                backend.lookup_evidence = Some(Evidence::ServerAssertion);
+                backend.terminal_evidence = Evidence::ServerAssertion;
+            }
+            let (mut service, requests, fetches) = cache_service(backend, Some(body.clone()));
+            let resolved = run_cached(
+                &mut service,
+                category,
+                &BcmrIdentityCache::default(),
+                Some(CACHE_CLOCK),
+            )
+            .await;
+            let identity = projected_identity(&resolved, category);
+            assert_eq!(identity.status, IdentityStatus::Verified);
+            assert_eq!(identity.name, "Frozen");
+            assert_eq!(
+                identity.basis,
+                IdentityBasis {
+                    assurance: if server_only {
+                        IdentityAssurance::ServerReported
+                    } else {
+                        IdentityAssurance::NodeValidated
+                    },
+                    burned: true,
+                }
+            );
+            assert_eq!(fetches.load(Ordering::SeqCst), 1);
+            assert!(!requests.lock().unwrap().iter().any(|request| matches!(
+                request,
+                ChainRequest::OutpointSpentness { txid, .. } if *txid == genesis.txid
+            )));
+
+            // Restarting from the cache asks only for the burned head again.
+            let (mut service, requests, fetches) = cache_service(
+                {
+                    let mut backend = cache_backend(vec![genesis.clone()], None);
+                    if server_only {
+                        backend.lookup_evidence = Some(Evidence::ServerAssertion);
+                    }
+                    backend
+                },
+                None,
+            );
+            let again =
+                run_cached(&mut service, category, &resolved.cache, Some(CACHE_CLOCK)).await;
+            assert_eq!(projected_identity(&again, category).name, "Frozen");
+            assert_eq!(
+                *requests.lock().unwrap(),
+                vec![ChainRequest::TransactionLookup { txid: genesis.txid }]
+            );
+            assert_eq!(fetches.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    /// base -> a1 -> a2 -> a3 (head, publishing), each spending output 0.
+    fn hinted_chain() -> ([u8; 32], Vec<ObservedTransaction>, Vec<u8>) {
+        let base = cache_transaction(None, None);
+        let mut category = base.txid;
+        category.reverse();
+        let body = registry_body("Far", category);
+        let a1 = cache_transaction(Some(base.txid), None);
+        let a2 = cache_transaction(Some(a1.txid), None);
+        let a3 = cache_transaction(Some(a2.txid), Some(&body));
+        (category, vec![base, a1, a2, a3], body)
+    }
+
+    #[tokio::test]
+    async fn a_servers_walk_back_hints_skip_its_own_repeat_lookups() {
+        let (category, chain, body) = hinted_chain();
+        let head = chain[3].txid;
+        let mut backend = server_backend(chain.clone(), Some(head));
+        // Discovery from base:0 finds a1 and walked a2, a3 on the way.
+        backend.descendants = vec![chain[2].clone(), chain[3].clone()];
+        let (mut service, requests, _) = cache_service(backend, Some(body));
+        let resolved = run_cached(
+            &mut service,
+            category,
+            &BcmrIdentityCache::default(),
+            Some(CACHE_CLOCK),
+        )
+        .await;
+        let identity = projected_identity(&resolved, category);
+        assert_eq!(identity.name, "Far");
+        assert_eq!(identity.basis.assurance, IdentityAssurance::ServerReported);
+        let requests = requests.lock().unwrap();
+        // The authbase is looked up; the hinted hops are not looked up again.
+        let lookups: Vec<_> = requests
+            .iter()
+            .filter_map(|request| match request {
+                ChainRequest::TransactionLookup { txid } => Some(*txid),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lookups, vec![chain[0].txid]);
+        // Only the head's terminal output is asked about after discovery.
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            ChainRequest::OutpointSpentness { txid, .. } if *txid == head
+        )));
+        assert_eq!(resolved.cache.0[&category_hex(&category)].chain.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn another_sources_hints_are_refetched_from_the_selected_node() {
+        let (category, chain, body) = hinted_chain();
+        let head = chain[3].txid;
+        // The selected node discovers nothing itself; a separate server does,
+        // and supplies the whole chain as hints.
+        let node = cache_backend(chain.clone(), Some(head));
+        let mut discovery = server_backend(chain.clone(), None);
+        discovery.source = SourceId::new("discovery-server");
+        discovery.endpoint = Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: "discovery.invalid".into(),
+            port: Some(50002),
+        };
+        discovery.protocol = ProtocolFamily::Electrum;
+        discovery.capabilities = CapabilitySet::default();
+        discovery.capabilities.record(
+            Capability::OutpointSpenderLookup,
+            CapabilityConfidence::Verified,
+            CapabilityDiscovery::ActiveProbe,
+        );
+        discovery.descendants = vec![chain[2].clone(), chain[3].clone()];
+        let node_requests = node.requests.clone();
+        let mut catalog = SourceCatalog::default();
+        for (id, endpoint) in [
+            (node.source.clone(), node.endpoint.clone()),
+            (discovery.source.clone(), discovery.endpoint.clone()),
+        ] {
+            catalog
+                .insert(ChainSource {
+                    id,
+                    label: "hint test".into(),
+                    origin: SourceOrigin::UserAdded,
+                    endpoints: vec![endpoint],
+                    capabilities: Default::default(),
+                    disposition: SourceDisposition::Enabled,
+                    priority: 0,
+                })
+                .unwrap();
+        }
+        let mut policy = ConnectionPolicy::exact(node.source.clone(), ProtocolFamily::BchnRpc);
+        policy.primary_scope = crate::chain::SourceScope::Explicit(BTreeSet::from([
+            node.source.clone(),
+            discovery.source.clone(),
+        ]));
+        policy.preferred = vec![node.source.clone(), discovery.source.clone()];
+        policy.protocols.insert(ProtocolFamily::Electrum);
+        let mut service = ChainService::new(catalog, policy);
+        service.register(Arc::new(node));
+        service.register(Arc::new(discovery));
+        service.set_registry_fetcher(Arc::new(CacheFetcher {
+            body,
+            calls: Arc::new(AtomicUsize::new(0)),
+            revoke: None,
+        }));
+        let resolved = run_cached(
+            &mut service,
+            category,
+            &BcmrIdentityCache::default(),
+            Some(CACHE_CLOCK),
+        )
+        .await;
+        let identity = projected_identity(&resolved, category);
+        assert_eq!(identity.name, "Far");
+        // Every hop came from the node in the end, so the node vouches for it.
+        assert_eq!(identity.basis.assurance, IdentityAssurance::NodeValidated);
+        let lookups: Vec<_> = node_requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|request| match request {
+                ChainRequest::TransactionLookup { txid } => Some(*txid),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lookups, chain.iter().map(|tx| tx.txid).collect::<Vec<_>>());
     }
 
     #[tokio::test]
@@ -2162,6 +2679,7 @@ pub(crate) mod tests {
                     OwnedCategoryIdentity::Observed {
                         publication: publication.clone(),
                         attempts: vec![(uri.clone(), Ok(bytes))],
+                        basis: IdentityBasis::default(),
                     },
                 )]),
             );
@@ -2607,6 +3125,7 @@ pub(crate) mod tests {
         let published = OwnedCategoryIdentity::Observed {
             publication: publication(&body, &["example.com"]),
             attempts: vec![("https://example.com".into(), Ok(body))],
+            basis: IdentityBasis::default(),
         };
         apply_owned_token_identities(&mut state, &BTreeMap::from([(ALPHA, published)]));
         let key = category_hex(&ALPHA);
@@ -2650,6 +3169,7 @@ pub(crate) mod tests {
                 OwnedCategoryIdentity::Observed {
                     publication: publication(body, &["example.com"]),
                     attempts: vec![("example.com".into(), attempt)],
+                    basis: IdentityBasis::default(),
                 },
             )])
         };
@@ -2870,6 +3390,7 @@ pub(crate) mod tests {
                 decimals: 0,
                 status: IdentityStatus::Verified,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         });
         let assets = optn_app::assets_view_model(&state);

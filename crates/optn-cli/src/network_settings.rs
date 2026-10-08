@@ -786,6 +786,17 @@ mod tests {
                             json!([{"tx_hash":expected_txid,"height":5}])
                         }
                         "blockchain.scripthash.get_mempool" => json!([]),
+                        // Asked alongside each lookup for the block height.
+                        "blockchain.transaction.get_merkle" => {
+                            json!({"block_height": 5, "merkle": [], "pos": 0})
+                        }
+                        // The token's authbase: this fixture holds no authchain,
+                        // so its identity stays unresolved and its coin visible.
+                        "blockchain.transaction.get"
+                            if request["params"][0] != json!(expected_txid) =>
+                        {
+                            Value::Null
+                        }
                         "blockchain.transaction.get" => {
                             assert_eq!(request["params"], json!([expected_txid, false]));
                             lookups += 1;

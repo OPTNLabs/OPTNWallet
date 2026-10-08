@@ -585,7 +585,7 @@ pub fn NftsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
 /// needs them to look different.
 fn category_label(identity: &Option<TokenIdentity>, category_hex: &str) -> String {
     match identity {
-        Some(identity) => match identity.status.caveat() {
+        Some(identity) => match identity.caveat() {
             Some(caveat) => format!("{} ({caveat})", identity.name),
             None => identity.name.clone(),
         },

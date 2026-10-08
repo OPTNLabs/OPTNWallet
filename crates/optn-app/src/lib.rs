@@ -2030,6 +2030,37 @@ impl IdentityStatus {
     }
 }
 
+/// What established a verified identity's authhead.
+///
+/// The registry always matched the hash committed on chain; this says how the
+/// chain position carrying that commitment was learned. Kept apart from
+/// [`IdentityStatus`] because "is this current" and "how do we know" are
+/// different questions, and a holder deciding whether to act on a name needs
+/// both. Ordered weakest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum IdentityAssurance {
+    /// Not recorded: nothing was established, or the record predates this.
+    #[default]
+    Unattested,
+    /// A chain server reported the authchain and that its head is unspent.
+    /// The server could have hidden a newer head or described a chain that
+    /// does not exist; the registry it led to still matched its hash.
+    ServerReported,
+    /// The holder's own validating node supplied every hop and the head's
+    /// unspent state.
+    NodeValidated,
+}
+
+/// How a verified identity was established.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IdentityBasis {
+    pub assurance: IdentityAssurance,
+    /// The authhead's identity output is `OP_RETURN`. The identity is burned:
+    /// nobody can publish a newer registry for it, so this one is final. That
+    /// part needs no server's word -- the output cannot be spent.
+    pub burned: bool,
+}
+
 /// A token's name as this wallet currently knows it.
 ///
 /// Only ever built from a registry whose committed hash matched. A name that
@@ -2041,9 +2072,25 @@ pub struct TokenIdentity {
     pub decimals: u8,
     pub status: IdentityStatus,
     pub presentation: TokenPresentation,
+    /// How the authhead behind a verified or last-known name was established.
+    pub basis: IdentityBasis,
 }
 
 impl TokenIdentity {
+    /// A short caveat for renderers that show one line, or `None` when the
+    /// name is current on the holder's own evidence.
+    ///
+    /// A current name a server vouched for still says so: the registry is
+    /// authentic, but which registry is current rests on that server.
+    pub const fn caveat(&self) -> Option<&'static str> {
+        match (self.status, self.basis.assurance) {
+            (IdentityStatus::Verified, IdentityAssurance::ServerReported) => {
+                Some("as reported by server")
+            }
+            (status, _) => status.caveat(),
+        }
+    }
+
     /// Presentation is not identity evidence. Only known authenticated states
     /// may carry it across a persistence or renderer boundary.
     pub fn authenticated_presentation(&self) -> TokenPresentation {
@@ -3168,6 +3215,7 @@ mod tests {
                 decimals: 2,
                 status,
                 presentation: Default::default(),
+                basis: Default::default(),
             }
         }
 

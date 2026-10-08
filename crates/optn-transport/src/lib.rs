@@ -14,9 +14,9 @@ use optn_app::{
     AuthScope, AutoLockMinutes, CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag,
     FeatureFlags, FeeMode, FeePreferences, FeeRate, FlipstarterPledge, FreezeReason,
     HardwareSessionState, HardwareSetupPreview, HardwareVendor, HistoryEntry, HistoryKind,
-    IdentityStatus, ImportStep, LedgerLink, MultisigSetupPreview, MultisigStep, Network,
-    NetworkServers, OpenedWallet, Outpoint, PledgeStatus, ScanCoverageView, ServerKind,
-    ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, TokenIdentity,
+    IdentityAssurance, IdentityBasis, IdentityStatus, ImportStep, LedgerLink, MultisigSetupPreview,
+    MultisigStep, Network, NetworkServers, OpenedWallet, Outpoint, PledgeStatus, ScanCoverageView,
+    ServerKind, ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, TokenIdentity,
     TokenPresentation, UiSkin, WalletKind, WalletSyncView, WatchOnlyKind, WatchOnlySetupPreview,
     RELAY_MINIMUM_FEE_RATE,
 };
@@ -772,6 +772,27 @@ pub struct WireTokenIdentity {
     /// treating it as current.
     pub status: String,
     pub presentation: TokenPresentation,
+    /// `node-validated` | `server-reported`, or empty when not recorded. An
+    /// unknown value reads as not recorded, never as the stronger claim.
+    pub assurance: String,
+    /// The identity is burned: its registry can no longer change.
+    pub burned: bool,
+}
+
+fn identity_assurance_name(assurance: IdentityAssurance) -> &'static str {
+    match assurance {
+        IdentityAssurance::Unattested => "",
+        IdentityAssurance::ServerReported => "server-reported",
+        IdentityAssurance::NodeValidated => "node-validated",
+    }
+}
+
+fn parse_identity_assurance(value: &str) -> IdentityAssurance {
+    match value {
+        "server-reported" => IdentityAssurance::ServerReported,
+        "node-validated" => IdentityAssurance::NodeValidated,
+        _ => IdentityAssurance::Unattested,
+    }
 }
 
 fn identity_status_name(status: IdentityStatus) -> &'static str {
@@ -802,6 +823,8 @@ impl From<&TokenIdentity> for WireTokenIdentity {
             decimals: value.decimals,
             status: identity_status_name(value.status).to_owned(),
             presentation: value.authenticated_presentation(),
+            assurance: identity_assurance_name(value.basis.assurance).to_owned(),
+            burned: value.basis.burned,
         }
     }
 }
@@ -814,6 +837,10 @@ impl From<WireTokenIdentity> for TokenIdentity {
             decimals: value.decimals,
             status: parse_identity_status(&value.status),
             presentation: value.presentation,
+            basis: IdentityBasis {
+                assurance: parse_identity_assurance(&value.assurance),
+                burned: value.burned,
+            },
         };
         identity.presentation = identity.authenticated_presentation();
         identity
@@ -2994,15 +3021,42 @@ mod tests {
             IdentityStatus::Unpublished,
             IdentityStatus::Unresolved,
         ] {
-            let identity = TokenIdentity {
-                name: "Bitcats".into(),
-                ticker: Some("BCAT".into()),
-                decimals: 2,
-                status,
-                presentation: Default::default(),
-            };
-            let decoded = TokenIdentity::from(WireTokenIdentity::from(&identity));
-            assert_eq!(decoded, identity);
+            for basis in [
+                IdentityBasis::default(),
+                IdentityBasis {
+                    assurance: IdentityAssurance::ServerReported,
+                    burned: false,
+                },
+                IdentityBasis {
+                    assurance: IdentityAssurance::NodeValidated,
+                    burned: true,
+                },
+            ] {
+                let identity = TokenIdentity {
+                    name: "Bitcats".into(),
+                    ticker: Some("BCAT".into()),
+                    decimals: 2,
+                    status,
+                    presentation: Default::default(),
+                    basis,
+                };
+                let decoded = TokenIdentity::from(WireTokenIdentity::from(&identity));
+                assert_eq!(decoded, identity);
+            }
+        }
+    }
+
+    /// An assurance this build does not recognise never reads as the stronger
+    /// claim, and a payload from before the field existed reads as unrecorded.
+    #[test]
+    fn an_unknown_or_missing_assurance_is_unattested() {
+        for wire in [
+            serde_json::json!({"name": "Bitcats", "status": "verified", "assurance": "notarised"}),
+            serde_json::json!({"name": "Bitcats", "status": "verified"}),
+        ] {
+            let identity =
+                TokenIdentity::from(serde_json::from_value::<WireTokenIdentity>(wire).unwrap());
+            assert_eq!(identity.basis, IdentityBasis::default());
         }
     }
 
@@ -3018,6 +3072,7 @@ mod tests {
             decimals: 0,
             status: "something-newer".into(),
             presentation: Default::default(),
+            ..Default::default()
         };
         assert_eq!(TokenIdentity::from(wire).status, IdentityStatus::Unresolved);
     }

@@ -183,6 +183,12 @@ pub enum ChainPayload {
         txid: Hash32,
         vout: u32,
         spender: Option<ObservedTransaction>,
+        /// Transactions the search passed through on its way to `spender`,
+        /// nearest first: each spends an output of the one before it, the first
+        /// spends an output of `spender`. Discovery hints only. A consumer that
+        /// follows an authchain through them must still check every link, and a
+        /// source owes nothing here: an empty list is always a valid answer.
+        descendants: Vec<ObservedTransaction>,
     },
     BroadcastObserved {
         txid: Hash32,
@@ -199,6 +205,10 @@ pub enum ChainPayload {
         root: Hash32,
     },
 }
+
+/// Upper bound on [`ChainPayload::OutpointSpender::descendants`]. A provider's
+/// hints are untrusted, so their volume is bounded where they enter.
+pub const MAX_SPENDER_DESCENDANTS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendObservation {
@@ -643,6 +653,30 @@ impl ChainService {
         route: &CapabilityRoute,
         request: &ChainRequest,
     ) -> Result<ChainObservation<ChainPayload>, ChainServiceError> {
+        self.execute_on_route_with(route, request, true).await
+    }
+
+    /// [`Self::execute_on_route`] for optional work, such as token metadata,
+    /// whose outcome must not change which routes wallet synchronization uses.
+    ///
+    /// The same policy check and response binding apply. Only the route-health
+    /// bookkeeping is skipped: an identity lookup a server cannot answer leaves
+    /// that server exactly as eligible for the next refresh as it was, and an
+    /// answer cannot clear a failure the refresh itself recorded.
+    pub async fn execute_optional_on_route(
+        &mut self,
+        route: &CapabilityRoute,
+        request: &ChainRequest,
+    ) -> Result<ChainObservation<ChainPayload>, ChainServiceError> {
+        self.execute_on_route_with(route, request, false).await
+    }
+
+    async fn execute_on_route_with(
+        &mut self,
+        route: &CapabilityRoute,
+        request: &ChainRequest,
+        record_health: bool,
+    ) -> Result<ChainObservation<ChainPayload>, ChainServiceError> {
         // Routes are public snapshots, not authorization to bypass current policy.
         if !self
             .routes_for_operation(request.operation())
@@ -703,6 +737,7 @@ impl ChainService {
                         txid: observed_txid,
                         vout: observed_vout,
                         spender,
+                        descendants,
                     } if observed_txid == txid && observed_vout == vout
                         && spender.as_ref().is_none_or(|transaction| {
                             optn_core::header_hash::sha256d(&transaction.raw) == transaction.txid
@@ -711,6 +746,14 @@ impl ChainService {
                                         parent == txid && index == vout
                                     })
                                 })
+                        })
+                        // Hints still have to be the bytes they claim to be, and
+                        // only exist alongside the spender they lead back to.
+                        && (spender.is_some() || descendants.is_empty())
+                        && descendants.len() <= MAX_SPENDER_DESCENDANTS
+                        && descendants.iter().all(|transaction| {
+                            optn_core::header_hash::sha256d(&transaction.raw) == transaction.txid
+                                && optn_core::tx::decode(&transaction.raw).is_ok()
                         }) => {}
                     _ => return Err(ChainBackendError::InvalidResponse(
                         "spender response does not bind to the requested outpoint".into(),
@@ -721,7 +764,9 @@ impl ChainService {
         });
         match response {
             Ok(observation) => {
-                self.set_route_health(route, ProviderHealth::Healthy);
+                if record_health {
+                    self.set_route_health(route, ProviderHealth::Healthy);
+                }
                 Ok(ChainObservation {
                     value: observation.payload,
                     source: route.source.clone(),
@@ -734,11 +779,12 @@ impl ChainService {
                 // been used by non-SHV nodes). An optional proof timeout or
                 // refusal must not disable the same peer's ordinary header
                 // path. Invalid replies still quarantine the route.
-                if !matches!(request, ChainRequest::HistoricalHeaderProof { .. })
-                    || !matches!(
-                        error,
-                        ChainBackendError::Unsupported | ChainBackendError::Timeout
-                    )
+                if record_health
+                    && (!matches!(request, ChainRequest::HistoricalHeaderProof { .. })
+                        || !matches!(
+                            error,
+                            ChainBackendError::Unsupported | ChainBackendError::Timeout
+                        ))
                 {
                     self.set_route_health(route, health_for_error(&error));
                 }
@@ -973,6 +1019,7 @@ mod tests {
                 txid: [1; 32],
                 vout: 0,
                 spender: None,
+                descendants: Vec::new(),
             }),
             failure: std::sync::Mutex::new(None),
         })
@@ -1144,6 +1191,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn optional_work_never_changes_which_routes_wallet_sync_may_use() {
+        // The fixture answers this with a payload for another outpoint: an
+        // invalid response, which quarantines a route on the wallet's own path.
+        let request = ChainRequest::OutpointSpentness {
+            txid: [2; 32],
+            vout: 3,
+        };
+        let (mut service, backend, _) = routed_service();
+        let route = service
+            .routes_for_operation(ChainOperation::OutpointSpentness)
+            .remove(0);
+        assert!(service
+            .execute_optional_on_route(&route, &request)
+            .await
+            .is_err());
+        assert!(
+            !service
+                .routes_for_operation(ChainOperation::HeaderSync)
+                .is_empty(),
+            "a failed metadata lookup must leave the route eligible for sync"
+        );
+        assert!(service.execute_on_route(&route, &request).await.is_err());
+        assert!(service
+            .routes_for_operation(ChainOperation::HeaderSync)
+            .is_empty());
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
     async fn spender_discovery_checks_raw_hash_exact_input_and_current_policy() {
         let request = ChainRequest::OutpointSpender {
             txid: [1; 32],
@@ -1177,6 +1253,7 @@ mod tests {
                 txid: if case == 4 { [2; 32] } else { [1; 32] },
                 vout: 0,
                 spender: (case != 0).then_some(candidate),
+                descendants: Vec::new(),
             };
             let result = service.execute(&request).await;
             assert_eq!(result.is_ok(), case < 2, "case {case}: {result:?}");

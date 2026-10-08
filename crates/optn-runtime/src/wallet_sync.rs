@@ -2111,6 +2111,7 @@ mod tests {
                 decimals: 0,
                 status: IdentityStatus::Unpublished,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         );
         // A registry can legitimately return a label beyond the restart-cache
@@ -2124,6 +2125,7 @@ mod tests {
                 decimals: 0,
                 status: IdentityStatus::Verified,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         );
         let (app_tx, _) = watch::channel(app.clone());
@@ -2427,6 +2429,7 @@ mod tests {
                                         .any(|(parent, index, _)| parent == txid && index == vout)
                                 })
                                 .cloned(),
+                            descendants: Vec::new(),
                         },
                         evidence: Evidence::ServerAssertion,
                         chain_tip: None,
@@ -3139,6 +3142,7 @@ mod tests {
                 decimals: 0,
                 status: IdentityStatus::Verified,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         });
         assert_eq!(

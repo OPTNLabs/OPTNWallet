@@ -106,7 +106,7 @@ fn wallet_chrome(state: &AppState) -> Vec<String> {
 /// one to look different from the first.
 fn category_label(identity: &Option<TokenIdentity>, category_hex: &str) -> String {
     match identity {
-        Some(identity) => match identity.status.caveat() {
+        Some(identity) => match identity.caveat() {
             Some(caveat) => format!("{} ({caveat})", identity.name),
             None => identity.name.clone(),
         },

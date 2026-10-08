@@ -11,7 +11,9 @@ use crate::{
     wallet_birthday::{WalletBirthday, WalletRestoreState},
     wallet_sync::WalletReconciliation,
 };
-use optn_app::{AppState, IdentityStatus, TokenIdentity, TokenPresentation};
+use optn_app::{
+    AppState, IdentityAssurance, IdentityBasis, IdentityStatus, TokenIdentity, TokenPresentation,
+};
 use optn_core::{
     cashaddr::Address,
     coins::{CoinSet, FreezeReason, Outpoint},
@@ -181,6 +183,57 @@ struct StoredTokenIdentity {
     status: StoredIdentityStatus,
     #[serde(default)]
     presentation: TokenPresentation,
+    /// Absent in checkpoints written before identities recorded how their
+    /// authhead was established; absence reads as not recorded.
+    #[serde(default)]
+    basis: StoredIdentityBasis,
+}
+
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredIdentityBasis {
+    #[serde(default)]
+    assurance: StoredIdentityAssurance,
+    #[serde(default)]
+    burned: bool,
+}
+
+/// An assurance written by a newer build reads as not recorded rather than
+/// as a claim this build would make on its own.
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum StoredIdentityAssurance {
+    ServerReported,
+    NodeValidated,
+    #[default]
+    #[serde(other)]
+    Unattested,
+}
+
+impl From<IdentityBasis> for StoredIdentityBasis {
+    fn from(basis: IdentityBasis) -> Self {
+        Self {
+            assurance: match basis.assurance {
+                IdentityAssurance::Unattested => StoredIdentityAssurance::Unattested,
+                IdentityAssurance::ServerReported => StoredIdentityAssurance::ServerReported,
+                IdentityAssurance::NodeValidated => StoredIdentityAssurance::NodeValidated,
+            },
+            burned: basis.burned,
+        }
+    }
+}
+
+impl From<StoredIdentityBasis> for IdentityBasis {
+    fn from(basis: StoredIdentityBasis) -> Self {
+        Self {
+            assurance: match basis.assurance {
+                StoredIdentityAssurance::Unattested => IdentityAssurance::Unattested,
+                StoredIdentityAssurance::ServerReported => IdentityAssurance::ServerReported,
+                StoredIdentityAssurance::NodeValidated => IdentityAssurance::NodeValidated,
+            },
+            burned: basis.burned,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -312,6 +365,7 @@ fn decode_token_identities(
                 decimals: identity.decimals,
                 status: identity.status.into(),
                 presentation: identity.presentation.clone(),
+                basis: identity.basis.into(),
             };
             decoded.presentation = decoded.authenticated_presentation();
             Ok((category.clone(), decoded))
@@ -667,6 +721,7 @@ impl WalletCheckpoint {
                             decimals: identity.decimals,
                             status: identity.status.into(),
                             presentation: identity.authenticated_presentation(),
+                            basis: identity.basis.into(),
                         },
                     )
                 })
@@ -959,6 +1014,7 @@ mod tests {
                 decimals: 2,
                 status: StoredIdentityStatus::Verified,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         );
         let checkpoint = WalletCheckpoint::open(&key, &encoded(&key, &stored, 210))
@@ -1148,6 +1204,7 @@ mod tests {
                     decimals: 2,
                     status: StoredIdentityStatus::Verified,
                     presentation: Default::default(),
+                    basis: Default::default(),
                 },
             );
             assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, 91)).is_err());
@@ -1234,6 +1291,7 @@ mod tests {
                     decimals: identity.decimals,
                     status: identity.status.into(),
                     presentation: identity.presentation.clone(),
+                    basis: Default::default(),
                 },
             );
             let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 92)).unwrap();
@@ -1274,6 +1332,7 @@ mod tests {
                 decimals: 0,
                 status: StoredIdentityStatus::Verified,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         );
         let mut legacy = serde_json::to_value(&stored).unwrap();

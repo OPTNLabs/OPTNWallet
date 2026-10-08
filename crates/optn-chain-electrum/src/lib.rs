@@ -10,7 +10,7 @@ use optn_runtime::chain::{
 };
 use optn_runtime::chain_service::{
     BackendObservation, ChainBackend, ChainBackendError, ChainFuture, ChainOperation, ChainPayload,
-    ChainRequest, ChainTip, ObservedTransaction, WalletInterest,
+    ChainRequest, ChainTip, ObservedTransaction, OutpointSpentness, WalletInterest,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -19,7 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::time::timeout;
+use tokio::sync::Mutex;
+use tokio::time::{timeout, Instant};
 use tokio_rustls::rustls::{pki_types::ServerName, ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
@@ -34,9 +35,20 @@ const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PIPELINE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_WALLET_TRANSACTIONS: usize = 100_000;
 const MAX_SPENDER_TRANSACTIONS: usize = 128;
-const MAX_SPENDER_UTXO_CANDIDATES: usize = 30;
+/// rnbrady's cap on the unspent-output phase: the outputs still at the address
+/// plus the ancestors walked back from them. Past this the history scan is
+/// cheaper than guessing.
+const MAX_SPENDER_HEURISTIC_FETCHES: usize = 30;
+/// How far a walk back from an unspent output follows arbitrary inputs. A walk
+/// that has only ever followed output-0 links is following an authchain, and
+/// the fetch cap alone bounds it.
+const MAX_WALK_BACK_DEPTH: u32 = 3;
 const MAX_SPENDER_RAW_BYTES: usize = 2 * 1024 * 1024;
 const SPENDER_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a parked connection stays eligible for reuse: long enough to carry
+/// one refresh and the lookups that follow it, short enough that a silently
+/// dropped Tor circuit is not the first thing the next refresh meets.
+const IDLE_SESSION_TTL: Duration = Duration::from_secs(30);
 const CLIENT_NAME: &str = "OPTN Wallet";
 const PROTOCOL_MIN: &str = "1.4";
 const PROTOCOL_MAX: &str = "1.6";
@@ -99,6 +111,17 @@ pub struct ElectrumBackend {
     config: ElectrumConfig,
     capabilities: CapabilitySet,
     server_info: ElectrumServerInfo,
+    /// One negotiated connection kept between requests. A new session costs a
+    /// TCP/TLS handshake plus `server.version` and `server.features` -- over Tor,
+    /// several round trips -- and an authchain walk asks a few small questions
+    /// per hop. Paying that per question would put ordinary walks past the
+    /// runtime's deadline.
+    idle: Mutex<Option<IdleSession>>,
+}
+
+struct IdleSession {
+    session: Session,
+    parked: Instant,
 }
 
 impl ElectrumBackend {
@@ -124,6 +147,9 @@ impl ElectrumBackend {
         for capability in [
             Capability::FastHistory,
             Capability::OutpointSpenderLookup,
+            // `blockchain.utxo.get_info` from protocol 1.4.4, the address's
+            // unspent list before that. Either way it is the server's word.
+            Capability::OutpointUnspentLookup,
             Capability::ScriptSubscriptions,
             Capability::UtxoQuery,
             Capability::TransactionQuery,
@@ -192,6 +218,11 @@ impl ElectrumBackend {
                 features,
                 peers,
             },
+            // The probe already paid for the handshake and checked the chain.
+            idle: Mutex::new(Some(IdleSession {
+                session,
+                parked: Instant::now(),
+            })),
         })
     }
 
@@ -237,8 +268,93 @@ impl ElectrumBackend {
         Ok(session)
     }
 
+    /// The parked connection while it is fresh, otherwise a new one. The flag
+    /// says which: a parked connection may have been closed by the server since.
+    async fn checkout(&self) -> Result<(Session, bool), ChainBackendError> {
+        if let Some(idle) = self.idle.lock().await.take() {
+            if idle.parked.elapsed() < IDLE_SESSION_TTL {
+                return Ok((idle.session, true));
+            }
+        }
+        Ok((self.session().await?, false))
+    }
+
+    /// Keep a connection for the next request. One is kept; a newer one
+    /// replaces it, which closes the older.
+    async fn park(&self, session: Session) {
+        *self.idle.lock().await = Some(IdleSession {
+            session,
+            parked: Instant::now(),
+        });
+    }
+
+    /// Read-only requests run on a reused connection when one is parked.
+    async fn pooled(
+        &self,
+        request: &ChainRequest,
+    ) -> Result<BackendObservation, ChainBackendError> {
+        let (mut session, reused) = self.checkout().await?;
+        let mut result = self.dispatch(&mut session, request).await;
+        // A parked connection the server has since closed fails before any
+        // reply. That is the connection's fault, not the request's, and these
+        // requests change nothing, so they get one fresh attempt.
+        if reused && matches!(result, Err(ChainBackendError::Offline)) {
+            session = self.session().await?;
+            result = self.dispatch(&mut session, request).await;
+        }
+        if !session.poisoned
+            && (result.is_ok() || matches!(result, Err(ChainBackendError::Unsupported)))
+        {
+            self.park(session).await;
+        }
+        result
+    }
+
+    async fn dispatch(
+        &self,
+        session: &mut Session,
+        request: &ChainRequest,
+    ) -> Result<BackendObservation, ChainBackendError> {
+        match request {
+            ChainRequest::WalletRefresh {
+                interests,
+                from_height,
+            } => self.wallet_refresh(session, interests, *from_height).await,
+            ChainRequest::TransactionLookup { txid } => {
+                self.transaction_lookup(session, *txid).await
+            }
+            ChainRequest::OutpointSpentness { txid, vout } => {
+                self.outpoint_spentness(session, *txid, *vout).await
+            }
+            ChainRequest::OutpointSpender {
+                txid,
+                vout,
+                script_pubkey,
+                from_height,
+            } => {
+                self.outpoint_spender(session, *txid, *vout, script_pubkey, *from_height)
+                    .await
+            }
+            ChainRequest::HeaderSync {
+                start_height,
+                count,
+            } => self.header_sync(session, *start_height, *count).await,
+            ChainRequest::HistoricalHeaderProof {
+                height,
+                checkpoint_height,
+            } => {
+                self.historical_header_proof(session, *height, *checkpoint_height)
+                    .await
+            }
+            ChainRequest::CashcodeBlockRange { .. }
+            | ChainRequest::HeaderSyncFromLocator { .. }
+            | ChainRequest::Broadcast { .. } => Err(ChainBackendError::Unsupported),
+        }
+    }
+
     async fn wallet_refresh(
         &self,
+        session: &mut Session,
         interests: &[WalletInterest],
         from_height: Option<u32>,
     ) -> Result<BackendObservation, ChainBackendError> {
@@ -249,7 +365,6 @@ impl ElectrumBackend {
         }) {
             return Err(ChainBackendError::Unsupported);
         }
-        let mut session = self.session().await?;
         let tip = parse_tip(
             &session
                 .call("blockchain.headers.subscribe", json!([]))
@@ -263,7 +378,7 @@ impl ElectrumBackend {
                 match interest {
                     WalletInterest::Script(script) => {
                         let sh = electrum_scripthash(script);
-                        let params = if protocol_at_least(&self.server_info.protocol, 1, 5, 1) {
+                        let params = if protocol_at_least(&session.protocol, 1, 5, 1) {
                             json!([sh, from_height.unwrap_or(0), -1])
                         } else {
                             json!([sh])
@@ -340,53 +455,148 @@ impl ElectrumBackend {
 
     async fn transaction_lookup(
         &self,
+        session: &mut Session,
         txid: [u8; 32],
     ) -> Result<BackendObservation, ChainBackendError> {
-        let mut session = self.session().await?;
-        let raw_hex = session
-            .call(
-                "blockchain.transaction.get",
-                json!([display_hash(txid), false]),
-            )
-            .await?
-            .as_str()
-            .ok_or_else(|| {
-                ChainBackendError::InvalidResponse("transaction.get did not return hex".into())
-            })?
-            .to_owned();
-        let raw = hex::decode(raw_hex).map_err(|error| {
-            ChainBackendError::InvalidResponse(format!("invalid transaction hex: {error}"))
-        })?;
-        if sha256d(&raw) != txid {
-            return Err(ChainBackendError::InvalidResponse(
-                "transaction bytes do not match requested txid".into(),
-            ));
+        let display = display_hash(txid);
+        let mut requests = vec![("blockchain.transaction.get", json!([display, false]))];
+        // The block height bounds a later history search to what came after
+        // this transaction (rnbrady's `from_height`). Asked in the same round
+        // trip; an unconfirmed transaction has none, and the server answers
+        // that with an error rather than a height.
+        if protocol_at_least(&session.protocol, 1, 4, 5) {
+            requests.push(("blockchain.transaction.get_merkle", json!([display])));
         }
+        let mut replies = session.call_many_lenient(&requests).await?.into_iter();
+        let raw = transaction_bytes(&replies.next().unwrap_or(Ok(Value::Null))?, txid)?;
+        let block_height = replies
+            .next()
+            .and_then(Result::ok)
+            .and_then(|merkle| merkle.get("block_height").and_then(Value::as_u64))
+            .and_then(|height| u32::try_from(height).ok())
+            .filter(|height| *height > 0);
         Ok(BackendObservation {
             payload: ChainPayload::Transaction(ObservedTransaction {
                 txid,
                 raw,
-                block_height: None,
+                block_height,
             }),
             evidence: Evidence::ServerAssertion,
             chain_tip: None,
         })
     }
 
+    /// Whether `txid:vout` is in the server's UTXO view, mempool included.
+    ///
+    /// One round trip carries three questions: the tip the answer is evaluated
+    /// at, the transaction itself so the answer is bound to that output's script
+    /// and value, and the lookup. `blockchain.utxo.get_info` answers directly
+    /// from protocol 1.4.4; older servers are asked for the address's unspent
+    /// list. An absent output is `Unknown`: the server saying it is not unspent
+    /// does not name what spent it.
+    async fn outpoint_spentness(
+        &self,
+        session: &mut Session,
+        txid: [u8; 32],
+        vout: u32,
+    ) -> Result<BackendObservation, ChainBackendError> {
+        let display = display_hash(txid);
+        let direct = protocol_at_least(&session.protocol, 1, 4, 4);
+        let mut requests = vec![
+            ("blockchain.headers.subscribe", json!([])),
+            ("blockchain.transaction.get", json!([display, false])),
+        ];
+        if direct {
+            requests.push(("blockchain.utxo.get_info", json!([display, vout])));
+        }
+        let mut replies = session.call_many_lenient(&requests).await?.into_iter();
+        let tip = parse_tip(&replies.next().unwrap_or(Ok(Value::Null))?)?.ok_or_else(|| {
+            ChainBackendError::InvalidResponse("headers.subscribe returned no tip".into())
+        })?;
+        let raw = transaction_bytes(&replies.next().unwrap_or(Ok(Value::Null))?, txid)?;
+        let decoded = optn_core::tx::decode(&raw).map_err(|error| {
+            ChainBackendError::InvalidResponse(format!("invalid transaction: {error}"))
+        })?;
+        let output = usize::try_from(vout)
+            .ok()
+            .and_then(|index| decoded.outputs.get(index))
+            .ok_or_else(|| {
+                ChainBackendError::InvalidResponse("the transaction has no such output".into())
+            })?;
+        let scripthash = electrum_scripthash(&output.script_pubkey);
+        // A server that advertises the protocol but refuses the method is asked
+        // the older way, rather than being marked unhealthy for wallet sync.
+        let direct_reply = replies.next().and_then(Result::ok).filter(|_| direct);
+        let unspent = if let Some(reply) = direct_reply {
+            match reply {
+                Value::Null => false,
+                Value::Object(info) => {
+                    let same_script = info
+                        .get("scripthash")
+                        .and_then(Value::as_str)
+                        .is_some_and(|reported| reported.eq_ignore_ascii_case(&scripthash));
+                    let same_value =
+                        info.get("value").and_then(Value::as_u64) == Some(output.value);
+                    if !same_script || !same_value {
+                        return Err(ChainBackendError::InvalidResponse(
+                            "utxo.get_info disagrees with the transaction's own output".into(),
+                        ));
+                    }
+                    true
+                }
+                _ => {
+                    return Err(ChainBackendError::InvalidResponse(
+                        "utxo.get_info returned neither an object nor null".into(),
+                    ))
+                }
+            }
+        } else {
+            let listed = session
+                .call("blockchain.scripthash.listunspent", json!([scripthash]))
+                .await?;
+            match listed_unspent_value(&listed, &display, vout)? {
+                Some(value) if value == output.value => true,
+                Some(_) => {
+                    return Err(ChainBackendError::InvalidResponse(
+                        "listunspent disagrees with the transaction's own output".into(),
+                    ))
+                }
+                None => false,
+            }
+        };
+        Ok(BackendObservation {
+            payload: ChainPayload::OutpointSpentness(if unspent {
+                OutpointSpentness::Unspent {
+                    txid,
+                    vout,
+                    value_sats: output.value,
+                    script_pubkey: output.script_pubkey.clone(),
+                    best_block: tip.hash,
+                }
+            } else {
+                OutpointSpentness::Unknown { txid, vout }
+            }),
+            evidence: Evidence::ServerAssertion,
+            chain_tip: Some((tip.height, tip.hash)),
+        })
+    }
+
     async fn outpoint_spender(
         &self,
+        session: &mut Session,
         txid: [u8; 32],
         vout: u32,
         script_pubkey: &[u8],
         from_height: Option<u32>,
     ) -> Result<BackendObservation, ChainBackendError> {
-        let spender = match timeout(
+        let (spender, descendants) = match timeout(
             SPENDER_TIMEOUT,
-            self.find_outpoint_spender(txid, vout, script_pubkey, from_height),
+            self.find_outpoint_spender(session, txid, vout, script_pubkey, from_height),
         )
         .await
         {
-            Ok(Err(ChainBackendError::Timeout)) | Err(_) => None,
+            // A deadline is a budget running out, not an answer.
+            Ok(Err(ChainBackendError::Timeout)) | Err(_) => (None, Vec::new()),
             Ok(result) => result?,
         };
         Ok(BackendObservation {
@@ -394,132 +604,155 @@ impl ElectrumBackend {
                 txid,
                 vout,
                 spender,
+                descendants,
             },
             evidence: Evidence::ServerAssertion,
             chain_tip: None,
         })
     }
 
+    /// Bounded discovery of whatever spends `txid:vout`, after rnbrady's
+    /// Electron Cash authchain work.
+    ///
+    /// First the outputs still sitting at the address: each one's transaction
+    /// may be the spender itself, or a descendant that leads back to it. The
+    /// walk back follows any input for three hops, and follows output-0 links
+    /// for as long as the fetch cap allows -- an unspent output at the end of an
+    /// authchain walks straight back to the spender, finding every hop between
+    /// in the same pass. Then the address's history after `from_height`, oldest
+    /// first, since a spender follows what it spends.
+    ///
+    /// Every candidate is checked for the exact input before it is reported.
+    /// Nothing found is unknown: a missing spender is never evidence of an
+    /// unspent output, and neither is running out of budget.
     async fn find_outpoint_spender(
         &self,
+        session: &mut Session,
         txid: [u8; 32],
         vout: u32,
         script_pubkey: &[u8],
         from_height: Option<u32>,
-    ) -> Result<Option<ObservedTransaction>, ChainBackendError> {
-        let mut session = self.session().await?;
+    ) -> Result<(Option<ObservedTransaction>, Vec<ObservedTransaction>), ChainBackendError> {
+        let target = (txid, vout);
         let sh = electrum_scripthash(script_pubkey);
-        let mut downloaded = BTreeSet::new();
-        let mut raw_bytes = 0;
-        for heuristic in [true, false] {
-            let mut candidates = BTreeMap::new();
-            let limit = if heuristic {
-                // UTXO creators are only candidates. Absence says nothing about
-                // spentness, and a successor need not itself remain unspent.
-                merge_history(
-                    &mut candidates,
-                    &session
-                        .call("blockchain.scripthash.listunspent", json!([sh]))
-                        .await?,
-                )?;
-                MAX_SPENDER_UTXO_CANDIDATES
-            } else {
-                let params = if protocol_at_least(&session.protocol, 1, 5, 1) {
-                    json!([sh, from_height.unwrap_or(0), -1])
-                } else {
-                    json!([sh])
+        let floor = i64::from(from_height.unwrap_or(0));
+        let eligible = |candidate: &[u8; 32], height: i64| {
+            *candidate != txid && (height <= 0 || height >= floor)
+        };
+        let mut search = SpenderSearch::default();
+
+        let mut unspent = BTreeMap::new();
+        merge_history(
+            &mut unspent,
+            &session
+                .call("blockchain.scripthash.listunspent", json!([sh]))
+                .await?,
+        )?;
+        let mut frontier: Vec<WalkStep> = chronological(unspent)
+            .into_iter()
+            .filter(|(candidate, height)| eligible(candidate, *height))
+            .map(|(candidate, height)| WalkStep {
+                txid: candidate,
+                height,
+                depth: 0,
+                output_zero_path: true,
+            })
+            .collect();
+        let mut walked = 0;
+        while !frontier.is_empty() && walked < MAX_SPENDER_HEURISTIC_FETCHES {
+            // Authchain-shaped paths first, then the shallowest. Stable, so
+            // equal steps keep chronological order.
+            frontier.sort_by_key(|step| (!step.output_zero_path, step.depth));
+            let room = (MAX_SPENDER_HEURISTIC_FETCHES - walked)
+                .min(MAX_PENDING_REQUESTS)
+                .min(search.room())
+                .min(frontier.len());
+            if room == 0 {
+                return Ok((None, Vec::new()));
+            }
+            let batch: Vec<WalkStep> = frontier.drain(..room).collect();
+            walked += batch.len();
+            let group: Vec<_> = batch
+                .iter()
+                .map(|step| (step.txid, step.height, step.depth > 0))
+                .collect();
+            if !search.fetch(session, &group).await? {
+                return Ok((None, Vec::new()));
+            }
+            if let Some(spender) =
+                search.spender_among(batch.iter().map(|step| step.txid), target)?
+            {
+                return Ok(search.report(spender));
+            }
+            for step in &batch {
+                let Some(found) = search.found.get(&step.txid) else {
+                    continue;
                 };
-                for response in session
-                    .call_many(&[
-                        ("blockchain.scripthash.get_history", params),
-                        ("blockchain.scripthash.get_mempool", json!([sh])),
-                    ])
-                    .await?
-                {
-                    merge_history(&mut candidates, &response)?;
-                }
-                usize::MAX
-            };
-            let candidates = candidates
-                .into_iter()
-                .filter(|(candidate_txid, height)| {
-                    *candidate_txid != txid
-                        && !downloaded.contains(candidate_txid)
-                        && (*height <= 0 || *height >= i64::from(from_height.unwrap_or(0)))
-                })
-                .take(limit.min(MAX_SPENDER_TRANSACTIONS - downloaded.len() + 1))
-                .collect::<Vec<_>>();
-            for group in candidates.chunks(MAX_PENDING_REQUESTS) {
-                let group = &group[..group.len().min(MAX_SPENDER_TRANSACTIONS - downloaded.len())];
-                if group.is_empty() || raw_bytes == MAX_SPENDER_RAW_BYTES {
-                    return Ok(None);
-                }
-                downloaded.extend(group.iter().map(|(txid, _)| *txid));
-                let requests = group
-                    .iter()
-                    .map(|(txid, _)| {
-                        (
-                            "blockchain.transaction.get",
-                            json!([display_hash(*txid), false]),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                // Include framing in the remaining hex budget so an oversized
-                // response is stopped on the wire, before allocating raw bytes.
-                let Some(responses) = session
-                    .call_many_bounded(&requests, Some((MAX_SPENDER_RAW_BYTES - raw_bytes) * 2))
-                    .await?
-                else {
-                    return Ok(None);
-                };
-                let mut spender = None;
-                for ((candidate_txid, height), response) in group.iter().zip(responses) {
-                    let raw_hex = response.as_str().ok_or_else(|| {
-                        ChainBackendError::InvalidResponse(
-                            "transaction.get did not return hex".into(),
-                        )
-                    })?;
-                    if raw_hex.len() / 2 > MAX_SPENDER_RAW_BYTES - raw_bytes {
-                        return Ok(None);
+                for &(parent, index) in &found.inputs {
+                    let output_zero_path = step.output_zero_path && index == 0;
+                    let depth = step.depth + 1;
+                    if parent == txid
+                        || parent == [0; 32]
+                        || search.requested.contains(&parent)
+                        || search.via.contains_key(&parent)
+                        || frontier.iter().any(|queued| queued.txid == parent)
+                        || (depth > MAX_WALK_BACK_DEPTH && !output_zero_path)
+                    {
+                        continue;
                     }
-                    let raw = hex::decode(raw_hex).map_err(|error| {
-                        ChainBackendError::InvalidResponse(format!(
-                            "invalid transaction hex: {error}"
-                        ))
-                    })?;
-                    raw_bytes += raw.len();
-                    if sha256d(&raw) != *candidate_txid {
-                        return Err(ChainBackendError::InvalidResponse(
-                            "transaction bytes do not match requested txid".into(),
-                        ));
-                    }
-                    let decoded = optn_core::tx::decode(&raw).map_err(|error| {
-                        ChainBackendError::InvalidResponse(format!("invalid transaction: {error}"))
-                    })?;
-                    if decoded.inputs.iter().any(|(input_txid, input_vout, _)| {
-                        *input_txid == txid && *input_vout == vout
-                    }) {
-                        if spender.is_some() {
-                            return Err(ChainBackendError::InvalidResponse(
-                                "multiple transactions spend the requested outpoint".into(),
-                            ));
-                        }
-                        spender = Some(ObservedTransaction {
-                            txid: *candidate_txid,
-                            raw,
-                            block_height: (*height > 0).then_some(*height as u32),
-                        });
-                    }
-                }
-                // Discovery only: reject conflicts in this observed batch, then
-                // let the runtime validate the candidate without scanning more.
-                if spender.is_some() {
-                    return Ok(spender);
+                    search.via.insert(parent, step.txid);
+                    frontier.push(WalkStep {
+                        txid: parent,
+                        height: 0,
+                        depth,
+                        output_zero_path,
+                    });
                 }
             }
         }
-        // A missing candidate or an exhausted budget is unknown, never unspent.
-        Ok(None)
+
+        let params = if protocol_at_least(&session.protocol, 1, 5, 1) {
+            json!([sh, from_height.unwrap_or(0), -1])
+        } else {
+            json!([sh])
+        };
+        let mut history = BTreeMap::new();
+        for response in session
+            .call_many(&[
+                ("blockchain.scripthash.get_history", params),
+                ("blockchain.scripthash.get_mempool", json!([sh])),
+            ])
+            .await?
+        {
+            merge_history(&mut history, &response)?;
+        }
+        let candidates: Vec<_> = chronological(history)
+            .into_iter()
+            .filter(|(candidate, height)| {
+                eligible(candidate, *height) && !search.requested.contains(candidate)
+            })
+            .collect();
+        for group in candidates.chunks(MAX_PENDING_REQUESTS) {
+            let group = &group[..group.len().min(search.room())];
+            if group.is_empty() {
+                return Ok((None, Vec::new()));
+            }
+            let fetches: Vec<_> = group
+                .iter()
+                .map(|(candidate, height)| (*candidate, *height, false))
+                .collect();
+            if !search.fetch(session, &fetches).await? {
+                return Ok((None, Vec::new()));
+            }
+            // Discovery only: reject conflicts actually observed, then let the
+            // runtime validate the candidate without scanning further.
+            if let Some(spender) =
+                search.spender_among(group.iter().map(|(candidate, _)| *candidate), target)?
+            {
+                return Ok((Some(search.observed(spender)), Vec::new()));
+            }
+        }
+        Ok((None, Vec::new()))
     }
 
     async fn broadcast(
@@ -532,6 +765,11 @@ impl ElectrumBackend {
                 "locally supplied txid does not match transaction bytes".into(),
             ));
         }
+        // Never a reused connection, and never retried: had a reused connection
+        // dropped mid-request, nobody could say whether the server relayed it.
+        // The parked one is closed first, so a broadcast is never this
+        // wallet's second open connection to the server.
+        drop(self.idle.lock().await.take());
         let mut session = self.session().await?;
         let returned = session
             .call(
@@ -556,10 +794,10 @@ impl ElectrumBackend {
 
     async fn header_sync(
         &self,
+        session: &mut Session,
         start_height: u32,
         count: u32,
     ) -> Result<BackendObservation, ChainBackendError> {
-        let mut session = self.session().await?;
         let result = session
             .call("blockchain.block.headers", json!([start_height, count, 0]))
             .await?;
@@ -575,6 +813,7 @@ impl ElectrumBackend {
 
     async fn historical_header_proof(
         &self,
+        session: &mut Session,
         height: u32,
         checkpoint_height: u32,
     ) -> Result<BackendObservation, ChainBackendError> {
@@ -583,7 +822,6 @@ impl ElectrumBackend {
                 "checkpoint height must be at or above requested header".into(),
             ));
         }
-        let mut session = self.session().await?;
         let result = session
             .call(
                 "blockchain.block.header",
@@ -653,35 +891,10 @@ impl ChainBackend for ElectrumBackend {
     fn execute<'a>(&'a self, request: &'a ChainRequest) -> ChainFuture<'a, BackendObservation> {
         Box::pin(async move {
             match request {
-                ChainRequest::CashcodeBlockRange { .. } => Err(ChainBackendError::Unsupported),
-                ChainRequest::WalletRefresh {
-                    interests,
-                    from_height,
-                } => self.wallet_refresh(interests, *from_height).await,
-                ChainRequest::TransactionLookup { txid } => self.transaction_lookup(*txid).await,
-                ChainRequest::OutpointSpender {
-                    txid,
-                    vout,
-                    script_pubkey,
-                    from_height,
-                } => {
-                    self.outpoint_spender(*txid, *vout, script_pubkey, *from_height)
-                        .await
-                }
-                ChainRequest::OutpointSpentness { .. } => Err(ChainBackendError::Unsupported),
+                ChainRequest::CashcodeBlockRange { .. }
+                | ChainRequest::HeaderSyncFromLocator { .. } => Err(ChainBackendError::Unsupported),
                 ChainRequest::Broadcast { raw_tx, txid } => self.broadcast(raw_tx, *txid).await,
-                ChainRequest::HeaderSync {
-                    start_height,
-                    count,
-                } => self.header_sync(*start_height, *count).await,
-                ChainRequest::HeaderSyncFromLocator { .. } => Err(ChainBackendError::Unsupported),
-                ChainRequest::HistoricalHeaderProof {
-                    height,
-                    checkpoint_height,
-                } => {
-                    self.historical_header_proof(*height, *checkpoint_height)
-                        .await
-                }
+                request => self.pooled(request).await,
             }
         })
     }
@@ -692,6 +905,10 @@ struct Session {
     next_id: u64,
     request_timeout: Duration,
     protocol: String,
+    /// Set while a request group is in flight, cleared once every reply is
+    /// read. A connection left mid-frame or with replies outstanding would hand
+    /// them to the next caller, so it is never reused.
+    poisoned: bool,
 }
 impl Session {
     async fn connect(config: &ElectrumConfig) -> Result<Self, ChainBackendError> {
@@ -700,6 +917,7 @@ impl Session {
             next_id: 1,
             request_timeout: config.request_timeout,
             protocol: String::new(),
+            poisoned: false,
         })
     }
     async fn negotiate(
@@ -765,6 +983,30 @@ impl Session {
         requests: &[(&str, Value)],
         byte_budget: Option<usize>,
     ) -> Result<Option<Vec<Value>>, ChainBackendError> {
+        match self.exchange(requests, byte_budget, false).await? {
+            Some(replies) => replies.into_iter().collect::<Result<Vec<_>, _>>().map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Like [`Self::call_many`], but an error reply answers only its own
+    /// request. Used where the server refusing one question -- "no such
+    /// transaction", "not in a block" -- is an ordinary answer.
+    async fn call_many_lenient(
+        &mut self,
+        requests: &[(&str, Value)],
+    ) -> Result<Vec<Result<Value, ChainBackendError>>, ChainBackendError> {
+        self.exchange(requests, None, true).await?.ok_or_else(|| {
+            ChainBackendError::InvalidResponse("Electrum response is missing".into())
+        })
+    }
+
+    async fn exchange(
+        &mut self,
+        requests: &[(&str, Value)],
+        byte_budget: Option<usize>,
+        lenient: bool,
+    ) -> Result<Option<Vec<Result<Value, ChainBackendError>>>, ChainBackendError> {
         if requests.is_empty() || requests.len() > MAX_PENDING_REQUESTS {
             return Err(ChainBackendError::Rejected(
                 "invalid Electrum request group size".into(),
@@ -774,6 +1016,7 @@ impl Session {
         self.next_id = first
             .checked_add(requests.len() as u64)
             .ok_or_else(|| ChainBackendError::Rejected("Electrum request IDs exhausted".into()))?;
+        self.poisoned = true;
         let mut bytes = Vec::new();
         for (index, (method, params)) in requests.iter().enumerate() {
             serde_json::to_writer(
@@ -850,23 +1093,29 @@ impl Session {
                     ));
                 }
                 if let Some(error) = response.get("error").filter(|error| !error.is_null()) {
-                    return Err(ChainBackendError::Protocol(error.to_string()));
+                    if !lenient {
+                        return Err(ChainBackendError::Protocol(error.to_string()));
+                    }
+                    results[index] = Some(Err(ChainBackendError::Protocol(error.to_string())));
+                    received += 1;
+                    continue;
                 }
-                results[index] =
-                    Some(response.get_mut("result").map(Value::take).ok_or_else(|| {
-                        ChainBackendError::InvalidResponse("Electrum response lacks result".into())
-                    })?);
+                results[index] = Some(Ok(response.get_mut("result").map(Value::take).ok_or_else(
+                    || ChainBackendError::InvalidResponse("Electrum response lacks result".into()),
+                )?));
                 received += 1;
             }
-            results
+            let replies = results
                 .into_iter()
                 .map(|result| {
                     result.ok_or_else(|| {
                         ChainBackendError::InvalidResponse("Electrum response is missing".into())
                     })
                 })
-                .collect::<Result<Vec<_>, _>>()
-                .map(Some)
+                .collect::<Result<Vec<_>, _>>()?;
+            // Every reply to this group has been read; the stream is clean.
+            self.poisoned = false;
+            Ok(Some(replies))
         })
         .await
         .map_err(|_| ChainBackendError::Timeout)?
@@ -1014,6 +1263,210 @@ fn validate_rpa_prefix(prefix: &str) -> Result<(), ChainBackendError> {
     }
     Ok(())
 }
+/// One step of the walk back from an address's unspent outputs.
+struct WalkStep {
+    txid: [u8; 32],
+    /// The server's reported height, or 0 when unknown (walked-back ancestors).
+    height: i64,
+    depth: u32,
+    /// Every link from the unspent output to here spent an output 0: the shape
+    /// of an authchain, so the walk may follow it past the depth limit.
+    output_zero_path: bool,
+}
+
+struct FoundTransaction {
+    raw: Vec<u8>,
+    inputs: Vec<([u8; 32], u32)>,
+    height: i64,
+}
+
+/// What one bounded spender search has asked for and learned.
+#[derive(Default)]
+struct SpenderSearch {
+    /// Every transaction asked for, answered or not. Counts against the budget.
+    requested: BTreeSet<[u8; 32]>,
+    raw_bytes: usize,
+    found: BTreeMap<[u8; 32], FoundTransaction>,
+    /// Walked-back ancestor -> the transaction it was reached from.
+    via: BTreeMap<[u8; 32], [u8; 32]>,
+}
+
+impl SpenderSearch {
+    fn room(&self) -> usize {
+        MAX_SPENDER_TRANSACTIONS.saturating_sub(self.requested.len())
+    }
+
+    /// Fetch one pipelined group of `(txid, height, may_be_missing)`. Returns
+    /// `false` once the byte budget is spent; the session is then mid-frame
+    /// and is not reused. A walked-back ancestor the server does not know is
+    /// skipped; anything else it refuses, or bytes that are not the requested
+    /// transaction, fail the search.
+    async fn fetch(
+        &mut self,
+        session: &mut Session,
+        group: &[([u8; 32], i64, bool)],
+    ) -> Result<bool, ChainBackendError> {
+        if self.raw_bytes == MAX_SPENDER_RAW_BYTES {
+            return Ok(false);
+        }
+        self.requested.extend(group.iter().map(|(txid, ..)| *txid));
+        let requests: Vec<_> = group
+            .iter()
+            .map(|(txid, ..)| {
+                (
+                    "blockchain.transaction.get",
+                    json!([display_hash(*txid), false]),
+                )
+            })
+            .collect();
+        // Include framing in the remaining hex budget so an oversized response
+        // is stopped on the wire, before allocating raw bytes.
+        let Some(replies) = session
+            .exchange(
+                &requests,
+                Some((MAX_SPENDER_RAW_BYTES - self.raw_bytes) * 2),
+                true,
+            )
+            .await?
+        else {
+            return Ok(false);
+        };
+        for ((txid, height, may_be_missing), reply) in group.iter().zip(replies) {
+            let reply = match reply {
+                Ok(reply) => reply,
+                Err(_) if *may_be_missing => continue,
+                Err(error) => return Err(error),
+            };
+            let raw_hex = reply.as_str().ok_or_else(|| {
+                ChainBackendError::InvalidResponse("transaction.get did not return hex".into())
+            })?;
+            if raw_hex.len() / 2 > MAX_SPENDER_RAW_BYTES - self.raw_bytes {
+                return Ok(false);
+            }
+            let raw = transaction_bytes(&reply, *txid)?;
+            self.raw_bytes += raw.len();
+            let decoded = optn_core::tx::decode(&raw).map_err(|error| {
+                ChainBackendError::InvalidResponse(format!("invalid transaction: {error}"))
+            })?;
+            self.found.insert(
+                *txid,
+                FoundTransaction {
+                    raw,
+                    inputs: decoded
+                        .inputs
+                        .into_iter()
+                        .map(|(parent, index, _)| (parent, index))
+                        .collect(),
+                    height: *height,
+                },
+            );
+        }
+        Ok(true)
+    }
+
+    /// The one fetched transaction among `candidates` spending `target`. Two
+    /// distinct spenders actually observed is a server describing two chains.
+    fn spender_among(
+        &self,
+        candidates: impl Iterator<Item = [u8; 32]>,
+        target: ([u8; 32], u32),
+    ) -> Result<Option<[u8; 32]>, ChainBackendError> {
+        let mut spender = None;
+        for candidate in candidates {
+            if self
+                .found
+                .get(&candidate)
+                .is_some_and(|found| found.inputs.contains(&target))
+            {
+                if spender.is_some_and(|known| known != candidate) {
+                    return Err(ChainBackendError::InvalidResponse(
+                        "multiple transactions spend the requested outpoint".into(),
+                    ));
+                }
+                spender = Some(candidate);
+            }
+        }
+        Ok(spender)
+    }
+
+    fn observed(&self, txid: [u8; 32]) -> ObservedTransaction {
+        let found = &self.found[&txid];
+        ObservedTransaction {
+            txid,
+            raw: found.raw.clone(),
+            block_height: (found.height > 0).then_some(found.height as u32),
+        }
+    }
+
+    /// The spender, and the walk that led back to it, nearest first.
+    fn report(&self, spender: [u8; 32]) -> (Option<ObservedTransaction>, Vec<ObservedTransaction>) {
+        let mut descendants = Vec::new();
+        let mut at = spender;
+        while let Some(child) = self.via.get(&at) {
+            if !self.found.contains_key(child) || descendants.len() >= MAX_SPENDER_HEURISTIC_FETCHES
+            {
+                break;
+            }
+            descendants.push(self.observed(*child));
+            at = *child;
+        }
+        (Some(self.observed(spender)), descendants)
+    }
+}
+
+/// Oldest first, unconfirmed last, then by txid so the order is stable. A
+/// spender follows what it spends, so it is usually among the first entries
+/// after `from_height`.
+fn chronological(entries: BTreeMap<[u8; 32], i64>) -> Vec<([u8; 32], i64)> {
+    let mut entries: Vec<_> = entries.into_iter().collect();
+    entries.sort_by_key(|(txid, height)| (*height <= 0, *height, *txid));
+    entries
+}
+
+/// Raw transaction bytes from a `transaction.get` reply, bound to `txid`.
+fn transaction_bytes(reply: &Value, txid: [u8; 32]) -> Result<Vec<u8>, ChainBackendError> {
+    let raw_hex = reply.as_str().ok_or_else(|| {
+        ChainBackendError::InvalidResponse("transaction.get did not return hex".into())
+    })?;
+    let raw = hex::decode(raw_hex).map_err(|error| {
+        ChainBackendError::InvalidResponse(format!("invalid transaction hex: {error}"))
+    })?;
+    if sha256d(&raw) != txid {
+        return Err(ChainBackendError::InvalidResponse(
+            "transaction bytes do not match requested txid".into(),
+        ));
+    }
+    Ok(raw)
+}
+
+/// The value listed for `tx_hash:tx_pos` in a `listunspent` reply, if listed.
+fn listed_unspent_value(
+    listed: &Value,
+    tx_hash: &str,
+    tx_pos: u32,
+) -> Result<Option<u64>, ChainBackendError> {
+    let entries = listed.as_array().ok_or_else(|| {
+        ChainBackendError::InvalidResponse("listunspent result is not an array".into())
+    })?;
+    for entry in entries {
+        let same_outpoint = entry
+            .get("tx_hash")
+            .and_then(Value::as_str)
+            .is_some_and(|hash| hash.eq_ignore_ascii_case(tx_hash))
+            && entry.get("tx_pos").and_then(Value::as_u64) == Some(u64::from(tx_pos));
+        if same_outpoint {
+            return entry
+                .get("value")
+                .and_then(Value::as_u64)
+                .map(Some)
+                .ok_or_else(|| {
+                    ChainBackendError::InvalidResponse("listunspent entry lacks a value".into())
+                });
+        }
+    }
+    Ok(None)
+}
+
 fn electrum_scripthash(script: &[u8]) -> String {
     let mut hash = Sha256::digest(script).to_vec();
     hash.reverse();
@@ -1174,6 +1627,7 @@ mod tests {
                 next_id: 1,
                 request_timeout: Duration::from_secs(2),
                 protocol: String::new(),
+                poisoned: false,
             };
             let peer = tokio::spawn(async move {
                 let mut server = BufReader::new(server);
@@ -1247,6 +1701,7 @@ mod tests {
             next_id: 7,
             request_timeout: Duration::from_secs(2),
             protocol: String::new(),
+            poisoned: false,
         };
         let peer = tokio::spawn(async move {
             let mut server = BufReader::new(server);
@@ -1292,6 +1747,7 @@ mod tests {
             next_id: 7,
             request_timeout: Duration::from_secs(2),
             protocol: String::new(),
+            poisoned: false,
         };
         let requests = vec![("fixture", json!([])); MAX_PENDING_REQUESTS + 1];
         assert!(matches!(
@@ -1314,6 +1770,7 @@ mod tests {
             next_id: 1,
             request_timeout: Duration::from_secs(5),
             protocol: String::new(),
+            poisoned: false,
         };
         let peer = tokio::spawn(async move {
             let mut server = BufReader::new(server);
@@ -1369,7 +1826,7 @@ mod tests {
         let response_hex = hex::encode(&raw);
         let server = tokio::spawn(async move {
             let mut lookups = 0;
-            for connection in 0..5 {
+            for connection in 0..3 {
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut stream = BufReader::new(stream);
                 let mut first = true;
@@ -1387,12 +1844,14 @@ mod tests {
                     let result = match method {
                         "server.version" => json!(["local-test", "1.6"]),
                         "server.features" => match connection {
-                            3 => json!({"genesis_hash": hex::encode([8; 32])}),
-                            4 => json!({}),
+                            1 => json!({"genesis_hash": hex::encode([8; 32])}),
+                            2 => json!({}),
                             _ => json!({"genesis_hash": hex::encode([9; 32])}),
                         },
                         "server.peers.subscribe" => json!([]),
                         "blockchain.transaction.get" => {
+                            // A wrong-chain connection must never be told the txid.
+                            assert_eq!(connection, 0);
                             assert_eq!(request["params"][0], expected_id);
                             assert_eq!(request["params"][1], false);
                             lookups += 1;
@@ -1401,6 +1860,10 @@ mod tests {
                             } else {
                                 json!("ff")
                             }
+                        }
+                        "blockchain.transaction.get_merkle" => {
+                            assert_eq!(request["params"], json!([expected_id]));
+                            json!({"block_height": 77, "merkle": [], "pos": 0})
                         }
                         other => panic!("unexpected request: {other}"),
                     };
@@ -1441,7 +1904,12 @@ mod tests {
                 ],
             ] {
                 assert_eq!(
-                    backend.wallet_refresh(&interests, None).await,
+                    backend
+                        .execute(&ChainRequest::WalletRefresh {
+                            interests,
+                            from_height: None,
+                        })
+                        .await,
                     Err(ChainBackendError::Unsupported)
                 );
             }
@@ -1472,22 +1940,271 @@ mod tests {
             };
             assert_eq!(transaction.raw, raw);
             assert_eq!(transaction.txid, txid);
+            assert_eq!(transaction.block_height, Some(77));
             assert!(service
                 .execute(&ChainRequest::TransactionLookup { txid })
                 .await
                 .is_err());
-            // Reconnects must recheck chain identity before revealing the txid.
+            // The failed reply discarded the connection. Reconnects must recheck
+            // chain identity before revealing the txid.
             for _ in 0..2 {
                 assert!(matches!(
-                    backend.transaction_lookup(txid).await,
+                    backend
+                        .execute(&ChainRequest::TransactionLookup { txid })
+                        .await,
                     Err(ChainBackendError::InvalidResponse(_))
                 ));
             }
+            drop(service);
+            drop(backend);
             server.await.unwrap();
         })
         .await
         .expect("bounded loopback adapter test");
     }
+
+    /// A loopback Electrum server for outpoint lookups. Every connection is
+    /// counted; replies follow the scripted protocol and UTXO answer.
+    async fn spentness_server(
+        protocol: &'static str,
+        raw: Vec<u8>,
+        utxo: Value,
+        listed: Value,
+    ) -> (u16, tokio::task::JoinHandle<(usize, Vec<Value>)>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut connections = 0;
+            let mut calls = Vec::new();
+            while let Ok(Ok((stream, _))) =
+                timeout(Duration::from_millis(500), listener.accept()).await
+            {
+                connections += 1;
+                let mut stream = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if stream.read_line(&mut line).await.unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    calls.push(request.clone());
+                    let method = request["method"].as_str().unwrap();
+                    if method == "blockchain.utxo.get_info" && utxo == json!("refuse") {
+                        let response = json!({"id": request["id"], "result": null,
+                            "error": {"code": -32601, "message": "unknown method"}});
+                        if stream
+                            .get_mut()
+                            .write_all(
+                                format!(
+                                    "{response}
+"
+                                )
+                                .as_bytes(),
+                            )
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        continue;
+                    }
+                    let result = match method {
+                        "server.version" => json!(["spentness-test", protocol]),
+                        "server.features" => json!({"genesis_hash": display_hash([9; 32])}),
+                        "server.peers.subscribe" => json!([]),
+                        "blockchain.headers.subscribe" => {
+                            json!({"height": 500, "hex": "11".repeat(80)})
+                        }
+                        "blockchain.transaction.get" => json!(hex::encode(&raw)),
+                        "blockchain.utxo.get_info" => utxo.clone(),
+                        "blockchain.scripthash.listunspent" => listed.clone(),
+                        other => panic!("unexpected request: {other}"),
+                    };
+                    let response = json!({"id": request["id"], "result": result, "error": null});
+                    if stream
+                        .get_mut()
+                        .write_all(format!("{response}\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+            (connections, calls)
+        });
+        (port, server)
+    }
+
+    fn one_output_transaction(script: &[u8], value: u64) -> Vec<u8> {
+        let mut raw = 2u32.to_le_bytes().to_vec();
+        raw.push(1);
+        raw.extend([4; 32]);
+        raw.extend(0u32.to_le_bytes());
+        raw.push(0);
+        raw.extend(u32::MAX.to_le_bytes());
+        raw.push(1);
+        raw.extend(value.to_le_bytes());
+        raw.push(script.len() as u8);
+        raw.extend(script);
+        raw.extend(0u32.to_le_bytes());
+        optn_core::tx::decode(&raw).expect("structurally valid fixture");
+        raw
+    }
+
+    async fn spentness(
+        protocol: &'static str,
+        raw: Vec<u8>,
+        utxo: Value,
+        listed: Value,
+    ) -> (
+        Result<BackendObservation, ChainBackendError>,
+        usize,
+        Vec<Value>,
+    ) {
+        let txid = sha256d(&raw);
+        let (port, server) = spentness_server(protocol, raw, utxo, listed).await;
+        let backend = ElectrumBackend::connect(ElectrumConfig::new(
+            SourceId::new("spentness-test"),
+            Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "127.0.0.1".into(),
+                port: Some(port),
+            },
+            ElectrumTransport::Tcp,
+            [9; 32],
+        ))
+        .await
+        .unwrap();
+        assert!(backend.supports(ChainOperation::OutpointSpentness));
+        let result = backend
+            .execute(&ChainRequest::OutpointSpentness { txid, vout: 0 })
+            .await;
+        drop(backend);
+        let (connections, calls) = server.await.unwrap();
+        (result, connections, calls)
+    }
+
+    #[tokio::test]
+    async fn utxo_info_binds_an_unspent_answer_to_the_output_and_the_tip() {
+        let script = [0x51];
+        let raw = one_output_transaction(&script, 1234);
+        let txid = sha256d(&raw);
+        let info = json!({"scripthash": electrum_scripthash(&script), "value": 1234});
+        let (result, connections, calls) = spentness("1.5", raw, info, Value::Null).await;
+        let tip = sha256d(&[0x11; 80]);
+        assert_eq!(
+            result.unwrap(),
+            BackendObservation {
+                payload: ChainPayload::OutpointSpentness(OutpointSpentness::Unspent {
+                    txid,
+                    vout: 0,
+                    value_sats: 1234,
+                    script_pubkey: script.to_vec(),
+                    best_block: tip,
+                }),
+                evidence: Evidence::ServerAssertion,
+                chain_tip: Some((500, tip)),
+            }
+        );
+        // The probe connection carried the lookup: one handshake in all.
+        assert_eq!(connections, 1);
+        let methods: Vec<_> = calls.iter().map(|call| call["method"].clone()).collect();
+        assert_eq!(
+            methods[methods.len() - 3..],
+            [
+                json!("blockchain.headers.subscribe"),
+                json!("blockchain.transaction.get"),
+                json!("blockchain.utxo.get_info"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_absent_utxo_is_unknown_never_spent() {
+        let raw = one_output_transaction(&[0x51], 1234);
+        let txid = sha256d(&raw);
+        let (result, ..) = spentness("1.6", raw, Value::Null, Value::Null).await;
+        assert_eq!(
+            result.unwrap().payload,
+            ChainPayload::OutpointSpentness(OutpointSpentness::Unknown { txid, vout: 0 })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_utxo_answer_that_contradicts_the_transaction_is_refused() {
+        let script = [0x51];
+        for info in [
+            json!({"scripthash": electrum_scripthash(&[0x52]), "value": 1234}),
+            json!({"scripthash": electrum_scripthash(&script), "value": 1235}),
+            json!({"value": 1234}),
+            json!(true),
+        ] {
+            let raw = one_output_transaction(&script, 1234);
+            let (result, ..) = spentness("1.6", raw, info, Value::Null).await;
+            assert!(
+                matches!(result, Err(ChainBackendError::InvalidResponse(_))),
+                "{result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn servers_before_utxo_info_answer_from_the_address_unspent_list() {
+        let script = [0x51];
+        let raw = one_output_transaction(&script, 1234);
+        let txid = sha256d(&raw);
+        let listed = json!([
+            {"tx_hash": display_hash(txid), "tx_pos": 1, "height": 9, "value": 7},
+            {"tx_hash": display_hash(txid), "tx_pos": 0, "height": 9, "value": 1234},
+        ]);
+        let (result, _, calls) = spentness("1.4.3", raw.clone(), Value::Null, listed).await;
+        assert!(matches!(
+            result.unwrap().payload,
+            ChainPayload::OutpointSpentness(OutpointSpentness::Unspent {
+                value_sats: 1234,
+                ..
+            })
+        ));
+        assert!(calls
+            .iter()
+            .all(|call| call["method"] != "blockchain.utxo.get_info"));
+        let listunspent = calls
+            .iter()
+            .find(|call| call["method"] == "blockchain.scripthash.listunspent")
+            .expect("the fallback asks for the address's unspent outputs");
+        assert_eq!(listunspent["params"], json!([electrum_scripthash(&script)]));
+
+        let (result, ..) = spentness("1.4", raw, Value::Null, json!([])).await;
+        assert!(matches!(
+            result.unwrap().payload,
+            ChainPayload::OutpointSpentness(OutpointSpentness::Unknown { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_server_refusing_utxo_info_is_asked_the_older_way() {
+        let script = [0x51];
+        let raw = one_output_transaction(&script, 1234);
+        let txid = sha256d(&raw);
+        let listed = json!([
+            {"tx_hash": display_hash(txid), "tx_pos": 0, "height": 9, "value": 1234},
+        ]);
+        let (result, connections, calls) = spentness("1.6", raw, json!("refuse"), listed).await;
+        assert!(matches!(
+            result.unwrap().payload,
+            ChainPayload::OutpointSpentness(OutpointSpentness::Unspent {
+                value_sats: 1234,
+                ..
+            })
+        ));
+        // Same connection throughout: the refusal is an answer, not a failure.
+        assert_eq!(connections, 1);
+        assert!(calls
+            .iter()
+            .any(|call| call["method"] == "blockchain.scripthash.listunspent"));
+    }
+
     #[test]
     fn scripthash_matches_protocol_byte_order() {
         let script = hex::decode("76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac").unwrap();
