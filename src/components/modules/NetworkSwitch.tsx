@@ -29,6 +29,7 @@ const NetworkSwitch = ({ networkType, setNetworkType }: NetworkSwitchProps) => {
             type="button"
             role="radio"
             aria-checked={active}
+            data-testid={`network-option-${network}`}
             onClick={() => setNetworkType(network)}
             className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition-colors ${
               active
