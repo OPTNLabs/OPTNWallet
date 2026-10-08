@@ -393,6 +393,11 @@ impl AppRuntime {
                         error,
                         reason: worker.reconciliation().sync.degraded_reason.clone(),
                     })?;
+                    if decision == ReconciliationDecision::Accepted
+                        && outcome.decision == ReconciliationDecision::Accepted
+                    {
+                        worker.prune_after_sync(service, &outcome.route);
+                    }
                     return Ok(if outcome.decision == ReconciliationDecision::Accepted {
                         decision
                     } else {
@@ -454,6 +459,11 @@ impl AppRuntime {
             error,
             reason: worker.reconciliation().sync.degraded_reason.clone(),
         })?;
+        if decision == ReconciliationDecision::Accepted
+            && outcome.decision == ReconciliationDecision::Accepted
+        {
+            worker.prune_after_sync(service, &outcome.route);
+        }
         if decision == ReconciliationDecision::PreservedFailure
             && outcome.decision != ReconciliationDecision::Accepted
         {
@@ -645,6 +655,7 @@ impl WalletSyncSession {
     }
 
     pub(super) fn project_status(&self, app: &mut AppState) {
+        crate::external_payment::apply_holds(app);
         if self.state.authoritative.is_none() {
             let requested = app.wallet_sync.rescan_requested;
             app.wallet_sync = optn_app::WalletSyncView::empty();
@@ -739,6 +750,7 @@ impl WalletSyncSession {
         app.wallet_sync.scan_coverage = checkpoint.scan_coverage;
         app.wallet_sync.rescan_requested = checkpoint.rescan_requested;
         app.coins = checkpoint.coins;
+        app.payment_outbox = checkpoint.payment_outbox;
         // The cache is useful presentation, never live authchain evidence.
         // `WalletCheckpoint` downgrades it before this actor publishes it.
         app.token_identities = token_identities;

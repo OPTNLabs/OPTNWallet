@@ -1,0 +1,35 @@
+{
+    "mainnet": {
+        "bch.imaginary.cash": {
+            "t": "50001",
+            "s": "50002"
+        },
+        "electrum.imaginary.cash": {
+            "t": "50001",
+            "s": "50002"
+        },
+        "cashnode.bch.ninja": {
+            "t": "50001",
+            "s": "50002"
+        },
+        "fulcrum.greyh.at": {
+            "s": "50002"
+        }
+    },
+    "chipnet": {
+        "chipnet.imaginary.cash": {
+            "t": "50001",
+            "s": "50002"
+        },
+        "chipnet.bch.ninja": {
+            "t": "50001",
+            "s": "50002"
+        }
+    },
+    "testnet4": {
+        "testnet4.imaginary.cash": {
+            "t": "50001",
+            "s": "50002"
+        }
+    }
+}

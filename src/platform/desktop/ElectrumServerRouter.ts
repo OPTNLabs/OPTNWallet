@@ -29,6 +29,7 @@ import { getElectrumServers } from '../../utils/servers/ElectrumServers';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import { Network } from '../../state/slices/networkSlice';
 
+import { cashAddressPrefix } from '../../utils/networkProfile';
 type ElectrumParams = RequestResponse[];
 
 /** Methods whose first param is a CashAddr. */
@@ -62,7 +63,7 @@ function assertOnCurrentNetwork(
   const sep = address.indexOf(':');
   if (sep <= 0) return; // prefixless — the server resolves it on its own network
   const prefix = address.slice(0, sep).toLowerCase();
-  const expected = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const expected = cashAddressPrefix(network);
   if (prefix !== expected) {
     throw new Error(
       `[network guard] ${address} is a ${prefix} address; wallet is on ${network} ` +

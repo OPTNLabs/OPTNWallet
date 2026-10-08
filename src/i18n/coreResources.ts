@@ -880,6 +880,10 @@ export const coreTranslations = {
     'settingsNetwork.comingSoon': 'Coming soon',
     'settingsNetwork.testnet3': 'Testnet3',
     'settingsNetwork.testnet4': 'Testnet4',
+    'settingsNetwork.testnet3Description':
+      'The long-running BCH testnet — test funds only',
+    'settingsNetwork.testnet4Description':
+      'The shorter BCH testnet — test funds only',
     'settingsNetwork.regtest': 'Regtest',
     'settingsDerivation.description':
       'OPTN supports one active BIP44 account path at a time. Reconfiguring it removes the old derived records and performs a fresh receive/change discovery and resync.',
@@ -1834,6 +1838,10 @@ export const coreTranslations = {
     'settingsNetwork.comingSoon': 'Próximamente',
     'settingsNetwork.testnet3': 'Testnet3',
     'settingsNetwork.testnet4': 'Testnet4',
+    'settingsNetwork.testnet3Description':
+      'La red de pruebas BCH de larga trayectoria: solo fondos de prueba',
+    'settingsNetwork.testnet4Description':
+      'La red de pruebas BCH más corta: solo fondos de prueba',
     'settingsNetwork.regtest': 'Regtest',
     'settingsDerivation.description':
       'OPTN admite una ruta de cuenta BIP44 activa a la vez. Reconfigurarla elimina los registros derivados anteriores y realiza una nueva búsqueda y sincronización de recepción y cambio.',
@@ -2691,6 +2699,9 @@ export const coreTranslations = {
     'settingsNetwork.comingSoon': '即将推出',
     'settingsNetwork.testnet3': 'Testnet3',
     'settingsNetwork.testnet4': 'Testnet4',
+    'settingsNetwork.testnet3Description':
+      '长期运行的 BCH 测试网 — 仅限测试资金',
+    'settingsNetwork.testnet4Description': '较短的 BCH 测试网 — 仅限测试资金',
     'settingsNetwork.regtest': 'Regtest',
     'settingsDerivation.description':
       'OPTN 同时支持一条活动的 BIP44 账户路径。重新配置会移除旧的派生记录，并重新发现和同步收款/找零地址。',

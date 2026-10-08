@@ -19,6 +19,7 @@ import type {
   CauldronWalletPoolPosition,
 } from './cauldron/types';
 import { getBchAccountPath, normalizeBchAccountPath } from './HdWalletService';
+import { parseNetwork } from '../utils/networkProfile';
 
 export type WalletSpecialActivityType = 'rpa' | 'cauldron';
 export type WalletSpecialActivityStatus = 'complete' | 'unavailable' | 'error';
@@ -130,7 +131,7 @@ function isActivityType(value: unknown): value is WalletSpecialActivityType {
 }
 
 function isNetwork(value: unknown): value is Network {
-  return value === Network.MAINNET || value === Network.CHIPNET;
+  return parseNetwork(value) !== undefined;
 }
 
 function toErrorMessage(error: unknown): string {

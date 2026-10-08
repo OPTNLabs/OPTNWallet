@@ -16,12 +16,13 @@ import {
   type ServerFusionAddressBucket,
 } from './serverFusionCoinPolicy';
 
+import { cashAddressPrefix } from '../../utils/networkProfile';
 export type FusionPreConsolidateResult =
   | { ok: true; txid: string; fromAddress: string; toAddress: string; coinCount: number }
   | { ok: false; reason: string; skipped?: boolean };
 
 function cashPrefix(network: Network): 'bitcoincash:' | 'bchtest:' {
-  return network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
+  return `${cashAddressPrefix(network)}:`;
 }
 
 export function walletCanPreConsolidate(): boolean {

@@ -4,6 +4,11 @@ import {
   decodeCashAddress,
 } from '@bitauth/libauth';
 import { Network } from '../state/slices/networkSlice';
+import {
+  cashAddressPrefix,
+  isTestNetwork,
+  networkProfile,
+} from './networkProfile';
 
 const MAINNET_PREFIX = 'bitcoincash';
 const CHIPNET_PREFIX = 'bchtest';
@@ -24,11 +29,12 @@ export type ParsedBip21Uri = {
 };
 
 function expectedPrefixForNetwork(network: Network): string {
-  return network === Network.MAINNET ? MAINNET_PREFIX : CHIPNET_PREFIX;
+  return cashAddressPrefix(network);
 }
 
+/** Every test network shares `bchtest:`, so the other side is always one prefix. */
 function oppositePrefix(network: Network): string {
-  return network === Network.MAINNET ? CHIPNET_PREFIX : MAINNET_PREFIX;
+  return isTestNetwork(network) ? MAINNET_PREFIX : CHIPNET_PREFIX;
 }
 
 function parseAmount(params: URLSearchParams): {
@@ -123,8 +129,8 @@ export function parseBip21Uri(input: string, network: Network): ParsedBip21Uri {
     typeof decodeBase58Address(noPrefixAddress) === 'object';
 
   if (isBase58Address) {
-    // Legacy base58 is mainnet-oriented; reject on chipnet to avoid silent
-    // cross-network pays. Mainnet still accepts base58 P2PKH.
+    // Legacy base58 is mainnet-oriented; reject on test networks to avoid
+    // silent cross-network pays. Mainnet still accepts base58 P2PKH.
     if (network !== Network.MAINNET) {
       return {
         isValidAddress: false,
@@ -218,7 +224,7 @@ export function recipientNetworkError(
   if (parsed.networkMismatch) {
     return network === Network.MAINNET
       ? 'That address is for Chipnet (bchtest:). This wallet is on Mainnet — paste a bitcoincash: address.'
-      : 'That address is for Mainnet (bitcoincash:). This wallet is on Chipnet — paste a bchtest: address.';
+      : `That address is for Mainnet (bitcoincash:). This wallet is on ${networkProfile(network).label} — paste a bchtest: address.`;
   }
   if (!input.trim()) return 'Please enter a destination address.';
   return 'Please enter a valid destination address for this network.';

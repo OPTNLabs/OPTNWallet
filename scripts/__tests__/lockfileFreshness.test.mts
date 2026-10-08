@@ -32,6 +32,7 @@ const roots = [
   'src-tauri',
   'crates/optn-core',
   'crates/optn-cli',
+  'crates/optn-x402',
   'crates/optn-ui-egui',
   'fuzz',
 ];

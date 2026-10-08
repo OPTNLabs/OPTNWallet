@@ -1,4 +1,6 @@
 import type { ParyonDeploymentConfig, ParyonNetwork } from './types';
+import { networkProfile, parseNetwork } from '../../utils/networkProfile';
+import { Network } from '../../state/slices/networkSlice';
 
 export const PARYON_MAINNET_V1_TOKEN_IDS = {
   paryonTokenId:
@@ -176,12 +178,20 @@ function isCompressedPublicKey(value: string): boolean {
   return /^(02|03)[0-9a-fA-F]{64}$/.test(value.trim());
 }
 
+/** Paryon is deployed on mainnet and chipnet; a missing value still means mainnet. */
+function toParyonNetwork(network: string | null | undefined): ParyonNetwork {
+  const parsed = parseNetwork(network);
+  if (parsed === Network.CHIPNET) return 'chipnet';
+  if (parsed === undefined || parsed === Network.MAINNET) return 'mainnet';
+  throw new Error(
+    `Paryon is not available on ${networkProfile(parsed).label}.`
+  );
+}
+
 export function getParyonDeploymentConfig(
   network: string | null | undefined
 ): ParyonDeploymentConfig {
-  const normalized: ParyonNetwork =
-    network === 'chipnet' ? 'chipnet' : 'mainnet';
-  return readConfig(normalized);
+  return readConfig(toParyonNetwork(network));
 }
 
 export function validateParyonDeploymentConfig(
