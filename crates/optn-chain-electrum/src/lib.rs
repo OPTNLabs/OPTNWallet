@@ -116,7 +116,7 @@ pub struct ElectrumBackend {
     /// several round trips -- and an authchain walk asks a few small questions
     /// per hop. Paying that per question would put ordinary walks past the
     /// runtime's deadline.
-    idle: Mutex<Option<IdleSession>>,
+    idle: Arc<Mutex<Option<IdleSession>>>,
 }
 
 struct IdleSession {
@@ -218,12 +218,39 @@ impl ElectrumBackend {
                 features,
                 peers,
             },
-            // The probe already paid for the handshake and checked the chain.
-            idle: Mutex::new(Some(IdleSession {
-                session,
-                parked: Instant::now(),
-            })),
-        })
+            idle: Arc::new(Mutex::new(None)),
+        }
+        .parked_with(session))
+    }
+
+    /// Park the probe's connection: it already paid for the handshake and
+    /// checked the chain, and the first request usually follows at once.
+    fn parked_with(self, session: Session) -> Self {
+        let parked = Instant::now();
+        if let Ok(mut slot) = self.idle.try_lock() {
+            *slot = Some(IdleSession { session, parked });
+        }
+        Self::reap_after_ttl(&self.idle, parked);
+        self
+    }
+
+    /// Close a parked connection once its reuse window has passed, so a
+    /// backend that is never asked again does not hold a socket open. Weak, so
+    /// dropping the backend still closes its connection at once.
+    fn reap_after_ttl(idle: &Arc<Mutex<Option<IdleSession>>>, parked: Instant) {
+        let idle = Arc::downgrade(idle);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                tokio::time::sleep(IDLE_SESSION_TTL).await;
+                let Some(idle) = idle.upgrade() else {
+                    return;
+                };
+                let mut slot = idle.lock().await;
+                if slot.as_ref().is_some_and(|idle| idle.parked == parked) {
+                    *slot = None;
+                }
+            });
+        }
     }
 
     pub fn server_info(&self) -> &ElectrumServerInfo {
@@ -282,10 +309,9 @@ impl ElectrumBackend {
     /// Keep a connection for the next request. One is kept; a newer one
     /// replaces it, which closes the older.
     async fn park(&self, session: Session) {
-        *self.idle.lock().await = Some(IdleSession {
-            session,
-            parked: Instant::now(),
-        });
+        let parked = Instant::now();
+        *self.idle.lock().await = Some(IdleSession { session, parked });
+        Self::reap_after_ttl(&self.idle, parked);
     }
 
     /// Read-only requests run on a reused connection when one is parked.
