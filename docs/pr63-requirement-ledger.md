@@ -1052,8 +1052,8 @@ lands evidence for them.
 | `authchain` registry extension unused | Registry extensions are parsed and never consulted | Use it as an untrusted candidate chain, checked like a restart hint |
 | Desktop token icons are always placeholders | `projectEngineTokenMetadata` sets `iconUri: null`. There is no policy-aware image port | Fetch image bytes in Rust under the wallet's transport policy, bounded by size and type |
 | Renderer requests bypass the Tor/proxy policy | `http-bridge.ts` routes only the price host natively. Every other webview request goes direct | Policy gate for renderer HTTP and image loads on desktop |
-| §21.3 feeds partly ingested | P2P DNS-seed and Fulcrum peer-discovery feeds are declared but not ingested. Peers returned by `server.peers.subscribe` are dropped | Ingest them with provenance, unverified until probed |
-| Versioned network-configuration migrations | The schema is fixed at 1 and any other version is refused | Migration step with atomic write and rollback tests |
+| §21.3 feeds partly ingested | P2P DNS-seed and Fulcrum peer-discovery feeds are declared but not ingested. Peers returned by `server.peers.subscribe` are dropped | Ingest them with provenance, unverified until probed. **Fulcrum peers closed 2026-10-09** (below); P2P DNS seeds are still not ingested |
+| Versioned network-configuration migrations | The schema is fixed at 1 and any other version is refused | Migration step with atomic write and rollback tests. **Closed 2026-10-09** (schema 2, below) |
 | Fusion input checks bypass the chain layer | `optn-fusion/src/electrum_input.rs` speaks Electrum JSON-RPC directly | Route through `chain_service`. Needs a live round to verify |
 | Stale open items | `open-items.md` #4 and #5 are already fixed in code. `src-tauri/src/fusion/component_vectors.rs` is no longer compiled | Document updated, orphan deleted |
 
@@ -1137,3 +1137,86 @@ The desktop shell's unit tests did not compile on this base: a test still called
 a function #105 had moved. One Tor lifecycle test also raced its siblings over
 process-wide state. Both are fixed, and Desktop E2E now runs the shell's tests
 after its build; nothing ran them before.
+
+### 2026-10-09: one Tor switch for chain, metadata, Cash Code and CashFusion
+
+#75 §4.1 asks for one transport policy that every feature consumes, and says
+ownership must not be encoded as transport. Before this, the Rust stack made
+every remote, non-own route need verified Tor and dialled declared own
+infrastructure directly. Nothing the holder set changed that. The old UI's Tor
+switch had not been rendered since the #63 refactor. The renderer's
+`torEnabled` flag reached only the TypeScript Fusion and Cash Code paths.
+
+The connection policy now carries the rule, `TransportPolicy::{Tor, Direct}`,
+shown as one switch under *Settings → Servers → Privacy & Transport* and as
+`optn network tor on|off`.
+
+- **Tor on** (the default) is what every route already did. Public sources go
+  through Tor; a node the holder declared as their own is reached directly.
+- **Tor off** proxies nothing.
+
+Ownership is now an input to the rule rather than a rule of its own. A third
+"Tor even for my own node" state was built and then removed: it served only
+onion-service setups and otherwise broke the holder's own node.
+
+The switch reaches:
+
+- native chain routes;
+- the Tor-need probe, which also decides whether the app starts its Tor;
+- BCMR and IPFS retrieval;
+- Cash Code scans and the legacy SPV commands;
+- CashFusion.
+
+Direct registry fetches from origins the holder did not declare resolve only to
+public addresses, so a URI published on chain cannot aim the wallet at its own
+network. Remote full-node RPC and ZMQ stay local-only either way. The refusal
+now says why. An idle install, with nothing selected, still does not wait on
+Tor detection; the first version made it probe, and a desktop test caught it.
+
+CashFusion stays Tor-mandatory. Every remote leg needs Tor with provenance:
+server, pool, peer-input and Electrum lookups, covert endpoints and the P2P
+Nostr relays. With Tor off, Fusion is refused before any proxy is consulted,
+rather than run in the clear. P2P relay connections used to accept a SOCKS port
+from the renderer; they now take Tor from provenance like every other leg.
+
+The network overlay is schema 2:
+
+- Schema-1 files read as `tor` with every other field intact. The file changes
+  only on a successful save; a failed read writes nothing.
+- Schemas outside 1..=2 are refused, never reset. A schema-2 file must name a
+  transport this build knows.
+- Portable backups carry the switch and never proxy trust.
+- Presets, pinning a source, editing the selection and saving the old
+  one-server fields all keep the switch. No setting of it makes those fields
+  unreadable or widens "only my server".
+
+The last guarantee needed `ConnectionPolicy::selects_like`. Three legacy
+comparisons against `ConnectionPolicy::auto()` would otherwise have refused the
+old server screen, or widened it, as soon as the switch was off.
+
+Fulcrum peer lists are now ingested (#75 §21.3), and the 2026-10-08 row for
+them closes. Every connected Electrum server's `server.peers.subscribe` answer
+is filtered:
+
+- TLS hostnames are kept, and onions only while Tor is on.
+- IP literals and local or single-label names are dropped.
+- Servers the catalog already has are dropped.
+
+What is left goes to a bounded per-network cache file beside the settings, not
+in them. The desktop runtime polls the selection and rebuilds every route,
+cancelling sync, when the catalog changes. Discovered servers therefore join
+only the catalog routes are built and listed from, never the selection that
+decides when to rebuild.
+
+They rank after every other source. A build dials them only when no other
+Electrum route connected, three at most, so they are failover. They are
+bootstrap entries: they can be disabled or banned, the ban lives in the overlay
+keyed by stable ID, and they cannot be removed. They are eligible only under
+public scopes, never under own-infrastructure-only, an explicit list or the old
+fields' "only my server", and never on an idle install. The desktop app and
+the CLI share the cache.
+
+Still open from the 2026-10-08 table: renderer HTTP and image loads, which
+still go direct from the webview, and Fusion input checks through
+`chain_service`.
+

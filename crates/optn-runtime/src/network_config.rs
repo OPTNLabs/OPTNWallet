@@ -466,18 +466,14 @@ struct StoredPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum StoredTransport {
-    TorExceptOwnInfrastructure,
-    TorForEverything,
+    Tor,
     Direct,
 }
 
 impl From<TransportPolicy> for Option<StoredTransport> {
     fn from(value: TransportPolicy) -> Self {
         Some(match value {
-            TransportPolicy::TorExceptOwnInfrastructure => {
-                StoredTransport::TorExceptOwnInfrastructure
-            }
-            TransportPolicy::TorForEverything => StoredTransport::TorForEverything,
+            TransportPolicy::Tor => StoredTransport::Tor,
             TransportPolicy::Direct => StoredTransport::Direct,
         })
     }
@@ -486,10 +482,7 @@ impl From<TransportPolicy> for Option<StoredTransport> {
 impl From<Option<StoredTransport>> for TransportPolicy {
     fn from(value: Option<StoredTransport>) -> Self {
         match value {
-            None | Some(StoredTransport::TorExceptOwnInfrastructure) => {
-                Self::TorExceptOwnInfrastructure
-            }
-            Some(StoredTransport::TorForEverything) => Self::TorForEverything,
+            None | Some(StoredTransport::Tor) => Self::Tor,
             Some(StoredTransport::Direct) => Self::Direct,
         }
     }
@@ -1690,11 +1683,7 @@ mod tests {
         use crate::chain::build_selection_plan;
         let mut source = user_source("chosen-server");
         source.priority = 0;
-        for transport in [
-            TransportPolicy::TorExceptOwnInfrastructure,
-            TransportPolicy::TorForEverything,
-            TransportPolicy::Direct,
-        ] {
+        for transport in TransportPolicy::ALL {
             let mut overlay = UserNetworkOverlay {
                 user_sources: vec![source.clone()],
                 ..Default::default()
@@ -2027,7 +2016,7 @@ mod tests {
         assert_eq!(migrated.schema_version, NETWORK_CONFIG_SCHEMA_VERSION);
         assert_eq!(
             migrated.overlay.connection_policy.transport,
-            TransportPolicy::TorExceptOwnInfrastructure
+            TransportPolicy::Tor
         );
         assert!(merge_bootstrap_with_user_overlay(&SourceCatalog::default(), &migrated).is_ok());
 
@@ -2035,10 +2024,7 @@ mod tests {
         let saved = encode_envelope_json(&migrated).unwrap();
         let value: serde_json::Value = serde_json::from_str(&saved).unwrap();
         assert_eq!(value["schema_version"], NETWORK_CONFIG_SCHEMA_VERSION);
-        assert_eq!(
-            value["overlay"]["connection_policy"]["transport"],
-            "tor_except_own_infrastructure"
-        );
+        assert_eq!(value["overlay"]["connection_policy"]["transport"], "tor");
         assert_eq!(decode_envelope_json(&saved).unwrap(), envelope);
 
         // A schema-1 portable backup imports the same way.
@@ -2050,11 +2036,7 @@ mod tests {
 
     #[test]
     fn every_transport_survives_saving_and_portable_transfer() {
-        for transport in [
-            TransportPolicy::TorExceptOwnInfrastructure,
-            TransportPolicy::TorForEverything,
-            TransportPolicy::Direct,
-        ] {
+        for transport in TransportPolicy::ALL {
             let mut overlay = rich_overlay();
             overlay.connection_policy.transport = transport;
             let envelope = NetworkConfigEnvelope::current("catalog-9", overlay);
@@ -2081,7 +2063,7 @@ mod tests {
             );
             assert_eq!(transport.as_str().parse(), Ok(transport));
         }
-        assert!("tor".parse::<TransportPolicy>().is_err());
+        assert!("on".parse::<TransportPolicy>().is_err());
     }
 
     #[test]

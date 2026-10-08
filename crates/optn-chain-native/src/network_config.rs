@@ -291,7 +291,7 @@ mod tests {
         let saved = file
             .update(|existing| {
                 let mut envelope = existing.expect("the schema-1 file is read");
-                envelope.overlay.connection_policy.transport = TransportPolicy::TorForEverything;
+                envelope.overlay.connection_policy.transport = TransportPolicy::Direct;
                 Ok(envelope)
             })
             .unwrap();
@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(reloaded, saved);
         assert_eq!(
             reloaded.overlay.connection_policy.transport,
-            TransportPolicy::TorForEverything
+            TransportPolicy::Direct
         );
         // Bans, ownership, order and this machine's proxy trust came through.
         let mut unchanged = reloaded.clone();

@@ -259,6 +259,105 @@ fn ingest_tls_snapshot(
     }
 }
 
+/// At most this many servers discovered from peer lists are kept per network.
+pub const MAX_DISCOVERED_PEERS: usize = 32;
+
+/// An Electrum server another server advertised in `server.peers.subscribe`
+/// (#75 §21.3). A hint like any bootstrap entry, never a trust anchor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredPeer {
+    pub endpoint: Endpoint,
+    /// The source whose peer list named it.
+    pub advertised_by: SourceId,
+}
+
+/// Whether a source came from a server's peer list rather than a shipped list.
+pub fn is_discovered(source: &ChainSource) -> bool {
+    matches!(
+        source.origin,
+        SourceOrigin::Bootstrap {
+            project: BootstrapProject::FulcrumPeerNetwork,
+            ..
+        }
+    )
+}
+
+/// The catalog plus servers discovered from peer lists, ranked after every
+/// source already in it.
+///
+/// A discovered server is a bootstrap candidate: public, so only the scopes
+/// that admit public sources select it; never removable, only disabled or
+/// banned through the same overrides, which stay keyed by its stable ID; and
+/// gone again once no server advertises it. One already in the catalog keeps
+/// its entry and its place.
+pub fn with_discovered_peers(
+    mut catalog: SourceCatalog,
+    peers: &[DiscoveredPeer],
+) -> SourceCatalog {
+    let mut priority = catalog
+        .iter()
+        .map(|source| source.priority)
+        .max()
+        .map_or(0, |last| last.saturating_add(1));
+    for peer in peers.iter().take(MAX_DISCOVERED_PEERS) {
+        if !matches!(
+            peer.endpoint.kind,
+            EndpointKind::ElectrumTls | EndpointKind::ElectrumTcp
+        ) {
+            continue;
+        }
+        let mut endpoint = peer.endpoint.clone();
+        endpoint.host = normalize_host(&endpoint.host);
+        let id = SourceId::new(stable_source_id(&endpoint));
+        let known = catalog.iter().any(|source| {
+            source.endpoints.iter().any(|existing| {
+                existing.kind == endpoint.kind
+                    && existing.port == endpoint.port
+                    && normalize_host(&existing.host) == endpoint.host
+            })
+        });
+        if known || catalog.get(&id).is_some() {
+            continue;
+        }
+        let source = ChainSource {
+            id,
+            label: endpoint.host.clone(),
+            origin: SourceOrigin::Bootstrap {
+                project: BootstrapProject::FulcrumPeerNetwork,
+                provenance: format!("advertised by {}", peer.advertised_by.as_str()),
+            },
+            endpoints: vec![endpoint],
+            capabilities: CapabilitySet::default(),
+            disposition: SourceDisposition::Enabled,
+            priority,
+        };
+        if catalog.insert(source).is_ok() {
+            priority = priority.saturating_add(1);
+        }
+    }
+    catalog
+}
+
+/// A persisted selection over the shipped catalog plus discovered servers.
+///
+/// Discovered servers join the base before the holder's overrides apply, so a
+/// disable or ban recorded for one holds wherever it reappears. Without an
+/// envelope the shipped default policy applies.
+pub fn resolve_with_discovered(
+    network: optn_core::network::Network,
+    envelope: Option<&crate::network_config::NetworkConfigEnvelope>,
+    peers: &[DiscoveredPeer],
+) -> Result<
+    (SourceCatalog, crate::chain::ConnectionPolicy),
+    crate::network_config::NetworkConfigError,
+> {
+    let base = with_discovered_peers(shipped_source_catalog(network), peers);
+    match envelope {
+        Some(envelope) => crate::network_config::resolve_chain_selection(&base, envelope),
+        None => Ok((base, crate::chain::ConnectionPolicy::auto())),
+    }
+}
+
 /// The same unverified discovery candidates for every native interface.
 /// Materialization performs no network I/O and never persists defaults as intent.
 pub fn shipped_source_catalog(network: optn_core::network::Network) -> SourceCatalog {
@@ -323,6 +422,97 @@ mod tests {
             host: host.into(),
             port: Some(50002),
         }
+    }
+
+    #[test]
+    fn discovered_servers_rank_last_and_never_displace_a_shipped_one() {
+        use crate::chain::{build_selection_plan, ConnectionPolicy};
+        let network = optn_core::network::Network::Mainnet;
+        let shipped = shipped_source_catalog(network);
+        let shipped_last = shipped.iter().map(|source| source.priority).max().unwrap();
+        let existing = shipped.iter().next().unwrap().endpoints[0].clone();
+        let advertiser = SourceId::new("bootstrap:electrum-tls:advertiser.example:50002");
+        let peer = |endpoint: Endpoint| DiscoveredPeer {
+            endpoint,
+            advertised_by: advertiser.clone(),
+        };
+        let mut new = electrum("New.Example.org.");
+        new.port = Some(50002);
+        let catalog = with_discovered_peers(
+            shipped.clone(),
+            &[
+                peer(existing.clone()),
+                peer(new.clone()),
+                peer(new.clone()),
+                peer(Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: "p2p.example.org".into(),
+                    port: Some(8333),
+                }),
+            ],
+        );
+        // One new entry: the shipped host keeps its own, the duplicate and
+        // the non-Electrum endpoint are dropped.
+        assert_eq!(catalog.iter().count(), shipped.iter().count() + 1);
+        let id = SourceId::new("bootstrap:electrum-tls:new.example.org:50002");
+        let discovered = catalog.get(&id).unwrap();
+        assert!(is_discovered(discovered));
+        assert!(discovered.is_public() && !discovered.can_remove());
+        assert_eq!(discovered.priority, shipped_last + 1);
+        assert!(!is_discovered(
+            catalog.get(&shipped.iter().next().unwrap().id).unwrap()
+        ));
+
+        // Public scopes reach it after every shipped source; own-only never.
+        let plan = build_selection_plan(&catalog, &ConnectionPolicy::auto());
+        assert_eq!(plan.primary.last(), Some(&id));
+        let own = build_selection_plan(&catalog, &ConnectionPolicy::own_infrastructure());
+        assert!(!own.primary.contains(&id) && !own.fallback.contains(&id));
+
+        // A server the holder added themselves is not added twice.
+        let mut mine = SourceCatalog::default();
+        mine.insert(ChainSource {
+            id: SourceId::new("host:new.example.org"),
+            label: "Mine".into(),
+            origin: SourceOrigin::UserAdded,
+            endpoints: vec![new.clone()],
+            capabilities: CapabilitySet::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        })
+        .unwrap();
+        assert_eq!(
+            with_discovered_peers(mine, &[peer(new.clone())])
+                .iter()
+                .count(),
+            1
+        );
+
+        // The holder's ban applies to a discovered server like any other.
+        let mut overlay = crate::network_config::UserNetworkOverlay::default();
+        overlay
+            .bootstrap_overrides
+            .insert(id.clone(), SourceDisposition::Banned);
+        let envelope = crate::network_config::NetworkConfigEnvelope::current(
+            crate::network_config::SHIPPED_CATALOG_VERSION,
+            overlay,
+        );
+        let (banned, _) =
+            resolve_with_discovered(network, Some(&envelope), &[peer(new.clone())]).unwrap();
+        assert_eq!(
+            banned.get(&id).unwrap().disposition,
+            SourceDisposition::Banned
+        );
+        let (fresh, policy) = resolve_with_discovered(network, None, &[peer(new.clone())]).unwrap();
+        assert!(fresh.get(&id).unwrap().is_enabled());
+        assert_eq!(policy, ConnectionPolicy::auto());
+
+        // Bounded.
+        let many: Vec<_> = (0..40)
+            .map(|index| peer(electrum(&format!("peer{index}.example.org"))))
+            .collect();
+        let bounded = with_discovered_peers(SourceCatalog::default(), &many);
+        assert_eq!(bounded.iter().count(), MAX_DISCOVERED_PEERS);
     }
 
     #[test]

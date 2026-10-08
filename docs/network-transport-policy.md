@@ -1,16 +1,17 @@
 # Transport policy, CashFusion and discovered servers
 
-Status: proposal for review. Nothing here is implemented yet.
+Status: implemented in #108.
 
-This settles three questions against the architecture in #75. First, how the
-privacy selector decides between Tor and a direct connection. Second, how
-CashFusion's need for Tor fits that selector without overruling it. Third, how
-servers discovered from Fulcrum peer lists join the source catalog.
+This settles three questions against the architecture in #75:
+
+1. How Tor is switched on and off for the whole wallet.
+2. How CashFusion's need for Tor fits that switch without overruling it.
+3. How servers discovered from Fulcrum peer lists join the source catalog.
 
 ## What the issues require
 
 - **One transport policy for everything (#75 §4.1).** Direct, Tor and a
-  configured proxy are a cross-cutting transport policy. Chain providers,
+  configured proxy form one cross-cutting transport policy. Chain providers,
   Nostr, CashFusion, chat, BCMR and IPFS retrieval, index providers and
   explorer requests all consume it. "Individual features MUST NOT each invent
   their own independent Tor policy."
@@ -31,105 +32,119 @@ servers discovered from Fulcrum peer lists join the source catalog.
   public sources must be explicit. A preferred source outranks the remaining
   allowed ones.
 
-## What the code does today
+## 1. Tor on or off, for everything
 
-- The Rust stack (desktop sync, token identity, CLI) applies CashFusion's rule
-  to every connection. Any remote, non-own endpoint needs trusted Tor or is
-  refused (`optn-chain-native::native_chain_route` → `optn_core::tor::route`).
-  A declared own-infrastructure source is always dialled directly.
-  - That is the encoding §4.1 forbids: ownership decides transport.
-  - The selector has no say: there is no transport field in
-    `ConnectionPolicy`.
-- The old UI's Tor switch (`torEnabled`, on by default) lives under
-  *Server & privacy* next to CashFusion. The TypeScript Fusion paths and the
-  Cash Code node scan read it. The Rust stack ignores it.
-- Registry and IPFS bytes are fetched only over verified Tor
-  (`registry_fetch.rs`).
-- Peers returned by `server.peers.subscribe` are fetched at connect and then
-  dropped.
+The network policy (`ConnectionPolicy`, persisted per network) carries one
+transport rule. The holder sees it as a single switch, under
+*Settings → Servers → Privacy & Transport*, or `optn network tor on|off`:
 
-## Proposal
-
-### 1. The selector owns transport
-
-The network policy (`ConnectionPolicy`, persisted in the network overlay) gains
-a transport rule, chosen in the same selector as scope and protocols:
-
-| Transport | Remote public sources | My infrastructure | Loopback |
+| Tor | Public sources | Sources you added as your own | Loopback |
 | --- | --- | --- | --- |
-| **Tor, except my infrastructure** (default) | Tor | Direct | Direct |
-| **Tor for everything** | Tor | Tor: the node must be reachable through Tor, e.g. an onion service | Direct |
-| **Direct** | Direct | Direct | Direct |
-| **Proxy** (later) | Configured proxy | Per the same rule | Direct |
+| **On** (default) | Tor | Direct | Direct |
+| **Off** | Direct | Direct | Direct |
 
-The default rule is exactly what the code does today, so existing users see no
-change. It stops being an implicit encoding: own infrastructure is direct
-because the holder's transport choice says so, and a holder who wants strict
-Tor can choose "Tor for everything". Loopback is always direct. It has no
-network hop to hide, and Tor cannot reach it.
+"On" is what every route already did, so existing users see no change.
+A node the holder declared as their own already knows who is asking, so it is
+reached directly. Loopback has no network hop to hide, and Tor cannot reach
+it.
 
-The Tor switch in the old UI becomes this selector, read from and written to
-the Rust overlay, so the desktop app, the CLI and Fusion all answer to one
-setting.
+The switch reaches every consumer:
 
-### 2. CashFusion requires a private transport; it never overrides one
+- chain routes (Electrum, BIP37, Neutrino);
+- the Tor-need probe, which also decides whether the app starts its own Tor;
+- BCMR and IPFS retrieval;
+- Cash Code scans and the legacy SPV commands;
+- CashFusion (section 2).
 
-Fusion becomes an operation with a transport requirement, not a second
-policy. Its legacy *server*, *pool*, *peer-input lookup*, *Electrum lookup*
-and *covert endpoint* connections need the selector's transport for that
-destination to be Tor or a proxy:
+With Tor on, a route that needs Tor and has no verified one is refused, never
+dialled directly.
 
-- Under either Tor rule, the default included, Fusion runs over Tor exactly
-  as today. Public fusion servers are public sources, so they always go
-  through Tor.
-- Under **Direct**, Fusion does not run. Its settings and Auto Fusion say why:
-  "CashFusion needs Tor. Your network policy connects directly." The holder's
-  choice is never overridden, and Fusion is never run in the clear.
-- A fusion server the holder declared as their own infrastructure follows the
-  transport rule like any of their sources.
+Direct registry fetches from origins the holder did not declare resolve only
+to public addresses. A URI published on chain therefore cannot aim the wallet
+at its own network.
 
-Because Tor is the default, Fusion works out of the box. The cost of turning
-Tor off is visible, which encourages keeping it on without forcing it.
+Remote full-node RPC and ZMQ stay local-only in both states. Their adapters
+cannot use a proxy, and RPC credentials are kept for loopback endpoints only.
 
-### 3. Discovered Fulcrum servers are bootstrap candidates
+The renderer's old `torEnabled` flag now mirrors this switch. Rust checks the
+rule again on every call.
 
-After a validated connection (genesis checked), the advertised peers are
-normalised. TLS hostnames are kept, and onion hosts only when Tor is in use.
-They are ingested with provenance `FulcrumPeerNetwork` and the advertising
-server named:
+## 2. CashFusion requires Tor; it never overrides the switch
 
-- **Lifecycle:** as a bootstrap entry. They can be disabled or banned, with
-  bans keyed by a stable ID and surviving restarts. They cannot be removed;
-  they simply stop appearing when no server advertises them any more.
-- **Eligibility:** only under scopes that admit public bootstrap sources
-  (*All enabled* and *Public enabled*, or a fallback scope that adds them).
-  Never under *My infrastructure* or an explicit list, so the selector's scope
-  is honoured.
-- **Order:** after preferred and shipped sources, with the same health and
-  backoff ranking (§21.6 "remaining allowed sources"). Auto reaches them only
-  when everything ranked above is unavailable: failover, as asked.
-- **Trust:** capabilities stay advertised until probed, and the same genesis
-  check runs on every connection. A discovered server never answers for
-  another chain.
-- **Bounds:** at most 32 per network are retained, refreshed on each
-  connection.
-- **Transport:** reached under the selector's rule, like any public source.
+CashFusion is private only over Tor. Every remote leg needs Tor with
+provenance, exactly as before:
+
+- server;
+- pool;
+- peer-input lookup;
+- Electrum lookup;
+- covert endpoints;
+- P2P Nostr relays.
+
+P2P relay connections no longer accept a proxy port from the renderer.
+
+- **Tor on:** Fusion runs over Tor, as before.
+- **Tor off:** Fusion does not run. It is refused before any proxy is
+  consulted, with "CashFusion needs Tor, and Tor is off. Turn it on in
+  Settings > Servers > Privacy & Transport to fuse." The holder's choice is
+  never overridden, and Fusion is never run in the clear.
+
+Because Tor is on by default, Fusion works out of the box. Turning Tor off
+shows its cost plainly.
+
+## 3. Discovered Fulcrum servers are failover candidates
+
+Every Electrum server the wallet connects to is asked for its peers
+(`server.peers.subscribe`, after the genesis check). The answer is filtered:
+
+- TLS hostnames are kept. Onion hosts are kept only while Tor is on.
+- IP literals and local or single-label names are dropped, so a server
+  cannot point the wallet at the holder's own network.
+- Servers the catalog already has are dropped.
+
+What is left goes to a small per-network cache file,
+`discovered-peers-<network>.json`, beside the settings files and never
+inside them. Recording a peer is therefore never a settings edit: it revokes
+no routes, interrupts no sync and travels in no backup.
+
+- **Lifecycle:** a bootstrap entry, `FulcrumPeerNetwork`, naming the server
+  that advertised it. It can be disabled or banned from the Servers screen,
+  where it reads "Discovered from a server's peer list", or with `optn network
+  disposition`. The ban lives in the settings overlay, keyed by the server's
+  stable ID, so it holds when the server is found again. It cannot be removed;
+  it is forgotten after 30 days unadvertised.
+- **Eligibility:** only under scopes that admit public sources (*All
+  enabled*, *Public enabled*, or a fallback that adds them). Never under *My
+  infrastructure*, an explicit list, or the old server fields' "only my
+  server". An idle install with no wallet open never gains them.
+- **Order:** after every shipped and user source. A build dials them only when
+  no other Electrum route connected, three at most, in their order. That is
+  the failover.
+- **Trust:** capabilities stay advertised until probed, and every connection
+  runs the same genesis check. A discovered server never answers for another
+  chain.
+- **Bounds:** at most 32 per network, newest first. Seeing a known server
+  again within a day does not rewrite the file.
+- **Transport:** reached under the Tor switch, like any public source.
+- **Shared:** the desktop app and the CLI read and keep the same cache.
 
 ## Persistence and migration
 
-The network overlay moves from schema 1 to schema 2:
+The network overlay moved from schema 1 to schema 2:
 
-- A `transport` field is added. Version 1 configurations migrate to
-  *Tor, except my infrastructure*, which is today's behaviour.
-- A bounded list of discovered peers is added, with provenance and last-seen
-  time.
-
-The migration is written atomically. A failed migration keeps the version 1
-file untouched and the previous configuration in force (#75 §22.2, §22.4).
-Tests:
-
-- upgrade preserves custom sources, own-infrastructure groups, bans,
-  ordering, protocol filters, fallback scopes and Tor trust;
-- a failed write rolls back;
-- portable export and import carry the transport rule but never machine-local
-  proxy trust.
+- **The `transport` field.** Its values are `tor` and `direct`. Schema-1 files
+  read as `tor`, which is how they were always reached. Every other field is
+  kept: sources, groups, bans, ordering, protocol filters, fallback scopes,
+  explorer and proxy trust.
+- **Writes.** A migrated file changes only on a successful atomic save. A read
+  never writes, and a file this build cannot read is left untouched.
+- **Versions.** Schemas outside 1..=2 are refused, never reset. A schema-2
+  file must name a transport this build knows.
+- **Backups.** Portable export and import carry the Tor setting, but never
+  machine-local proxy trust.
+- **Other writers.** Choosing a preset, pinning a source, editing the
+  selection or saving the old one-server fields never changes the switch. No
+  setting of it makes the old server fields unreadable or widens "only my
+  server".
+- **Discovered peers.** They are not part of the schema. They live in their
+  own cache file (section 3), because they are not the holder's intent.

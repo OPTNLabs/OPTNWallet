@@ -11,6 +11,7 @@
 
 use optn_chain_bchn::{BchnRpcBackend, BchnRpcConfig, RpcAuth};
 pub mod coin_holds_file;
+pub mod discovered_peers_file;
 pub mod network_config;
 pub mod registry_fetch;
 pub mod wallet_checkpoint;
@@ -163,6 +164,10 @@ pub struct NativeChainStack {
     /// No provider is registered in this state, so callers cannot fall back to
     /// a different route behind the user's back.
     pub configuration_error: Option<String>,
+    /// Electrum servers the connected servers advertised and the catalog does
+    /// not already hold (#75 §21.3). Hints for the host to keep, never routes
+    /// of this stack.
+    pub discovered_peers: Vec<optn_runtime::bootstrap::DiscoveredPeer>,
 }
 
 impl NativeChainStack {
@@ -178,6 +183,46 @@ impl NativeChainStack {
             event_sources: Vec::new(),
             failures: Vec::new(),
             configuration_error: Some(error.into()),
+            discovered_peers: Vec::new(),
+        }
+    }
+}
+
+/// Discovered servers dialled in one build when nothing else connected.
+const MAX_FAILOVER_ATTEMPTS: usize = 3;
+
+/// Keep what a connected Electrum server says about its peers: TLS names, and
+/// onions only while Tor carries public traffic. Bounded, without repeats, and
+/// without servers the catalog already has.
+fn note_advertised_peers(
+    provider: &ElectrumBackend,
+    source: &ChainSource,
+    allow_onion: bool,
+    known: &[Endpoint],
+    into: &mut Vec<optn_runtime::bootstrap::DiscoveredPeer>,
+) {
+    use optn_runtime::bootstrap::MAX_DISCOVERED_PEERS;
+    for endpoint in optn_chain_electrum::advertised_peers(
+        &provider.server_info().peers,
+        allow_onion,
+        MAX_DISCOVERED_PEERS,
+    ) {
+        if into.len() >= MAX_DISCOVERED_PEERS {
+            return;
+        }
+        let already = known.iter().any(|existing| {
+            existing.kind == endpoint.kind
+                && existing.port == endpoint.port
+                && existing
+                    .host
+                    .trim_end_matches('.')
+                    .eq_ignore_ascii_case(&endpoint.host)
+        });
+        if !already && into.iter().all(|peer| peer.endpoint != endpoint) {
+            into.push(optn_runtime::bootstrap::DiscoveredPeer {
+                endpoint,
+                advertised_by: source.id.clone(),
+            });
         }
     }
 }
@@ -427,16 +472,14 @@ async fn socks_answers(host: &str, port: u16) -> bool {
 /// The holder's transport policy decides (#75 §4.1); ownership is one input
 /// to it, never a rule of its own. Loopback is always direct.
 ///
-/// - **Tor, except my infrastructure** (the default): a source the holder
-///   *declared* as their own is reached directly, exactly as loopback is. Tor
-///   is there to stop a third-party server learning that this IP is asking
-///   about these addresses; their own node already knows. `is_loopback_host`
-///   recognises only `127.0.0.0/8`, `localhost` and `::1`, so without this a
-///   self-hosted node one room away on a LAN address, or on a private mesh,
-///   would be refused as "remote".
-/// - **Tor for everything**: the holder's node too, which must then be
-///   reachable through Tor, for example as an onion service.
-/// - **Direct**: nothing is proxied.
+/// - **Tor on** (the default): a source the holder *declared* as their own is
+///   reached directly, exactly as loopback is. Tor is there to stop a
+///   third-party server learning that this IP is asking about these
+///   addresses; their own node already knows. `is_loopback_host` recognises
+///   only `127.0.0.0/8`, `localhost` and `::1`, so without this a self-hosted
+///   node one room away on a LAN address, or on a private mesh, would be
+///   refused as "remote".
+/// - **Tor off**: nothing is proxied.
 ///
 /// The declaration is what carries ownership, not the address:
 /// `UserInfrastructure` is a group the holder wrote down
@@ -631,7 +674,22 @@ async fn build_native_chain_stack_with_tor_status(
     // has a locator to start from on a fresh install.
     let headers = supplied_headers.unwrap_or_else(|| new_accepted_header_store(network));
     let selected = selected_source_ids(&catalog, &policy);
-    let sources = catalog.iter().cloned().collect::<Vec<_>>();
+    // Discovered servers are failover (#75 §21.6): after every other source,
+    // in their own order, and dialled only while no Electrum route connected.
+    let mut sources = catalog.iter().cloned().collect::<Vec<_>>();
+    sources.sort_by_key(|source| {
+        let discovered = optn_runtime::bootstrap::is_discovered(source);
+        (discovered, if discovered { source.priority } else { 0 })
+    });
+    let known_endpoints: Vec<Endpoint> = sources
+        .iter()
+        .filter(|source| !optn_runtime::bootstrap::is_discovered(source))
+        .flat_map(|source| source.endpoints.iter().cloned())
+        .collect();
+    let allow_onion = policy.transport.tor_for(false) && tor_status.usable_port().is_some();
+    let mut discovered_peers = Vec::new();
+    let mut electrum_routes = 0usize;
+    let mut failover_attempts = 0usize;
     let mut service = ChainService::new(catalog, policy.clone());
     {
         // Each metadata origin is reached as the transport says for its owner.
@@ -660,6 +718,12 @@ async fn build_native_chain_stack_with_tor_status(
     for source in sources {
         if !source.is_enabled() || !selected.contains(&source.id) {
             continue;
+        }
+        if optn_runtime::bootstrap::is_discovered(&source) {
+            if electrum_routes > 0 || failover_attempts >= MAX_FAILOVER_ATTEMPTS {
+                continue;
+            }
+            failover_attempts += 1;
         }
         for endpoint in &source.endpoints {
             // Full-node RPC and ZMQ are used on this machine only, whatever
@@ -716,7 +780,17 @@ async fn build_native_chain_stack_with_tor_status(
                     ))
                     .await
                     {
-                        Ok(provider) => service.register(Arc::new(provider)),
+                        Ok(provider) => {
+                            note_advertised_peers(
+                                &provider,
+                                &source,
+                                allow_onion,
+                                &known_endpoints,
+                                &mut discovered_peers,
+                            );
+                            electrum_routes += 1;
+                            service.register(Arc::new(provider))
+                        }
                         Err(error) => failures.push(failure(
                             &source,
                             ProtocolFamily::Electrum,
@@ -812,6 +886,7 @@ async fn build_native_chain_stack_with_tor_status(
         event_sources,
         failures,
         configuration_error: None,
+        discovered_peers,
     }
 }
 
@@ -879,25 +954,9 @@ mod tests {
                 vec![("https://gateway.example/", true)]
             );
             assert!(build_selection_plan(&catalog, &policy).primary.is_empty());
-            // The holder's own gateway is reached as the transport says:
-            // directly by default, through Tor when everything must be.
+            // The holder's own gateway is reached directly, so it needs no
+            // Tor; a public one would.
             assert!(!requires_tor_proxy(&catalog, &policy));
-            let mut strict = policy.clone();
-            strict.transport = TransportPolicy::TorForEverything;
-            assert!(requires_tor_proxy(&catalog, &strict));
-            let stack = build_native_chain_stack_with_tor_status(
-                catalog.clone(),
-                strict,
-                "chipnet",
-                &NativeChainSecrets::default(),
-                TorStatus::Absent,
-                None,
-            )
-            .await;
-            assert!(
-                stack.service.lock().await.registry_fetcher().is_none(),
-                "Tor for everything without Tor has no metadata route"
-            );
             policy.fallback_scope = Some(SourceScope::PublicEnabled);
             let plan = build_endpoint_selection_plan(&catalog, &policy, kind);
             assert_eq!(plan.primary, vec![own.clone()]);
@@ -1138,12 +1197,7 @@ mod tests {
             ..remote.clone()
         };
         for (transport, own, public) in [
-            (
-                TransportPolicy::TorExceptOwnInfrastructure,
-                TorRoute::Direct,
-                through,
-            ),
-            (TransportPolicy::TorForEverything, through, through),
+            (TransportPolicy::Tor, TorRoute::Direct, through),
             (TransportPolicy::Direct, TorRoute::Direct, TorRoute::Direct),
         ] {
             assert_eq!(
@@ -1167,9 +1221,9 @@ mod tests {
         }
         // Requiring Tor without a trusted one refuses; it never falls back.
         assert!(native_chain_route(
-            &declared_own_source(),
+            &pasted_source(),
             &remote,
-            TransportPolicy::TorForEverything,
+            TransportPolicy::Tor,
             TorStatus::Absent
         )
         .is_refused());
@@ -1339,12 +1393,6 @@ mod tests {
             &catalog,
             &ConnectionPolicy::own_infrastructure()
         ));
-        let mut strict = ConnectionPolicy::own_infrastructure();
-        strict.transport = TransportPolicy::TorForEverything;
-        assert!(
-            needs_default_tor_proxy(&catalog, &strict),
-            "Tor for everything includes the holder's own node"
-        );
     }
 
     #[test]
@@ -1526,11 +1574,6 @@ mod tests {
                 TransportPolicy::default(),
                 REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE,
             ),
-            (
-                own(),
-                TransportPolicy::TorForEverything,
-                REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE,
-            ),
             // No Tor is required, and remote full-node RPC is still not used.
             (
                 own(),
@@ -1576,6 +1619,149 @@ mod tests {
                 "{transport:?}: {:?}",
                 stack.failures
             );
+        }
+    }
+
+    /// An Electrum server on loopback that answers the handshake for chipnet
+    /// and advertises `peers`.
+    async fn fake_electrum(peers: serde_json::Value) -> (u16, tokio::task::JoinHandle<()>) {
+        use tokio::io::AsyncBufReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut genesis = optn_chain_bip37::genesis_hash("chipnet");
+        genesis.reverse();
+        let genesis = hex::encode(genesis);
+        let handle = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let genesis = genesis.clone();
+                let peers = peers.clone();
+                tokio::spawn(async move {
+                    let (read, mut write) = tokio::io::split(stream);
+                    let mut lines = tokio::io::BufReader::new(read).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let request: serde_json::Value =
+                            serde_json::from_str(&line).unwrap_or_default();
+                        let result = match request["method"].as_str() {
+                            Some("server.version") => serde_json::json!(["Fulcrum test", "1.5"]),
+                            Some("server.features") => {
+                                serde_json::json!({ "genesis_hash": genesis })
+                            }
+                            Some("server.peers.subscribe") => peers.clone(),
+                            _ => serde_json::Value::Null,
+                        };
+                        let reply = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": request["id"],
+                            "result": result,
+                        });
+                        if write
+                            .write_all(format!("{reply}\n").as_bytes())
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        (port, handle)
+    }
+
+    /// A loopback port that accepts and hangs up, so a dial fails at once.
+    async fn hang_up() -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        (port, handle)
+    }
+
+    /// Discovered servers are failover (#75 §21.6): untouched while another
+    /// Electrum route works, a bounded few in order when none does. What a
+    /// working server advertises comes back for the host to keep.
+    #[tokio::test]
+    async fn discovered_servers_are_bounded_failover_and_peer_lists_are_kept() {
+        use optn_runtime::bootstrap::{stable_source_id, with_discovered_peers, DiscoveredPeer};
+        let electrum = |port| Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "127.0.0.1".into(),
+            port: Some(port),
+        };
+        let mut servers = Vec::new();
+        let mut peers = Vec::new();
+        for _ in 0..5 {
+            let (port, handle) = hang_up().await;
+            servers.push(handle);
+            peers.push(DiscoveredPeer {
+                endpoint: electrum(port),
+                advertised_by: SourceId::new("pasted"),
+            });
+        }
+        let catalog_with = |port| {
+            let mut catalog = SourceCatalog::default();
+            let mut source = pasted_source();
+            source.endpoints = vec![electrum(port)];
+            catalog.insert(source).unwrap();
+            with_discovered_peers(catalog, &peers)
+        };
+        let secrets = NativeChainSecrets::default();
+        let build = |catalog| {
+            build_native_chain_stack_with_tor_status(
+                catalog,
+                ConnectionPolicy::auto(),
+                "chipnet",
+                &secrets,
+                TorStatus::Absent,
+                None,
+            )
+        };
+
+        // Nothing else connects: three discovered servers, in their order.
+        let (dead, handle) = hang_up().await;
+        servers.push(handle);
+        let stack = build(catalog_with(dead)).await;
+        let tried: Vec<_> = stack
+            .failures
+            .iter()
+            .map(|failure| failure.source.clone())
+            .collect();
+        let expected: Vec<_> = std::iter::once(SourceId::new("pasted"))
+            .chain(
+                peers
+                    .iter()
+                    .take(MAX_FAILOVER_ATTEMPTS)
+                    .map(|peer| SourceId::new(stable_source_id(&peer.endpoint))),
+            )
+            .collect();
+        assert_eq!(tried, expected);
+
+        // A working route: no discovered server is dialled, and the public
+        // names it advertises are kept, never an address.
+        let (port, handle) = fake_electrum(serde_json::json!([
+            ["203.0.113.7", "found.example.org", ["v1.5", "s50002"]],
+            ["203.0.113.8", "127.0.0.1", ["s50002"]]
+        ]))
+        .await;
+        servers.push(handle);
+        let stack = build(catalog_with(port)).await;
+        assert!(stack.failures.is_empty(), "{:?}", stack.failures);
+        assert_eq!(
+            stack.discovered_peers,
+            vec![DiscoveredPeer {
+                endpoint: Endpoint {
+                    kind: EndpointKind::ElectrumTls,
+                    host: "found.example.org".into(),
+                    port: Some(50002),
+                },
+                advertised_by: SourceId::new("pasted"),
+            }]
+        );
+        for server in servers {
+            server.abort();
         }
     }
 

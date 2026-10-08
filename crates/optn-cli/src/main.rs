@@ -401,6 +401,11 @@ enum NetworkCommand {
     Configure { file: std::path::PathBuf },
     /// Choose auto, privacy, own-infrastructure, electrum-only, bip37-only or neutrino-only.
     Policy { preset: String },
+    /// Turn Tor on or off. Off connects directly and CashFusion does not run.
+    Tor {
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
     /// Add one source using an AddSourceRequest JSON file.
     Add { file: std::path::PathBuf },
     /// Enable, disable, or ban a source known to this network catalog.
@@ -759,6 +764,7 @@ fn command_name(command: &Command) -> &'static str {
             action:
                 NetworkCommand::Configure { .. }
                 | NetworkCommand::Policy { .. }
+                | NetworkCommand::Tor { .. }
                 | NetworkCommand::Add { .. }
                 | NetworkCommand::Disposition { .. }
                 | NetworkCommand::Remove { .. },
@@ -927,6 +933,10 @@ fn shared_network_status(cli: &Cli) -> Result<Value> {
             })
         })
         .collect::<Vec<_>>();
+    let tor = match selection.policy.transport {
+        optn_runtime::chain::TransportPolicy::Tor => "on",
+        optn_runtime::chain::TransportPolicy::Direct => "off",
+    };
     Ok(json!({
         "ok": true,
         "network": cli.network.to_string(),
@@ -937,6 +947,7 @@ fn shared_network_status(cli: &Cli) -> Result<Value> {
             "fallback_scope": selection.policy.fallback_scope.as_ref().map(|scope| format!("{scope:?}")),
             "preferred": selection.policy.preferred.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
         },
+        "tor": tor,
         "sources": sources,
         "primary": plan.primary.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
         "fallback": plan.fallback.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
@@ -1823,6 +1834,7 @@ fn authorize_command(cli: &Cli) -> Result<()> {
             action: NetworkCommand::Configure { .. }
                 | NetworkCommand::Import { .. }
                 | NetworkCommand::Policy { .. }
+                | NetworkCommand::Tor { .. }
                 | NetworkCommand::Add { .. }
                 | NetworkCommand::Disposition { .. }
                 | NetworkCommand::Remove { .. }
@@ -1853,6 +1865,17 @@ async fn run(cli: &Cli) -> Result<Value> {
                 cli.network,
                 cli.network_config_dir.as_deref(),
                 network_settings::parse_policy_preset(preset).map_err(CliError::Usage)?,
+            )
+            .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::Tor { state },
+        } => {
+            network_settings::set_transport(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                network_settings::parse_tor_switch(state).map_err(CliError::Usage)?,
             )
             .map_err(CliError::Usage)?;
             return shared_network_status(cli);

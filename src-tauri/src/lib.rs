@@ -64,8 +64,8 @@ async fn verified_native_proxy_for_network(
     verified_native_proxy(destination_hosts, &trusted_ports).await
 }
 
-const FUSION_NEEDS_TOR: &str = "CashFusion needs Tor. Your network policy connects directly; \
-     choose a Tor setting under Server & privacy to fuse.";
+const FUSION_NEEDS_TOR: &str = "CashFusion needs Tor, and Tor is off. Turn it on in \
+     Settings > Servers > Privacy & Transport to fuse.";
 
 /// CashFusion is private only over Tor, so it runs only while the holder's
 /// transport keeps public destinations on Tor. The selector never relaxes it:
@@ -1692,17 +1692,7 @@ mod tests {
             fusion::Transport::Direct
         ));
 
-        // The holder's transport decides: Tor for everything takes their own
-        // node through Tor too, and Direct proxies nothing.
-        let strict = optn_runtime::chain::ConnectionPolicy {
-            transport: optn_runtime::chain::TransportPolicy::TorForEverything,
-            ..own_policy
-        };
-        assert!(
-            bip37_transport_for_catalog("node.example", 8333, &own_catalog, &strict, &[])
-                .await
-                .is_err()
-        );
+        // With Tor off nothing is proxied.
         let direct = optn_runtime::chain::ConnectionPolicy {
             transport: optn_runtime::chain::TransportPolicy::Direct,
             ..remote_policy
@@ -1722,13 +1712,12 @@ mod tests {
         server.abort();
     }
 
-    /// Fusion is Tor-mandatory under every transport that has Tor, and does
-    /// not run at all under Direct.
+    /// Fusion is Tor-mandatory: with Tor on it needs a verified proxy, and
+    /// with Tor off it does not run at all.
     #[tokio::test]
     async fn fusion_runs_only_while_the_transport_keeps_it_on_tor() {
         use optn_runtime::chain::TransportPolicy;
-        assert!(fusion_transport_allows(TransportPolicy::TorExceptOwnInfrastructure).is_ok());
-        assert!(fusion_transport_allows(TransportPolicy::TorForEverything).is_ok());
+        assert!(fusion_transport_allows(TransportPolicy::Tor).is_ok());
         assert_eq!(
             fusion_transport_allows(TransportPolicy::Direct),
             Err(FUSION_NEEDS_TOR.to_string())

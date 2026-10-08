@@ -244,6 +244,11 @@ pub const fn scope_label(scope: &SourceScope) -> &'static str {
 
 fn origin_view(origin: &SourceOrigin) -> (String, Option<String>) {
     match origin {
+        // A server another server advertised, rather than a shipped list.
+        SourceOrigin::Bootstrap {
+            project: optn_runtime::chain::BootstrapProject::FulcrumPeerNetwork,
+            ..
+        } => ("bootstrap".into(), Some("discovered".into())),
         SourceOrigin::Bootstrap { .. } => ("bootstrap".into(), None),
         SourceOrigin::UserAdded => ("user".into(), None),
         SourceOrigin::UserInfrastructure { group } => {

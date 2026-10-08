@@ -523,6 +523,16 @@ impl NativeChainRuntime {
         self.rebuild_selection().await;
     }
 
+    /// The catalog routes are built from: the selection's, plus discovered
+    /// servers ranked last (see `NetworkSettingsStore::with_discovered`).
+    async fn route_catalog(&self, network: Network, catalog: SourceCatalog) -> SourceCatalog {
+        let settings = self.network_settings.clone();
+        let fallback = catalog.clone();
+        tokio::task::spawn_blocking(move || settings.with_discovered(network, catalog))
+            .await
+            .unwrap_or(fallback)
+    }
+
     /// Read persisted policy on the blocking pool without holding the stack lock.
     /// Missing files return `None`; reader or validation failures remain errors.
     async fn persisted_selection(
@@ -754,6 +764,10 @@ impl NativeChainRuntime {
             }
             secrets
         };
+        // Discovered servers join only the routes, ranked last, and never the
+        // selection compared above and below: learning of a new server must
+        // not count as a settings change and interrupt wallet sync.
+        let catalog = self.route_catalog(network, catalog).await;
         // Providers read the host's accepted chain, so a rebuild swaps routes
         // without discarding verified headers. A network with no reviewed
         // checkpoint gets a stack whose P2P scans will refuse for want of
@@ -814,12 +828,22 @@ impl NativeChainRuntime {
         {
             return true;
         }
+        let discovered = replacement.discovered_peers.clone();
         *stack = Some(InstalledStack {
             stack: replacement,
             selection: captured_selection,
             generation,
             credential_revision,
         });
+        drop(stack);
+        // Kept for a later build's failover. A cache write, outside every lock.
+        if !discovered.is_empty() {
+            let settings = self.network_settings.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                settings.record_discovered_peers(network, &discovered)
+            })
+            .await;
+        }
         true
     }
 
@@ -1173,19 +1197,9 @@ mod tests {
     #[test]
     fn cashcode_scans_follow_the_holders_transport() {
         let remote = parse_peer_endpoint("node.example:8333", NODE_HINT_PORT).unwrap();
-        // Their declared node is direct by default, and through Tor when
-        // everything must be; Direct proxies nothing.
+        // Their declared node is direct with Tor on; with Tor off nothing is
+        // proxied.
         assert!(!cashcode_tor_required(&remote, TransportPolicy::default(), true, None).unwrap());
-        assert!(
-            cashcode_tor_required(&remote, TransportPolicy::TorForEverything, true, None).unwrap()
-        );
-        assert!(cashcode_tor_required(
-            &remote,
-            TransportPolicy::TorForEverything,
-            true,
-            Some(false)
-        )
-        .is_err());
         assert!(
             !cashcode_tor_required(&remote, TransportPolicy::Direct, false, Some(false)).unwrap()
         );
@@ -1590,6 +1604,7 @@ mod tests {
                 failures: Vec::new(),
                 configuration_error: None,
                 headers: optn_chain_native::new_accepted_header_store("chipnet"),
+                discovered_peers: Vec::new(),
             },
         });
 

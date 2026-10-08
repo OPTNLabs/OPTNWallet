@@ -44,7 +44,7 @@ pub async fn build_stack(
             )
         }
     };
-    optn_chain_native::build_native_chain_stack_via(
+    let stack = optn_chain_native::build_native_chain_stack_via(
         selection.catalog,
         selection.policy,
         &network.to_string(),
@@ -54,7 +54,28 @@ pub async fn build_stack(
             trusted: &trusted,
         },
     )
-    .await
+    .await;
+    // Kept for a later run's failover, in the cache the desktop keeps too.
+    if !stack.discovered_peers.is_empty() && network != Network::Regtest {
+        if let Some(file) = discovered_file(network, directory) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs());
+            let _ = file.record(network, &stack.discovered_peers, now);
+        }
+    }
+    stack
+}
+
+fn discovered_file(
+    network: Network,
+    directory: Option<&Path>,
+) -> Option<optn_chain_native::discovered_peers_file::DiscoveredPeersFile> {
+    config_directory(directory).map(|directory| {
+        optn_chain_native::discovered_peers_file::DiscoveredPeersFile::new(
+            directory.join(format!("discovered-peers-{network}.json")),
+        )
+    })
 }
 
 pub fn export_sources(network: Network, directory: Option<&Path>) -> Result<String, String> {
@@ -351,6 +372,39 @@ pub fn set_policy_preset(
         .map(|_| ())
 }
 
+/// Turn Tor on or off for this network. Which sources are selected is left
+/// exactly as it was.
+pub fn set_transport(
+    network: Network,
+    directory: Option<&Path>,
+    transport: optn_runtime::chain::TransportPolicy,
+) -> Result<(), String> {
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    NetworkConfigFile::new(directory.join(file_name(network)))
+        .update(|existing| {
+            let mut envelope = existing.unwrap_or_else(|| {
+                NetworkConfigEnvelope::current(
+                    optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
+                    Default::default(),
+                )
+            });
+            optn_runtime::network_config::promote_legacy_policy(&mut envelope);
+            envelope.overlay.connection_policy.transport = transport;
+            Ok(envelope)
+        })
+        .map(|_| ())
+}
+
+/// `on` or `off`, as typed after `network tor`.
+pub fn parse_tor_switch(value: &str) -> Result<optn_runtime::chain::TransportPolicy, String> {
+    match value.trim() {
+        "on" => Ok(optn_runtime::chain::TransportPolicy::Tor),
+        "off" => Ok(optn_runtime::chain::TransportPolicy::Direct),
+        _ => Err("Use network tor on|off.".into()),
+    }
+}
+
 /// The durable source catalog and policy shared by native wallet surfaces.
 ///
 /// The CLI has no private network-settings shape: it either uses this exact
@@ -367,8 +421,18 @@ pub fn shared_chain_selection(
     configured_directory: Option<&Path>,
 ) -> Result<Option<SharedChainSelection>, String> {
     let envelope = shared_envelope(network, configured_directory)?;
-    let (catalog, policy) = resolve_shipped_chain_selection(network, envelope.as_ref())
-        .map_err(|error| format!("cannot enforce network settings: {error:?}"))?;
+    // Servers discovered from peer lists rank after every shipped one, with
+    // the holder's dispositions applied; see `optn_runtime::bootstrap`.
+    let discovered = if network == Network::Regtest {
+        Vec::new()
+    } else {
+        discovered_file(network, configured_directory)
+            .map(|file| file.load(network))
+            .unwrap_or_default()
+    };
+    let (catalog, policy) =
+        optn_runtime::bootstrap::resolve_with_discovered(network, envelope.as_ref(), &discovered)
+            .map_err(|error| format!("cannot enforce network settings: {error:?}"))?;
     Ok(Some(SharedChainSelection { catalog, policy }))
 }
 
@@ -637,6 +701,32 @@ mod tests {
             stored.overlay.user_sources.is_empty(),
             "shipped entries are not user records"
         );
+    }
+
+    #[test]
+    fn switching_tor_keeps_the_selection() {
+        use optn_runtime::chain::TransportPolicy;
+        assert_eq!(parse_tor_switch("on"), Ok(TransportPolicy::Tor));
+        assert_eq!(parse_tor_switch("off"), Ok(TransportPolicy::Direct));
+        assert!(parse_tor_switch("direct").is_err());
+
+        let directory = TestDirectory::new();
+        let mut overlay = legacy_electrum("127.0.0.1");
+        overlay.connection_policy =
+            ConnectionPolicy::exact(overlay.user_sources[0].id.clone(), ProtocolFamily::Electrum);
+        let pinned = overlay.connection_policy.clone();
+        directory.write(Network::Chipnet, overlay);
+        set_transport(
+            Network::Chipnet,
+            Some(&directory.0),
+            TransportPolicy::Direct,
+        )
+        .unwrap();
+        let selection = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.policy.transport, TransportPolicy::Direct);
+        assert!(selection.policy.selects_like(&pinned));
     }
 
     #[test]

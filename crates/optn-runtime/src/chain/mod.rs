@@ -584,14 +584,12 @@ impl SourceScope {
 /// to hide, and Tor cannot reach it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransportPolicy {
-    /// Tor for remote endpoints, except the holder's declared infrastructure,
-    /// which is reached directly. The behaviour before this choice existed.
+    /// Tor on: every remote endpoint through Tor, except a node the holder
+    /// declared as their own, which already knows who is asking and is
+    /// reached directly. The behaviour before this choice existed.
     #[default]
-    TorExceptOwnInfrastructure,
-    /// Tor for every remote endpoint, the holder's own included: their node
-    /// must be reachable through Tor, for example as an onion service.
-    TorForEverything,
-    /// No proxy. CashFusion, which is private only over Tor, does not run.
+    Tor,
+    /// Tor off: no proxy. CashFusion, private only over Tor, does not run.
     Direct,
 }
 
@@ -600,8 +598,7 @@ impl TransportPolicy {
     /// Tor. `tor_for(false)` is the rule for every public source.
     pub const fn tor_for(self, own_infrastructure: bool) -> bool {
         match self {
-            Self::TorExceptOwnInfrastructure => !own_infrastructure,
-            Self::TorForEverything => true,
+            Self::Tor => !own_infrastructure,
             Self::Direct => false,
         }
     }
@@ -613,23 +610,17 @@ impl TransportPolicy {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::TorExceptOwnInfrastructure => "Tor, except my infrastructure",
-            Self::TorForEverything => "Tor for everything",
-            Self::Direct => "Direct",
+            Self::Tor => "Tor on",
+            Self::Direct => "Tor off",
         }
     }
 
-    pub const ALL: [Self; 3] = [
-        Self::TorExceptOwnInfrastructure,
-        Self::TorForEverything,
-        Self::Direct,
-    ];
+    pub const ALL: [Self; 2] = [Self::Tor, Self::Direct];
 
-    /// The stable name used in settings files, IPC and the CLI.
+    /// The stable name used in settings files and IPC.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::TorExceptOwnInfrastructure => "tor_except_own_infrastructure",
-            Self::TorForEverything => "tor_for_everything",
+            Self::Tor => "tor",
             Self::Direct => "direct",
         }
     }
@@ -642,12 +633,7 @@ impl std::str::FromStr for TransportPolicy {
         Self::ALL
             .into_iter()
             .find(|transport| transport.as_str() == value)
-            .ok_or_else(|| {
-                format!(
-                    "unknown transport '{value}'; expected tor_except_own_infrastructure, \
-                     tor_for_everything or direct"
-                )
-            })
+            .ok_or_else(|| format!("unknown transport '{value}'; expected tor or direct"))
     }
 }
 

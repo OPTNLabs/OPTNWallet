@@ -1258,6 +1258,113 @@ fn validate_endpoint(config: &ElectrumConfig) -> Result<(), ChainBackendError> {
     }
     Ok(())
 }
+/// The Electrum servers a server says it peers with (`server.peers.subscribe`),
+/// as endpoints worth trying later (#75 §21.3).
+///
+/// Hints, never trust: each is connected to, negotiated and genesis-checked
+/// like any other source before it serves anything. An entry is
+/// `[ip, hostname, [features]]`, where `s50002` names a TLS port and `t50001`
+/// a plaintext one (a bare `s` or `t` means the default port). Only TLS is
+/// kept for an ordinary hostname. An onion host is kept only when `allow_onion`
+/// says Tor is in use, and then on either port, since Tor encrypts the hop.
+///
+/// IP literals and local or single-label names are dropped: a server must not
+/// be able to aim this wallet at the holder's own network.
+pub fn advertised_peers(peers: &Value, allow_onion: bool, limit: usize) -> Vec<Endpoint> {
+    let mut found: Vec<Endpoint> = Vec::new();
+    for entry in peers.as_array().into_iter().flatten() {
+        if found.len() >= limit {
+            break;
+        }
+        let Some(fields) = entry.as_array() else {
+            continue;
+        };
+        let Some(host) = fields.get(1).and_then(Value::as_str) else {
+            continue;
+        };
+        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+        if !plausible_peer_host(&host) {
+            continue;
+        }
+        let onion = host.ends_with(".onion");
+        if onion && !allow_onion {
+            continue;
+        }
+        let mut tls = None;
+        let mut plain = None;
+        for feature in fields
+            .get(2)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            let (slot, default) = match feature.chars().next() {
+                Some('s') => (&mut tls, 50002),
+                Some('t') => (&mut plain, 50001),
+                _ => continue,
+            };
+            let port = match &feature[1..] {
+                "" => Some(default),
+                digits => digits.parse::<u16>().ok().filter(|port| *port != 0),
+            };
+            if slot.is_none() {
+                *slot = port;
+            }
+        }
+        let endpoint = match (tls, plain) {
+            (Some(port), _) => Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host,
+                port: Some(port),
+            },
+            (None, Some(port)) if onion => Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host,
+                port: Some(port),
+            },
+            _ => continue,
+        };
+        if !found.contains(&endpoint) {
+            found.push(endpoint);
+        }
+    }
+    found
+}
+
+/// A public DNS name: at least two labels, letters, digits and hyphens only,
+/// not all digits (an IPv4 literal), and not a name reserved for local use.
+fn plausible_peer_host(host: &str) -> bool {
+    const LOCAL_SUFFIXES: &[&str] = &[
+        ".localhost",
+        ".local",
+        ".lan",
+        ".home",
+        ".internal",
+        ".intranet",
+        ".corp",
+        ".home.arpa",
+        ".in-addr.arpa",
+        ".ip6.arpa",
+    ];
+    let labels: Vec<&str> = host.split('.').collect();
+    host.len() <= 253
+        && labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+        && !labels
+            .iter()
+            .all(|label| label.bytes().all(|byte| byte.is_ascii_digit()))
+        && !LOCAL_SUFFIXES.iter().any(|suffix| host.ends_with(suffix))
+}
+
 fn feature_enabled(features: &Value, key: &str) -> bool {
     match features.get(key) {
         Some(Value::Bool(v)) => *v,
@@ -1643,6 +1750,57 @@ fn map_io(_: std::io::Error) -> ChainBackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advertised_peers_keep_public_tls_names_and_onions_only_over_tor() {
+        let peers = json!([
+            [
+                "203.0.113.7",
+                "Fulcrum.Example.org.",
+                ["v1.5.2", "s50002", "t50001"]
+            ],
+            ["203.0.113.8", "bch.example.net", ["v1.5", "s", "p10000"]],
+            ["203.0.113.9", "plain.example.net", ["v1.4", "t50001"]],
+            [
+                "198.51.100.1",
+                "exampleonionaddressxyz.onion",
+                ["v1.5", "t50001"]
+            ],
+            ["192.168.1.5", "192.168.1.5", ["s50002"]],
+            ["10.0.0.2", "router", ["s50002"]],
+            ["127.0.0.1", "localhost", ["s50002"]],
+            ["10.0.0.3", "node.local", ["s50002"]],
+            ["10.0.0.4", "node.home.arpa", ["s50002"]],
+            ["203.0.113.10", "bad_name.example.org", ["s50002"]],
+            ["203.0.113.11", "zero.example.org", ["s0"]],
+            ["203.0.113.12", "fulcrum.example.org", ["s50002"]],
+            "not an entry",
+            ["203.0.113.13"]
+        ]);
+        let tls = |host: &str, port| Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: host.into(),
+            port: Some(port),
+        };
+        assert_eq!(
+            advertised_peers(&peers, false, 32),
+            vec![
+                tls("fulcrum.example.org", 50002),
+                tls("bch.example.net", 50002),
+            ]
+        );
+        let with_tor = advertised_peers(&peers, true, 32);
+        assert_eq!(
+            with_tor.last(),
+            Some(&Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "exampleonionaddressxyz.onion".into(),
+                port: Some(50001),
+            })
+        );
+        assert_eq!(advertised_peers(&peers, true, 1).len(), 1);
+        assert!(advertised_peers(&json!({"not": "a list"}), true, 32).is_empty());
+    }
 
     #[tokio::test]
     async fn pipelined_requests_require_every_matching_reply_and_preserve_order() {

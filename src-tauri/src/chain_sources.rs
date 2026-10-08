@@ -82,6 +82,14 @@ pub async fn optn_chain_sources(
             }
         }
     };
+    // Listed as routes are built, discovered servers included, so the holder
+    // can disable or ban one.
+    let catalog = {
+        let settings = (*network_settings).clone();
+        tokio::task::spawn_blocking(move || settings.with_discovered(network, catalog))
+            .await
+            .map_err(|_| "network settings reader stopped".to_string())?
+    };
 
     let settings = (*network_settings).clone();
     let trusted_ports = tokio::task::spawn_blocking(move || settings.trusted_socks_ports(network))
@@ -271,8 +279,7 @@ pub async fn optn_chain_set_policy(
     .await
 }
 
-/// How the network's selected sources are reached (#75 §4.1): one of
-/// `tor_except_own_infrastructure`, `tor_for_everything` or `direct`.
+/// Whether Tor is on for the network (#75 §4.1): `tor` or `direct`.
 #[tauri::command]
 pub async fn optn_chain_transport(
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
