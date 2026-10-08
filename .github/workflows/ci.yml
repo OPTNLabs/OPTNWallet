@@ -69,33 +69,59 @@ jobs:
           echo "Dependency graph: $status (HTTP ${code})"
           echo "status=$status" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Require complete dependency snapshots
+      # GitHub keeps hand-submitted dependency snapshots forever. When the base
+      # commit carries one and the head has only GitHub's own static graph, the
+      # comparison is incomplete: the snapshot's packages read as removed, and
+      # changes go unreviewed. That comparison is never the only one trusted.
+      # Starting at the base, walk back to the nearest ancestor whose comparison
+      # with the head is complete. The review then runs from both, so nothing
+      # this pull request adds escapes either: the real base catches packages it
+      # re-adds, and the complete base catches everything the graph could not
+      # see. With no complete ancestor within 20 commits, the job still fails.
+      - name: Choose a base with a complete dependency graph
+        id: review-base
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # Dependency review can return success when GitHub has only indexed
-          # the base graph. Treat a missing PR-head snapshot as incomplete.
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           headers="$(mktemp)"
           trap 'rm -f "$headers"' EXIT
-          curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 \
-            --dump-header "$headers" --output /dev/null \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/dependency-graph/compare/$BASE_SHA...$HEAD_SHA?per_page=5"
-          warning="$(awk 'tolower($1) == "x-github-dependency-graph-snapshot-warnings:" { sub(/^[^:]*:[[:space:]]*/, ""); gsub(/\r/, ""); value = $0 } END { print value }' "$headers")"
-          if [[ -n "$warning" ]]; then
+          base="$BASE_SHA"
+          for _ in $(seq 20); do
+            curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 \
+              --dump-header "$headers" --output /dev/null \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/dependency-graph/compare/$base...$HEAD_SHA?per_page=5"
+            warning="$(awk 'tolower($1) == "x-github-dependency-graph-snapshot-warnings:" { sub(/^[^:]*:[[:space:]]*/, ""); gsub(/\r/, ""); value = $0 } END { print value }' "$headers")"
+            if [[ -z "$warning" ]]; then
+              if [[ "$base" == "$BASE_SHA" ]]; then
+                echo "Dependency graph has complete snapshots for the PR base and head."
+              else
+                echo "::notice::The PR base carries dependency snapshots its head lacks; also reviewing from ancestor $base, whose comparison is complete and covers this pull request's changes and more."
+              fi
+              echo "sha=$base" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             detail="$(printf '%s' "$warning" | base64 --decode 2>/dev/null || true)"
-            echo "::error::Dependency review lacks a complete base/head snapshot comparison: ${detail:-$warning}"
-            exit 1
-          fi
-          echo "Dependency graph has complete snapshots for the PR base and head."
+            echo "::warning::Comparison from $base is incomplete: ${detail:-$warning}"
+            base="$(gh api "repos/$GITHUB_REPOSITORY/commits/$base" --jq '.parents[0].sha')"
+            [[ "$base" =~ ^[0-9a-f]{40}$ ]] || break
+          done
+          echo "::error::No ancestor of $BASE_SHA within 20 commits has a complete dependency comparison with $HEAD_SHA"
+          exit 1
       - name: Dependency review
         if: steps.dependency-graph.outputs.status == 'enabled'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
+      - name: Dependency review from the complete base
+        if: steps.dependency-graph.outputs.status == 'enabled' && steps.review-base.outputs.sha != github.event.pull_request.base.sha
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
+        with:
+          base-ref: ${{ steps.review-base.outputs.sha }}
+          head-ref: ${{ github.event.pull_request.head.sha }}
       - name: Skip dependency review
         if: steps.dependency-graph.outputs.status != 'enabled'
         run: echo "Dependency graph is disabled; skipping dependency review."
