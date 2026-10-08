@@ -72,6 +72,7 @@ import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
 import { P2P_COMPONENT_JITTER_MS, p2pRoundTimeoutMs } from './fusionTiming';
 import { getFusionKnobs } from './fusionKnobs';
 import { log } from './logger';
+import { networkProfile } from '../../utils/networkProfile';
 
 const P2P_FEERATE = 1_000; // sats per 1000 bytes
 // Participant bounds live in nostr/fusion.ts so the pool, the rendezvous and
@@ -126,7 +127,11 @@ export interface P2pFusionOptions {
 }
 
 function toPoolNetwork(network: Network): FusionPoolNetwork {
-  return network === Network.MAINNET ? 'mainnet' : 'chipnet';
+  if (network === Network.MAINNET) return 'mainnet';
+  if (network === Network.CHIPNET) return 'chipnet';
+  throw new Error(
+    `CashFusion is not available on ${networkProfile(network).label}.`
+  );
 }
 
 /**

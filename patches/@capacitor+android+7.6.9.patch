@@ -1,5 +1,5 @@
 diff --git a/node_modules/@capacitor/android/capacitor/build.gradle b/node_modules/@capacitor/android/capacitor/build.gradle
-index 22e90b1..51850af 100644
+index 22e90b1..49f2296 100644
 --- a/node_modules/@capacitor/android/capacitor/build.gradle
 +++ b/node_modules/@capacitor/android/capacitor/build.gradle
 @@ -18,7 +18,7 @@ buildscript {
@@ -47,8 +47,3 @@ index 22e90b1..51850af 100644
      }
      compileOptions {
          sourceCompatibility JavaVersion.VERSION_21
-@@ -93,4 +93,3 @@ dependencies {
-     testImplementation 'org.json:json:20240303'
-     testImplementation 'org.mockito:mockito-core:5.14.1'
- }
--

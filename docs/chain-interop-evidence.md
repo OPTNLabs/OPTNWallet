@@ -409,14 +409,15 @@ Recorded so the gap is not mistaken for a pass.
 - **Production-network rules.** These runs are regtest. Mainnet and chipnet
   constants and difficulty behaviour are covered by separate tests and are
   deliberately not exercised by any regtest fixture.
-- **Mainnet header verification.** No reviewed mainnet checkpoint ships in this
-  build, so `shipped_header_verifier` refuses mainnet rather than anchoring
-  trust on whatever a peer served first. Routes that do not need verified
-  headers keep working; BIP37 and Neutrino decline.
+- **Mainnet header verification.** The historical build used for these runs
+  lacked its mainnet anchor. Current `shipped_header_verifier` supplies each
+  network's genesis, including mainnet; that component coverage does not turn
+  these regtest runs into a live mainnet result.
 - **Tor.** Every run above is loopback. The Tor route has its own timeouts and
   has not been exercised against these nodes.
-- **Reorg and restart.** The header store and the replay module have unit
-  coverage for both, but neither has been driven against a live node here.
+- **Reorg and restart.** The earlier provider-level reorg result is recorded
+  above. The 2026-10-07 runtime/CLI restart result is below; neither establishes
+  automatic wallet recovery onto a reorganized chain in a packaged app.
 
 ## 2026-09-19: native Leptos GUI live Chipnet and offline reopen
 
@@ -562,3 +563,102 @@ The interactive wallet commands `assets` and `nfts`, or private stdio
 the existing framework-free `optn-ui-text` crate. A process test opens a public
 fixture, reaches both views, locks it and confirms further asset reads are
 refused. This tests command wiring and lock boundaries, not live token discovery.
+
+## Runtime SHV recovery and encrypted restart (2026-10-07)
+
+Follow-up to merged PR63, based on `dev` at `c45be9b7`. Production recovery now
+requests a historical proof on the selected wallet route, verifies it against
+the runtime's saved MMR commitment, and privately rebuilds the linked range up
+to the accepted tip. Only a complete, unchanged-source/store result is published.
+An unsupported or timed-out optional SHV request uses the same peer's existing
+authenticated genesis replay. A structurally valid proof that fails cryptographic
+verification is discarded and takes that same replay path. Replay must still
+reach the already accepted MMR commitment; the failed proof grants no trust or
+hash-pruning authority. Wrong heights/checkpoints, malformed proof structure and
+invalid linked tails remain hard failures.
+
+Pruning runs after the actor accepts the wallet checkpoint. The default recent
+window is 2,016 headers. Ordinary BIP37 and Neutrino keep earlier locator/filter
+hashes while dropping raw headers. BIP37 may also discard those hashes only
+after this worker validates an actual proof from that exact, still-eligible
+route. Advertising bit 9 alone is insufficient. Recovering an older wallet floor
+hydrates the required range before the provider scans it. Date preflight also
+recovers missing raw timestamp windows and re-derives provisional medians before
+the actor resolves a saved birthday, including when the chain tip has not moved.
+
+### Connected live fixture
+
+Two real BCHN processes were explicitly peered on one disposable 160-block
+regtest chain. They had no external network route, discovery or user data.
+Windows OPTN reached their loopback listeners through an owned local relay.
+
+| Role | Version / provenance | Endpoint |
+| --- | --- | --- |
+| SHV | `v29.0.1-e6d380373-dirty`, `-mmrindex=1`; retained source matches `e6d38037350dbf0dbc0aaba3d7a34387390a7e8b` after line-ending normalization | `127.0.0.1:29444` |
+| Ordinary BIP37 | `v29.1.0-b31ed10b4`, no SHV advertisement | `127.0.0.1:28444` |
+
+SHV binary SHA-256:
+`26cef9241624b8275b5936b914c4395afb3e7c544a919db6ef9021815ac17297`.
+Ordinary binary SHA-256:
+`c56cd18435c50c2c621df6d8fb93567531209a081ecc2c7b044cd5a7b361e31e`.
+The retained SHV build binary matches the running binary. Comparing all 2,820
+tracked source files found only line-ending and executable-mode differences;
+the historical cause of its dirty suffix is not established. This is source
+comparison and executable identification, not a reproducible-build attestation.
+
+`crates/optn-cli/tests/shv_regtest.rs` passed against those peers, including a
+rerun after the review fixes below. It uses a
+randomly protected encrypted watch-only record for the published BIP39 fixture,
+never a normal wallet profile. It verifies:
+
+- Actual HD Bloom sync produces a nonzero balance and transaction history.
+- Encrypted reopen displays the saved balance as stale and restores the same
+  accepted MMR commitment before fetching anything.
+- A real SHV response recovers missing history; pruning removes old hashes;
+  another scan recovers them again without changing balance/history.
+- Switching to the peered ordinary node requests no SHV proof, authenticates
+  replay and produces the same balance/history.
+- Two actual CLI processes reopen the same record, first selecting SHV and then
+  the ordinary node through saved exact-source policy. Both report the same
+  balance, height and commitment. An explicit floor remains labelled scoped
+  history rather than becoming a full-history claim.
+- A saved date, with no manual-height override, survives encrypted reopen.
+  Both peer types recover and authenticate the timestamp anchors at an unchanged
+  tip, then publish the same date-scoped balance/history through the actor.
+
+To keep the fixture small, it sets a four-header retention window and a
+16-block timestamp-anchor interval. The production defaults are unchanged at
+2,016. Reproduce with two loopback peers on the same regtest chain, mining at
+least 32 blocks to the public fixture address documented above:
+
+```powershell
+$env:OPTN_BCHN_SHV_P2P = '127.0.0.1:29444'
+$env:OPTN_REGTEST_P2P = '127.0.0.1:28444'
+cargo test --manifest-path crates/optn-cli/Cargo.toml --test shv_regtest --locked -- --ignored --nocapture
+```
+
+Deterministic worker regressions additionally cover invalid proof roots,
+heights, checkpoints and paths; broken/empty tails; same-source fallback;
+source bans; revoked requests; concurrent store mutations; unchanged-tip date
+recovery; and invalid restored medians. Invalid-proof fallback is tested for
+both BIP37 and Neutrino, including replay that ends at the wrong commitment and
+revocation or store mutation during the failed proof request.
+
+Normal header publication and both recovery paths now capture a store revision
+and stage only incoming headers, without cloning or comparing the entire
+accepted history. Publication checks the revision under the write lock, validates
+the whole batch and both retained boundaries, and rechecks revocation before any
+insertion. Every write invalidates the revision, including pruning, rewinds and
+whole-store replacement; replacing identical contents cannot revive an old
+revision. Empty batches still check publication permission. Tests cover late
+conflicts leaving all accepted entries unchanged and preservation of unrelated
+history and the chain generation. These changes passed all 361 runtime library
+tests and strict runtime/CLI Clippy. This is not a mainnet-scale memory benchmark.
+
+This is live local-node runtime and CLI evidence. It is not a new packaged GUI,
+mobile, Tor, public Chipnet or mainnet run, nor automatic wallet reorg recovery.
+GUI and CLI call the same Rust synchronization entry point, but packaged GUI
+interaction still needs its own verification. Mainnet and Chipnet keep their
+network-specific parameters. No public SHV availability is assumed. Ordinary
+hash retention and full-floor scans remain linear in their covered history;
+only the MMR peaks are logarithmic. No transaction was signed or broadcast.

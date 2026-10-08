@@ -168,9 +168,8 @@
     "ts-mls": "file:vendor/ts-mls"
   },
   "overrides": {
+    "braces": "$braces",
     "@cashscript/utils": "0.13.0-next.3",
-    "braces": "npm:@dieub/braces-depth-guard@3.0.3-pn.3",
-    "source-map-js": "1.2.2",
     "anymatch": {
       "picomatch": "^2.3.2"
     },
@@ -198,7 +197,8 @@
     "mocha": {
       "diff": "8.0.4"
     },
-    "js-yaml": "4.3.2"
+    "js-yaml": "4.3.2",
+    "source-map-js": "^1.2.2"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.6.9",
@@ -218,6 +218,7 @@
     "@wdio/mocha-framework": "^9.31.7",
     "@wdio/spec-reporter": "^9.31.2",
     "autoprefixer": "^10.4.19",
+    "braces": "file:vendor/braces",
     "cross-env": "^10.1.0",
     "dotenv-cli": "^8.0.0",
     "eslint": "^8.57.0",
@@ -227,25 +228,26 @@
     "eslint-plugin-react-refresh": "^0.4.6",
     "jsdom": "^29.1.1",
     "jsqr": "^1.4.0",
+    "minimatch": "9.0.9",
     "mocha": "^11.8.0",
     "patch-package": "^8.0.0",
     "postcss": "^8.5.15",
     "prettier": "^3.3.2",
+    "rollup": "^4.62.2",
     "tailwindcss": "^3.4.3",
     "tsx": "4.23.13",
     "typescript": "^5.2.2",
-    "rollup": "^4.62.2",
     "vite": "^8.2.1",
     "vite-plugin-node-polyfills": "^0.28.0",
     "vite-plugin-top-level-await": "^1.6.0",
     "vite-plugin-wasm": "^3.6.0",
     "vitest": "^5.0.0",
-    "webdriverio": "^9.31.7"
+    "webdriverio": "^9.31.7",
+    "yaml": "2.9.0"
   },
   "resolutions": {
+    "**/braces": "file:vendor/braces",
     "**/@cashscript/utils": "0.13.0-next.3",
-    "**/braces": "npm:@dieub/braces-depth-guard@3.0.3-pn.3",
-    "**/source-map-js": "1.2.2",
     "**/js-yaml": "4.3.2",
     "**/ws": "^8.21.0",
     "**/@puppeteer/browsers": "3.2.2",
@@ -254,7 +256,8 @@
     "**/esbuild": "0.28.2",
     "**/axios": "^1.20.0",
     "**/protobufjs": "8.7.0",
-    "**/serialize-javascript": "^7.1.2"
+    "**/serialize-javascript": "^7.1.2",
+    "**/source-map-js": "^1.2.2"
   },
   "packageManager": "npm@10.9.2"
 }

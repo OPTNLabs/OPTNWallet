@@ -202,12 +202,26 @@ pub struct Cashcode {
 }
 
 impl Cashcode {
+    /// The network this code reports. A cashcode only says mainnet
+    /// (`cashcode:`) or test network (`cashcodetest:`): every test chain shares
+    /// one payload version, so all of them report Chipnet here. Check a code
+    /// against a wallet with [`Cashcode::matches`], not by comparing this.
     pub fn network(&self) -> Network {
-        if self.version == 0x01 || self.version == 0x02 {
+        if self.is_mainnet() {
             Network::Mainnet
         } else {
             Network::Chipnet
         }
+    }
+
+    /// Whether this is a mainnet (`cashcode:`) code.
+    pub fn is_mainnet(&self) -> bool {
+        self.version == 0x01 || self.version == 0x02
+    }
+
+    /// Whether a wallet on `network` may pay this code.
+    pub fn matches(&self, network: Network) -> bool {
+        self.is_mainnet() != network.is_testnet()
     }
 }
 
@@ -1185,6 +1199,33 @@ mod tests {
         assert_eq!(decoded.expiry, 0);
         assert_eq!(decoded.network(), Network::Chipnet);
         assert!(looks_like_rpa(&code));
+    }
+
+    /// A code names mainnet or "a test network", never which test chain, so a
+    /// testnet4 wallet must accept a code a chipnet wallet made, and vice versa.
+    #[test]
+    fn a_test_cashcode_is_payable_from_every_test_network_and_never_mainnet() {
+        let scan = pubkey_of(&small_key(7));
+        let spend = pubkey_of(&small_key(13));
+        let tests = [
+            Network::Testnet3,
+            Network::Testnet4,
+            Network::Chipnet,
+            Network::Regtest,
+        ];
+        for made_on in tests {
+            let code = decode(&encode(&scan, &spend, made_on, RPA_PREFIX_BITS)).unwrap();
+            assert!(!code.is_mainnet(), "{made_on}");
+            assert!(!code.matches(Network::Mainnet), "{made_on}");
+            for paid_from in tests {
+                assert!(code.matches(paid_from), "{made_on} code from {paid_from}");
+            }
+        }
+        let mainnet = decode(&encode(&scan, &spend, Network::Mainnet, RPA_PREFIX_BITS)).unwrap();
+        assert!(mainnet.is_mainnet() && mainnet.matches(Network::Mainnet));
+        for paid_from in tests {
+            assert!(!mainnet.matches(paid_from), "{paid_from}");
+        }
     }
 
     #[test]

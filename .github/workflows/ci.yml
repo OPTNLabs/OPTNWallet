@@ -96,19 +96,6 @@ jobs:
       - name: Dependency review
         if: steps.dependency-graph.outputs.status == 'enabled'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
-        with:
-          # The dependency graph names an npm alias by its install path, so
-          # `braces: npm:@dieub/braces-depth-guard@3.0.3-pn.3` is matched as
-          # `braces@3.0.3-pn.3`. GHSA-grv7-fg5c-xmjg is fixed in the 3.0.3
-          # source the backport is built on (the prerelease suffix sorts below
-          # 3.0.3); GHSA-vfj7-8cjw-p6xm has no upstream fix and is the depth
-          # ceiling the backport adds. Both are reviewed in
-          # docs/dependency-policy.md and pinned by the regressions in
-          # scripts/__tests__/bracesSecurity.test.mts. npm audit in
-          # dependency-audit resolves the real package name, so a genuine
-          # `braces` entering the tree still fails there. Remove these with
-          # the alias.
-          allow-ghsas: GHSA-grv7-fg5c-xmjg, GHSA-vfj7-8cjw-p6xm
       - name: Skip dependency review
         if: steps.dependency-graph.outputs.status != 'enabled'
         run: echo "Dependency graph is disabled; skipping dependency review."
@@ -152,6 +139,8 @@ jobs:
 
       - name: Dependency policy
         run: npm run deps:check
+      - name: Dependency security regressions
+        run: npx vitest run scripts/__tests__/dependencySecurity.test.mts
       - name: Dependency audit (prod, critical+)
         run: npm audit --omit=dev --audit-level=critical
       - name: Dependency audit (all, high+)

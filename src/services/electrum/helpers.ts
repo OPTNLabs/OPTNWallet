@@ -4,7 +4,6 @@ import {
   sha256,
 } from '@bitauth/libauth';
 import { RequestResponse } from '@electrum-cash/network';
-import { Network } from '../../state/slices/networkSlice';
 import { store } from '../../state/store';
 import { binToHex, hexToBin } from '../../utils/hex';
 import { normalizeTokenField } from '../../utils/tokenNormalization';
@@ -14,6 +13,7 @@ import {
   UTXO,
 } from '../../types/types';
 
+import { cashAddressPrefix } from '../../utils/networkProfile';
 export type TransactionVisibility = {
   seen: boolean;
   confirmed: boolean;
@@ -48,7 +48,7 @@ export type ElectrumVerboseTransaction = {
 
 function currentAddressPrefix(): 'bitcoincash' | 'bchtest' {
   const network = store.getState().network.currentNetwork;
-  return network === Network.CHIPNET ? 'bchtest' : 'bitcoincash';
+  return cashAddressPrefix(network);
 }
 
 export function isTransactionHistoryArray(

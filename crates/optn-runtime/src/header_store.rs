@@ -18,11 +18,12 @@
 //! a window, and a request outside it is reported as a gap rather than guessed
 //! at. Recovering an older range is a separate, authenticated operation.
 //!
-//! Storage is linear in the retained window — 32 bytes per hash, plus 80 per
-//! header where one is kept. That is deliberately not described as O(log n);
-//! only the accumulator peaks are.
+//! Storage is linear in retained entries. Each entry has a hash and an inline
+//! optional header slot, plus map overhead; dropping a header does not shrink
+//! that slot. Only the accumulator peaks are O(log n).
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, RwLock};
 
 use optn_core::header_hash::sha256d;
 
@@ -62,6 +63,12 @@ pub enum HeaderStoreError {
     Discontiguous { missing: u32 },
     /// A header did not link to the block already retained beneath it.
     Linkage { height: u32 },
+    /// Recovery must not replace an already accepted hash with another chain.
+    ConflictingHash { height: u32 },
+    /// Recovery batches contain authenticated raw headers, not hash assertions.
+    MissingHeader { height: u32 },
+    /// The runtime withdrew permission after validation, before publication.
+    PublicationCancelled,
 }
 
 /// One retained block. The header is optional: a pruned tail can keep the hash
@@ -73,7 +80,7 @@ struct Retained {
 }
 
 /// Dense, bounded, authoritative height/hash storage for one accepted chain.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RetainedHeaders {
     by_height: BTreeMap<u32, Retained>,
     by_hash: HashMap<Hash32, u32>,
@@ -122,6 +129,73 @@ impl RetainedHeaders {
 
     pub fn header_at(&self, height: u32) -> Option<&BlockHeaderBytes> {
         self.by_height.get(&height)?.header.as_ref()
+    }
+
+    /// Check contiguous coverage without allocating a copy of the hash range.
+    pub(crate) fn covers_range(&self, start: u32, end: u32) -> bool {
+        start <= end
+            && self
+                .by_height
+                .range(start..=end)
+                .map(|(h, _)| *h)
+                .eq(start..=end)
+    }
+
+    /// Atomically merge an independently authenticated batch. Validate every
+    /// conflict and boundary before writing anything; an error leaves the
+    /// accepted store untouched. Work is proportional to incoming headers,
+    /// not to the entire previously retained chain.
+    pub(crate) fn merge_verified(
+        &mut self,
+        incoming: Self,
+        may_publish: impl FnOnce() -> bool,
+    ) -> Result<(), HeaderStoreError> {
+        let mut previous_height: Option<u32> = None;
+        for (&height, entry) in &incoming.by_height {
+            if let Some(previous) = previous_height {
+                if previous.checked_add(1) != Some(height) {
+                    return Err(HeaderStoreError::Discontiguous {
+                        missing: previous.saturating_add(1),
+                    });
+                }
+            }
+            previous_height = Some(height);
+            let header = entry
+                .header
+                .as_ref()
+                .ok_or(HeaderStoreError::MissingHeader { height })?;
+            if self.hash_at(height).is_some_and(|hash| hash != entry.hash) {
+                return Err(HeaderStoreError::ConflictingHash { height });
+            }
+            if let Some(previous) = height
+                .checked_sub(1)
+                .and_then(|h| incoming.hash_at(h).or_else(|| self.hash_at(h)))
+            {
+                if header.0[4..36] != previous {
+                    return Err(HeaderStoreError::Linkage { height });
+                }
+            }
+            if let Some(next_height) = height.checked_add(1) {
+                if self
+                    .header_at(next_height)
+                    .is_some_and(|next| next.0[4..36] != entry.hash)
+                {
+                    return Err(HeaderStoreError::Linkage {
+                        height: next_height,
+                    });
+                }
+            }
+        }
+        if !may_publish() {
+            return Err(HeaderStoreError::PublicationCancelled);
+        }
+        // No fallible validation remains. Keep existing generation, hashes and
+        // headers outside this batch, including retained history after its tip.
+        for (height, entry) in incoming.by_height {
+            self.by_hash.insert(entry.hash, height);
+            self.by_height.insert(height, entry);
+        }
+        Ok(())
     }
 
     /// Append a verified header, checking it links to what is already there.
@@ -289,20 +363,64 @@ pub trait BlockHeaderSource: Send + Sync + std::fmt::Debug {
 /// The runtime's own store behind a shared lock, handed to providers as a
 /// [`BlockHeaderSource`].
 #[derive(Debug, Default)]
-pub struct SharedHeaders(std::sync::RwLock<RetainedHeaders>);
+pub struct SharedHeaders(RwLock<SharedHeaderState>);
+
+#[derive(Debug, Default)]
+struct SharedHeaderState {
+    headers: RetainedHeaders,
+    revision: Arc<()>,
+}
+
+/// An identity token, not a chain generation. Every write invalidates it,
+/// including pruning or replacement with an older clone. Holding the token
+/// prevents address reuse (ABA); there is no wrapping integer counter.
+#[derive(Debug, Clone)]
+pub(crate) struct HeaderStoreRevision(Arc<()>);
 
 impl SharedHeaders {
     pub fn new(headers: RetainedHeaders) -> Self {
-        Self(std::sync::RwLock::new(headers))
+        Self(RwLock::new(SharedHeaderState {
+            headers,
+            revision: Arc::new(()),
+        }))
     }
 
     /// Write access, for the runtime only. Providers get the trait.
     pub fn write<R>(&self, edit: impl FnOnce(&mut RetainedHeaders) -> R) -> R {
-        edit(&mut self.0.write().expect("header store lock poisoned"))
+        let mut state = self.0.write().expect("header store lock poisoned");
+        state.revision = Arc::new(());
+        edit(&mut state.headers)
     }
 
-    fn read<R>(&self, view: impl FnOnce(&RetainedHeaders) -> R) -> R {
-        view(&self.0.read().expect("header store lock poisoned"))
+    pub(crate) fn read<R>(&self, view: impl FnOnce(&RetainedHeaders) -> R) -> R {
+        view(&self.0.read().expect("header store lock poisoned").headers)
+    }
+
+    /// Capture a revision together with only the data the caller needs.
+    pub(crate) fn snapshot<R>(
+        &self,
+        view: impl FnOnce(&RetainedHeaders) -> R,
+    ) -> (HeaderStoreRevision, R) {
+        let state = self.0.read().expect("header store lock poisoned");
+        (
+            HeaderStoreRevision(state.revision.clone()),
+            view(&state.headers),
+        )
+    }
+
+    /// Acquire the writer only if no intervening write occurred. The callback
+    /// must validate its batch before mutation; stale revisions never run it.
+    pub(crate) fn write_if_current<R>(
+        &self,
+        expected: &HeaderStoreRevision,
+        edit: impl FnOnce(&mut RetainedHeaders) -> R,
+    ) -> Option<R> {
+        let mut state = self.0.write().expect("header store lock poisoned");
+        if !Arc::ptr_eq(&state.revision, &expected.0) {
+            return None;
+        }
+        state.revision = Arc::new(());
+        Some(edit(&mut state.headers))
     }
 }
 
@@ -389,6 +507,144 @@ mod tests {
                 .expect("linked fixture");
         }
         (store, headers)
+    }
+
+    #[test]
+    fn recovery_batch_validates_every_entry_before_mutating() {
+        let (mut accepted, headers) = store_of(10);
+        accepted.drop_headers_below(5);
+        let before = accepted.clone();
+        let mut incoming = RetainedHeaders::new();
+        for (height, header) in headers.iter().take(5).enumerate() {
+            let mut header = header.clone();
+            if height == 4 {
+                header.0[36] ^= 1;
+            }
+            incoming.insert_verified(height as u32, header).unwrap();
+        }
+        assert_eq!(
+            accepted.merge_verified(incoming, || true),
+            Err(HeaderStoreError::ConflictingHash { height: 4 })
+        );
+        assert_eq!(
+            accepted, before,
+            "late conflict must not restore even an earlier header"
+        );
+
+        let mut incoming = RetainedHeaders::new();
+        for (height, header) in headers.iter().take(5).enumerate() {
+            incoming
+                .insert_verified(height as u32, header.clone())
+                .unwrap();
+        }
+        assert_eq!(
+            accepted.merge_verified(incoming.clone(), || false),
+            Err(HeaderStoreError::PublicationCancelled)
+        );
+        assert_eq!(accepted, before);
+        accepted.merge_verified(incoming, || true).unwrap();
+        assert_eq!(accepted.len(), 10);
+        assert_eq!(accepted.generation(), before.generation());
+        for (height, header) in headers.iter().enumerate() {
+            assert_eq!(accepted.header_at(height as u32), Some(header));
+        }
+    }
+
+    #[test]
+    fn recovery_batch_checks_both_boundaries_and_requires_raw_contiguous_headers() {
+        let (original, headers) = store_of(10);
+        let mut accepted = original.clone();
+        accepted.prune_below(5);
+        let before = accepted.clone();
+        let mut incoming = RetainedHeaders::new();
+        let mut wrong = headers[4].clone();
+        wrong.0[36] ^= 1;
+        incoming.insert_verified(4, wrong).unwrap();
+        assert_eq!(
+            accepted.merge_verified(incoming, || true),
+            Err(HeaderStoreError::Linkage { height: 5 })
+        );
+        assert_eq!(accepted, before);
+
+        let mut accepted = original.clone();
+        accepted.rewind_to(5);
+        let before = accepted.clone();
+        let mut incoming = RetainedHeaders::new();
+        let mut wrong = headers[5].clone();
+        wrong.0[4] ^= 1;
+        incoming.insert_verified(5, wrong).unwrap();
+        assert_eq!(
+            accepted.merge_verified(incoming, || true),
+            Err(HeaderStoreError::Linkage { height: 5 })
+        );
+        assert_eq!(accepted, before);
+
+        let mut incoming = RetainedHeaders::new();
+        incoming.insert_verified(5, headers[5].clone()).unwrap();
+        incoming.insert_verified(7, headers[7].clone()).unwrap();
+        assert_eq!(
+            accepted.merge_verified(incoming, || true),
+            Err(HeaderStoreError::Discontiguous { missing: 6 })
+        );
+        assert_eq!(accepted, before);
+        let mut incoming = RetainedHeaders::new();
+        incoming.insert_hash_only(5, sha256d(&headers[5].0));
+        assert_eq!(
+            accepted.merge_verified(incoming, || true),
+            Err(HeaderStoreError::MissingHeader { height: 5 })
+        );
+        assert_eq!(accepted, before);
+    }
+
+    #[test]
+    fn revisions_cover_pruning_rewinds_replacement_and_empty_publication() {
+        let (original, _) = store_of(10);
+        let store = SharedHeaders::new(original.clone());
+        let edits: [fn(&mut RetainedHeaders); 5] = [
+            |s| s.drop_headers_below(5),
+            |s| s.prune_below(3),
+            |s| s.rewind_to(9),
+            |s| s.insert_hash_only(0, [42; 32]),
+            |s| *s = RetainedHeaders::new(),
+        ];
+        for edit in edits {
+            let (revision, _) = store.snapshot(|s| s.tip());
+            store.write(edit);
+            assert!(store
+                .write_if_current(&revision, |_| panic!("stale writer ran"))
+                .is_none());
+        }
+        // Restoring identical contents cannot revive a prior token (ABA).
+        store.write(|s| *s = original.clone());
+        let (revision, _) = store.snapshot(|s| s.tip());
+        store.write(|s| *s = RetainedHeaders::new());
+        store.write(|s| *s = original.clone());
+        assert!(store
+            .write_if_current(&revision, |_| panic!("ABA writer ran"))
+            .is_none());
+
+        let (revision, _) = store.snapshot(|s| s.tip());
+        store.read(|s| assert_eq!(s.len(), 10));
+        assert_eq!(
+            store.write_if_current(&revision, |s| s
+                .merge_verified(RetainedHeaders::new(), || true)),
+            Some(Ok(()))
+        );
+        assert!(store
+            .write_if_current(&revision, |_| panic!("token reused"))
+            .is_none());
+        assert_eq!(store.read(Clone::clone), original);
+    }
+
+    #[test]
+    fn coverage_checks_detect_gaps_without_materializing_the_range() {
+        let (mut store, _) = store_of(10);
+        assert!(store.covers_range(0, 9));
+        assert!(!store.covers_range(9, 0));
+        assert!(!store.covers_range(0, 10));
+        store.by_height.remove(&4);
+        assert!(!store.covers_range(0, 9));
+        assert!(store.covers_range(5, 9));
     }
 
     #[test]

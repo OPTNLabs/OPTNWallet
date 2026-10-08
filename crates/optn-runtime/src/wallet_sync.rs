@@ -393,6 +393,11 @@ impl AppRuntime {
                         error,
                         reason: worker.reconciliation().sync.degraded_reason.clone(),
                     })?;
+                    if decision == ReconciliationDecision::Accepted
+                        && outcome.decision == ReconciliationDecision::Accepted
+                    {
+                        worker.prune_after_sync(service, &outcome.route);
+                    }
                     return Ok(if outcome.decision == ReconciliationDecision::Accepted {
                         decision
                     } else {
@@ -454,6 +459,11 @@ impl AppRuntime {
             error,
             reason: worker.reconciliation().sync.degraded_reason.clone(),
         })?;
+        if decision == ReconciliationDecision::Accepted
+            && outcome.decision == ReconciliationDecision::Accepted
+        {
+            worker.prune_after_sync(service, &outcome.route);
+        }
         if decision == ReconciliationDecision::PreservedFailure
             && outcome.decision != ReconciliationDecision::Accepted
         {
