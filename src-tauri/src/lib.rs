@@ -64,6 +64,41 @@ async fn verified_native_proxy_for_network(
     verified_native_proxy(destination_hosts, &trusted_ports).await
 }
 
+const FUSION_NEEDS_TOR: &str = "CashFusion needs Tor. Your network policy connects directly; \
+     choose a Tor setting under Server & privacy to fuse.";
+
+/// CashFusion is private only over Tor, so it runs only while the holder's
+/// transport keeps public destinations on Tor. The selector never relaxes it:
+/// under "Direct" Fusion does not run at all, rather than running in the clear.
+fn fusion_transport_allows(transport: optn_runtime::chain::TransportPolicy) -> Result<(), String> {
+    if transport.tor_for(false) {
+        Ok(())
+    } else {
+        Err(FUSION_NEEDS_TOR.into())
+    }
+}
+
+/// The proxy for every leg of a Fusion operation: the transport must allow
+/// Fusion, and each remote leg then needs Tor with provenance, exactly as
+/// before. A loopback-only operation has no network hop and needs neither.
+async fn verified_fusion_proxy_for_network(
+    destination_hosts: &[&str],
+    network_settings: &crate::network_config::NetworkSettingsStore,
+    network: optn_core::network::Network,
+) -> Result<Option<u16>, String> {
+    if !destination_hosts
+        .iter()
+        .all(|host| fusion::is_local_server(host))
+    {
+        let settings = network_settings.clone();
+        let transport = tokio::task::spawn_blocking(move || settings.transport(network))
+            .await
+            .map_err(|_| "network settings reader stopped".to_string())??;
+        fusion_transport_allows(transport)?;
+    }
+    verified_native_proxy_for_network(destination_hosts, network_settings, network).await
+}
+
 fn bip37_endpoint_matches(endpoint: &optn_runtime::chain::Endpoint, host: &str, port: u16) -> bool {
     endpoint.kind == optn_runtime::chain::EndpointKind::BchP2p
         && endpoint.port == Some(port)
@@ -108,7 +143,8 @@ async fn bip37_transport_for_catalog(
     trusted_ports: &[u16],
 ) -> Result<fusion::Transport<'static>, String> {
     let selected_is_own = bip37_selected_endpoint_is_declared_own(catalog, policy, host, port)?;
-    if fusion::is_local_server(host) || selected_is_own {
+    // The holder's transport decides; ownership is only an input to it.
+    if fusion::is_local_server(host) || !policy.transport.tor_for(selected_is_own) {
         return Ok(fusion::Transport::Direct);
     }
     let verified_proxy = verified_native_proxy(&[host], trusted_ports).await?;
@@ -297,7 +333,7 @@ async fn fusion_server_status(
     // Resolve provenance before consulting the cache. A revoked trust entry or
     // exited managed child must fail now rather than reuse a prior success.
     let verified_proxy =
-        verified_native_proxy_for_network(&[host.as_str()], &network_settings, network).await?;
+        verified_fusion_proxy_for_network(&[host.as_str()], &network_settings, network).await?;
 
     let key = FusionStatusCacheKey {
         host: host.trim().trim_end_matches('.').to_ascii_lowercase(),
@@ -334,7 +370,7 @@ async fn fusion_join_status(
     if host.trim().is_empty() || port == 0 {
         return Err("CashFusion server endpoint is invalid".into());
     }
-    let verified_proxy = verified_native_proxy_for_network(
+    let verified_proxy = verified_fusion_proxy_for_network(
         &[host.as_str()],
         &network_settings,
         runtime.state().network,
@@ -487,7 +523,7 @@ async fn fusion_run(
     // against the complete destination set first, so a local primary cannot
     // make a remote fallback inherit a direct route.
     let destination_hosts = fusion_run_destination_hosts(&host, &lookup_host, &lookup_fallbacks);
-    let verified_proxy = verified_native_proxy_for_network(
+    let verified_proxy = verified_fusion_proxy_for_network(
         &destination_hosts,
         &network_settings,
         runtime.state().network,
@@ -697,7 +733,7 @@ async fn fusion_transaction_is_known(
 
     let hosts: Vec<&str> = endpoints.iter().map(|e| e.host.as_str()).collect();
     let verified_proxy =
-        verified_native_proxy_for_network(&hosts, &network_settings, runtime.state().network)
+        verified_fusion_proxy_for_network(&hosts, &network_settings, runtime.state().network)
             .await?;
 
     let mut last_error = String::from("no Electrum server could answer");
@@ -750,7 +786,7 @@ async fn fusion_relay_broadcast_and_observe(
     validate_fusion_relay_request(&tx_hex, &network)?;
     let tx_bytes = decode_hex(&tx_hex).map_err(|_| "invalid transaction hex".to_string())?;
 
-    let verified_proxy = verified_native_proxy_for_network(
+    let verified_proxy = verified_fusion_proxy_for_network(
         &[relay_host.as_str(), observer_host.as_str()],
         &network_settings,
         runtime.state().network,
@@ -1315,6 +1351,8 @@ pub fn run() {
             chain_sources::optn_chain_sources,
             chain_sources::optn_chain_rpc_credentials,
             chain_sources::optn_chain_set_policy,
+            chain_sources::optn_chain_transport,
+            chain_sources::optn_chain_set_transport,
             chain_sources::optn_chain_set_selection,
             chain_sources::optn_chain_export_configuration,
             chain_sources::optn_chain_import_configuration,
@@ -1653,7 +1691,93 @@ mod tests {
                 .unwrap(),
             fusion::Transport::Direct
         ));
+
+        // The holder's transport decides: Tor for everything takes their own
+        // node through Tor too, and Direct proxies nothing.
+        let strict = optn_runtime::chain::ConnectionPolicy {
+            transport: optn_runtime::chain::TransportPolicy::TorForEverything,
+            ..own_policy
+        };
+        assert!(
+            bip37_transport_for_catalog("node.example", 8333, &own_catalog, &strict, &[])
+                .await
+                .is_err()
+        );
+        let direct = optn_runtime::chain::ConnectionPolicy {
+            transport: optn_runtime::chain::TransportPolicy::Direct,
+            ..remote_policy
+        };
+        assert!(matches!(
+            bip37_transport_for_catalog(
+                "remote-bip37.example",
+                8333,
+                &remote_catalog,
+                &direct,
+                &[]
+            )
+            .await
+            .unwrap(),
+            fusion::Transport::Direct
+        ));
         server.abort();
+    }
+
+    /// Fusion is Tor-mandatory under every transport that has Tor, and does
+    /// not run at all under Direct.
+    #[tokio::test]
+    async fn fusion_runs_only_while_the_transport_keeps_it_on_tor() {
+        use optn_runtime::chain::TransportPolicy;
+        assert!(fusion_transport_allows(TransportPolicy::TorExceptOwnInfrastructure).is_ok());
+        assert!(fusion_transport_allows(TransportPolicy::TorForEverything).is_ok());
+        assert_eq!(
+            fusion_transport_allows(TransportPolicy::Direct),
+            Err(FUSION_NEEDS_TOR.to_string())
+        );
+
+        let directory = std::env::temp_dir().join(format!(
+            "optn-fusion-transport-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let store = crate::network_config::NetworkSettingsStore::new(directory.clone());
+        let network = optn_core::network::Network::Chipnet;
+        store
+            .update_overlay(network, |overlay| {
+                overlay.connection_policy.transport = TransportPolicy::Direct;
+                Ok(())
+            })
+            .unwrap();
+        // Refused before any proxy is consulted, whatever is listening.
+        assert_eq!(
+            verified_fusion_proxy_for_network(&["fusion.example"], &store, network).await,
+            Err(FUSION_NEEDS_TOR.to_string())
+        );
+        assert_eq!(
+            verified_fusion_proxy_for_network(&["127.0.0.1", "fusion.example"], &store, network)
+                .await,
+            Err(FUSION_NEEDS_TOR.to_string())
+        );
+        // A loopback-only round has no hop to hide.
+        assert_eq!(
+            verified_fusion_proxy_for_network(&["127.0.0.1"], &store, network).await,
+            Ok(None)
+        );
+        // With a Tor transport the old rule stands: no verified Tor, no Fusion.
+        store
+            .update_overlay(network, |overlay| {
+                overlay.connection_policy.transport = TransportPolicy::default();
+                Ok(())
+            })
+            .unwrap();
+        let refused = verified_fusion_proxy_for_network(&["fusion.example"], &store, network)
+            .await
+            .unwrap_err();
+        assert_ne!(refused, FUSION_NEEDS_TOR);
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -1683,6 +1807,7 @@ mod tests {
             primary_scope: SourceScope::Explicit(std::collections::BTreeSet::from([id.clone()])),
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: Default::default(),
         };
         assert!(bip37_selected_endpoint_is_declared_own(
             &catalog,

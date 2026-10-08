@@ -8,7 +8,9 @@ use crate::chain_runtime::catalog_and_policy_from_app_state;
 use optn_app::{AppState, NetworkServers, ServerKind};
 use optn_chain_native::network_config::NetworkConfigFile;
 use optn_core::network::Network;
-use optn_runtime::chain::{ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceOrigin};
+use optn_runtime::chain::{
+    ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceOrigin, TransportPolicy,
+};
 use optn_runtime::network_config::{
     legacy_network_servers_from_overlay, legacy_server_policy, promote_legacy_policy,
     resolve_shipped_chain_selection, NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay,
@@ -102,6 +104,18 @@ impl NetworkSettingsStore {
             .transpose()
     }
 
+    /// How this network's selected sources are reached.
+    ///
+    /// A missing file is the default rule. An unreadable one is an error and
+    /// never permission to relax it.
+    pub fn transport(&self, network: Network) -> Result<TransportPolicy, String> {
+        Ok(self
+            .file_for(network)
+            .load()?
+            .map(|envelope| envelope.overlay.connection_policy.transport)
+            .unwrap_or_default())
+    }
+
     /// Loopback SOCKS ports the holder has confirmed are their own Tor.
     ///
     /// A missing or unreadable file yields none. That direction is the only
@@ -123,14 +137,20 @@ impl NetworkSettingsStore {
     pub fn save_for_network(&self, state: &AppState, network: Network) -> Result<(), String> {
         let file = self.file_for(network);
         file.update(|existing| {
-            let catalog_version = match existing {
+            let (catalog_version, transport) = match existing {
                 Some(existing) => {
                     legacy_network_servers_from_overlay(&existing.overlay)?;
-                    existing.bootstrap_catalog_version_seen
+                    (
+                        existing.bootstrap_catalog_version_seen,
+                        existing.overlay.connection_policy.transport,
+                    )
                 }
-                None => LEGACY_SERVER_CATALOG_VERSION.into(),
+                None => (LEGACY_SERVER_CATALOG_VERSION.into(), Default::default()),
             };
-            envelope_from_state(state, network, catalog_version)
+            let mut envelope = envelope_from_state(state, network, catalog_version)?;
+            // The server fields say which servers, never how they are reached.
+            envelope.overlay.connection_policy.transport = transport;
+            Ok(envelope)
         })
         .map(|_| ())
     }
@@ -442,6 +462,54 @@ mod tests {
             build_selection_plan(&catalog, &policy),
             build_selection_plan(&defaults, &default_policy)
         );
+    }
+
+    /// The server fields and the transport selector edit one file. Saving the
+    /// servers keeps the transport, and no transport makes them unsavable.
+    #[test]
+    fn saving_server_fields_keeps_the_chosen_transport() {
+        for transport in [TransportPolicy::TorForEverything, TransportPolicy::Direct] {
+            let directory = TestDirectory::new();
+            let store = directory.store();
+            let mut state = AppState::default();
+            state
+                .servers
+                .set(Network::Chipnet, ServerKind::Electrum, "127.0.0.1:1")
+                .unwrap();
+            store.save_for_network(&state, Network::Chipnet).unwrap();
+            store
+                .update_overlay(Network::Chipnet, |overlay| {
+                    overlay.connection_policy.transport = transport;
+                    Ok(())
+                })
+                .unwrap();
+            state
+                .servers
+                .set(Network::Chipnet, ServerKind::Electrum, "127.0.0.1:2")
+                .unwrap();
+            store.save_for_network(&state, Network::Chipnet).unwrap();
+
+            let envelope = store.chipnet.load().unwrap().unwrap();
+            assert_eq!(
+                envelope.overlay.connection_policy.transport, transport,
+                "{transport:?}"
+            );
+            let mut restored = AppState::default();
+            directory.store().restore(&mut restored).unwrap();
+            assert_eq!(restored.servers, state.servers, "{transport:?}");
+            let (_, policy) = store.chain_selection(Network::Chipnet).unwrap().unwrap();
+            assert_eq!(policy.transport, transport);
+            assert_eq!(store.transport(Network::Chipnet), Ok(transport));
+        }
+        // Nothing saved yet is the default rule; an unreadable file is not.
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        assert_eq!(
+            store.transport(Network::Mainnet),
+            Ok(TransportPolicy::default())
+        );
+        fs::write(directory.0.join("network-mainnet.json"), "not json").unwrap();
+        assert!(store.transport(Network::Mainnet).is_err());
     }
 
     #[test]

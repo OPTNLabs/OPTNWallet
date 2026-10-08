@@ -13,7 +13,7 @@ use optn_core::endpoint::{
 use optn_core::network::Network;
 use optn_runtime::chain::{
     CapabilitySet, ChainSource, ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog,
-    SourceDisposition, SourceId, SourceOrigin,
+    SourceDisposition, SourceId, SourceOrigin, TransportPolicy,
 };
 use optn_runtime::chain_service::ChainService;
 use optn_runtime::wallet_refresh::{RefreshOutcome, WalletRefresh};
@@ -74,28 +74,50 @@ fn authorize_cashcode_peer(
 
 /// Remote BIP37 scans always require Tor. IPC can ask for the stricter route,
 /// but cannot turn the native privacy requirement off.
-fn cashcode_tor_required(peer: &PeerEndpoint, requested: Option<bool>) -> Result<bool, String> {
-    let required = !crate::fusion::is_local_server(peer.host());
+/// Whether a Cash Code scan of `peer` must use Tor: the holder's transport
+/// decides, as for every chain route. A renderer asking for no Tor where the
+/// transport requires it is refused, never obeyed.
+fn cashcode_tor_required(
+    peer: &PeerEndpoint,
+    transport: TransportPolicy,
+    own_infrastructure: bool,
+    requested: Option<bool>,
+) -> Result<bool, String> {
+    let required =
+        !crate::fusion::is_local_server(peer.host()) && transport.tor_for(own_infrastructure);
     if required && requested == Some(false) {
         return Err("Tor is required for Cash Code scans to remote nodes".into());
     }
     Ok(required)
 }
 
+/// Whether the holder declared `peer` as their own infrastructure in the saved
+/// sources. The declaration carries ownership, never the address.
+fn cashcode_peer_is_declared_own(catalog: &SourceCatalog, peer: &PeerEndpoint) -> bool {
+    catalog.iter().any(|source| {
+        source.is_enabled()
+            && source.is_user_infrastructure()
+            && source
+                .endpoints
+                .iter()
+                .any(|endpoint| crate::bip37_endpoint_matches(endpoint, peer.host(), peer.port()))
+    })
+}
+
 /// Select Cash Code's transport from the same provenance-aware policy as the
 /// native chain stack. IPC may require Tor, but cannot nominate a proxy.
 async fn cashcode_transport(
     peer: &PeerEndpoint,
-    catalog: &SourceCatalog,
-    policy: &ConnectionPolicy,
+    transport: TransportPolicy,
+    own_infrastructure: bool,
     requested: Option<bool>,
     trust: optn_chain_native::TorProxyTrust<'_>,
 ) -> Result<optn_chain_native::Bip37Transport, String> {
-    if !cashcode_tor_required(peer, requested)? {
+    if !cashcode_tor_required(peer, transport, own_infrastructure, requested)? {
         return Ok(optn_chain_native::Bip37Transport::Direct);
     }
 
-    let proxy_port = optn_chain_native::tor_status_for(catalog, policy, trust)
+    let proxy_port = optn_chain_native::tor_status_from_trust(trust)
         .await
         .usable_port()
         .ok_or_else(|| {
@@ -161,12 +183,21 @@ pub async fn cashcode_scan_node(
         })
         .map_err(|e| format!("Invalid node selection: {e:?}"))?;
     let policy = ConnectionPolicy::exact(id.clone(), ProtocolFamily::Bip37);
+    // The saved policy's transport and ownership. An unreadable policy is not
+    // permission to relax either.
+    let (holder_transport, own_infrastructure) = match runtime.persisted_selection(network).await? {
+        Some((saved, saved_policy)) => (
+            saved_policy.transport,
+            cashcode_peer_is_declared_own(&saved, &peer),
+        ),
+        None => (TransportPolicy::default(), false),
+    };
     let managed_port = crate::fusion::tor_manager::owned_socks_port();
     let trusted_ports = runtime.trusted_socks_ports(network).await;
     let transport = cashcode_transport(
         &peer,
-        &catalog,
-        &policy,
+        holder_transport,
+        own_infrastructure,
         tor_required,
         optn_chain_native::TorProxyTrust {
             managed: managed_port.as_slice(),
@@ -1126,13 +1157,70 @@ mod tests {
 
     #[test]
     fn remote_cashcode_scans_cannot_disable_tor() {
+        let default = TransportPolicy::default();
         let remote = parse_peer_endpoint("node.example:8333", NODE_HINT_PORT).unwrap();
-        assert!(cashcode_tor_required(&remote, None).unwrap());
-        assert!(cashcode_tor_required(&remote, Some(true)).unwrap());
-        assert!(cashcode_tor_required(&remote, Some(false)).is_err());
+        assert!(cashcode_tor_required(&remote, default, false, None).unwrap());
+        assert!(cashcode_tor_required(&remote, default, false, Some(true)).unwrap());
+        assert!(cashcode_tor_required(&remote, default, false, Some(false)).is_err());
 
         let local = parse_peer_endpoint("127.0.0.1:8333", NODE_HINT_PORT).unwrap();
-        assert!(!cashcode_tor_required(&local, Some(false)).unwrap());
+        assert!(!cashcode_tor_required(&local, default, false, Some(false)).unwrap());
+        for transport in TransportPolicy::ALL {
+            assert!(!cashcode_tor_required(&local, transport, false, None).unwrap());
+        }
+    }
+
+    #[test]
+    fn cashcode_scans_follow_the_holders_transport() {
+        let remote = parse_peer_endpoint("node.example:8333", NODE_HINT_PORT).unwrap();
+        // Their declared node is direct by default, and through Tor when
+        // everything must be; Direct proxies nothing.
+        assert!(!cashcode_tor_required(&remote, TransportPolicy::default(), true, None).unwrap());
+        assert!(
+            cashcode_tor_required(&remote, TransportPolicy::TorForEverything, true, None).unwrap()
+        );
+        assert!(cashcode_tor_required(
+            &remote,
+            TransportPolicy::TorForEverything,
+            true,
+            Some(false)
+        )
+        .is_err());
+        assert!(
+            !cashcode_tor_required(&remote, TransportPolicy::Direct, false, Some(false)).unwrap()
+        );
+
+        let mut catalog = SourceCatalog::default();
+        let mut source = ChainSource {
+            id: SourceId::new("home-node"),
+            label: "Home node".into(),
+            origin: SourceOrigin::UserAdded,
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::BchP2p,
+                host: "NODE.example.".into(),
+                port: Some(8333),
+            }],
+            capabilities: Default::default(),
+            disposition: SourceDisposition::Enabled,
+            priority: 0,
+        };
+        catalog.insert(source.clone()).unwrap();
+        assert!(
+            !cashcode_peer_is_declared_own(&catalog, &remote),
+            "an address alone is not a declaration"
+        );
+        source.origin = SourceOrigin::UserInfrastructure {
+            group: "home".into(),
+        };
+        let mut catalog = SourceCatalog::default();
+        catalog.insert(source.clone()).unwrap();
+        assert!(cashcode_peer_is_declared_own(&catalog, &remote));
+        let other_port = parse_peer_endpoint("node.example:8334", NODE_HINT_PORT).unwrap();
+        assert!(!cashcode_peer_is_declared_own(&catalog, &other_port));
+        source.disposition = SourceDisposition::Disabled;
+        let mut catalog = SourceCatalog::default();
+        catalog.insert(source).unwrap();
+        assert!(!cashcode_peer_is_declared_own(&catalog, &remote));
     }
 
     #[tokio::test]
@@ -1151,30 +1239,11 @@ mod tests {
         });
 
         let peer = parse_peer_endpoint("node.example:8333", NODE_HINT_PORT).unwrap();
-        let id = SourceId::new("cashcode-test");
-        let endpoint = Endpoint {
-            kind: EndpointKind::BchP2p,
-            host: peer.host().to_owned(),
-            port: Some(peer.port()),
-        };
-        let mut catalog = SourceCatalog::default();
-        catalog
-            .insert(ChainSource {
-                id: id.clone(),
-                label: "Cash Code test node".into(),
-                origin: SourceOrigin::UserAdded,
-                endpoints: vec![endpoint],
-                capabilities: Default::default(),
-                disposition: SourceDisposition::Enabled,
-                priority: 0,
-            })
-            .unwrap();
-        let policy = ConnectionPolicy::exact(id, ProtocolFamily::Bip37);
 
         assert!(cashcode_transport(
             &peer,
-            &catalog,
-            &policy,
+            TransportPolicy::default(),
+            false,
             None,
             optn_chain_native::TorProxyTrust::default(),
         )
@@ -1183,8 +1252,8 @@ mod tests {
         assert_eq!(
             cashcode_transport(
                 &peer,
-                &catalog,
-                &policy,
+                TransportPolicy::default(),
+                false,
                 None,
                 optn_chain_native::TorProxyTrust {
                     managed: &[],

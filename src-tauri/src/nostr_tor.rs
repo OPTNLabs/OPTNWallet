@@ -69,10 +69,23 @@ pub async fn nostr_tor_open(
     url: String,
     socks_host: String,
     socks_port: u16,
+    runtime: tauri::State<'_, AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<u32, String> {
+    // Legacy IPC fields. A renderer names the relay, never the proxy: Tor is
+    // resolved from provenance like every other Fusion leg, and only while the
+    // holder's transport allows Fusion at all.
+    let _ = (socks_host, socks_port);
     let (host, port) = parse_wss(&url)?;
+    let socks_port = crate::verified_fusion_proxy_for_network(
+        &[host.as_str()],
+        &network_settings,
+        runtime.state().network,
+    )
+    .await?
+    .ok_or("Nostr relays for P2P CashFusion are reached only through Tor")?;
     let transport = Transport::Tor {
-        host: &socks_host,
+        host: crate::fusion::tor::DEFAULT_TOR_HOST,
         port: socks_port,
     };
     // Tor+TLS leg, then the WebSocket upgrade over it. A failure here means Tor
@@ -441,7 +454,7 @@ pub async fn nostr_relay_health(
                 let hosts: Vec<_> = relays.iter().map(|relay| relay.host.as_str()).collect();
                 health_tor_port(
                     public_allowed,
-                    crate::verified_native_proxy_for_network(&hosts, &network_settings, network),
+                    crate::verified_fusion_proxy_for_network(&hosts, &network_settings, network),
                 )
                 .await
             })

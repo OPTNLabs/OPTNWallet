@@ -3701,7 +3701,11 @@ async fn rpa_pay_selected(
     if p2p && from_height.is_none() {
         return Err(CliError::Usage("Selected P2P Cash Code funding requires --from-height with the wallet's nonzero birth height".into()));
     }
-    let policy = optn_runtime::chain::ConnectionPolicy::exact(route.source.clone(), route.protocol);
+    // Narrow to the one route; how it is reached stays the holder's choice.
+    let policy = optn_runtime::chain::ConnectionPolicy {
+        transport: service.policy().transport,
+        ..optn_runtime::chain::ConnectionPolicy::exact(route.source.clone(), route.protocol)
+    };
     let mut worker =
         hd_sync_worker(cli.network, &policy)?.with_accepted_headers(stack.headers.clone());
     service.set_policy(policy);

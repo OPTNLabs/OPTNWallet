@@ -575,21 +575,119 @@ impl SourceScope {
     }
 }
 
+/// How an eligible endpoint is reached (#75 §4.1).
+///
+/// Orthogonal to which sources are eligible: scope decides *which* sources a
+/// wallet may use, this decides *how* it reaches them. A route that cannot
+/// satisfy it is ineligible, and nothing falls back from Tor to a direct
+/// connection on its own. Loopback is always direct: there is no network hop
+/// to hide, and Tor cannot reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransportPolicy {
+    /// Tor for remote endpoints, except the holder's declared infrastructure,
+    /// which is reached directly. The behaviour before this choice existed.
+    #[default]
+    TorExceptOwnInfrastructure,
+    /// Tor for every remote endpoint, the holder's own included: their node
+    /// must be reachable through Tor, for example as an onion service.
+    TorForEverything,
+    /// No proxy. CashFusion, which is private only over Tor, does not run.
+    Direct,
+}
+
+impl TransportPolicy {
+    /// Whether a remote destination of this ownership must be reached through
+    /// Tor. `tor_for(false)` is the rule for every public source.
+    pub const fn tor_for(self, own_infrastructure: bool) -> bool {
+        match self {
+            Self::TorExceptOwnInfrastructure => !own_infrastructure,
+            Self::TorForEverything => true,
+            Self::Direct => false,
+        }
+    }
+
+    /// Whether reaching `host` on a source of this ownership must use Tor.
+    pub fn requires_tor(self, own_infrastructure: bool, host: &str) -> bool {
+        !optn_core::endpoint::is_loopback_host(host) && self.tor_for(own_infrastructure)
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::TorExceptOwnInfrastructure => "Tor, except my infrastructure",
+            Self::TorForEverything => "Tor for everything",
+            Self::Direct => "Direct",
+        }
+    }
+
+    pub const ALL: [Self; 3] = [
+        Self::TorExceptOwnInfrastructure,
+        Self::TorForEverything,
+        Self::Direct,
+    ];
+
+    /// The stable name used in settings files, IPC and the CLI.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TorExceptOwnInfrastructure => "tor_except_own_infrastructure",
+            Self::TorForEverything => "tor_for_everything",
+            Self::Direct => "direct",
+        }
+    }
+}
+
+impl std::str::FromStr for TransportPolicy {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|transport| transport.as_str() == value)
+            .ok_or_else(|| {
+                format!(
+                    "unknown transport '{value}'; expected tor_except_own_infrastructure, \
+                     tor_for_everything or direct"
+                )
+            })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionPolicy {
     pub protocols: ProtocolSet,
     pub primary_scope: SourceScope,
     pub fallback_scope: Option<SourceScope>,
     pub preferred: Vec<SourceId>,
+    /// How the selected sources are reached.
+    pub transport: TransportPolicy,
 }
 
 impl ConnectionPolicy {
+    /// Whether two policies choose the same sources the same way, whatever
+    /// transport each reaches them over.
+    ///
+    /// Every field but `transport` is named, so a field added later has to be
+    /// placed on one side of that line or the other.
+    pub fn selects_like(&self, other: &Self) -> bool {
+        let Self {
+            protocols,
+            primary_scope,
+            fallback_scope,
+            preferred,
+            transport: _,
+        } = self;
+        *protocols == other.protocols
+            && *primary_scope == other.primary_scope
+            && *fallback_scope == other.fallback_scope
+            && *preferred == other.preferred
+    }
+
     pub fn auto() -> Self {
         Self {
             protocols: ProtocolSet::all(),
             primary_scope: SourceScope::AllEnabled,
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: TransportPolicy::default(),
         }
     }
 
@@ -599,6 +697,7 @@ impl ConnectionPolicy {
             primary_scope: SourceScope::UserInfrastructure,
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: TransportPolicy::default(),
         }
     }
 
@@ -608,6 +707,7 @@ impl ConnectionPolicy {
             primary_scope: SourceScope::Explicit(BTreeSet::from([source])),
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: TransportPolicy::default(),
         }
     }
 }
@@ -1008,6 +1108,7 @@ mod tests {
             primary_scope: SourceScope::Explicit(BTreeSet::from([a.clone(), b.clone()])),
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: TransportPolicy::default(),
         };
         let plan = build_selection_plan(&catalog, &policy);
         assert_eq!(plan.primary, vec![b, a]);
@@ -1119,6 +1220,7 @@ mod tests {
             primary_scope: SourceScope::Explicit(BTreeSet::from([preferred.clone()])),
             fallback_scope: Some(SourceScope::PublicEnabled),
             preferred: vec![preferred.clone()],
+            transport: TransportPolicy::default(),
         };
         let plan = build_selection_plan(&catalog, &policy);
         assert_eq!(plan.primary, vec![preferred]);
@@ -1224,6 +1326,7 @@ mod tests {
             primary_scope: SourceScope::Explicit(BTreeSet::from([id.clone()])),
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: TransportPolicy::default(),
         };
         let plan = build_selection_plan(&catalog, &policy);
         assert_eq!(plan.primary, vec![id]);

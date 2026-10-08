@@ -16,7 +16,7 @@ use crate::chain_runtime::NativeChainRuntime;
 use crate::network_config::NetworkSettingsStore;
 use optn_core::network::Network;
 use optn_runtime::chain::{
-    ConnectionPolicy, ProtocolFamily, SourceCatalog, SourceDisposition, SourceId,
+    ConnectionPolicy, ProtocolFamily, SourceCatalog, SourceDisposition, SourceId, TransportPolicy,
 };
 use optn_runtime::chain_service::ChainOperation;
 use optn_runtime::network_config::{
@@ -271,6 +271,41 @@ pub async fn optn_chain_set_policy(
     .await
 }
 
+/// How the network's selected sources are reached (#75 §4.1): one of
+/// `tor_except_own_infrastructure`, `tor_for_everything` or `direct`.
+#[tauri::command]
+pub async fn optn_chain_transport(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, NetworkSettingsStore>,
+    network: Option<String>,
+) -> Result<String, String> {
+    let network = network_or_current(&runtime, network)?;
+    let settings = (*network_settings).clone();
+    tokio::task::spawn_blocking(move || settings.transport(network))
+        .await
+        .map_err(|_| "network settings reader stopped".to_string())?
+        .map(|transport| transport.as_str().to_owned())
+}
+
+/// Choose how the network's sources are reached. Like any selection edit, the
+/// old routes are revoked first and rebuilt from the saved policy.
+#[tauri::command]
+pub async fn optn_chain_set_transport(
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, NetworkSettingsStore>,
+    network: Option<String>,
+    transport: String,
+) -> Result<(), String> {
+    let network = network_or_current(&runtime, network)?;
+    let transport: TransportPolicy = transport.parse()?;
+    edit_overlay(&native, &network_settings, network, move |overlay| {
+        overlay.connection_policy.transport = transport;
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn optn_chain_set_selection(
     native: tauri::State<'_, Arc<NativeChainRuntime>>,
@@ -288,7 +323,11 @@ pub async fn optn_chain_set_selection(
         let (catalog, _) =
             optn_runtime::network_config::resolve_shipped_chain_selection(network, Some(&envelope))
                 .map_err(|error| format!("Invalid source catalog: {error:?}"))?;
-        overlay.connection_policy = optn_runtime::source_selection::policy(&catalog, &selection)?;
+        overlay.connection_policy = optn_runtime::source_selection::policy(
+            &catalog,
+            &selection,
+            overlay.connection_policy.transport,
+        )?;
         Ok(())
     })
     .await

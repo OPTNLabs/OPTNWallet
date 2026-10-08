@@ -99,8 +99,11 @@ fn apply_edit(
         }
         ChainSourceEdit::Selection(selection) => {
             let catalog = resolved_catalog(network, overlay)?;
-            overlay.connection_policy =
-                optn_runtime::source_selection::policy(&catalog, &selection)?;
+            overlay.connection_policy = optn_runtime::source_selection::policy(
+                &catalog,
+                &selection,
+                overlay.connection_policy.transport,
+            )?;
             Ok(())
         }
         ChainSourceEdit::Disposition {

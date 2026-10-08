@@ -94,8 +94,11 @@ pub fn configure_sources(
             optn_runtime::network_config::promote_legacy_policy(&mut envelope);
             let (catalog, _) = resolve_shipped_chain_selection(network, Some(&envelope))
                 .map_err(|error| format!("invalid network settings: {error:?}"))?;
-            envelope.overlay.connection_policy =
-                optn_runtime::source_selection::policy(&catalog, selection)?;
+            envelope.overlay.connection_policy = optn_runtime::source_selection::policy(
+                &catalog,
+                selection,
+                envelope.overlay.connection_policy.transport,
+            )?;
             Ok(envelope)
         })
         .map(|_| ())
@@ -121,7 +124,11 @@ pub fn select_source(
             let (catalog, _) = resolve_shipped_chain_selection(network, Some(&envelope))
                 .map_err(|error| format!("invalid network settings: {error:?}"))?;
             let id = optn_runtime::chain::SourceId::new(source);
-            let policy = ConnectionPolicy::exact(id.clone(), protocol);
+            // Pinning a source changes which one is used, never how.
+            let policy = ConnectionPolicy {
+                transport: envelope.overlay.connection_policy.transport,
+                ..ConnectionPolicy::exact(id.clone(), protocol)
+            };
             if !optn_runtime::chain::build_selection_plan(&catalog, &policy)
                 .primary
                 .contains(&id)
@@ -630,6 +637,36 @@ mod tests {
             stored.overlay.user_sources.is_empty(),
             "shipped entries are not user records"
         );
+    }
+
+    #[test]
+    fn pinning_a_source_keeps_the_chosen_transport() {
+        use optn_runtime::chain::TransportPolicy;
+        let directory = TestDirectory::new();
+        let mut overlay = UserNetworkOverlay::default();
+        overlay.connection_policy.transport = TransportPolicy::Direct;
+        directory.write(Network::Chipnet, overlay);
+        let (catalog, _) = resolve_shipped_chain_selection(Network::Chipnet, None).unwrap();
+        let id = catalog
+            .iter()
+            .find(|source| source.endpoints[0].kind == EndpointKind::ElectrumTls)
+            .unwrap()
+            .id
+            .clone();
+        select_source(
+            Network::Chipnet,
+            Some(&directory.0),
+            id.as_str(),
+            ProtocolFamily::Electrum,
+        )
+        .unwrap();
+        let pinned = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pinned.policy.transport, TransportPolicy::Direct);
+        assert!(pinned
+            .policy
+            .selects_like(&ConnectionPolicy::exact(id, ProtocolFamily::Electrum)));
     }
 
     #[tokio::test]
