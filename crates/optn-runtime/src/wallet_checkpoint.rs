@@ -1378,6 +1378,55 @@ mod tests {
     }
 
     #[test]
+    fn identity_basis_survives_reopening_and_unknown_or_missing_reads_as_unattested() {
+        let (key, mut stored) = fixture();
+        let category = "aa".repeat(32);
+        stored.source = Some(SourceId::new("basis-fixture"));
+        stored.evidence = Some(Evidence::ServerAssertion);
+        stored.tip = Some((100, [3; 32]));
+        stored.branch_lengths = vec![1; 4];
+        let basis = IdentityBasis {
+            assurance: IdentityAssurance::ServerReported,
+            burned: true,
+        };
+        stored.token_identities.insert(
+            category.clone(),
+            StoredTokenIdentity {
+                name: "Frozen".into(),
+                ticker: None,
+                decimals: 0,
+                status: StoredIdentityStatus::Verified,
+                presentation: Default::default(),
+                basis: basis.into(),
+            },
+        );
+        let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 96)).unwrap();
+        let restored = &reopened.restored_token_identities()[&category];
+        // A restored name is last-known, and still says how it was established.
+        assert_eq!(restored.status, IdentityStatus::Stale);
+        assert_eq!(restored.basis, basis);
+
+        let mut value = serde_json::to_value(&stored).unwrap();
+        value["token_identities"][&category]["basis"]["assurance"] = "notarised".into();
+        let reopened = WalletCheckpoint::open(&key, &encoded_value(&key, &value, 97)).unwrap();
+        assert_eq!(
+            reopened.restored_token_identities()[&category]
+                .basis
+                .assurance,
+            IdentityAssurance::Unattested
+        );
+        value["token_identities"][&category]
+            .as_object_mut()
+            .unwrap()
+            .remove("basis");
+        let reopened = WalletCheckpoint::open(&key, &encoded_value(&key, &value, 98)).unwrap();
+        assert_eq!(
+            reopened.restored_token_identities()[&category].basis,
+            IdentityBasis::default()
+        );
+    }
+
+    #[test]
     fn legacy_floor_projection_migrates_to_manual_rescan() {
         let (key, mut stored) = fixture();
         stored.rescan_requested = Some(50);
