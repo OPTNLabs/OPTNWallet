@@ -527,6 +527,7 @@ impl WalletSecurity {
                 .unwrap_or_default();
             if let Some(restored) = &binding.restored {
                 candidate.coins = restored.coins.clone();
+                candidate.payment_outbox = restored.payment_outbox.clone();
                 candidate.token_identities = restored.restored_token_identities();
                 candidate.wallet_sync.rescan_requested = restored.rescan_requested;
                 candidate.wallet_sync.scan_coverage = restored.scan_coverage;

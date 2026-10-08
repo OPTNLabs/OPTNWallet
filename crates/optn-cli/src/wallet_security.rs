@@ -533,7 +533,14 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
         .ok_or_else(|| CliError::Usage("Specify a wallet directory.".into()))?;
     let checkpoints =
         optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(directory.join(".state"));
-    let storage = optn_platform_native::wallet_storage::NativeWalletStorage::new(directory);
+    let storage = optn_platform_native::wallet_storage::NativeWalletStorage::new(directory)
+        .with_exclusive_session()
+        .map_err(|_| {
+            CliError::Usage(
+                "Cannot acquire the wallet directory session; close other CLI sessions and retry."
+                    .into(),
+            )
+        })?;
     let service =
         WalletSecurity::new(Box::new(storage), None).with_checkpoints(Box::new(checkpoints));
     let initial = AppState {
@@ -877,7 +884,8 @@ pub async fn open_managed_runtime(cli: &crate::Cli) -> Result<&AppRuntime> {
             let checkpoints = optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(
                 directory.join(".state"),
             );
-            let storage = optn_platform_native::wallet_storage::NativeWalletStorage::new(directory);
+            let storage = optn_platform_native::wallet_storage::NativeWalletStorage::new(directory)
+        .with_exclusive_session().map_err(|_| CliError::Usage("Cannot acquire the wallet directory session; close other CLI sessions and retry.".into()))?;
             let (runtime, driver) = AppRuntime::new_with_security(
                 AppState {
                     network: cli.network,
@@ -960,6 +968,9 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
     } else {
         optn_app::AuthScope::Chat
     };
+    if scope == optn_app::AuthScope::Spend && !state.payment_outbox.is_empty() {
+        return Err(CliError::Usage("This wallet has durable external payments. Legacy signing commands cannot share their reservations yet; use x402 pay with the saved payment id for recovery.".into()));
+    }
     match runtime.wallet_for_operation(scope).await {
         Ok(wallet) => Ok(wallet),
         Err(TransportError::AuthenticationRequired) => {
@@ -977,6 +988,18 @@ pub async fn read_managed_wallet(cli: &crate::Cli) -> Result<optn_core::hd::Wall
         }
         Err(error) => Err(CliError::Usage(message(error))),
     }
+}
+
+/// Trusted CLI password confirmation; the runtime retains signing authority.
+pub async fn authenticate_managed(cli: &crate::Cli, runtime: &AppRuntime) -> Result<()> {
+    runtime
+        .wallet_security(Request::Authenticate {
+            password: managed_password(cli, "Confirm wallet password: ")?,
+            epoch: runtime.state().lock.unlock_epoch,
+        })
+        .await
+        .map_err(|error| CliError::Usage(message(error)))?;
+    Ok(())
 }
 
 #[cfg(test)]

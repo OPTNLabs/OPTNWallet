@@ -270,61 +270,82 @@ GUI and provider timeouts are unchanged.
 
 ## Paying for HTTP with x402
 
-x402 makes HTTP 402 a working status code. A server answers a request with what
-it charges, the client pays on-chain, and the request is repeated carrying
-proof of payment. The x402-bch variant settles on Bitcoin Cash and, unlike the
-original, the Facilitator holds no wallet — clients pay servers directly and
-the Facilitator only verifies.
+`x402 check` and `x402 pay` implement the BCH Rust SDK's **x402 v2 exact**
+protocol. A `PAYMENT-REQUIRED` base64 header (or v2 JSON body) describes the
+price. OPTN prepares a transaction, the SDK verifies it, and the retry carries
+it in a base64 `PAYMENT-SIGNATURE`. The merchant/facilitator handles settlement.
+OPTN does not broadcast a separate funding transaction for this protocol.
 
-Ask what something costs. This reads only; it never spends:
-
-```bash
-optn x402 check https://api.example.com/forecast
-```
-
-```
-status    402  payment required
-price     1000 sats
-pay to    bitcoincash:qqlrzp23w08434twmvr4fxw672whkjy0py26r63g3d
-chain     bip122:000000000019d6689c085ae1
-scheme    utxo
-```
-
-Payment is **batched**, which is what makes this usable by an agent. You fund a
-server once and every later call debits that credit without touching the chain,
-so a few hundred API calls cost one transaction rather than a few hundred:
+Configure the shared network sources with `optn network` first. Examples use
+Chipnet and an illustrative HTTPS merchant:
 
 ```bash
-optn x402 pay https://api.example.com/forecast --fund 100000 --yes   # once
-optn x402 pay https://api.example.com/forecast                       # and after
+optn --network chipnet x402 check https://api.example.com/forecast
+optn --network chipnet x402 pay https://api.example.com/forecast \
+  --payment-id forecast-001 --max-sats 1000 --dry-run
+optn --network chipnet --wallet example.optn x402 pay https://api.example.com/forecast \
+  --payment-id forecast-001 --max-sats 1000 --max-fee-sats 1000 --yes
 ```
 
-The first form broadcasts a funding transaction and authorises against it. The
-second signs an authorisation against the credit the server already holds and
-spends nothing, which is why only the first needs `--yes`.
+Pay opens the saved encrypted wallet and syncs its actual HD account through
+OPTN's selected source policy. It authorizes spending, signs in the runtime,
+allocates change, and atomically saves the transaction and input reservations
+before giving a payment to the server. `--max-sats` caps the merchant amount;
+`--max-fee-sats` separately caps the network fee. `--fee-rate` defaults to 1
+sat/byte. Passwords use the private prompt, or `--password-stdin` for scripts.
+`--dry-run` only inspects the quote: it opens no wallet and emits no signature.
 
-`--dry-run` prints the exact header that would be sent without funding or
-requesting anything. To debit a funding output you created elsewhere, name it
-in full with `--txid`, `--vout` and `--funded`.
+After a timeout or lost response, **repeat the original command with the same
+payment ID**. The saved bytes are reused. A changed resource request, merchant
+quote, or fee approval cannot overwrite that ID. Do not create a replacement
+payment because an HTTP request failed: the first transaction may have settled.
+Inspect the local record without contacting the merchant:
 
-A few things the command will refuse, and why:
+```bash
+optn --network chipnet --wallet example.optn x402 status --payment-id forecast-001
+```
 
-- **Plain HTTP anywhere but localhost.** The payment header carries a signed
-  authorisation to debit your credit; anyone who reads it in transit can spend
-  that credit on their own requests.
-- **A server with no BCH option.** Servers may advertise several chains. Paying
-  an EVM requirement with a BCH signature fails at the Facilitator with an
-  error that says nothing about the real cause, so the option is picked by
-  scheme rather than by position.
-- **A `payTo` on the other chain.** It is decoded under `--network` first, so a
-  mainnet address is never paid while you believe you are on chipnet.
-- **`PAYMENT-SIGNATURE` passed as `--header`.** That header is built from your
-  key; supplying it by hand would send an authorisation this wallet did not
-  sign.
+To use a transaction signed elsewhere, add `--transaction signed.hex` to `pay`.
+OPTN verifies signatures, the exact merchant output, owned inputs, wallet change,
+fee limits and reservations before saving it. This also supports an authenticated
+HD watch-only wallet; automatic signing requires a seed wallet. Only native BCH,
+standard P2PKH inputs, and mainnet/Chipnet network identities are admitted by this
+first wallet planner. CashToken quotes can be inspected, but token spending, RPA,
+multisig and contract inputs are not supported by this payment path.
 
-The authorisation is signed as a Bitcoin Signed Message — the same construction
-wallets have used for years, whose magic prefix is what stops a message
-signature being replayed as a signature over a transaction.
+HTTP success alone is not payment confirmation. `paid: true` requires a successful
+response with a matching SDK settlement receipt; `settlement: reported_by_server`
+is the server's claim, not independent chain confirmation. Missing, malformed or
+mismatching receipts leave settlement uncertain. Reservations survive HTTP errors,
+restart and refreshed/reorganized history. There is no automatic release or pruning;
+the encrypted outbox is capped at 256 payments / 8 MiB and requires future
+chain-driven retirement before it can grow further.
+
+Remote requests require HTTPS and follow the shared outbound/Tor policy, including
+SOCKS hostname resolution. Loopback HTTP is supported for local services. Redirects,
+caller-supplied payment/routing headers, URL credentials, unsupported networks and
+legacy `--host` overrides are refused. No hidden SDK provider or public-source
+fallback is installed.
+
+This initial integration requires a runtime-managed saved wallet. Migrated desktop
+wallets retain a separate legacy hold store and are refused. Once a wallet has an
+external payment record, older CLI signing commands are refused because they do
+not yet consume that outbox. CLI sessions hold a directory lease across signing
+and submission; close other CLI processes using that wallet directory first.
+This is a bounded integration, not completion of the common spend lifecycle for
+all wallet interfaces. No payment API is exposed to add-ons or the HTTP RPC server.
+
+The previous BCH funded-credit/message-signature protocol remains available as
+`x402 legacy-check` and `x402 legacy-pay`, with its existing flags. Scripts using
+`--fund`, `--txid`, `--vout` or `--funded` must use those explicit legacy names.
+It is a different protocol and is never selected as a fallback for an exact quote.
+
+The adapter currently pins Rust SDK PR [OPTNLabs/x402-bch#2](https://github.com/OPTNLabs/x402-bch/pull/2)
+to `a6e50946f95ce6e65bb3d08071eb49584786fba9` from its PR source repository.
+After that PR merges, replace the pin with its immutable **upstream** merged
+revision, regenerate the adapter/CLI locks and rerun the interoperability tests.
+The OPTNWallet integration targets `dev` separately; merging the SDK does not
+merge or release OPTNWallet.
 
 ## Covenants
 

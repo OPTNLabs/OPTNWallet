@@ -48,7 +48,7 @@ jobs:
 
       - name: Validate standalone Rust lockfiles
         run: |
-          for directory in crates/optn-core crates/optn-cli crates/optn-ui-egui fuzz; do
+          for directory in crates/optn-core crates/optn-cli crates/optn-x402 crates/optn-ui-egui fuzz; do
             (
               cd "$directory"
               cargo metadata --locked --format-version 1 > /dev/null
@@ -66,6 +66,7 @@ jobs:
             src-tauri/Cargo.lock
             crates/optn-core/Cargo.lock
             crates/optn-cli/Cargo.lock
+            crates/optn-x402/Cargo.lock
             crates/optn-ui-egui/Cargo.lock
             fuzz/Cargo.lock
           if-no-files-found: error
@@ -73,7 +74,7 @@ jobs:
 
       - name: Verify generated lockfiles are committed
         run: |
-          status="$(git status --porcelain -- Cargo.lock package-lock.json src-tauri/Cargo.lock crates/optn-core/Cargo.lock crates/optn-cli/Cargo.lock crates/optn-ui-egui/Cargo.lock fuzz/Cargo.lock)"
+          status="$(git status --porcelain -- Cargo.lock package-lock.json src-tauri/Cargo.lock crates/optn-core/Cargo.lock crates/optn-cli/Cargo.lock crates/optn-x402/Cargo.lock crates/optn-ui-egui/Cargo.lock fuzz/Cargo.lock)"
           if [ -n "$status" ]; then
             printf '%s\n' "$status"
             echo '::error::generated lockfiles differ from the repository'

@@ -854,6 +854,143 @@ credentials are explicitly refused with regression coverage. Remote scans and
 platform builds must still succeed for the pushed revision; no security alerts
 were dismissed in this continuation.
 
+### 2026-10-07: x402 BCH Rust SDK integration draft on dev
+
+The `feat/cli-x402-bch-sdk` branch starts at merged `dev` revision
+`c45be9b70a87198a08fea2c0ad1dc79b8c812d39`. It depends on
+[OPTNLabs/x402-bch#2](https://github.com/OPTNLabs/x402-bch/pull/2), currently pinned
+to its immutable source revision `a6e50946f95ce6e65bb3d08071eb49584786fba9`.
+Merge the SDK PR first, move the dependency and locks to the upstream merged
+revision, then complete review/checks before merging this wallet PR into `dev`.
+
+For #71/#83, protocol encoding sits in `optn-x402`; native HTTP sits in the CLI;
+shared runtime owns authorization, HD change, signing, bounded durable outbox and
+input reservations. The same reconciled spendable-coin extractor now serves the
+native GUI and this runtime flow. Signed transaction import receives independent
+core signature/value validation and SDK verification. Raw signed bytes never enter
+the renderer/add-on `WireState`. For #75, chain data comes from shared selected
+sources; SDK source access is an immutable snapshot, and merchant HTTP uses the
+existing outbound/Tor policy without redirects or implicit proxy/public fallback.
+
+Windows local evidence: 979 shared core/application/runtime/transport tests,
+149 CLI tests (two opt-in live/credential-store tests ignored), three SDK tests,
+and two native storage tests pass. The CLI test covers a lost HTTP response,
+identical-byte retry, held-input refusal, changed quote refusal and signed import.
+Four runtime tests cover encrypted restart, CAS/storage failure, signature/fee
+validation, watch-only import and legacy-wallet refusal. Windows CLI binaries
+reserve a 4 MiB stack to prevent the debug HTTP/signing flow overflowing the
+default 1 MiB stack; the complete CLI suite passes in a fresh build directory.
+
+Strict Clippy passes for affected shared crates, CLI, SDK adapter and desktop
+library. Rust formatting, architecture, TypeScript core typecheck/lint,
+dependency policy, six security tests, addon validation, 21 connector tests and
+the generated WASM rebuild/freshness checks pass. Repository formatting passes
+after normalizing this Windows checkout to the committed LF line endings.
+The broader core suite has 1,928 passing tests; its one Windows Bash process
+timeout in the unchanged release-assembly fixture passes on a focused rerun.
+All 49 UI tests pass. The lockfile fixture now covers the new SDK adapter.
+Remote scans and packaged/cross-target CI remain pending. This draft is not
+merge-ready and includes no live-network or mainnet spend proof.
+
+The scope is native BCH from runtime-managed HD saved wallets, plus finalized
+P2PKH import (including watch-only). Migrated desktop wallets, token/RPA/contract/
+multisig spending and the common lifecycle for other signing commands remain
+unfinished. Legacy CLI signing is refused after this outbox exists, and a CLI
+session lease serializes access to that wallet directory. Reservations never expire
+on HTTP success or timeout; there is no automatic cancellation/pruning, and the
+outbox is capped at 256 records / 8 MiB. Server receipts are reported as claims,
+not chain confirmation. The earlier shared outbox/reconciliation gap remains open
+for those other surfaces and retirement behavior.
+
+PR #105 continuation: the initial Linux desktop jobs failed while fetching
+deleted AppImage plugin assets, before compiling wallet code. Both architectures
+now pin the versioned upstream `1-alpha-20250213-1` release rather than assets
+from its replaceable continuous release. Both downloaded binaries match the
+committed SHA256 values, and all 52 release-workflow regression tests pass.
+The checksum enforcement and full package matrix remain intact. This is the
+same packaging repair already proposed independently in
+PR #103; it does not import that PR's wallet-sync changes. Full remote builds and
+security gates must pass for the new head before readiness is reported.
+
+The next PR #105 CI run exposed a standalone-core Clippy error and missing
+`ExternalPayment` handling in the Leptos coin row. Hex decoding now uses typed
+two-byte chunks after its existing even-length guard. The coin row labels
+payment reservations and consults the shared `is_user_reversible` policy before
+offering unfreeze. The policy regression includes external-payment holds.
+All 438 core tests, strict standalone-core Clippy, both browser and Tauri WASM
+frontend checks, and the architecture boundary check pass locally. The core
+WASM was rebuilt and freshness-checked; all 21 connector/BCH VM tests pass.
+This resolves the source errors seen in desktop, iOS, Android and architecture
+jobs; complete packaged-platform validation remains a remote CI requirement.
+
+The dependency-audit and supply-chain gates also found
+[GHSA-rvm3-566m-v7fv](https://github.com/advisories/GHSA-rvm3-566m-v7fv) in the
+inherited Capacitor Android/iOS 7.4.2 dependencies. Android, iOS, core and CLI now
+resolve to the patched 7.6.9 release. The Android Gradle compatibility patch was
+regenerated for that release, retaining the existing settings and omitting old
+generated build-cache entries. A clean locked install applies all patches;
+the production dependency audit reports zero vulnerabilities. Dependency and
+direct-license policy, core TypeScript typecheck, production web build and all
+six security tests pass locally. Existing development-only audit and transitive
+license-metadata warnings remain visible; no audit threshold or gate changed.
+Android/iOS package and device evidence still depends on their respective CI
+jobs, and the SDK PR #2 remains unmerged at this validation point.
+
+The full-graph audit subsequently reached the development dependencies. Its
+`source-map-js` finding (GHSA-68fv-2mgg-jv7q) is fixed by updating the single
+locked package from 1.2.1 to the upstream 1.2.2 release. Dependency policy,
+TypeScript core typecheck, production web build and all 49 UI tests pass; the
+production audit still reports zero vulnerabilities.
+
+The full audit remains red: all 13 high-severity entries trace to
+`braces@3.0.3` (GHSA-vfj7-8cjw-p6xm) through existing development tools.
+As checked on 2026-10-07, npm has no patched braces release and upstream
+micromatch/braces PRs #78 and #79 remain open. The audit exit code is still 1;
+no finding is suppressed and no threshold changed. This is an additional
+merge blocker alongside the unmerged SDK dependency and required review.
+The source-map update does not constitute full-audit or merge-readiness proof.
+
+Further PR #105 dependency repair on 2026-10-07: the development `braces`
+consumers now use the exact published MIT backport
+`@dieub/braces-depth-guard@3.0.3-pn.3`. It is a third-party release while the
+upstream fix remains unpublished. All ten published files match provenance
+commit `305a2e4bfe324bb53c336c1b03387ee1251c926f`; npm verified its registry
+signature and attestation. The reviewed runtime diff adds bounded parsing and
+AST traversal, option validation and expansion-parent cycle detection, without
+new runtime dependencies or install hooks. The unchanged upstream 3.0.3 test
+suite passes all 764 cases against the patched runtime; the fork's extended
+suite passes all 799. The dependency policy records the temporary pin and its
+limits, including that expansion cardinality is not bounded by this fix.
+
+Three new repository regressions fail against the original package and pass
+against the installed replacement, covering deep brace/parenthesis strings,
+direct and cyclic ASTs, normal glob behavior, actual Micromatch/Chokidar
+consumers and every locked copy. Both lockfiles retain published integrity
+hashes. Yarn was regenerated with Yarn 1.22.22 and also brought forward the
+existing Capacitor 7.6.9 and source-map-js 1.2.2 fixes. Its installed-consumer
+checks pass. Both managers report zero high/critical findings: npm retains
+6 low / 4 moderate findings and Yarn retains 1 low / 4 moderate findings.
+The production npm audit reports zero vulnerabilities. No advisory, audit
+threshold, workflow or required check was suppressed or weakened.
+
+A clean install with the declared npm 10.9.2 applies all repository patches.
+Dependency/license policy, formatting, core TypeScript typecheck, strict core
+lint, five focused dependency regressions, the production web build and all
+49 UI tests pass. The broad core run passed 1,927 tests with 10 skipped and
+five Git Bash subprocess timeouts on Windows. Both affected workflow-test
+files then passed all 54 tests with one worker, without changing their
+timeouts or assertions. Fresh current-head remote CI is still required;
+SDK PR #2 remains open and the wallet PR still requires human approval.
+
+PR #105 merged #103 (`fix/shv-runtime-recovery-20261007`) on 2026-10-08 so it
+could be reviewed on a base without the hand-submitted dependency-graph snapshot
+on `c45be9b7`. #103 carries the same dependency repairs in its own form
+(Capacitor 7.6.9, source-map-js 1.2.2 and the vendored `@optn/build-braces`
+3.0.4-optn.1), and this branch now uses them unchanged: the
+`@dieub/braces-depth-guard` alias above and its dependency-review advisory
+exception are gone, and package.json, both lockfiles, the Capacitor patch,
+`docs/dependency-policy.md` and the desktop AppImage pins are identical to #103.
+
 ### 2026-10-07: production SHV recovery, bounded retention and date restart
 
 The follow-up based on merged `dev` at `c45be9b7` connects historical proof
