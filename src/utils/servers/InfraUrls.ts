@@ -83,6 +83,52 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
       'https://ipfs-api.optnlabs.com',
     ],
   },
+
+  // Testnet hosts serve several networks on one name, selected by port, so each
+  // entry carries the port that host uses for this network. Every endpoint
+  // returned the expected block hash at this network's electrum-cash/checkpoint
+  // height over WSS on 2026-10-08. No Chaingraph or BCMR indexer serves these
+  // chains; their empty pools fail the same way an unreachable indexer does.
+  // IPFS content addressing does not depend on the chain.
+  [Network.TESTNET3]: {
+    electrumServers: [
+      'testnet.imaginary.cash',
+      'tbch.loping.net:60004',
+      'blackie.c3-soft.com:60004',
+    ],
+    chaingraphUrls: [],
+    bcmrNativeBaseUrls: [],
+    bcmrApiBaseUrls: [],
+    ipfsGateways: [
+      'https://ipfs.optnlabs.com/ipfs',
+      'https://ipfs.io/ipfs',
+      'https://dweb.link/ipfs',
+    ],
+    ipfsUploadRelayBases: [
+      'https://upload.optnlabs.com',
+      'https://ipfs-api.optnlabs.com',
+    ],
+  },
+
+  [Network.TESTNET4]: {
+    electrumServers: [
+      'testnet4.imaginary.cash',
+      'tbch4.loping.net:62004',
+      'blackie.c3-soft.com:62004',
+    ],
+    chaingraphUrls: [],
+    bcmrNativeBaseUrls: [],
+    bcmrApiBaseUrls: [],
+    ipfsGateways: [
+      'https://ipfs.optnlabs.com/ipfs',
+      'https://ipfs.io/ipfs',
+      'https://dweb.link/ipfs',
+    ],
+    ipfsUploadRelayBases: [
+      'https://upload.optnlabs.com',
+      'https://ipfs-api.optnlabs.com',
+    ],
+  },
 };
 
 function readEnv(key: string): string | undefined {
@@ -120,8 +166,9 @@ function dedupe(items: string[]): string[] {
   return out;
 }
 
-function networkSuffix(network: Network): 'MAINNET' | 'CHIPNET' {
-  return network === Network.MAINNET ? 'MAINNET' : 'CHIPNET';
+/** Env override suffix, e.g. `VITE_ELECTRUM_SERVERS_TESTNET4`. */
+function networkSuffix(network: Network): string {
+  return network.toUpperCase();
 }
 
 function readEndpointList(
@@ -317,6 +364,8 @@ const DESKTOP_ONLY_TCP_SERVERS: Record<Network, string[]> = {
     'fulcrum.aglauck.com',
   ],
   [Network.CHIPNET]: [],
+  [Network.TESTNET3]: [],
+  [Network.TESTNET4]: [],
 };
 
 function isDesktop(): boolean {

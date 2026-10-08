@@ -3102,10 +3102,15 @@ async fn run(cli: &Cli) -> Result<Value> {
                     )));
                 }
                 let decoded = rpa::decode(code)?;
-                if decoded.network() != cli.network {
+                // A code only says mainnet or test network, never which test chain.
+                if !decoded.matches(cli.network) {
+                    let family = if decoded.is_mainnet() {
+                        "mainnet"
+                    } else {
+                        "a test network"
+                    };
                     return Err(CliError::Usage(format!(
-                        "that code is for {}, but this is {}",
-                        decoded.network(),
+                        "that code is for {family}, but this is {}",
                         cli.network
                     )));
                 }

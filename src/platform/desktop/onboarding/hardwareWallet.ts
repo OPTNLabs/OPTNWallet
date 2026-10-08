@@ -29,6 +29,7 @@ import {
   resetDesktopWalletColumnsCache,
 } from '../desktopSchema';
 
+import { cashAddressPrefix, parseNetwork } from '../../../utils/networkProfile';
 /** Desktop-only walletType TEXT — matches EC keystore dump type: 'hardware'. */
 export const HARDWARE_WALLET_TYPE = 'hardware';
 
@@ -137,7 +138,7 @@ export async function createHardwareWallet(
   // path reads `addresses`. Hardware create used to only fill `keys` → empty
   // history and broken Recent Activity.
   const prefix =
-    args.network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+    cashAddressPrefix(args.network);
   const insertKey = db.prepare(
     `INSERT INTO keys
        (wallet_id, public_key, private_key, address, token_address, pubkey_hash,
@@ -266,7 +267,7 @@ export async function ensureHardwareWalletKeys(
       return { keyCount: 0, rebuilt: false, firstReceive: null };
     }
     const row = metaQ.getAsObject() as Record<string, unknown>;
-    if (row.networkType === Network.CHIPNET) network = Network.CHIPNET;
+    network = parseNetwork(row.networkType) ?? Network.MAINNET;
     accountXpub =
       typeof row.account_xpub === 'string' ? row.account_xpub.trim() : '';
   } finally {
@@ -290,7 +291,7 @@ export async function ensureHardwareWalletKeys(
 
   // Wrong network prefix (e.g. purge left nothing usable, or keys are bchtest
   // while wallet is mainnet) also forces rebuild.
-  const prefixOk = network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
+  const prefixOk = `${cashAddressPrefix(network)}:`;
   const prefixQ = db.prepare(
     `SELECT COUNT(*) AS c FROM keys
      WHERE wallet_id = ? AND address LIKE ?`
@@ -382,7 +383,7 @@ export async function ensureHardwareWalletKeys(
     );
     return { keyCount: 0, rebuilt: false, firstReceive: null };
   }
-  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const prefix = cashAddressPrefix(network);
   const insertKey = db.prepare(
     `INSERT OR IGNORE INTO keys
        (wallet_id, public_key, private_key, address, token_address, pubkey_hash,
@@ -464,11 +465,11 @@ export async function ensureHardwareWalletAddresses(
     meta.bind([walletId, HARDWARE_WALLET_TYPE]);
     if (!meta.step()) return 0;
     const row = meta.getAsObject() as Record<string, unknown>;
-    if (row.networkType === Network.CHIPNET) network = Network.CHIPNET;
+    network = parseNetwork(row.networkType) ?? Network.MAINNET;
   } finally {
     meta.free();
   }
-  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const prefix = cashAddressPrefix(network);
 
   const missing = db.prepare(`
     SELECT k.address, k.token_address, k.address_index, k.change_index
@@ -571,7 +572,7 @@ export async function readHardwareKeystore(walletId: number): Promise<{
     // migration backfills derivation_path, so this should only fire for a row
     // written outside that path.
     const rowNetwork =
-      row.networkType === Network.CHIPNET ? Network.CHIPNET : Network.MAINNET;
+      (parseNetwork(row.networkType) ?? Network.MAINNET);
     const accountPath =
       typeof row.derivation_path === 'string' && row.derivation_path
         ? row.derivation_path
