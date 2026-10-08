@@ -165,9 +165,10 @@ pub fn parse_publication(script: &[u8]) -> Option<RegistryPublication> {
 
 /// The first BCMR publication among a transaction's outputs.
 ///
-/// Only this transaction's outputs are examined. An authhead that publishes
-/// nothing has no current metadata, and reaching back to an ancestor for one
-/// would present withdrawn metadata as though it were still endorsed.
+/// Only this transaction's outputs are examined; which transaction's
+/// publication is in effect is the resolver's decision, not this function's.
+/// (OPTN's resolver takes the newest one on the authchain, as Electron Cash
+/// does: a head that publishes nothing leaves the previous registry in place.)
 /// The first matching prefix is definitive even when its payload is malformed;
 /// later publication outputs cannot override it (CHIP-BCMR publication outputs).
 pub fn publication_in<'a>(
