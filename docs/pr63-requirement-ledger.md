@@ -1035,3 +1035,32 @@ regressions and four new store publication tests. The connected real-node
 runtime/CLI test passes after the review fixes; strict runtime and CLI Clippy,
 Rust formatting and the architecture boundary check pass. Remote platform
 packages and security scans remain independent checks on the pushed revision.
+
+### 2026-10-08: #63 follow-up scope, checked against `62f8d85a`
+
+This follow-up keeps the shipped React/Tauri interface. The #71 Leptos/Slint
+overhaul is out of scope. Each row below was checked against the source at
+`62f8d85a` rather than copied from an earlier row. Rows close as the follow-up
+lands evidence for them.
+
+| Gap | Current code at `62f8d85a` | Closure |
+| --- | --- | --- |
+| Electrum-only wallets never resolve a token identity | `token_metadata::resolve_selected_identities_inner` accepts only `FullNodeValidated` transaction and terminal evidence, and `identity_from_step` discards any other authhead. Only `optn-chain-bchn` produces that evidence. The shipped sources are Electrum servers, so every owned token reads *Unverified* unless the holder runs BCHN | Accept Electrum observations at an explicit server-reported assurance that reaches every surface. Node-validated stays distinct |
+| Electrum cannot answer `OutpointSpentness` | `optn-chain-electrum` returns `Unsupported` | `blockchain.utxo.get_info` where the server has it, `listunspent` otherwise, bound to the tip it was evaluated at |
+| rnbrady's walk-back, race and forward-entry heuristics | Spender discovery tries UTXO creators, then height-filtered history, one after the other. No ancestor walk-back, no race | Bounded walk-back (three ancestor hops, 30 fetches) racing the history scan. Every candidate still passes the authchain rule |
+| Burned identities lose their publication | An `OP_RETURN` identity output maps to *Unpublished*. That includes the common case where genesis output 0 *is* the BCMR publication | Read the publication from the burned authhead, whose outputs carry the claim, and mark it final |
+| `authchain` registry extension unused | Registry extensions are parsed and never consulted | Use it as an untrusted candidate chain, checked like a restart hint |
+| Desktop token icons are always placeholders | `projectEngineTokenMetadata` sets `iconUri: null`. There is no policy-aware image port | Fetch image bytes in Rust under the wallet's transport policy, bounded by size and type |
+| Renderer requests bypass the Tor/proxy policy | `http-bridge.ts` routes only the price host natively. Every other webview request goes direct | Policy gate for renderer HTTP and image loads on desktop |
+| §21.3 feeds partly ingested | P2P DNS-seed and Fulcrum peer-discovery feeds are declared but not ingested. Peers returned by `server.peers.subscribe` are dropped | Ingest them with provenance, unverified until probed |
+| Versioned network-configuration migrations | The schema is fixed at 1 and any other version is refused | Migration step with atomic write and rollback tests |
+| Fusion input checks bypass the chain layer | `optn-fusion/src/electrum_input.rs` speaks Electrum JSON-RPC directly | Route through `chain_service`. Needs a live round to verify |
+| Stale open items | `open-items.md` #4 and #5 are already fixed in code. `src-tauri/src/fusion/component_vectors.rs` is no longer compiled | Document updated, orphan deleted |
+
+Not adopted: rnbrady's fallback to an ancestor's publication when the authhead
+has none. The specification resolves a registry from the authhead's outputs,
+and this ledger's earlier rule stands.
+
+Still blocked or out of scope here: hardware-device signing evidence,
+store-signed and iOS packages, the React-to-Leptos cut-over (#71), the #82
+marketplace, and maintainer approval of #83's diagrams.
