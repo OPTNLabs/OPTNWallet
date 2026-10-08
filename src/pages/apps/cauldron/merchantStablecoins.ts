@@ -31,10 +31,15 @@ const CHIPNET_MERCHANT_STABLECOINS: MerchantStablecoin[] = [
   },
 ];
 
+const MERCHANT_STABLECOINS: Record<Network, MerchantStablecoin[]> = {
+  [Network.MAINNET]: MAINNET_MERCHANT_STABLECOINS,
+  [Network.TESTNET3]: [],
+  [Network.TESTNET4]: [],
+  [Network.CHIPNET]: CHIPNET_MERCHANT_STABLECOINS,
+};
+
 export function getMerchantStablecoins(network: Network): MerchantStablecoin[] {
-  return network === Network.MAINNET
-    ? MAINNET_MERCHANT_STABLECOINS
-    : CHIPNET_MERCHANT_STABLECOINS;
+  return MERCHANT_STABLECOINS[network];
 }
 export function getDefaultMerchantStablecoin(
   network: Network

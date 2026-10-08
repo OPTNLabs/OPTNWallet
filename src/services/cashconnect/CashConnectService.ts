@@ -23,6 +23,11 @@ import {
 } from './cashconnectContext';
 import { deriveCashConnectIdentityKey } from './cashconnectKey';
 
+import {
+  cashAddressPrefix,
+  networkProfile,
+  parseNetwork,
+} from '../../utils/networkProfile';
 export type CashConnectProposalWaiter = {
   resolve: () => void;
   reject: (error: Error) => void;
@@ -67,13 +72,11 @@ export function bindCashConnectUi(next: UiHooks): void {
 }
 
 function walletNetwork(info: { networkType?: Network | null }): Network {
-  return info.networkType === Network.MAINNET
-    ? Network.MAINNET
-    : Network.CHIPNET;
+  return parseNetwork(info.networkType) ?? Network.CHIPNET;
 }
 
 function expectedChain(network: Network): SessionProposalResponse['chain'] {
-  return network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  return cashAddressPrefix(network);
 }
 
 function assertCashConnectActive(
@@ -139,8 +142,7 @@ export async function startCashConnect(nextWalletId: number): Promise<void> {
             if (proposal.chain !== walletChain) {
               const dappNet =
                 proposal.chain === 'bitcoincash' ? 'Mainnet' : 'Chipnet';
-              const walletNet =
-                nextSeed.network === Network.MAINNET ? 'Mainnet' : 'Chipnet';
+              const walletNet = networkProfile(nextSeed.network).label;
               return Promise.reject(
                 new Error(
                   `This CashConnect dApp is ${dappNet}. This wallet is ${walletNet}. Open a ${dappNet} wallet to connect.`

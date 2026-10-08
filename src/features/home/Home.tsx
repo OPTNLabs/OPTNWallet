@@ -24,7 +24,6 @@ import {
 import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 import { refreshUTXOWorkerSubscriptions } from '../../workers/UTXOWorkerService';
 import { logError } from '../../utils/errorHandling';
-import { Network } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
@@ -40,6 +39,7 @@ import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from './useHomeConnect';
 import { useI18n } from '../../i18n/useI18n';
 import { unitFor } from '../../utils/unitLabel';
+import { isTestNetwork, networkProfile } from '../../utils/networkProfile';
 
 type QuickActionButtonProps = {
   title: string;
@@ -236,11 +236,11 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
           title={t('home.title')}
           subtitle={
             viewerOnly
-              ? currentNetwork === Network.CHIPNET
-                ? `${t('assets.chipnet')} - Browser viewer`
+              ? isTestNetwork(currentNetwork)
+                ? `${t(networkProfile(currentNetwork).labelKey)} - Browser viewer`
                 : 'Browser viewer'
-              : currentNetwork === Network.CHIPNET
-                ? t('assets.chipnet')
+              : isTestNetwork(currentNetwork)
+                ? t(networkProfile(currentNetwork).labelKey)
                 : undefined
           }
           compact

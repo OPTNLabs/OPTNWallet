@@ -2,7 +2,8 @@ import { cashAddressToLockingBytecode } from '@bitauth/libauth';
 
 import { parseBip21Uri } from '../../../utils/bip21';
 import { TOKEN_OUTPUT_SATS } from '../../../utils/constants';
-import type { Network } from '../../../state/slices/networkSlice';
+import { Network } from '../../../state/slices/networkSlice';
+import { networkProfile } from '../../../utils/networkProfile';
 import {
   createTransactionFingerprint,
   deserializePartiallySignedTransaction,
@@ -1198,13 +1199,22 @@ export function buildMerchantPaymentTransactionTemplate(
   };
 }
 
+/** Merchant Pay settles on mainnet and chipnet; its signing request names one of them. */
+function signingRequestNetwork(network: Network): 'mainnet' | 'chipnet' {
+  if (network === Network.MAINNET) return 'mainnet';
+  if (network === Network.CHIPNET) return 'chipnet';
+  throw new Error(
+    `Merchant Pay is not available on ${networkProfile(network).label}.`
+  );
+}
+
 function buildTransportEnvelope(
   proposal: MerchantPaymentProposal
 ): Omit<PartiallySignedTransaction, 'metadata'> {
   const transactionTemplate = buildMerchantPaymentTransactionTemplate(proposal);
   return {
     version: 1,
-    network: proposal.network,
+    network: signingRequestNetwork(proposal.network),
     unsignedTransaction:
       proposal.version === 2
         ? compactMerchantPaymentTransactionTemplateV2(transactionTemplate)

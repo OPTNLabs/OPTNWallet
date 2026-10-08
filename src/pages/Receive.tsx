@@ -37,6 +37,7 @@ import { useI18n } from '../i18n/useI18n';
 import { copyToClipboard } from '../utils/clipboard';
 import { canSignLocally } from '../services/watchOnlyWallet';
 
+import { networkProfile } from '../utils/networkProfile';
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
 const ALLOW_PRIVATE_KEY_VIEW = true;
@@ -65,7 +66,7 @@ async function fetchAddressWif(
     if (!privateKey) return null;
     return encodePrivateKeyWif(
       privateKey,
-      currentNetwork === Network.MAINNET ? 'mainnet' : 'testnet'
+      networkProfile(currentNetwork).hdNetwork
     );
   } catch (error) {
     console.warn('[Receive] failed to load private key WIF', {

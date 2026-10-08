@@ -9,6 +9,7 @@ import {
 } from '../utils/browserStorage';
 import { toArrayBufferBytes } from '../utils/arrayBuffer';
 
+import { parseNetwork } from '../utils/networkProfile';
 type BackendRegistrationPayload = {
   account_id?: string;
   installation_id: string;
@@ -132,8 +133,11 @@ async function getAccountId(
   return `acct_${fingerprint.slice(0, 24)}`;
 }
 
-function getNetworkLabel(network: Network): 'mainnet' | 'chipnet' {
-  return network === Network.MAINNET ? 'mainnet' : 'chipnet';
+/** OPTN's wallet backend serves mainnet and chipnet; other networks do not register. */
+function getNetworkLabel(network: Network): 'mainnet' | 'chipnet' | null {
+  if (network === Network.MAINNET) return 'mainnet';
+  if (network === Network.CHIPNET) return 'chipnet';
+  return null;
 }
 
 function getAccountStorageKey(
@@ -153,10 +157,11 @@ async function buildRegistrationPayload(
     return null;
   }
 
-  const network =
-    walletInfo.networkType === Network.MAINNET
-      ? Network.MAINNET
-      : Network.CHIPNET;
+  const network = parseNetwork(walletInfo.networkType) ?? Network.CHIPNET;
+  const networkLabel = getNetworkLabel(network);
+  if (!networkLabel) {
+    return null;
+  }
   const xpubs = await KeyService.getWalletXpubs(walletId, 0);
   const receiveXpub = xpubs.receive;
   const changeXpub = xpubs.change;
@@ -174,7 +179,7 @@ async function buildRegistrationPayload(
     account_id: accountId,
     installation_id: installationId,
     coin_family: 'bch',
-    network: getNetworkLabel(network),
+    network: networkLabel,
     profile_version: walletInfo.walletType === WalletType.QUANTUMROOT ? 2 : 1,
     receive_xpub: receiveXpub,
     change_xpub: changeXpub,

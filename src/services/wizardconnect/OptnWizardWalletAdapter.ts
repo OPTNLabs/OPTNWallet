@@ -16,6 +16,7 @@ import getElectrumAdapter from '../ElectrumAdapter';
 import { decodeWizardConnectTransaction } from './transaction';
 
 
+import { parseNetwork } from '../../utils/networkProfile';
 type WalletSnapshot = {
   walletId: number;
   walletName: string;
@@ -48,7 +49,7 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
     }
 
     const network =
-      walletInfo.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
+      (parseNetwork(walletInfo.networkType) ?? Network.CHIPNET);
     const mnemonic = walletInfo.mnemonic;
     const passphrase = walletInfo.passphrase ?? '';
     const walletXpubs = await KeyService.getWalletXpubs(walletId);
