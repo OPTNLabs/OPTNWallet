@@ -116,7 +116,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | Sequential receive → spend lifecycle | **PROVEN** | `a_spend_is_found_through_an_outpoint_the_receive_scan_discovered`; spend invisible to a script-only scan | CashTokens/NFT/OP_RETURN/reorg/restart cases not covered |
 | Manual rescan, encrypted restart, GUI/CLI routing | **PROVEN** (runtime/CLI; bounded Windows GUI refresh/reopen) | `request_wallet_rescan`, encrypted checkpoints, Settings `rescan_wallet_from`, CLI `rescan --from-height`; CLI live floor checks and Windows GUI offline restart/online resume on 2026-09-19 | GUI custom-height interaction and current Android/macOS packages still need separate verification; normal HD refresh rechecks the configured floor, not only a suffix |
 | Wallet birthday | **PARTIAL** (durable imported hints connected) | Shared `SetBirthday`/`ClearRescan`, sealed checkpoint, atomic `BeginHd` floor resolution; CLI process restart and Windows GUI height/date reopen and manual-override clearing verified on 2026-09-19. Unknown imports explicitly scan from genesis; missing authenticated date evidence fails closed; legacy manual floors migrate | Automatic same-route header acquisition is connected and tested; requests retain their runtime generation across header I/O. Host-generated creation-anchor capture, restored historical-date evidence and live date acquisition remain to verify. Imported mnemonic input is never treated as proof of fresh wallet creation |
-| Local BCMR / authchain | **PARTIAL** | HD sync now invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Connected synthetic sync checks accepted identity, unknown spentness, output mismatch, wrong registry hash, absent fetch transport and stale-state downgrade | Needs real-node/token workflow; desktop RPC credential controls and CLI private-input controls are connected (see evidence below). Unknown successors outside wallet history need a selected spender-discovery capability; legacy TypeScript migration remains. Authenticated token-identity caching and stale restart semantics are connected and tested (see 2026-09-19 evidence below) |
+| Local BCMR / authchain | **PARTIAL** | HD sync invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Electrum routes resolve at a labelled server-reported assurance; burned heads and quiet heads follow the 2026-10-08 entry; Moria USD and Furu resolve live on mainnet through public Fulcrum | The registry `authchain` extension is not used yet. Packaged GUI rendering of a live token is not yet observed. The web/Android React app still resolves through its legacy TypeScript path |
 | Token capability execution | **INTEGRATION** | `optn-runtime/src/token_capability.rs`; refuses global totals from partial data | Planner and executor exist; no provider adapter routes through them |
 | Broadcast lifecycle | **PARTIAL** | `optn-runtime/src/tx_broadcast.rs`; retained desktop `TransactionManager` now submits signed bytes through the authenticated native command | Desktop single-account Send/CashTokens has guarded submission and preserves ambiguous outbox records. Durable shared outbox, uncovered contract/RPA/multisig inputs, and the other submission paths still need integration; see 2026-09-27 evidence below |
 
@@ -1057,10 +1057,76 @@ lands evidence for them.
 | Fusion input checks bypass the chain layer | `optn-fusion/src/electrum_input.rs` speaks Electrum JSON-RPC directly | Route through `chain_service`. Needs a live round to verify |
 | Stale open items | `open-items.md` #4 and #5 are already fixed in code. `src-tauri/src/fusion/component_vectors.rs` is no longer compiled | Document updated, orphan deleted |
 
-Not adopted: rnbrady's fallback to an ancestor's publication when the authhead
-has none. The specification resolves a registry from the authhead's outputs,
-and this ledger's earlier rule stands.
+The ancestor-publication rule below was first left out of this scope; live
+mainnet data reversed that (see the next entry).
 
 Still blocked or out of scope here: hardware-device signing evidence,
 store-signed and iOS packages, the React-to-Leptos cut-over (#71), the #82
 marketplace, and maintainer approval of #83's diagrams.
+
+### 2026-10-08: token identities over Electrum, rnbrady's search, live mainnet tokens
+
+Token identities now resolve on the default Electrum sources. The resolver
+accepts a route's own node or that route's server, and the result says which:
+`IdentityBasis { assurance: NodeValidated | ServerReported, burned }` travels
+through `optn-app`, the encrypted checkpoint (records written before it read as
+unattested), the transport and the desktop bridge. React labels a server-backed
+name "Verified via server" and a burned identity "· final"; the text and Leptos
+renderers add "as reported by server". A walk rests on its weakest step, and a
+node-selected walk still refetches every hop from the node, so a discovery
+server can neither lower nor raise it. Registry bytes still have to match the
+committed hash; a timeout, partial history or exhausted budget is still never an
+authhead.
+
+Electrum answers `OutpointSpentness` with `blockchain.utxo.get_info` (protocol
+1.4.4 and later), or with the address's unspent list on older servers or when the
+method is refused. The tip, the transaction and the lookup share one pipelined
+round trip, and the answer is bound to that output's script and value.
+`TransactionLookup` also returns the block height from `get_merkle`, which bounds
+later history searches. A backend keeps one negotiated connection for 30 seconds,
+so a walk no longer pays a TLS or Tor handshake per question; a broadcast never
+reuses one and is never retried. Identity lookups run through
+`ChainService::execute_optional_on_route`: the same policy and response-binding
+checks, without route-health bookkeeping. Now that identity resolution runs on
+every Electrum wallet, a metadata lookup a server cannot answer must not take
+that server out of wallet sync, and it no longer can.
+
+Spender discovery follows rnbrady's Electron Cash work. It tries the address's
+unspent outputs first, walking back three hops through any input and through
+output-0 links until a 30-fetch cap, then the history after `from_height`, oldest
+first. The transactions the walk passed through come back as untrusted hints; the
+resolver accepts them only as the authchain rule allows and uses their bytes in
+place of a lookup only when they came from the route's own source. Not adopted:
+racing the two phases. Pipelining already sends up to 64 fetches per round trip,
+and a race would request the history even when the unspent outputs answer.
+
+Two readings changed on live data. An `OP_RETURN` identity output is a burned
+head whose outputs carry its registry, often the burning output itself, and it
+is resolved without asking anyone whether it is unspent. A head without a
+publication leaves the newest earlier publication in effect: Moria USD's head is
+four identity moves past its registry, and the strict reading showed that token
+as unpublished on desktop while Electron Cash and OPTN's own legacy TypeScript
+resolver showed its name. Withdrawal is still a newer publication or a burn.
+
+The shipped catalog had one IPFS gateway, and it rate-limited during the live run
+(HTTP 429). Four path gateways that served the exact committed bytes now ship on
+every network but regtest: OPTN's own, ipfs.io, Filebase and Pinata.
+
+Desktop token icons come through `optn_token_image`. The renderer names a
+category and one image URI from that category's authenticated presentation; the
+host fetches through the wallet's metadata transport, recognises a bounded image
+by its content and returns a `data:` URL. A runtime identity never shows a remote
+URI the webview would fetch itself.
+
+Live evidence, from the opt-in `optn-chain-native/tests/bcmr_live.rs` against
+public Fulcrum `bch.imaginary.cash` over direct TLS:
+
+| Token | Result | Chain | Time |
+| --- | --- | --- | --- |
+| Moria USD `b38a33f7…` | Verified via server: "Moria USD", MUSD, 2 decimals | 8 hops, registry at hop 4 | 8.7 s |
+| Furu `d9ab24ed…` | Verified via server: "Furu Tokens", FURU, 0 decimals | 6 hops, found by the walk back | 7.4 s |
+
+The desktop shell's unit tests did not compile on this base: a test still called
+a function #105 had moved. One Tor lifecycle test also raced its siblings over
+process-wide state. Both are fixed, and Desktop E2E now runs the shell's tests
+after its build; nothing ran them before.
