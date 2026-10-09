@@ -1135,6 +1135,22 @@ impl WalletSyncSession {
             );
         }
         if let Some(previous) = &self.state.authoritative {
+            // What the last scan accepted stays covered, even when it was a
+            // larger scan than this one (`rescan --max-addresses`): the budget
+            // grows to the longest branch it kept, plus one gap so that branch
+            // can still grow, as it does for issued addresses. A provider can
+            // move that by one gap per accepted scan, never past the hard cap.
+            // Found in the fleet run: a wallet with used addresses past index
+            // 1,368 could never refresh on the default budget.
+            if let Some(book) = &previous.value.hd {
+                let longest = book.branches.iter().map(Vec::len).max().unwrap_or(0);
+                let longest = u32::try_from(longest).unwrap_or(u32::MAX);
+                limits.addresses_per_branch = limits.addresses_per_branch.max(
+                    longest
+                        .saturating_add(limits.gap_limit)
+                        .min(optn_core::watch_only::MAX_HD_ADDRESSES_PER_BRANCH),
+                );
+            }
             for interest in &previous.value.interests {
                 let WalletInterest::Script(script) = interest else {
                     return Err(WalletSyncError::InvalidScope(
