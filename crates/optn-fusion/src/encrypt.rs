@@ -141,6 +141,28 @@ mod tests {
     use crate::schnorr::pubkey_compressed;
 
     #[test]
+    fn electron_cash_ciphertext_decrypts_with_the_protocol_iv() {
+        // Upstream encrypt.py at fdc0fff298854e1e24b3187104408b038f2d5ca8.
+        // Public fixture only: recipient scalar 7, ephemeral scalar 11, pad 80.
+        let ciphertext = hex::decode(concat!(
+            "03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb3b",
+            "24ffb94704a1949b2e2257fd884c9df94eab9be5665541813e735124e9a05e7337f",
+            "72798ac08337075969ce4a01f2f54e082cd567a7308f55ac1dedecb5bd2cd3591bc",
+            "b7fa968c27f10cd44c985fbb57c6c8a853bfd54c93729f865d2bcd93",
+        ))
+        .unwrap();
+        let recipient = Scalar::from(7u64);
+        let key = ecdh_key(recipient, &parse_point(&ciphertext[..33]).unwrap());
+        assert_eq!(
+            hex::encode(key),
+            "f703981ac7ae7e09263a53abbb34818f984f002f860415b6fd8878fba376f6e0"
+        );
+        let message = b"CashFusion public compatibility vector";
+        assert_eq!(decrypt(&ciphertext, recipient).unwrap(), message);
+        assert_eq!(decrypt_with_symmkey(&ciphertext, &key).unwrap(), message);
+    }
+
+    #[test]
     fn encrypt_decrypt_round_trip() {
         let priv_k = random_nonce();
         let pubkey = pubkey_compressed(priv_k);

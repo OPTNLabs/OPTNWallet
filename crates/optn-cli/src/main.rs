@@ -136,6 +136,12 @@ enum Command {
         #[arg(long)]
         verbose: bool,
     },
+    /// Review a local hex PSBT; optionally verify a signed return. Offline, Chipnet only.
+    Psbt {
+        original: PathBuf,
+        #[arg(long, value_name = "SIGNED_HEX_FILE")]
+        signed: Option<PathBuf>,
+    },
     /// Broadcast a signed, hex-encoded transaction.
     Broadcast { hex: String },
     /// Generate a new BIP39 recovery phrase.
@@ -738,6 +744,7 @@ async fn main() {
 /// The command as it appears in the skill manifest.
 fn command_name(command: &Command) -> &'static str {
     match command {
+        Command::Psbt { .. } => "psbt",
         Command::Wallet { .. } => "wallet",
         Command::Network {
             action: NetworkCommand::Export,
@@ -1798,6 +1805,11 @@ fn authorize_command(cli: &Cli) -> Result<()> {
     // Before anything else, including opening a connection. A refusal should
     // cost nothing and reveal nothing about the wallet.
     skills::enforce(skills::Policy::from_env()?, command_name(&cli.command))?;
+    if matches!(cli.command, Command::Psbt { .. })
+        && SERVING.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(CliError::Usage("PSBT files require the local CLI.".into()));
+    }
     if cli.wallet.is_some()
         && (matches!(cli.command, Command::Serve { .. })
             || SERVING.load(std::sync::atomic::Ordering::SeqCst))
@@ -1832,6 +1844,37 @@ fn authorize_command(cli: &Cli) -> Result<()> {
 async fn run(cli: &Cli) -> Result<Value> {
     authorize_command(cli)?;
     match &cli.command {
+        Command::Psbt { original, signed } => {
+            let read = |path: &Path| -> Result<Vec<u8>> {
+                use std::io::Read;
+                let mut raw = String::new();
+                std::fs::File::open(path)
+                    .map_err(|_| CliError::Usage("Cannot open PSBT hex file.".into()))?
+                    .take(2 * 1024 * 1024 + 1)
+                    .read_to_string(&mut raw)
+                    .map_err(|_| CliError::Usage("Cannot read PSBT hex file.".into()))?;
+                if raw.len() > 2 * 1024 * 1024 {
+                    return Err(CliError::Usage("PSBT hex file exceeds 2 MiB.".into()));
+                }
+                decode_hex(raw.trim())
+            };
+            let original = read(original)?;
+            let review = optn_core::psbt::review_p2pkh(&original, cli.network)?;
+            let raw = signed
+                .as_ref()
+                .map(|path| {
+                    optn_core::psbt::finalize_cash_tokens_p2pkh(
+                        &original,
+                        &read(path)?,
+                        cli.network,
+                    )
+                })
+                .transpose()?;
+            return Ok(
+                json!({"ok":true, "network":cli.network.to_string(), "review":review,
+                "raw_transaction_hex":raw.as_ref().map(|bytes| hex(bytes)), "sent":false}),
+            );
+        }
         Command::Wallet { .. } => unreachable!("handled before network setup"),
         Command::Network {
             action: NetworkCommand::Status,
@@ -1952,6 +1995,7 @@ async fn run(cli: &Cli) -> Result<Value> {
     match &cli.command {
         Command::Wallet { .. } => unreachable!("handled before network setup"),
         Command::Ping
+        | Command::Psbt { .. }
         | Command::Network { .. }
         | Command::Tx { .. }
         | Command::Broadcast { .. } => {
@@ -2120,58 +2164,19 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
             let wanted = token::parse_category(category)?;
             let wallet = read_wallet(cli).await?;
-            let coin = default_coin_type(cli.network);
-            const TOKEN_DUST: u64 = 1000;
-
-            let mut matches: Vec<(tx::Utxo, String, token::Nft, u64)> = Vec::new();
-            let mut plain_inputs: Vec<(tx::Utxo, String)> = Vec::new();
-
-            for change in [false, true] {
-                for index in 0..*gap {
-                    let path = hd::address_path(coin, 0, change, index);
-                    let address = wallet.address(cli.network, &path)?;
-                    for u in client()?.utxos(&address.electrum_scripthash()).await? {
-                        let mut txid = decode_hex32(&u.tx_hash)?;
-                        txid.reverse();
-                        let utxo = tx::Utxo {
-                            txid,
-                            vout: u.tx_pos,
-                            value: u.value,
-                            script_pubkey: address.script_pubkey(),
-                        };
-                        match &u.token_data {
-                            Some(t) if t.category.eq_ignore_ascii_case(category) => {
-                                let Some(nft) = &t.nft else { continue };
-                                let held = nft.commitment.clone().unwrap_or_default();
-                                if !commitment.is_empty() && !held.eq_ignore_ascii_case(commitment)
-                                {
-                                    continue;
-                                }
-                                let capability = match nft.capability.as_deref() {
-                                    Some("mutable") => token::Capability::Mutable,
-                                    Some("minting") => token::Capability::Minting,
-                                    _ => token::Capability::None,
-                                };
-                                let bytes = decode_hex(&held)?;
-                                let fungible: u64 =
-                                    t.amount.as_deref().unwrap_or("0").parse().unwrap_or(0);
-                                matches.push((
-                                    utxo,
-                                    path.clone(),
-                                    token::Nft {
-                                        capability,
-                                        commitment: bytes,
-                                    },
-                                    fungible,
-                                ));
-                            }
-                            Some(_) => {}
-                            None => plain_inputs.push((utxo, path.clone())),
-                        }
-                    }
-                }
-            }
-
+            let (coins, paths) = hd_coins_with_tokens(cli, client()?, &wallet, *gap).await?;
+            let matches: Vec<&optn_core::coins::Coin> = coins
+                .iter()
+                .filter(|coin| {
+                    coin.token().is_some_and(|held| {
+                        held.category == wanted
+                            && held.nft.as_ref().is_some_and(|nft| {
+                                commitment.is_empty()
+                                    || hex(&nft.commitment).eq_ignore_ascii_case(commitment)
+                            })
+                    })
+                })
+                .collect();
             if matches.is_empty() {
                 return Err(CliError::Usage(format!(
                     "no NFT found for category {category}{}",
@@ -2187,7 +2192,8 @@ async fn run(cli: &Cli) -> Result<Value> {
                 // name, and NFTs are not interchangeable.
                 let seen: Vec<String> = matches
                     .iter()
-                    .map(|(_, _, nft, _)| hex(&nft.commitment))
+                    .filter_map(|coin| coin.token()?.nft.as_ref())
+                    .map(|nft| hex(&nft.commitment))
                     .collect();
                 return Err(CliError::Usage(format!(
                     "category {category} holds {} NFTs; pass --commitment to choose one of: {}",
@@ -2195,59 +2201,22 @@ async fn run(cli: &Cli) -> Result<Value> {
                     seen.join(", ")
                 )));
             }
-
-            let (nft_utxo, nft_path, nft, fungible) = matches.remove(0);
-            // The NFT keeps its capability and commitment. Any fungible amount
-            // riding on the same output travels with it, since dropping it here
-            // would destroy those tokens.
-            let moved = token::TokenData {
-                category: wanted,
-                amount: fungible,
-                nft: Some(nft.clone()),
-            };
-            let outputs = vec![tx::Output::with_tokens(
-                TOKEN_DUST,
-                destination.script_pubkey(),
-                moved.encode_prefix()?,
-            )];
-
-            let pool: Vec<tx::Utxo> = plain_inputs.iter().map(|(u, _)| u.clone()).collect();
-            let (funding, fee) = tx::select_coins(
-                &pool,
-                TOKEN_DUST.saturating_sub(nft_utxo.value),
+            let outpoint = matches[0].outpoint();
+            let nft = matches[0]
+                .token()
+                .and_then(|held| held.nft.clone())
+                .ok_or_else(|| CliError::Internal("the chosen coin lost its NFT".into()))?;
+            // The shared planner moves the NFT exactly as it is; fungible
+            // units on the same coin come back to this wallet as token change.
+            let plan = plan_token_send(
+                cli,
+                &wallet,
+                &coins,
+                to,
+                optn_core::spend::Payment::Nft { outpoint },
                 *fee_rate,
-                2,
             )?;
-
-            let mut inputs = vec![nft_utxo.clone()];
-            inputs.extend(funding.iter().cloned());
-            let mut outputs = outputs;
-            let funded: u64 = funding.iter().map(|u| u.value).sum();
-            let bch_change = (nft_utxo.value + funded).saturating_sub(TOKEN_DUST + fee);
-            let change_path = hd::address_path(coin, 0, true, 0);
-            if bch_change >= 546 {
-                outputs.push(tx::Output::new(
-                    bch_change,
-                    wallet.address(cli.network, &change_path)?.script_pubkey(),
-                ));
-            }
-
-            let transaction = tx::Transaction::new(inputs.clone(), outputs);
-            let mut keys = Vec::with_capacity(inputs.len());
-            for input in &inputs {
-                let path = if input.txid == nft_utxo.txid && input.vout == nft_utxo.vout {
-                    nft_path.clone()
-                } else {
-                    plain_inputs
-                        .iter()
-                        .find(|(u, _)| u.txid == input.txid && u.vout == input.vout)
-                        .map(|(_, p)| p.clone())
-                        .ok_or_else(|| CliError::Internal("selected an unknown utxo".into()))?
-                };
-                keys.push(wallet.signing_key(&path)?);
-            }
-            let raw = transaction.sign(&keys)?;
-            let raw_hex = hex(&raw);
+            let raw_hex = hex(&sign_token_plan(&wallet, &plan, &paths)?);
 
             if *dry_run {
                 return Ok(json!({
@@ -2258,7 +2227,8 @@ async fn run(cli: &Cli) -> Result<Value> {
                     "commitment": hex(&nft.commitment),
                     "capability": nft.capability.as_str(),
                     "to": to,
-                    "fee": fee,
+                    "fee": plan.fee_sats,
+                    "inputs": plan.inputs.len(),
                     "raw": raw_hex,
                 }));
             }
@@ -2272,7 +2242,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 "commitment": hex(&nft.commitment),
                 "capability": nft.capability.as_str(),
                 "to": to,
-                "fee": fee,
+                "fee": plan.fee_sats,
             }))
         }
         Command::TokenSend {
@@ -2299,122 +2269,27 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
             let wanted = token::parse_category(category)?;
             let wallet = read_wallet(cli).await?;
-            let coin = default_coin_type(cli.network);
-
-            // A token output still carries BCH. 1000 sats clears the dust
-            // threshold for the larger output a token prefix produces; the
-            // familiar 546 figure applies to a bare P2PKH.
-            const TOKEN_DUST: u64 = 1000;
-
-            let mut token_inputs: Vec<(tx::Utxo, String, u64)> = Vec::new();
-            let mut plain_inputs: Vec<(tx::Utxo, String)> = Vec::new();
-
-            for change in [false, true] {
-                for index in 0..*gap {
-                    let path = hd::address_path(coin, 0, change, index);
-                    let address = wallet.address(cli.network, &path)?;
-                    for u in client()?.utxos(&address.electrum_scripthash()).await? {
-                        let mut txid = decode_hex32(&u.tx_hash)?;
-                        txid.reverse();
-                        let utxo = tx::Utxo {
-                            txid,
-                            vout: u.tx_pos,
-                            value: u.value,
-                            script_pubkey: address.script_pubkey(),
-                        };
-                        match &u.token_data {
-                            Some(t) if t.category.eq_ignore_ascii_case(category) => {
-                                let held: u64 =
-                                    t.amount.as_deref().unwrap_or("0").parse().map_err(|_| {
-                                        CliError::Protocol("token amount is not a number".into())
-                                    })?;
-                                token_inputs.push((utxo, path.clone(), held));
-                            }
-                            // An output holding a different category cannot fund
-                            // the fee without destroying that token, so only
-                            // token-free outputs do.
-                            Some(_) => {}
-                            None => plain_inputs.push((utxo, path.clone())),
-                        }
-                    }
-                }
-            }
-
-            token_inputs.sort_by_key(|e| std::cmp::Reverse(e.2));
-            let mut selected: Vec<(tx::Utxo, String, u64)> = Vec::new();
-            let mut gathered: u64 = 0;
-            for entry in token_inputs {
-                gathered = gathered.saturating_add(entry.2);
-                selected.push(entry);
-                if gathered >= *amount {
-                    break;
-                }
-            }
-            if gathered < *amount {
-                return Err(CliError::Usage(format!(
-                    "holding {gathered} of category {category}, need {amount}"
-                )));
-            }
-            let token_change = gathered - amount;
-
-            let mut outputs = vec![tx::Output::with_tokens(
-                TOKEN_DUST,
-                destination.script_pubkey(),
-                token::TokenData::fungible(wanted, *amount).encode_prefix()?,
-            )];
-
-            let change_path = hd::address_path(coin, 0, true, 0);
-            let plain_change = wallet.address(cli.network, &change_path)?;
-            if token_change > 0 {
-                // Token change must land on a token-aware address for the same
-                // reason the destination must: a plain one destroys it.
-                let mut token_change_address = plain_change.clone();
-                token_change_address.kind = token_change_address.kind.token_aware();
-                outputs.push(tx::Output::with_tokens(
-                    TOKEN_DUST,
-                    token_change_address.script_pubkey(),
-                    token::TokenData::fungible(wanted, token_change).encode_prefix()?,
-                ));
-            }
-
-            // Token inputs bring their own BCH; only the shortfall needs funding.
-            let token_bch: u64 = selected.iter().map(|(u, ..)| u.value).sum();
-            let needed = TOKEN_DUST * outputs.len() as u64;
-            let pool: Vec<tx::Utxo> = plain_inputs.iter().map(|(u, _)| u.clone()).collect();
-            let (funding, fee) = tx::select_coins(
-                &pool,
-                needed.saturating_sub(token_bch),
+            let (coins, paths) = hd_coins_with_tokens(cli, client()?, &wallet, *gap).await?;
+            let plan = plan_token_send(
+                cli,
+                &wallet,
+                &coins,
+                to,
+                optn_core::spend::Payment::Fungible {
+                    category: wanted,
+                    amount: *amount,
+                },
                 *fee_rate,
-                outputs.len() + 1,
             )?;
-
-            let mut inputs: Vec<tx::Utxo> = selected.iter().map(|(u, ..)| u.clone()).collect();
-            inputs.extend(funding.iter().cloned());
-
-            let funded: u64 = funding.iter().map(|u| u.value).sum();
-            let bch_change = (token_bch + funded).saturating_sub(needed + fee);
-            if bch_change >= 546 {
-                outputs.push(tx::Output::new(bch_change, plain_change.script_pubkey()));
-            }
-
-            let transaction = tx::Transaction::new(inputs.clone(), outputs);
-            let mut keys = Vec::with_capacity(inputs.len());
-            for input in &inputs {
-                let path = selected
-                    .iter()
-                    .find(|(u, ..)| u.txid == input.txid && u.vout == input.vout)
-                    .map(|(_, p, _)| p.clone())
-                    .or_else(|| {
-                        plain_inputs
-                            .iter()
-                            .find(|(u, _)| u.txid == input.txid && u.vout == input.vout)
-                            .map(|(_, p)| p.clone())
-                    })
-                    .ok_or_else(|| CliError::Internal("selected an unknown utxo".into()))?;
-                keys.push(wallet.signing_key(&path)?);
-            }
-            let raw = transaction.sign(&keys)?;
-            let raw_hex = hex(&raw);
+            let raw_hex = hex(&sign_token_plan(&wallet, &plan, &paths)?);
+            let token_change: u64 = plan
+                .outputs
+                .iter()
+                .filter(|output| output.role == optn_core::spend::OutputRole::TokenChange)
+                .filter_map(|output| output.token.as_ref())
+                .filter(|held| held.category == wanted)
+                .map(|held| held.amount)
+                .sum();
 
             if *dry_run {
                 return Ok(json!({
@@ -2425,8 +2300,8 @@ async fn run(cli: &Cli) -> Result<Value> {
                     "to": to,
                     "amount": amount,
                     "token_change": token_change,
-                    "fee": fee,
-                    "inputs": inputs.len(),
+                    "fee": plan.fee_sats,
+                    "inputs": plan.inputs.len(),
                     "raw": raw_hex,
                 }));
             }
@@ -2439,7 +2314,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 "category": category,
                 "to": to,
                 "amount": amount,
-                "fee": fee,
+                "fee": plan.fee_sats,
             }))
         }
         Command::Tokens { gap } => {
@@ -4273,6 +4148,123 @@ fn read_phrase() -> Result<String> {
 /// phrase, and stdin comes last because reaching it means blocking on input —
 /// which for a binary designed to be driven by automation is a hang, not a
 /// prompt.
+/// The wallet's coins on its first `gap` receive and change addresses, as the
+/// shared spend path takes them -- tokens included, so a plan can see every
+/// token a coin carries -- with the HD path of each coin's key.
+async fn hd_coins_with_tokens(
+    cli: &Cli,
+    client: &Client,
+    wallet: &Wallet,
+    gap: u32,
+) -> Result<(
+    optn_core::coins::CoinSet,
+    std::collections::BTreeMap<optn_core::coins::Outpoint, String>,
+)> {
+    let coin_type = default_coin_type(cli.network);
+    let mut coins = optn_core::coins::CoinSet::new();
+    let mut paths = std::collections::BTreeMap::new();
+    for change in [false, true] {
+        for index in 0..gap {
+            let path = hd::address_path(coin_type, 0, change, index);
+            let address = wallet.address(cli.network, &path)?;
+            for reported in client.utxos(&address.electrum_scripthash()).await? {
+                let outpoint =
+                    optn_core::coins::Outpoint::parse(&reported.tx_hash, reported.tx_pos)
+                        .map_err(|error| CliError::Protocol(error.to_string()))?;
+                let held = reported
+                    .token_data
+                    .as_ref()
+                    .map(|held| {
+                        token::TokenData::from_reported(
+                            &held.category,
+                            held.amount.as_deref(),
+                            held.nft.as_ref().and_then(|nft| nft.capability.as_deref()),
+                            held.nft.as_ref().and_then(|nft| nft.commitment.as_deref()),
+                        )
+                    })
+                    .transpose()?;
+                let coin = optn_core::coins::Coin::from_observation(
+                    outpoint,
+                    reported.value,
+                    address.encode(),
+                    held,
+                )
+                .map_err(|error| CliError::Protocol(error.to_string()))?;
+                coins
+                    .insert(coin)
+                    .map_err(|error| CliError::Protocol(error.to_string()))?;
+                paths.insert(outpoint, path.clone());
+            }
+        }
+    }
+    Ok((coins, paths))
+}
+
+/// Plan a token send through the shared spend path: it chooses the coins,
+/// returns every other token they carry to the wallet, pays the fee from BCH
+/// and refuses any plan that would burn a token. Change goes to the first
+/// change address, its token-aware form for tokens.
+fn plan_token_send(
+    cli: &Cli,
+    wallet: &Wallet,
+    coins: &optn_core::coins::CoinSet,
+    to: &str,
+    payment: optn_core::spend::Payment,
+    fee_sats_per_byte: u64,
+) -> Result<optn_core::spend::TokenSpendPlan> {
+    let change = wallet.address(
+        cli.network,
+        &hd::address_path(default_coin_type(cli.network), 0, true, 0),
+    )?;
+    optn_core::spend::prepare_token_spend(
+        coins,
+        cli.network,
+        &optn_core::spend::TokenSpendRequest {
+            destination: to.to_owned(),
+            payment,
+            coins: optn_core::spend::CoinChoice::Automatic,
+            change: change.encode(),
+        },
+        optn_core::fee::FeeRate::from_satoshis_per_kb(fee_sats_per_byte.saturating_mul(1000)),
+    )
+    .map_err(|error| CliError::Usage(error.to_string()))
+}
+
+/// Sign a token plan with the wallet's keys. Each signature commits to the
+/// token prefix of the output it spends, as nodes require since CashTokens;
+/// signing a token input as if it carried none gets the transaction refused.
+fn sign_token_plan(
+    wallet: &Wallet,
+    plan: &optn_core::spend::TokenSpendPlan,
+    paths: &std::collections::BTreeMap<optn_core::coins::Outpoint, String>,
+) -> Result<Vec<u8>> {
+    let mut inputs = Vec::with_capacity(plan.inputs.len());
+    let mut keys = Vec::with_capacity(plan.inputs.len());
+    for input in &plan.inputs {
+        let mut txid = input.outpoint.txid();
+        txid.reverse();
+        inputs.push(tx::Utxo {
+            txid,
+            vout: input.outpoint.vout(),
+            value: input.sats,
+            script_pubkey: Address::decode(&input.address)
+                .map_err(CliError::Usage)?
+                .script_pubkey(),
+        });
+        let path = paths.get(&input.outpoint).ok_or_else(|| {
+            CliError::Internal(format!(
+                "the plan spends {} which this wallet did not list",
+                input.outpoint
+            ))
+        })?;
+        keys.push(wallet.signing_key(path)?);
+    }
+    let outputs = plan
+        .transaction_outputs()
+        .map_err(|error| CliError::Internal(error.to_string()))?;
+    tx::Transaction::new(inputs, outputs).sign_spending_tokens(&keys, &plan.spent_tokens())
+}
+
 async fn read_wallet(cli: &Cli) -> Result<Wallet> {
     if cli.wallet.is_some() {
         return wallet_security::read_managed_wallet(cli).await;
@@ -4803,5 +4795,98 @@ mod manifest_tests {
                 skill.name
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod token_send_tests {
+    use super::*;
+    use optn_core::coins::{Coin, CoinSet, Outpoint};
+    use optn_core::spend::{CoinChoice, Payment, TokenSpendRequest};
+
+    /// Input `index`'s scriptSig public key, read from the raw transaction:
+    /// version, input count, then per input txid, vout, script, sequence.
+    fn signer_of(raw: &[u8], index: usize) -> Vec<u8> {
+        let mut at = 5; // version (4) + input count (1, under 0xfd here)
+        for current in 0..=index {
+            at += 36;
+            let length = usize::from(raw[at]);
+            let script = &raw[at + 1..at + 1 + length];
+            if current == index {
+                return script[script.len() - 33..].to_vec();
+            }
+            at += 1 + length + 4;
+        }
+        unreachable!()
+    }
+
+    /// The CLI's token sends are signed from the shared plan: every input by
+    /// the key of the address its own coin sits at, every token where the plan
+    /// put it. A key taken from the wrong path signs validly for nothing.
+    #[test]
+    fn a_token_plan_is_signed_with_each_coins_own_key() {
+        let wallet = Wallet::from_mnemonic(hd::BIP39_TEST_VECTOR_MNEMONIC, "").unwrap();
+        let coin_type = default_coin_type(Network::Chipnet);
+        let at = |change, index| hd::address_path(coin_type, 0, change, index);
+        let category = [7u8; 32];
+        let token_coin = Outpoint::parse(&"aa".repeat(32), 0).unwrap();
+        let bch_coin = Outpoint::parse(&"bb".repeat(32), 1).unwrap();
+        let mut coins = CoinSet::new();
+        let mut paths = std::collections::BTreeMap::new();
+        for (outpoint, path, sats, held) in [
+            (
+                token_coin,
+                at(false, 2),
+                1_000,
+                Some(token::TokenData::fungible(category, 500)),
+            ),
+            (bch_coin, at(true, 5), 50_000, None),
+        ] {
+            let address = wallet.address(Network::Chipnet, &path).unwrap();
+            coins
+                .insert(Coin::from_observation(outpoint, sats, address.encode(), held).unwrap())
+                .unwrap();
+            paths.insert(outpoint, path);
+        }
+        let mut recipient = wallet.address(Network::Chipnet, &at(false, 9)).unwrap();
+        recipient.kind = recipient.kind.token_aware();
+        let change = wallet.address(Network::Chipnet, &at(true, 0)).unwrap();
+        let plan = optn_core::spend::prepare_token_spend(
+            &coins,
+            Network::Chipnet,
+            &TokenSpendRequest {
+                destination: recipient.encode(),
+                payment: Payment::Fungible {
+                    category,
+                    amount: 200,
+                },
+                coins: CoinChoice::Automatic,
+                change: change.encode(),
+            },
+            optn_core::fee::FeeRate::from_satoshis_per_kb(1_000),
+        )
+        .unwrap();
+
+        let raw = sign_token_plan(&wallet, &plan, &paths).unwrap();
+        let decoded = tx::decode(&raw).unwrap();
+        assert_eq!(decoded.inputs.len(), plan.inputs.len());
+        for (index, input) in plan.inputs.iter().enumerate() {
+            let mut txid = decoded.inputs[index].0;
+            txid.reverse();
+            assert_eq!(Outpoint::new(txid, decoded.inputs[index].1), input.outpoint);
+            assert_eq!(
+                signer_of(&raw, index),
+                wallet.public_key(&paths[&input.outpoint]).unwrap().to_vec(),
+                "input {index} is signed by its own coin's key"
+            );
+        }
+        let tokens: Vec<_> = decoded.outputs.iter().map(|o| o.token.clone()).collect();
+        let planned: Vec<_> = plan.outputs.iter().map(|o| o.token.clone()).collect();
+        assert_eq!(tokens, planned);
+
+        // A coin the plan spends but the wallet did not list is refused.
+        let mut missing = paths.clone();
+        missing.remove(&bch_coin);
+        assert!(sign_token_plan(&wallet, &plan, &missing).is_err());
     }
 }

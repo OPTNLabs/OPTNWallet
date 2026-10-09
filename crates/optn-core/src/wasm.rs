@@ -53,6 +53,399 @@ fn err(e: crate::error::CliError) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
+/// Pure offline review. Does not authorize a spend or establish unspentness.
+#[wasm_bindgen(js_name = psbtReviewP2pkh)]
+pub fn psbt_review_p2pkh(raw: &[u8], network: &str) -> Result<String, JsValue> {
+    let review = crate::psbt::review_p2pkh(raw, network_from(network)?).map_err(err)?;
+    serde_json::to_string(&review).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Verify the signed return against the exact reviewed bytes. Never broadcasts.
+#[wasm_bindgen(js_name = psbtFinalizeCashTokensP2pkh)]
+pub fn psbt_finalize_cash_tokens_p2pkh(
+    original: &[u8],
+    signed: &[u8],
+    network: &str,
+) -> Result<Vec<u8>, JsValue> {
+    crate::psbt::finalize_cash_tokens_p2pkh(original, signed, network_from(network)?).map_err(err)
+}
+
+/// The coin-control label of one reported coin, as JSON; see
+/// `coin_control::ReportedCoin`. Flat arguments keep a JSON parser out of
+/// this binary.
+#[wasm_bindgen(js_name = coinControlLabel)]
+pub fn coin_control_label(
+    category: Option<String>,
+    amount: Option<String>,
+    nft_capability: Option<String>,
+    identity_name: Option<String>,
+    identity_ticker: Option<String>,
+    identity_decimals: Option<u32>,
+    identity_status: Option<String>,
+) -> Result<String, JsValue> {
+    let label = crate::coin_control::ReportedCoin {
+        category,
+        amount,
+        nft_capability,
+        identity_name,
+        identity_ticker,
+        identity_decimals,
+        identity_status,
+    }
+    .label();
+    serde_json::to_string(&label).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// The label of output `vout` of the complete parent transaction `txid`
+/// (display order), as JSON. Refuses a parent that is not that transaction.
+#[wasm_bindgen(js_name = spentOutputLabel)]
+pub fn spent_output_label(parent: &[u8], txid: &str, vout: u32) -> Result<String, JsValue> {
+    let label = crate::coin_control::spent_output_label(parent, txid, vout).map_err(err)?;
+    serde_json::to_string(&label).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Sends that may spend token coins: one planner, `spend::prepare_token_spend`,
+// for every wallet kind.
+//
+// The wallet's coins cross as parallel arrays, one entry per coin, for the
+// same reason coinControlLabel takes flat arguments: no JSON parser on the
+// way in. A coin's outpoint is `txid:vout` (display order), its token fields
+// are empty strings when it carries none, and amounts are decimal strings.
+// ---------------------------------------------------------------------------
+
+fn reported_coins(
+    outpoints: &[String],
+    sats: &[u64],
+    addresses: &[String],
+    categories: &[String],
+    amounts: &[String],
+    capabilities: &[String],
+    commitments: &[String],
+) -> Result<crate::coins::CoinSet, JsValue> {
+    let count = outpoints.len();
+    if [
+        sats.len(),
+        addresses.len(),
+        categories.len(),
+        amounts.len(),
+        capabilities.len(),
+        commitments.len(),
+    ]
+    .iter()
+    .any(|len| *len != count)
+    {
+        return Err(JsValue::from_str(
+            "every coin needs one entry in each coin field",
+        ));
+    }
+    fn present(text: &str) -> Option<&str> {
+        (!text.is_empty()).then_some(text)
+    }
+    let mut coins = crate::coins::CoinSet::new();
+    for (index, outpoint) in outpoints.iter().enumerate() {
+        let refuse =
+            |error: &dyn std::fmt::Display| JsValue::from_str(&format!("coin {outpoint}: {error}"));
+        let parsed: crate::coins::Outpoint = outpoint.parse().map_err(|e| refuse(&e))?;
+        let token = match present(&categories[index]) {
+            Some(category) => Some(
+                crate::token::TokenData::from_reported(
+                    category,
+                    present(&amounts[index]),
+                    present(&capabilities[index]),
+                    present(&commitments[index]),
+                )
+                .map_err(|e| refuse(&e))?,
+            ),
+            None if [&amounts[index], &capabilities[index], &commitments[index]]
+                .iter()
+                .any(|field| !field.is_empty()) =>
+            {
+                return Err(refuse(&"token fields without a category"));
+            }
+            None => None,
+        };
+        let coin = crate::coins::Coin::from_observation(
+            parsed,
+            sats[index],
+            addresses[index].clone(),
+            token,
+        )
+        .map_err(|e| refuse(&e))?;
+        coins.insert(coin).map_err(|e| refuse(&e))?;
+    }
+    Ok(coins)
+}
+
+/// `bch` (amount in satoshis), `fungible` (target a category, amount typed
+/// with `amount_decimals`), `all_fungible` (target a category) or `nft`
+/// (target the NFT's coin).
+fn payment(
+    kind: &str,
+    target: Option<String>,
+    amount: Option<String>,
+    amount_decimals: u8,
+) -> Result<crate::spend::Payment, JsValue> {
+    use crate::spend::Payment;
+    let target = || {
+        target
+            .clone()
+            .ok_or_else(|| JsValue::from_str("this payment needs a target"))
+    };
+    let amount = || {
+        amount
+            .clone()
+            .ok_or_else(|| JsValue::from_str("this payment needs an amount"))
+    };
+    let category = |text: String| crate::token::parse_category(&text).map_err(err);
+    Ok(match kind {
+        "bch" => {
+            let text = amount()?;
+            if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(JsValue::from_str("a BCH amount is a number of satoshis"));
+            }
+            Payment::Bch {
+                sats: text
+                    .parse()
+                    .map_err(|_| JsValue::from_str("a BCH amount is a number of satoshis"))?,
+            }
+        }
+        "fungible" => Payment::Fungible {
+            category: category(target()?)?,
+            amount: crate::coin_control::parse_scaled_amount(&amount()?, amount_decimals)
+                .map_err(err)?,
+        },
+        "all_fungible" => Payment::AllFungible {
+            category: category(target()?)?,
+        },
+        "nft" => Payment::Nft {
+            outpoint: target()?
+                .parse()
+                .map_err(|e: crate::coins::CoinError| JsValue::from_str(&e.to_string()))?,
+        },
+        other => return Err(JsValue::from_str(&format!("unknown payment '{other}'"))),
+    })
+}
+
+/// `None` lets the wallet choose; a list is coin control, and naming a coin
+/// twice is refused rather than quietly merged.
+fn coin_choice(chosen: Option<Vec<String>>) -> Result<crate::spend::CoinChoice, JsValue> {
+    let Some(chosen) = chosen else {
+        return Ok(crate::spend::CoinChoice::Automatic);
+    };
+    let mut set = std::collections::BTreeSet::new();
+    for outpoint in &chosen {
+        let parsed: crate::coins::Outpoint = outpoint
+            .parse()
+            .map_err(|e: crate::coins::CoinError| JsValue::from_str(&e.to_string()))?;
+        if !set.insert(parsed) {
+            return Err(JsValue::from_str(&format!(
+                "coin {outpoint} is chosen twice"
+            )));
+        }
+    }
+    Ok(crate::spend::CoinChoice::Exactly(set))
+}
+
+#[allow(clippy::too_many_arguments)] // A flat boundary on purpose; see above.
+fn plan(
+    network: &str,
+    outpoints: &[String],
+    sats: &[u64],
+    addresses: &[String],
+    categories: &[String],
+    amounts: &[String],
+    capabilities: &[String],
+    commitments: &[String],
+    payment_kind: &str,
+    payment_target: Option<String>,
+    payment_amount: Option<String>,
+    amount_decimals: u8,
+    chosen: Option<Vec<String>>,
+    destination: &str,
+    change: &str,
+    fee_sats_per_kb: u64,
+) -> Result<crate::spend::TokenSpendPlan, JsValue> {
+    let coins = reported_coins(
+        outpoints,
+        sats,
+        addresses,
+        categories,
+        amounts,
+        capabilities,
+        commitments,
+    )?;
+    crate::spend::prepare_token_spend(
+        &coins,
+        network_from(network)?,
+        &crate::spend::TokenSpendRequest {
+            destination: destination.to_owned(),
+            payment: payment(
+                payment_kind,
+                payment_target,
+                payment_amount,
+                amount_decimals,
+            )?,
+            coins: coin_choice(chosen)?,
+            change: change.to_owned(),
+        },
+        crate::fee::FeeRate::from_satoshis_per_kb(fee_sats_per_kb),
+    )
+    .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+/// Plan a send that may spend token coins, as JSON; see
+/// `spend::TokenSpendPlan`. Any wallet kind can call this: it decides inputs
+/// and outputs, token and BCH change, and checks that nothing is burned.
+#[wasm_bindgen(js_name = planTokenSpend)]
+#[allow(clippy::too_many_arguments)] // A flat boundary on purpose; see above.
+pub fn plan_token_spend(
+    network: &str,
+    outpoints: Vec<String>,
+    sats: Vec<u64>,
+    addresses: Vec<String>,
+    categories: Vec<String>,
+    amounts: Vec<String>,
+    capabilities: Vec<String>,
+    commitments: Vec<String>,
+    payment_kind: &str,
+    payment_target: Option<String>,
+    payment_amount: Option<String>,
+    amount_decimals: u8,
+    chosen: Option<Vec<String>>,
+    destination: &str,
+    change: &str,
+    fee_sats_per_kb: u64,
+) -> Result<String, JsValue> {
+    let plan = plan(
+        network,
+        &outpoints,
+        &sats,
+        &addresses,
+        &categories,
+        &amounts,
+        &capabilities,
+        &commitments,
+        payment_kind,
+        payment_target,
+        payment_amount,
+        amount_decimals,
+        chosen,
+        destination,
+        change,
+        fee_sats_per_kb,
+    )?;
+    serde_json::to_string(&plan).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// The same plan as an unsigned PSBT for an air-gapped signer, as JSON
+/// `{psbt, plan, review}`: the PSBT as hex, and Rust's review of exactly
+/// those bytes for the holder to approve.
+///
+/// Takes the same arguments as `planTokenSpend` -- the plan is made again
+/// here, so the PSBT cannot be built from a different one -- then each coin's
+/// key (`pubkeys` as hex, empty when unknown, with its HD `branches` and
+/// `indexes`), the account path, the signer's fingerprint if the wallet has
+/// one, and the complete parent transaction of every input, as hex.
+#[wasm_bindgen(js_name = tokenSpendPsbt)]
+#[allow(clippy::too_many_arguments)] // A flat boundary on purpose; see above.
+pub fn token_spend_psbt(
+    network: &str,
+    outpoints: Vec<String>,
+    sats: Vec<u64>,
+    addresses: Vec<String>,
+    categories: Vec<String>,
+    amounts: Vec<String>,
+    capabilities: Vec<String>,
+    commitments: Vec<String>,
+    payment_kind: &str,
+    payment_target: Option<String>,
+    payment_amount: Option<String>,
+    amount_decimals: u8,
+    chosen: Option<Vec<String>>,
+    destination: &str,
+    change: &str,
+    fee_sats_per_kb: u64,
+    pubkeys: Vec<String>,
+    branches: Vec<u32>,
+    indexes: Vec<u32>,
+    account_path: &str,
+    fingerprint: Option<String>,
+    parents: Vec<String>,
+) -> Result<String, JsValue> {
+    let network_value = network_from(network)?;
+    let plan = plan(
+        network,
+        &outpoints,
+        &sats,
+        &addresses,
+        &categories,
+        &amounts,
+        &capabilities,
+        &commitments,
+        payment_kind,
+        payment_target,
+        payment_amount,
+        amount_decimals,
+        chosen,
+        destination,
+        change,
+        fee_sats_per_kb,
+    )?;
+    if pubkeys.len() != outpoints.len()
+        || branches.len() != outpoints.len()
+        || indexes.len() != outpoints.len()
+    {
+        return Err(JsValue::from_str(
+            "every coin needs one entry in each key field",
+        ));
+    }
+    let mut keys = std::collections::BTreeMap::new();
+    for (index, outpoint) in outpoints.iter().enumerate() {
+        if pubkeys[index].is_empty() {
+            continue;
+        }
+        let pubkey = crate::coins::hex_decode(&pubkeys[index])
+            .and_then(|bytes| <[u8; 33]>::try_from(bytes).ok())
+            .ok_or_else(|| {
+                JsValue::from_str(&format!("coin {outpoint}: a public key is 33 bytes of hex"))
+            })?;
+        let parsed: crate::coins::Outpoint = outpoint
+            .parse()
+            .map_err(|e: crate::coins::CoinError| JsValue::from_str(&e.to_string()))?;
+        keys.insert(
+            parsed,
+            crate::airgap_spend::CoinKey {
+                pubkey,
+                branch: branches[index],
+                index: indexes[index],
+            },
+        );
+    }
+    let parents = parents
+        .iter()
+        .map(|parent| {
+            crate::coins::hex_decode(parent)
+                .ok_or_else(|| JsValue::from_str("a parent transaction is hex"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let prepared = crate::airgap_spend::prepare_token_psbt(
+        &plan,
+        &parents,
+        &keys,
+        crate::hd::parse_account_path(account_path).map_err(err)?,
+        fingerprint.as_deref(),
+        network_value,
+    )
+    .map_err(err)?;
+    serde_json::to_string(&serde_json::json!({
+        "psbt": crate::coins::hex_encode(&prepared.psbt),
+        "plan": plan,
+        "review": prepared.review,
+    }))
+    .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 /// Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
 /// display order, matching the shared coin-hold record. This does not sign.
 #[wasm_bindgen(js_name = transactionOutpoints)]

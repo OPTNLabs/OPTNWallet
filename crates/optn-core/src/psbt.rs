@@ -39,6 +39,9 @@ use crate::network::Network;
 use crate::rpa::parse_transaction;
 use crate::watch_only::normalize_master_fingerprint;
 
+mod cash_tokens;
+pub use cash_tokens::{review_p2pkh, CategoryReview, P2pkhReview, ReviewedOutput};
+
 /// `psbt` followed by `0xff`.
 pub const PSBT_MAGIC: &[u8] = b"psbt\xff";
 
@@ -370,12 +373,39 @@ pub fn finalize_p2pkh(
     signed_psbt: &[u8],
     network: Network,
 ) -> Result<Vec<u8>> {
+    finalize_p2pkh_inner(original_psbt, signed_psbt, network, false)
+}
+
+/// Finalize a reviewed CashTokens PSBT. Review `review_p2pkh` first, including
+/// burns and authority changes. This only returns bytes; it does not approve,
+/// sign, broadcast, or establish chain inclusion/unspentness of supplied parents.
+/// The ordinary wallet's token-free finalizer remains unchanged in scope.
+pub fn finalize_cash_tokens_p2pkh(
+    original_psbt: &[u8],
+    signed_psbt: &[u8],
+    network: Network,
+) -> Result<Vec<u8>> {
+    finalize_p2pkh_inner(original_psbt, signed_psbt, network, true)
+}
+
+fn finalize_p2pkh_inner(
+    original_psbt: &[u8],
+    signed_psbt: &[u8],
+    network: Network,
+    allow_tokens: bool,
+) -> Result<Vec<u8>> {
     use crate::tx::{self, Output, Transaction, Utxo};
 
     if network != Network::Chipnet {
         return Err(CliError::Usage("PSBT finalization is chipnet-only".into()));
     }
     let original = parse_maps(original_psbt)?;
+    let review = cash_tokens::review_maps(&original)?;
+    if !allow_tokens && !review.categories.is_empty() {
+        return Err(CliError::Protocol(
+            "token-free finalization refuses CashTokens".into(),
+        ));
+    }
     let signed = parse_maps(signed_psbt)?;
     let invalid =
         || CliError::Protocol("signed PSBT does not retain the approved P2PKH intent".into());
@@ -397,10 +427,9 @@ pub fn finalize_p2pkh(
     }
     // The v145 fields displayed by a signer must agree with the embedded tx.
     for (fields, output) in original.outputs.iter().zip(&decoded.outputs) {
-        if output.token.is_some()
-            || fields
-                .iter()
-                .any(|(key, _)| matches!(key[0], OUT_REDEEM_SCRIPT | 0x01 | OUT_CASHTOKEN))
+        if fields
+            .iter()
+            .any(|(key, _)| matches!(key[0], OUT_REDEEM_SCRIPT | 0x01))
             || field_value(fields, OUT_AMOUNT).is_some_and(|v| v != output.value.to_le_bytes())
             || field_value(fields, OUT_SCRIPT).is_some_and(|v| v != output.script_pubkey)
         {
@@ -410,6 +439,7 @@ pub fn finalize_p2pkh(
     let mut seen = std::collections::BTreeSet::new();
     let mut inputs = Vec::with_capacity(decoded.inputs.len());
     let mut signatures = Vec::with_capacity(decoded.inputs.len());
+    let mut token_prefixes = Vec::with_capacity(decoded.inputs.len());
     for (index, ((txid, vout, sequence), fields)) in
         decoded.inputs.iter().zip(&original.inputs).enumerate()
     {
@@ -444,8 +474,7 @@ pub fn finalize_p2pkh(
         let prevout = parent.outputs.get(*vout as usize).ok_or_else(invalid)?;
         let origin = &metadata.origins[0];
         let script = &prevout.script_pubkey;
-        if prevout.token.is_some()
-            || script.len() != 25
+        if script.len() != 25
             || script[..3] != [0x76, 0xa9, 0x14]
             || script[23..] != [0x88, 0xac]
             || script[3..23] != crate::hd::hash160(&origin.pubkey)
@@ -464,6 +493,14 @@ pub fn finalize_p2pkh(
             script_pubkey: script.clone(),
         });
         signatures.push((&origin.pubkey, signature));
+        token_prefixes.push(
+            prevout
+                .token
+                .as_ref()
+                .map(crate::token::TokenData::encode_prefix)
+                .transpose()?
+                .unwrap_or_default(),
+        );
     }
     // Refuse inflation/overflow independently of signature validity.
     let input_value = inputs
@@ -485,8 +522,18 @@ pub fn finalize_p2pkh(
         outputs: decoded
             .outputs
             .into_iter()
-            .map(|output| Output::new(output.value, output.script_pubkey))
-            .collect(),
+            .map(|output| {
+                Ok(Output {
+                    value: output.value,
+                    script_pubkey: output.script_pubkey,
+                    token_prefix: output
+                        .token
+                        .as_ref()
+                        .map(crate::token::TokenData::encode_prefix)
+                        .transpose()?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
         locktime: decoded.locktime,
         sequence: 0xffff_ffff,
     };
@@ -494,8 +541,11 @@ pub fn finalize_p2pkh(
         .iter()
         .enumerate()
         .map(|(index, (key, signature))| {
-            let digest =
-                tx::double_sha256(&transaction.sighash_preimage_with_sequences(index, &sequences)?);
+            let digest = tx::double_sha256(&transaction.sighash_preimage_with_token(
+                index,
+                &sequences,
+                &token_prefixes[index],
+            )?);
             tx::verified_p2pkh_script_sig(key.as_slice(), signature, &digest)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -897,7 +947,8 @@ pub struct PsbtOutputSpec {
     /// Present when this output is the wallet's own change, so the device can
     /// show it as change rather than as an unknown third party.
     pub derivations: Vec<KeyOrigin>,
-    /// An already-encoded CashToken prefix, passed through as bytes.
+    /// A canonical CashToken prefix (including 0xef), separate from locking
+    /// bytecode. Written into both the unsigned transaction and v145 metadata.
     pub token_prefix: Option<Vec<u8>>,
 }
 
@@ -966,6 +1017,19 @@ pub fn encode_unsigned_with_sighash(
         return Err(CliError::Usage("a PSBT needs at least one output".into()));
     }
     check_sighash(sighash)?;
+    for output in outputs {
+        if output.locking_bytecode.first() == Some(&0xef) {
+            return Err(CliError::Usage(
+                "pass the token prefix separately from locking bytecode".into(),
+            ));
+        }
+        if let Some(prefix) = &output.token_prefix {
+            let (_, used) = crate::token::TokenData::decode_prefix(prefix)?;
+            if used != prefix.len() {
+                return Err(CliError::Protocol("token prefix has trailing bytes".into()));
+            }
+        }
+    }
 
     let mut out = PSBT_MAGIC.to_vec();
 
@@ -1105,7 +1169,11 @@ fn unsigned_transaction(inputs: &[PsbtInputSpec], outputs: &[PsbtOutputSpec]) ->
     tx.extend_from_slice(&compact_size(outputs.len() as u64));
     for output in outputs {
         tx.extend_from_slice(&output.satoshis.to_le_bytes());
-        tx.extend_from_slice(&compact_size(output.locking_bytecode.len() as u64));
+        let prefix = output.token_prefix.as_deref().unwrap_or_default();
+        tx.extend_from_slice(&compact_size(
+            (prefix.len() + output.locking_bytecode.len()) as u64,
+        ));
+        tx.extend_from_slice(prefix);
         tx.extend_from_slice(&output.locking_bytecode);
     }
     tx.extend_from_slice(&0u32.to_le_bytes()); // locktime
@@ -1851,7 +1919,7 @@ mod tests {
         (unhex("unsigned_hex"), unhex("signed_hex"))
     }
 
-    fn encode_maps(maps: &ParsedMaps) -> Vec<u8> {
+    pub(super) fn encode_maps(maps: &ParsedMaps) -> Vec<u8> {
         let mut raw = PSBT_MAGIC.to_vec();
         for fields in std::iter::once(&maps.global)
             .chain(&maps.inputs)

@@ -115,10 +115,10 @@
   dependencies:
     css-tree "^3.0.0"
 
-"@capacitor/android@^7.0.0":
-  version "7.4.2"
-  resolved "https://registry.npmjs.org/@capacitor/android/-/android-7.4.2.tgz"
-  integrity sha512-FZ7M9NwFkljR7EP5eXiE32mAIfZNcYw2CzRMCG3rQu0u0ZaIoeOeq5/oK4YcDnGpNmu8jpngKJqZ+9OiSQSwDg==
+"@capacitor/android@^7.6.9":
+  version "7.6.9"
+  resolved "https://registry.yarnpkg.com/@capacitor/android/-/android-7.6.9.tgz#eb15132eb054286916ac069c6a83b26d23393cf9"
+  integrity sha512-jvfU42aOuj92/KJqRscfDm+5612WzJainFL09xjJgD9oI3OMXN4PBfccn8Ig9i8x7bkVqZv/XNwFshiIRqmggg==
 
 "@capacitor/app@^7.1.2":
   version "7.1.2"
@@ -137,10 +137,10 @@
   resolved "https://registry.npmjs.org/@capacitor/camera/-/camera-7.0.1.tgz"
   integrity sha512-gDUFsYlhMra5VVOa4iJV6+MQRhp3VXpTLQY4JDATj7UvoZ8Hv4DG8qplPL9ufUFNoR3QbDDnf8+gbQOsKdkDjg==
 
-"@capacitor/cli@^7.6.8":
-  version "7.6.8"
-  resolved "https://registry.npmjs.org/@capacitor/cli/-/cli-7.6.8.tgz"
-  integrity sha512-sJYLoSS1wVHjDPwRc0grtNZcQZnkQc7TJKoVZdHL2HI5TPCq+27WBrMAo0mXvQQSH2axPYCz5cyRrcqqakOvxQ==
+"@capacitor/cli@^7.6.9":
+  version "7.6.9"
+  resolved "https://registry.yarnpkg.com/@capacitor/cli/-/cli-7.6.9.tgz#d1d5cb38d94410e0eca8039b98144fb88e977df5"
+  integrity sha512-QBDEf38yBAFTJehbi5FvAmhDWV1I/e7Zr3Z6XX0Bj+9T+/OY5EkGbw5/1e+3oIyyeepq3WtdSkLWHs3VNH2gCA==
   dependencies:
     "@ionic/cli-framework-output" "^2.2.8"
     "@ionic/utils-subprocess" "^3.0.1"
@@ -165,10 +165,10 @@
   resolved "https://registry.npmjs.org/@capacitor/clipboard/-/clipboard-7.0.1.tgz"
   integrity sha512-n4XEHma7apLOYvyeaR9S5u3uGzDYG7WeQxmtZlwP01HneIzMnusVgw4Im6I+pMBcoUN9TfVdf6eqKph97B1bAw==
 
-"@capacitor/core@^7.0.0":
-  version "7.4.2"
-  resolved "https://registry.npmjs.org/@capacitor/core/-/core-7.4.2.tgz"
-  integrity sha512-akCf9A1FUR8AWTtmgGjHEq6LmGsjA2U7igaJ9PxiCBfyxKqlDbuGHrlNdpvHEjV5tUPH3KYtkze6gtFcNKPU9A==
+"@capacitor/core@^7.6.9":
+  version "7.6.9"
+  resolved "https://registry.yarnpkg.com/@capacitor/core/-/core-7.6.9.tgz#5f33353b06bfa7dbb727046a40ee9fc36f8e7d9c"
+  integrity sha512-4DOh/xySC9S5ryhUIqpOppasIyi2WiTdF0JuZ/2DEs+vf5eunRzHDdNYBp1snA3faHciTw/3SVGXfR+WkYxsMA==
   dependencies:
     tslib "^2.1.0"
 
@@ -184,10 +184,10 @@
   dependencies:
     "@capacitor/synapse" "^1.0.3"
 
-"@capacitor/ios@^7.0.0":
-  version "7.4.2"
-  resolved "https://registry.npmjs.org/@capacitor/ios/-/ios-7.4.2.tgz"
-  integrity sha512-Edd4aZ6IJi4O/7dJIsSIuuo6LXvVVP5V++0Vs1w5bWOGbGhWZXLF0lt0KGFgSUxTuyL6xURGUygkD6dCp35QAQ==
+"@capacitor/ios@^7.6.9":
+  version "7.6.9"
+  resolved "https://registry.yarnpkg.com/@capacitor/ios/-/ios-7.6.9.tgz#25671dc9f70ec8ffc52ac923af1c44bb3210de73"
+  integrity sha512-LANP81TfwuJk1zq9EuF+J5AJK71rKDgXB5XD+VFJQHC7BxSH4Dsma6DSMyrjFT03jtqc/0JTMEfSMBE7go3ZjA==
 
 "@capacitor/local-notifications@^7.0.2":
   version "7.0.2"
@@ -3447,10 +3447,8 @@ brace-expansion@^5.0.8:
   dependencies:
     balanced-match "^4.0.2"
 
-braces@^3.0.3, braces@~3.0.2:
-  version "3.0.3"
-  resolved "https://registry.npmjs.org/braces/-/braces-3.0.3.tgz"
-  integrity sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==
+braces@^3.0.3, "braces@file:vendor/braces", braces@~3.0.2:
+  version "3.0.4-optn.1"
   dependencies:
     fill-range "^7.1.1"
 
@@ -4966,7 +4964,7 @@ filelist@^1.0.4:
 
 fill-range@^7.1.1:
   version "7.1.1"
-  resolved "https://registry.npmjs.org/fill-range/-/fill-range-7.1.1.tgz"
+  resolved "https://registry.yarnpkg.com/fill-range/-/fill-range-7.1.1.tgz#44265d3cac07e3ea7dc247516380643754a05292"
   integrity sha512-YsGpe3WHLK8ZYi4tWDg2Jy3ebRz2rXowDxnld4bkQB00cc/1Zw9AWnC0i9ztDJitivtQvaI9KaLyKrc+hBW0yg==
   dependencies:
     to-regex-range "^5.0.1"
@@ -5642,7 +5640,7 @@ is-nan@^1.3.2:
 
 is-number@^7.0.0:
   version "7.0.0"
-  resolved "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz"
+  resolved "https://registry.yarnpkg.com/is-number/-/is-number-7.0.0.tgz#7535345b896734d5f80c4d06c50955527a14f12b"
   integrity sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==
 
 is-path-inside@^3.0.3:
@@ -6424,6 +6422,13 @@ minimalistic-crypto-utils@^1.0.1:
   resolved "https://registry.npmjs.org/minimalistic-crypto-utils/-/minimalistic-crypto-utils-1.0.1.tgz"
   integrity sha512-JIYlbt6g8i5jKfJ3xz7rF0LXmv2TkDxBLUkiBeZ7bAx4GnnNMr8xFpGnOxn6GhTEHx3SjRrZEoU+j04prX1ktg==
 
+minimatch@9.0.9, minimatch@^9.0.4, minimatch@^9.0.5:
+  version "9.0.9"
+  resolved "https://registry.npmjs.org/minimatch/-/minimatch-9.0.9.tgz"
+  integrity sha512-OBwBN9AL4dqmETlpS2zasx+vTeWclWzkblfZk7KTA5j3jeOONz/tRCnZomUyvNg83wL5Zv9Ss6HMJXAgL8R2Yg==
+  dependencies:
+    brace-expansion "^2.0.2"
+
 minimatch@^10.1.1:
   version "10.2.6"
   resolved "https://registry.npmjs.org/minimatch/-/minimatch-10.2.6.tgz"
@@ -6444,13 +6449,6 @@ minimatch@^5.0.1, minimatch@^5.1.0:
   integrity sha512-7o1wEA2RyMP7Iu7GNba9vc0RWWGACJOCZBJX2GJWip0ikV+wcOsgVuY9uE8CPiyQhkGFSlhuSkZPavN7u1c2Fw==
   dependencies:
     brace-expansion "^2.0.1"
-
-minimatch@^9.0.4, minimatch@^9.0.5:
-  version "9.0.9"
-  resolved "https://registry.npmjs.org/minimatch/-/minimatch-9.0.9.tgz"
-  integrity sha512-OBwBN9AL4dqmETlpS2zasx+vTeWclWzkblfZk7KTA5j3jeOONz/tRCnZomUyvNg83wL5Zv9Ss6HMJXAgL8R2Yg==
-  dependencies:
-    brace-expansion "^2.0.2"
 
 minimist@^1.2.6:
   version "1.2.8"
@@ -8032,10 +8030,10 @@ sonic-boom@^4.0.1:
   dependencies:
     atomic-sleep "^1.0.0"
 
-source-map-js@^1.2.1:
-  version "1.2.1"
-  resolved "https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.1.tgz"
-  integrity sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==
+source-map-js@^1.2.1, source-map-js@^1.2.2:
+  version "1.2.2"
+  resolved "https://registry.yarnpkg.com/source-map-js/-/source-map-js-1.2.2.tgz#79fb88d97535a21cb27162cb05d211b67acea4ab"
+  integrity sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==
 
 space-separated-tokens@^2.0.0:
   version "2.0.2"
@@ -8503,7 +8501,7 @@ to-buffer@^1.2.0, to-buffer@^1.2.1, to-buffer@^1.2.2:
 
 to-regex-range@^5.0.1:
   version "5.0.1"
-  resolved "https://registry.npmjs.org/to-regex-range/-/to-regex-range-5.0.1.tgz"
+  resolved "https://registry.yarnpkg.com/to-regex-range/-/to-regex-range-5.0.1.tgz#1648c44aae7c8d988a326018ed72f5b4dd0392e4"
   integrity sha512-65P7iz6X5yEr1cwcgvQxbbIw7Uk3gOy5dIdtZ4rDveLqhrdJP+Li/Hx6tyK0NEb+2GCyneCMJiGqrADCSNk8sQ==
   dependencies:
     is-number "^7.0.0"
@@ -9218,7 +9216,7 @@ yallist@^5.0.0:
   resolved "https://registry.npmjs.org/yallist/-/yallist-5.0.0.tgz"
   integrity sha512-YgvUTfwqyc7UXVMrB+SImsVYSmTS8X/tSrtdNZMImM+n7+QTriRXyXim0mBrTXNeqzVF0KWGgHPeiyViFFrNDw==
 
-yaml@^2.2.2, yaml@^2.3.4:
+yaml@2.9.0, yaml@^2.2.2, yaml@^2.3.4:
   version "2.9.0"
   resolved "https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz"
   integrity sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==
