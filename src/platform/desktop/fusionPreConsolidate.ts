@@ -6,15 +6,10 @@
 
 import KeyService from '../../services/KeyService';
 import TransactionService from '../../services/TransactionService';
-import type { UTXO } from '../../types/types';
 import { Network } from '../../state/slices/networkSlice';
 import { store } from '../../state/store';
 import { createSimpleSendPlanner } from '../../hooks/simple-send/planner';
-import {
-  EC_SERVER_FUSION_MAX_COINS_PER_ADDRESS,
-  findCrowdedPlainAddressBuckets,
-  type ServerFusionAddressBucket,
-} from './serverFusionCoinPolicy';
+import type { FusionCoinBucket } from './fusionCoinSelection';
 
 import { cashAddressPrefix } from '../../utils/networkProfile';
 export type FusionPreConsolidateResult =
@@ -82,7 +77,8 @@ export async function allocateFreshReceiveAddress(
 export async function consolidateCrowdedFusionAddress(options: {
   walletId: number;
   network: Network;
-  coins: readonly UTXO[];
+  /** A crowded address, as the shared coin policy reported it. */
+  bucket: FusionCoinBucket;
   signal?: AbortSignal;
 }): Promise<FusionPreConsolidateResult> {
   if (options.signal?.aborted) {
@@ -96,9 +92,9 @@ export async function consolidateCrowdedFusionAddress(options: {
     };
   }
 
-  const crowded = findCrowdedPlainAddressBuckets(options.coins);
-  const bucket: ServerFusionAddressBucket | undefined = crowded[0];
-  if (!bucket || bucket.coins.length <= EC_SERVER_FUSION_MAX_COINS_PER_ADDRESS) {
+  // The shared coin policy names crowded addresses; this sweeps one.
+  const bucket = options.bucket;
+  if (bucket.coins.length === 0) {
     return { ok: false, skipped: true, reason: 'no crowded address' };
   }
 

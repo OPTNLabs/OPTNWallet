@@ -21,8 +21,6 @@ import { reconcileOutboundTransactions } from '../../services/OutboundTransactio
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
 import {
-  coinDepth,
-  coinsBelowDepth,
   formatAutoDepthGateLog,
   formatAutoDepthMetMessage,
   fuseDepthEligibility,
@@ -51,18 +49,9 @@ import {
   type FusionMode,
 } from './fusionAutoEngine';
 import {
-  ACCEPT_UNCONFIRMED_FUSION_INPUTS,
-  EC_DEFAULT_MAX_COINS,
-} from './fusionTiming';
-import {
-  classifyServerFusionCoins,
-  findCrowdedPlainAddressBuckets,
-  formatServerFusionEmptyReason,
-  isServerFusionDepthSatisfied,
-  selectServerFusionBuckets,
-  type ServerFusionAddressBucket,
-  type ServerFusionClassification,
-} from './serverFusionCoinPolicy';
+  selectFusionCoins,
+  type FusionCoinBucket,
+} from './fusionCoinSelection';
 import {
   consolidateCrowdedFusionAddress,
   walletCanPreConsolidate,
@@ -376,48 +365,21 @@ if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', releaseOnUnload);
 }
 
-// Unconfirmed coins are eligible (ACCEPT_UNCONFIRMED_FUSION_INPUTS). EC-maintainer
-// direction endorses fusing 0-conf on BCH — we do not wait for a block before the
-// next Auto round. Classic EC still excludes unconfirmed in select_coins /
-// validation.py; we do not copy that. Trade-off: spending an unconfirmed parent
-// dies if that parent is replaced — rare on BCH; waiting costs liquidity/privacy.
-
-/**
- * EC plugin.py DEFAULT_MAX_COINS = 20. Prefer the largest UTXOs so tiers stay
- * affordable (EC samples randomly; we keep the best batch deterministically).
- */
-function limitFusionCoins(coins: UTXO[]): UTXO[] {
-  if (coins.length <= EC_DEFAULT_MAX_COINS) return coins;
-  return [...coins]
-    .sort((a, b) => Number(b.value ?? 0) - Number(a.value ?? 0))
-    .slice(0, EC_DEFAULT_MAX_COINS);
-}
-
-function secureRandomUnit(): number {
-  const cryptoApi = globalThis.crypto;
-  if (!cryptoApi?.getRandomValues) {
-    throw new Error(
-      'secure randomness is unavailable for server Fusion coin selection'
-    );
-  }
-  const sample = new Uint32Array(1);
-  cryptoApi.getRandomValues(sample);
-  return sample[0] / 0x1_0000_0000;
-}
-
 interface FreshCoinSelection {
   /** Coins used only for depth/status reporting; never a second chain scan. */
   depthCoins: UTXO[];
   /** Exact coins offered to the selected transport. */
   selectedCoins: UTXO[];
   serverDepthSatisfied: boolean;
-  serverClassification?: ServerFusionClassification;
-  crowdedBuckets: ServerFusionAddressBucket[];
+  /** Server rounds: why no address is eligible, worded for the trigger. */
+  emptyReason: string | null;
+  crowdedBuckets: FusionCoinBucket[];
   allCoins: UTXO[];
 }
 
 /**
- * Live, spendable, non-token coins for this wallet.
+ * Live, spendable, non-token coins for this wallet, chosen by the shared Rust
+ * policy (optn-core fusion::coin_selection).
  *
  * `null` from the refresh means this trigger joined an in-progress refresh or the
  * wallet session changed — it is NOT "no coins". Returning an empty array here
@@ -440,90 +402,34 @@ async function freshCoinSelection(
   if (!snapshot) return null;
 
   const allCoins = Object.values(snapshot).flat().filter(Boolean) as UTXO[];
-
+  const selection = selectFusionCoins({
+    walletId,
+    mode,
+    trigger,
+    fuseDepth,
+    coins: allCoins,
+  });
   if (mode === 'server') {
-    // 0-conf / height-0 fusion outputs are allowed (ACCEPT_UNCONFIRMED).
-    // Auto still stops via isServerFusionDepthSatisfied below; Manual does not.
-    const classified = classifyServerFusionCoins(allCoins);
-    const crowdedBuckets = findCrowdedPlainAddressBuckets(allCoins);
-    const depthCoins = classified.eligibleBuckets.flatMap(
-      (bucket) => bucket.coins
-    );
-    const depth = isServerFusionDepthSatisfied(classified.eligibleBuckets, {
-      fuseDepth,
-      depthOf: (outpoint) => coinDepth(walletId, outpoint),
-    });
     void import('./logger')
       .then(({ log }) =>
         log.info(
           'fusion-diag',
           `w${walletId} server ${trigger}: coins=${allCoins.length} ` +
-            `eligibleBuckets=${classified.eligibleBuckets.length} ` +
-            `eligibleCoins=${classified.eligibleBuckets.reduce((n, b) => n + b.coins.length, 0)} ` +
-            `crowded=${crowdedBuckets.length} ` +
-            `skipped=${JSON.stringify(classified.skipCounts)} ` +
-            `depthSatisfied=${depth.satisfied} fuseDepth=${fuseDepth}`
+            `eligibleBuckets=${selection.eligibleBuckets} ` +
+            `eligibleCoins=${selection.eligibleCoins} ` +
+            `crowded=${selection.crowded.length} ` +
+            `skipped=${JSON.stringify(Object.fromEntries(selection.skipCounts))} ` +
+            `depthSatisfied=${selection.depthSatisfied} fuseDepth=${fuseDepth}`
         )
       )
       .catch(() => undefined);
-    if (trigger === 'auto' && depth.satisfied && crowdedBuckets.length === 0) {
-      return {
-        depthCoins,
-        selectedCoins: [],
-        serverDepthSatisfied: true,
-        serverClassification: classified,
-        crowdedBuckets,
-        allCoins,
-      };
-    }
-
-    // Electron Cash's default "normal" mode selects each unrelated address
-    // bucket with probability 0.5, keeps the bucket indivisible, and falls back
-    // to one bucket when the random sample is empty.
-    const selectedBuckets = selectServerFusionBuckets(
-      classified.eligibleBuckets,
-      {
-        fraction: 0.5,
-        random: secureRandomUnit,
-      }
-    );
-    return {
-      depthCoins,
-      selectedCoins: selectedBuckets.flatMap((bucket) => bucket.coins),
-      serverDepthSatisfied: false,
-      serverClassification: classified,
-      crowdedBuckets,
-      allCoins,
-    };
   }
-
-  const coins = allCoins.flat().filter(
-    // Both token fields: `token` is our normalised shape, `token_data` is what
-    // comes straight off Electrum. A coin carrying either must never be fused
-    // — that would burn the CashToken.
-    // Unconfirmed (height ≤ 0) kept when ACCEPT_UNCONFIRMED_FUSION_INPUTS.
-    (coin): coin is UTXO => {
-      if (!coin || coin.token || coin.token_data) return false;
-      if (
-        !ACCEPT_UNCONFIRMED_FUSION_INPUTS &&
-        typeof coin.height === 'number' &&
-        coin.height <= 0
-      ) {
-        return false;
-      }
-      return true;
-    }
-  );
-
-  // Depth bounds automatic spending only. A user who clicks Fuse Now is making an
-  // explicit choice and may re-fuse a coin that has already reached the limit.
-  const eligible =
-    trigger === 'auto' ? coinsBelowDepth(walletId, coins, fuseDepth) : coins;
   return {
-    depthCoins: coins,
-    selectedCoins: limitFusionCoins(eligible),
-    serverDepthSatisfied: false,
-    crowdedBuckets: findCrowdedPlainAddressBuckets(coins),
+    depthCoins: selection.depthCoins,
+    selectedCoins: selection.selected,
+    serverDepthSatisfied: selection.depthSatisfied,
+    emptyReason: selection.emptyReason,
+    crowdedBuckets: selection.crowded,
     allCoins,
   };
 }
@@ -560,7 +466,7 @@ async function maybePreConsolidateCrowdedCoins(
   const result = await consolidateCrowdedFusionAddress({
     walletId: options.walletId,
     network: options.network,
-    coins: selection.allCoins,
+    bucket,
     signal: options.signal,
   });
   if (result.ok === false) {
@@ -830,15 +736,7 @@ export async function startFusionRound(
           options.fuseDepth
         );
         const detail =
-          mode === 'server' &&
-          selection.depthCoins.length === 0 &&
-          !selection.serverDepthSatisfied
-            ? formatServerFusionEmptyReason(
-                selection.serverClassification ??
-                  classifyServerFusionCoins([]),
-                { auto: true }
-              )
-            : formatAutoDepthMetMessage(elig);
+          selection.emptyReason ?? formatAutoDepthMetMessage(elig);
         // Long depth-met idle so Auto does not thrash every engine tick.
         await stampAutoDepthMetIdle(
           walletId,
@@ -970,10 +868,7 @@ export async function startFusionRound(
     }
     const coins = selection.selectedCoins;
     if (coins.length === 0) {
-      const detail =
-        mode === 'server' && selection.serverClassification
-          ? formatServerFusionEmptyReason(selection.serverClassification)
-          : 'No eligible coins to fuse.';
+      const detail = selection.emptyReason ?? 'No eligible coins to fuse.';
       return finish({
         status: 'no-eligible-coins',
         detail,

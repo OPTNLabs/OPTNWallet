@@ -136,6 +136,16 @@ export function fusionScalarIsCanonical(bytes: Uint8Array): boolean;
 export function fusionScalarSum(packed: Uint8Array): Uint8Array;
 
 /**
+ * Choose the coins for one CashFusion round (`fusion::coin_selection`): a JSON
+ * request in, a JSON selection out, coins named by outpoint.
+ *
+ * The selection's random draws come from the host's `crypto.getRandomValues`
+ * through getrandom's `js` backend, so no caller supplies them. A host
+ * without secure randomness gets an error, never a selection.
+ */
+export function fusionSelectCoins(request_json: string): string;
+
+/**
  * Verify a 64-byte BCH Schnorr signature. False on any malformed input.
  */
 export function fusionVerifySchnorr(pubkey: Uint8Array, signature: Uint8Array, message: Uint8Array): boolean;
@@ -300,6 +310,7 @@ export interface InitOutput {
     readonly fusionPedersenH: () => [number, number];
     readonly fusionScalarIsCanonical: (a: number, b: number) => number;
     readonly fusionScalarSum: (a: number, b: number) => [number, number, number, number];
+    readonly fusionSelectCoins: (a: number, b: number) => [number, number, number, number];
     readonly fusionVerifySchnorr: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly grindBudget: (a: number) => [number, number, number];
     readonly grindRpaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
@@ -320,6 +331,8 @@ export interface InitOutput {
     readonly sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly transactionOutpoints: (a: number, b: number) => [number, number, number, number];
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

@@ -1877,3 +1877,42 @@ any address or round on a planning refusal.
 Next in the same direction: the Auto Fusion driver (coin choice, rounds,
 fresh outputs) in `optn-runtime`, so `optn fusion` on the CLI and the
 docker runner fuse with the same code as the desktop.
+
+### 2026-10-09: fusion coin selection runs in Rust, through the shared WASM core
+
+Which coins a round offers was decided in TypeScript
+(`serverFusionCoinPolicy.ts`, plus a P2P branch and a 20-coin limit inside
+`FusionRunnerService.ts`). The CLI and the docker runner had no way to make
+the same choice.
+
+`optn_core::fusion::coin_selection` is the one policy: Electron Cash's
+`select_coins` / `select_random_coins` / `FUSE_DEPTH_THRESHOLD` for server
+rounds (address buckets offered whole and at random, three largest coins
+from a crowded address, Auto stopping at 99.9% of eligible value fused deep
+enough), and the P2P selection (plain coins below the rounds-per-coin depth,
+largest twenty). It is pure; randomness is a parameter. `FusionMode` moved
+into the same module and `optn-app` re-exports it, so there is one
+definition.
+
+The desktop reaches it through the shared WASM core (`fusionSelectCoins`),
+synchronously and without IPC, with draws from the host's
+`crypto.getRandomValues`. `fusionCoinSelection.ts` only describes the
+wallet's UTXO records (legacy freeze-flag names, token fields, recorded
+depth) and maps the answer back to them. `serverFusionCoinPolicy.ts`, its
+test, the runner's own P2P filter and limit, and the dead timing constants
+are removed. Pre-consolidation now sweeps the crowded address the policy
+names rather than recomputing it.
+
+One tightening: a P2P round no longer offers a frozen coin. The TypeScript
+P2P branch checked only tokens; `optn_core::coins` already says a frozen
+coin (a pledge, an authhead, another round) is never fused.
+
+Tests: 12 Rust tests port and extend the TypeScript ones. The runner's
+vitest suite now runs the real Rust policy through WASM instead of a
+TypeScript copy, and a new glue test checks the record mapping.
+
+The committed WASM was also stale before this change: the Tor probe change
+(`7b70e937`) touched `optn-core` without a rebuild, which the "Shared Rust
+connectors" check would have refused once this PR targets `dev`. The
+regenerated artifact passes `build-optn-core-wasm.mts --check`, and the
+connector tests that run against it pass.

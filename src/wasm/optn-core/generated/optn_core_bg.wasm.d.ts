@@ -26,6 +26,7 @@ export const fusionPedersenCommitSigned: (a: bigint, b: number, c: number) => [n
 export const fusionPedersenH: () => [number, number];
 export const fusionScalarIsCanonical: (a: number, b: number) => number;
 export const fusionScalarSum: (a: number, b: number) => [number, number, number, number];
+export const fusionSelectCoins: (a: number, b: number) => [number, number, number, number];
 export const fusionVerifySchnorr: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const grindBudget: (a: number) => [number, number, number];
 export const grindRpaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
@@ -46,6 +47,8 @@ export const sendBlockReason: (a: number, b: number) => [number, number, number,
 export const sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const transactionOutpoints: (a: number, b: number) => [number, number, number, number];
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
