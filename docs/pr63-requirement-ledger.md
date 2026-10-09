@@ -95,7 +95,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | 11 | No 2-of-3 provider voting | **PROVEN** | `reconciliation.rs` ranks evidence; no vote count exists | — |
 | 12 | SHV/MMR passes reference vectors | **PROVEN** | `optn-core/src/header_mmr.rs::reference_vectors` against bitcoincashautist's published vectors, byte-identical to BCHN's | — |
 | 13 | Pruning preserves historical verification and reorg recovery | **PROVEN** | `header_store.rs::prune_below`/`rewind_to`; driven against a node that actually reorganised by `optn-chain-neutrino/tests/regtest_live.rs::a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment` — pruning leaves the commitment unmoved, a forked branch is refused rather than extended onto, and the rebuild reaches the node's longer branch with a different commitment | Recovery is a rebuild from the anchor, not an in-place rewind: the accumulator is append-only and the test pins that rewinding the index alone does not let it extend. A pruned range still needs an SHV peer to re-prove, which BCHD does not serve |
-| 14 | CashFusion uses the shared chain observation layer | **PROVEN** (component) | A round checks its own and its peers' inputs through `optn_fusion::lookup::InputLookups`, implemented once by `optn_fusion_native::lookups::ChainInputLookups` over `optn-chain-electrum` (`ElectrumBackend::script_unspent_values`), on connections of the round's own and only through the verified Tor proxy for remote servers. The desktop and the CLI both use it; `electrum_input.rs` is deleted. A live round on the native host is still to run (needs Tor and a server) | Rounds are driven natively for the CLI and the docker runner (`optn-fusion-native::server_round`). The desktop still drives its rounds from `Fusion*.ts` for wallets whose keys live in the TypeScript key database, and P2P rounds (Nostr) have no Rust driver yet |
+| 14 | CashFusion uses the shared chain observation layer | **PROVEN** (component) | A round checks its own and its peers' inputs through `optn_fusion::lookup::InputLookups`, implemented once by `optn_fusion_native::lookups::ChainInputLookups` over `optn-chain-electrum` (`ElectrumBackend::script_unspent_values`), on connections of the round's own and only through the verified Tor proxy for remote servers. The desktop and the CLI both use it; `electrum_input.rs` is deleted. Live on chipnet: six server rounds on the native host from the CLI and the docker runner, one with the desktop as a third player ("a live mixed fleet fuses") | Rounds are driven natively for the CLI and the docker runner (`optn-fusion-native::server_round`). The desktop still drives its rounds from `Fusion*.ts` for wallets whose keys live in the TypeScript key database, and P2P rounds (Nostr) have no Rust driver yet |
 | 15 | Explorer routing independent of consensus | **PROVEN** | `optn-core/src/explorer.rs` owns the presets, the templates and the refusal; `optn-runtime/src/explorer.rs::route_for_overlay` turns a saved `UserNetworkOverlay` into a link or a refusal; the renderer calls through via `explorerPresetUrl`/`explorerCustomUrl` and `src/utils/servers/useExplorerLink.ts`. `a_saved_own_infrastructure_policy_refuses_a_public_explorer`, `the_same_policy_opens_the_holders_own_explorer`, `own_infrastructure_refuses_every_public_preset`, and the renderer-side `explorers.test.ts`; `cargo run -p xtask -- architecture` fails any surface that names a public explorer host | Explorer links were the one path around the policy: the renderer held its own preset table and built URLs itself, so a wallet set to own-infrastructure-only still handed txids to a public site. The decision now has one home, and the refusal is rendered with its reason rather than as a missing button |
 | 16 | No renderer/shell owns networking or chain truth | **PARTIAL** | `cargo run -p xtask -- architecture` proves declared dependency boundaries | Legacy desktop Home/subscriptions still call TypeScript `ElectrumService` through `UTXOService`. Dependency checks do not prove every packaged interface uses the shared Rust runtime. |
 
@@ -2044,7 +2044,7 @@ Known limits, stated rather than hidden:
   whose keys live in the TypeScript key database; the runtime refuses those
   wallets' coins until they are runtime-managed;
 - not yet run live: that needs Tor and a local Electron Cash server for the
-  fleet.
+  fleet. (Run live since: "a live mixed fleet fuses", below.)
 
 Each CLI process holds its wallet directory's session, so a CLI fleet uses
 one `--wallet-directory` per member. The skill manifest lists `fusion` as a
@@ -2075,7 +2075,8 @@ declare a trusted port.
   settings instead of "future CLI".
 
 Not yet run live in a container: that needs a CashFusion server and Tor,
-the same as the fleet run.
+the same as the fleet run. (Run live since: "a live mixed fleet fuses",
+below.)
 
 ### 2026-10-09: a newer build's checkpoint is refused by name
 
@@ -2119,3 +2120,75 @@ showed up live: the desktop's wallets fund other wallets from the desktop.
 Live: a dry run from a desktop-migrated chipnet wallet (3,000-address scan)
 planned one input, a 226-sat fee and change to a fresh address; the real
 send was refused by that guard, as designed.
+
+### 2026-10-09: a live mixed fleet fuses: CLI, docker and desktop
+
+Server CashFusion on chipnet across all three surfaces at once, on the
+native host, `optn fusion` and the docker runner above. The test-only
+pieces stay outside the repository:
+
+- an Electron Cash fusion server on `127.0.0.1:8787` with
+  `FUSION_MIN_CLIENTS=2` (the harness pins covert ports to 8790-8799 so a
+  container can reach them) and Tor on 9050;
+- two CLI wallets, each in its own `--wallet-directory`, running
+  `optn fusion --server 127.0.0.1:8787 --auto --rounds 2 --yes`;
+- the docker `fusion-lab` profile running `fusion-lab-headless.sh`
+  unchanged; a test-only compose override adds loopback forwarders to the
+  host's server through `host.docker.internal`;
+- the desktop debug build, with Server Fusion and Auto on for one wallet.
+
+Funding: 60,000 sats to two addresses of each new wallet from the shared
+chipnet test wallet (txids in its handoff log), then 300,000 sats from the
+desktop wallet to CLI w1 (`cbee36e0bdd45be90584a481c1b16f82509977077df1955863ec7a32c9b0b375`)
+and to the docker wallet (`c92d5302d55318f4b19e799bacd6834fd2b1ac71b0e21e89bd9a983837c7bf02`).
+The send meant for CLI w2 never happened, so w2 kept 2 x 60,000.
+
+Six rounds, each broadcast and then seen by the selected servers:
+
+| Round | Tier | Players | Who |
+| --- | --- | --- | --- |
+| `6ddebc1638b000fd746e670f2becd3089e06c6542b885a63dffd6dda58866e25` | 10,000 | 2 | CLI w1, docker |
+| `8e16870ba4485218b8fc3378ddba37977b9ab06e2c518afcf23e5327f6a35e0c` | 22,000 | 3 | CLI w1, docker, desktop |
+| `b2cdcf955cbcea550a2507f5e0e9dc8f4e30fdaed44dd8e976d4b62de36c2b34` | 18,000 | 2 | docker, desktop |
+| `a992a0963e39dab66d7ba285e3121b1fc8a1aae05e3dff69a7fccaf6a80ba73c` | 12,000 | 2 | docker, desktop |
+| `87f43d10a4bb0833e1fbe146f274d18530bfec0cdc2040563aca8bfc811f0b25` | 12,000 | 2 | docker, desktop |
+| `6945d0ad3fbe82c9045865fac2224dea077de44bc55ebba90cad91f9f1334b48` | 18,000 | 2 | docker, desktop |
+
+Player counts are the server's ("Starting fusion with N players"). Who
+took part comes from each member's own record: CLI w1's result lists the
+first two rounds, the docker runner's log all six, the desktop's fusion
+record the last five. Depth reached 2 on every surface (CLI w1's second
+round spent only the first round's outputs), each step recorded only after
+the selected servers held the round.
+
+What the run found:
+
+- **CLI w2 could not fuse, correctly.** Electron Cash wants 11 components
+  counted by distinct keys, so two coins at two addresses need nine
+  outputs, each at least 10,000 sats plus its fee and a random spread:
+  roughly 180,000 sats at the smallest tier. With 120,000 every attempt
+  ended in "Selected inputs cannot afford any fusion tier". `--auto`
+  retried every 10 s with a new random bucket choice (47 attempts). Open:
+  wait for the wallet to change when no choice of its eligible coins can
+  fund a tier, as Auto already waits once every coin is deep enough.
+- **Simple Send pays all change to one address.** Both desktop sends above
+  paid change to `bchtest:qpxc7u3y3d9fkhneddjy39flv34ywv5qtcfq5j2wu5`. The
+  retained UI sends BCH change to the wallet's first address
+  (`TransactionService.fetchWalletAddresses` returns `addresses[0]`;
+  `preferInternalChangeForBch` is `false`), and here both spent coins were
+  fusion outputs, so the shared change address links what the fusion had
+  separated. The runtime's spend path (`optn send --wallet`) reserves a new
+  change address for every spend. Open: Simple Send's change through the
+  runtime's reservation; it is refused for wallets whose keys are still in
+  the TypeScript key database, which these were.
+- **Desktop engine sessions.** The desktop broadcasts only when the shared
+  engine holds the window's wallet. Unlocking a wallet in a secondary window
+  never opened it in the engine, silently, so that window could not send.
+  The first refresh after launch failed with "Wallet refresh unavailable;
+  retained history remains stale."; a manual retry worked for one wallet,
+  while another (receive branch at index 1,368) never became fresh. One
+  refresh reported "headers did not advance: ReorgBeyondWindow { floor:
+  325540 }" with the tip at 327,163, far below any ten-block reorg. After
+  the engine was reopened by hand, a send reviewed before it was refused
+  with "Wallet changed or needs a refresh", which is the unlock-epoch check
+  doing its job. Open: the first three.
