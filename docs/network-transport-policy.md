@@ -69,6 +69,46 @@ cannot use a proxy, and RPC credentials are kept for loopback endpoints only.
 The renderer's old `torEnabled` flag now mirrors this switch. Rust checks the
 rule again on every call.
 
+### Everything the app does for the renderer
+
+The webview never reaches the network itself. Its CSP allows only the app's
+own origin, IPC and loopback, so a direct request is blocked rather than
+merely avoided. The Vite dev server sends the same policy, so this holds in
+development too. Everything goes through Rust (`src-tauri/src/egress.rs`),
+which applies the switch through one rule (`decide`):
+
+- **Which switch.** A request answers to the shared runtime's network and to
+  the network of the window that made it. If either network's switch is on,
+  it goes through Tor. A host counts as the holder's own node only if it is
+  declared own on both.
+- **HTTP** (`fetch`) goes through `optn_http_fetch`. It is limited to the hosts
+  the old CSP allowed, so routing through Rust adds privacy, never new
+  destinations. Each redirect is re-checked, identity headers are stripped,
+  and sizes are bounded.
+- **WebSockets** go through `optn_ws_open`. `socket-bridge.ts` replaces
+  `WebSocket` before any library loads, so WalletConnect, CashConnect,
+  WizardConnect and Nostr all use it. A socket closes with the page that
+  opened it, and every one closes when the switch changes, so none outlives
+  the rule it was opened under. P2P Fusion's relay pools are given their own
+  Tor-only socket and never use this one.
+- **Images** named by dApps, add-ons, indexers and token registries come
+  through `optn_remote_image` as bounded `data:` URLs (`RemoteImg`,
+  `RemoteBackground`). Only `https` names, never an IP literal or `localhost`.
+- **The legacy TypeScript Electrum client's native socket**
+  (`electrum_tcp_connect`) follows the switch. So do the price fetch and the
+  update check.
+- **With Tor off**, a public name must resolve to public addresses, and the
+  connection goes to the address that was checked, so DNS cannot point a
+  request at the holder's own network. The holder's declared nodes and
+  loopback are exempt.
+- **Links** open in the system browser, which is outside every route this
+  app controls. With Tor on, Rust refuses until the holder confirms, because
+  the site would see their IP and, for an explorer, which transaction or
+  address is theirs.
+
+With Tor on and no verified Tor, every one of these is refused. None goes
+direct.
+
 ## 2. CashFusion requires Tor; it never overrides the switch
 
 CashFusion is private only over Tor. Every remote leg needs Tor with

@@ -13,6 +13,7 @@ mod chain_sources;
 #[cfg(desktop)]
 pub mod clipboard;
 mod coin_holds;
+mod egress;
 pub mod electrum_tcp;
 pub mod fusion;
 #[cfg(desktop)]
@@ -1125,38 +1126,6 @@ fn tor_status() -> fusion::tor_manager::TorStatus {
     fusion::tor_manager::status()
 }
 
-// Desktop-only price fetch.
-//
-// The OPTN price server rejects (HTTP 500) any browser `Origin` header, and
-// @tauri-apps/plugin-http force-sets Origin to the webview origin
-// (`tauri.localhost`) in production, which cannot be overridden from JS. The
-// mobile app avoids this by using Capacitor's native HTTP (no browser Origin).
-// This command is the desktop equivalent: a server-side reqwest call (no Origin),
-// hardcoded to the single trusted price host so it can never be used for SSRF.
-#[tauri::command]
-async fn optn_price_fetch(url: String) -> Result<String, String> {
-    if !url.starts_with("https://price.optnlabs.com/") {
-        return Err("host not allowed".into());
-    }
-    // A server that accepts the TCP/TLS connection and then never answers
-    // (observed in practice against this exact host) would otherwise hang
-    // this request indefinitely — reqwest has no default timeout. The JS
-    // side (http-bridge.ts) also races this call against its own timeout,
-    // but bounding it here too means a slow/dead server doesn't leave the
-    // Rust-side request running forever regardless of what the JS caller does.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
-    let status = resp.status().as_u16();
-    let body = resp.text().await.map_err(|e| e.to_string())?;
-    if status != 200 {
-        return Err(format!("HTTP {status}"));
-    }
-    Ok(body)
-}
-
 // Read/write a wallet file at a path the user explicitly picked via the OS
 // dialog. Done in Rust (unrestricted fs) so opening/exporting a .optn file from
 // anywhere on disk doesn't require a broad JS fs-capability scope. Constrained
@@ -1195,19 +1164,56 @@ fn ensure_optn_cold_path(path: &str) -> Result<(), String> {
 // Open an external URL in the user's default browser. A Tauri webview silently
 // blocks `target="_blank"` links, so faucet/explorer/etc. links never open; the
 // frontend intercepts those clicks and routes them here. Restricted to http(s).
+/// Returned when a link would leave a Tor-routed wallet for the system browser
+/// and the holder has not confirmed it yet.
+const EXTERNAL_NEEDS_CONFIRMATION: &str = "external-link-outside-tor";
+
+/// Open an http(s) link in the system browser.
+///
+/// The browser is outside every route this app controls: the site sees the
+/// holder's IP, and an explorer link names their transaction or address. With
+/// the Tor switch on that is refused until the holder confirms it
+/// (`confirmed`), so it never happens as a side effect of a click.
 #[tauri::command]
-fn open_external(url: String) -> Result<(), String> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
+async fn open_external(
+    url: String,
+    confirmed: Option<bool>,
+    network: Option<String>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
+) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "invalid URL".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
         return Err("only http(s) URLs may be opened externally".into());
     }
+    if confirmed != Some(true) {
+        let host = parsed.host_str().unwrap_or_default();
+        let networks = egress::networks_for(runtime.state().network, network.as_deref());
+        let direct = matches!(
+            egress::decide(host, &network_settings, &networks).await,
+            Ok(egress::EgressDecision {
+                route: egress::EgressRoute::Direct,
+                ..
+            })
+        );
+        if !direct {
+            return Err(EXTERNAL_NEEDS_CONFIRMATION.into());
+        }
+    }
+    // The URL is one argument to a program, never a command line: `cmd /C
+    // start` would read `&` in a query string as a second command.
     #[cfg(target_os = "windows")]
-    let spawn = std::process::Command::new("cmd")
-        .args(["/C", "start", "", &url])
+    let spawn = std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", parsed.as_str()])
         .spawn();
     #[cfg(target_os = "macos")]
-    let spawn = std::process::Command::new("open").arg(&url).spawn();
+    let spawn = std::process::Command::new("open")
+        .arg(parsed.as_str())
+        .spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
-    let spawn = std::process::Command::new("xdg-open").arg(&url).spawn();
+    let spawn = std::process::Command::new("xdg-open")
+        .arg(parsed.as_str())
+        .spawn();
     spawn
         .map(|_| ())
         .map_err(|e| format!("could not open browser: {e}"))
@@ -1345,7 +1351,27 @@ pub fn run() {
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
 
+    // Sockets the renderer opened through Rust belong to its page: they close
+    // when the page reloads or its window goes, as a browser socket would.
     builder
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                let owner = webview.label().to_owned();
+                tauri::async_runtime::spawn(async move {
+                    nostr_tor::close_owned_by(&owner).await;
+                    electrum_tcp::close_owned_by(&owner).await;
+                });
+            }
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let owner = window.label().to_owned();
+                tauri::async_runtime::spawn(async move {
+                    nostr_tor::close_owned_by(&owner).await;
+                    electrum_tcp::close_owned_by(&owner).await;
+                });
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             app_transport::optn_app_dispatch,
             chain_sources::optn_chain_sources,
@@ -1386,7 +1412,8 @@ pub fn run() {
             platform_mobile::clipboard_write_text,
             #[cfg(mobile)]
             platform_mobile::clipboard_read_text,
-            optn_price_fetch,
+            egress::optn_http_fetch,
+            egress::optn_remote_image,
             open_external,
             read_wallet_file,
             write_wallet_file,
@@ -1418,6 +1445,7 @@ pub fn run() {
             electrum_tcp::electrum_tcp_send,
             electrum_tcp::electrum_tcp_close,
             nostr_tor::nostr_tor_open,
+            nostr_tor::optn_ws_open,
             nostr_tor::nostr_tor_send,
             nostr_tor::nostr_tor_close,
             nostr_tor::nostr_relay_health,

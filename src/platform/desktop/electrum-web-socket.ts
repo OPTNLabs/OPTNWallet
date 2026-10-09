@@ -18,6 +18,7 @@
 import { EventEmitter } from 'eventemitter3';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { rendererNetwork } from './rendererNetwork';
 
 // Standard BCH Electrum ports. parseServerEntry in ElectrumServer.ts turns a
 // bare host into the WSS port (50004); map those to the TCP equivalents since
@@ -58,6 +59,7 @@ export class ElectrumWebSocket extends EventEmitter {
           host: this.host,
           port: this.port,
           useSsl: this.encrypted,
+          network: rendererNetwork(),
         });
         this.connId = id;
 

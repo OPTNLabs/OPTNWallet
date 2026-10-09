@@ -1051,7 +1051,7 @@ lands evidence for them.
 | Burned identities lose their publication | An `OP_RETURN` identity output maps to *Unpublished*. That includes the common case where genesis output 0 *is* the BCMR publication | Read the publication from the burned authhead, whose outputs carry the claim, and mark it final |
 | `authchain` registry extension unused | Registry extensions are parsed and never consulted | Use it as an untrusted candidate chain, checked like a restart hint |
 | Desktop token icons are always placeholders | `projectEngineTokenMetadata` sets `iconUri: null`. There is no policy-aware image port | Fetch image bytes in Rust under the wallet's transport policy, bounded by size and type |
-| Renderer requests bypass the Tor/proxy policy | `http-bridge.ts` routes only the price host natively. Every other webview request goes direct | Policy gate for renderer HTTP and image loads on desktop |
+| Renderer requests bypass the Tor/proxy policy | `http-bridge.ts` routes only the price host natively. Every other webview request goes direct | Policy gate for renderer HTTP and image loads on desktop. **Closed 2026-10-09** (the webview cannot reach the network, below) |
 | §21.3 feeds partly ingested | P2P DNS-seed and Fulcrum peer-discovery feeds are declared but not ingested. Peers returned by `server.peers.subscribe` are dropped | Ingest them with provenance, unverified until probed. **Fulcrum peers closed 2026-10-09** (below); P2P DNS seeds are still not ingested |
 | Versioned network-configuration migrations | The schema is fixed at 1 and any other version is refused | Migration step with atomic write and rollback tests. **Closed 2026-10-09** (schema 2, below) |
 | Fusion input checks bypass the chain layer | `optn-fusion/src/electrum_input.rs` speaks Electrum JSON-RPC directly | Route through `chain_service`. Needs a live round to verify |
@@ -1218,5 +1218,70 @@ the CLI share the cache.
 
 Still open from the 2026-10-08 table: renderer HTTP and image loads, which
 still go direct from the webview, and Fusion input checks through
-`chain_service`.
+`chain_service`. The first is closed in the next entry.
+
+### 2026-10-09: the webview cannot reach the network
+
+Everything above governed Rust. The webview still made its own requests, so
+none of it applied there:
+
+- `fetch` went direct to every host the CSP listed, and only the price host
+  went through Rust. The Cauldron activity scan sends up to 300 of the
+  wallet's PKHs to `indexer.riften.net` on every wallet open.
+- Every relay socket went direct, because the CSP allowed any `wss:`/`ws:`:
+  WalletConnect, CashConnect, WizardConnect (whose pairing URI names the
+  relay, plaintext included) and Nostr chat.
+- The P2P Fusion relays went direct as well. `FusionP2pService` set the
+  Tor socket through `nostr-tools/pool`, but its `SimplePool` comes from
+  `nostr-tools`, a separate module with its own default, so the Tor socket was
+  never used. A relay could link a peer's inputs to its outputs.
+- Images from any `https:` host loaded straight from the webview.
+- The legacy Electrum client's native TCP socket, the price fetch and the
+  update check all ignored the switch.
+- Links opened in the system browser with no warning, through `cmd /C start`,
+  where a `&` in a query string is a second command.
+
+Now the CSP allows only the app, IPC and loopback, in release and in the Vite
+dev server. Remote `fetch`, sockets, images and the Electrum socket all go
+through Rust (`src-tauri/src/egress.rs`), and one rule decides each route. The
+rules are in `docs/network-transport-policy.md`:
+
+- the stricter of the runtime's and the window's network;
+- own nodes direct only when declared own on both;
+- with Tor off, public names resolve to public addresses only, and the
+  connection goes to the address that was checked;
+- sockets close with their page and on every change of the switch;
+- a link outside Tor asks first.
+
+HTTP is still limited to the hosts the old CSP allowed. Images take `https`
+names only.
+
+Fusion's relay pools are now given the Tor-only socket directly, and a test
+checks every pool, the per-output ones included.
+
+A review of the first version found 31 issues, all fixed here. Among them:
+
+- WalletConnect never connected: its relay URL has a query and no path, and
+  a hand-written parser read the query as part of the host. URLs are now
+  parsed by `reqwest::Url`.
+- Two windows on different networks followed the wrong switch.
+- A socket outlived its page, and ignored a later switch change.
+- Frames that arrived before the page listened were lost.
+- Failed images were cached for the session.
+
+Checking the release bundle found that the bridges themselves loaded too
+late. The desktop prelude was imported first in `main.tsx`, but the bundler
+runs every chunk an entry imports before the entry's own code. The chunk
+holding nostr-tools and the redux store ran first.
+
+- nostr-tools had already captured the webview's `WebSocket`. Under the new
+  CSP its relays would have failed closed.
+- The store had already opened the shared `optn-wallet` database before
+  `storagePartition` could rename it. Every release window shared one persist
+  database: the bug the partition exists to prevent. This one predates this
+  work, and development builds never showed it.
+
+The prelude is now a chunk of its own, imported before any other.
+`scripts/__tests__/desktopPrelude.test.mts` checks the chunking, the import
+order and the dev-server CSP.
 

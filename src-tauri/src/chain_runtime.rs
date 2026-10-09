@@ -551,6 +551,19 @@ impl NativeChainRuntime {
         self.generation.load(Ordering::SeqCst)
     }
 
+    /// Whether the holder's Tor switch is on for the current network. An
+    /// unreadable policy reads as on: it must never be what allows a direct
+    /// connection.
+    pub async fn tor_switch_on(&self) -> bool {
+        let network = self.owner.state().network;
+        let settings = self.network_settings.clone();
+        tokio::task::spawn_blocking(move || settings.transport(network))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .map_or(true, |transport| transport.tor_for(false))
+    }
+
     /// The proxy situation for an outbound request that is not chain traffic.
     ///
     /// An update check is a connection to a third party like any other, so it

@@ -32,7 +32,7 @@ tauri-plugin-log = "=2.9.1"
 tauri-plugin-notification = "=2.4.0"
 tauri-plugin-fs = "=2.5.2"
 tauri-plugin-dialog = "=2.7.3"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json", "socks"] }
 tauri-plugin-biometry = "=0.2.8"
 # Clipboard. The WebView clipboard is not dependable: WKWebView resolves
 # navigator.clipboard.writeText() and silently drops the write, and readText()

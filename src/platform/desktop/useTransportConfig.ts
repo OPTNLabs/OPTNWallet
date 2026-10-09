@@ -26,6 +26,7 @@ import {
 import { readTransportConfig, writeTransportConfig } from './transportConfig';
 import { ensureTorAvailable } from './FusionTorResolver';
 import { readChainTransport } from './chainSourcesBridge';
+import { setRendererNetwork } from './rendererNetwork';
 import type { RootState } from '../../state/store';
 
 export function useTransportConfig(): void {
@@ -40,6 +41,10 @@ export function useTransportConfig(): void {
   const network = useSelector(
     (state: RootState) => state.network.currentNetwork
   );
+  // Set while rendering, not in an effect: child effects run first, and the
+  // requests they make must already answer to this window's network. A
+  // network Rust adds to the runtime's can only make a route stricter.
+  setRendererNetwork(network);
 
   /** Until the stored config has been applied, writes would persist defaults. */
   const loaded = useRef(false);

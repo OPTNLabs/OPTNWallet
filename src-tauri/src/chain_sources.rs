@@ -298,6 +298,7 @@ pub async fn optn_chain_transport(
 /// old routes are revoked first and rebuilt from the saved policy.
 #[tauri::command]
 pub async fn optn_chain_set_transport(
+    app: tauri::AppHandle,
     native: tauri::State<'_, Arc<NativeChainRuntime>>,
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
     network_settings: tauri::State<'_, NetworkSettingsStore>,
@@ -310,7 +311,12 @@ pub async fn optn_chain_set_transport(
         overlay.connection_policy.transport = transport;
         Ok(())
     })
-    .await
+    .await?;
+    // Sockets opened under the old rule must not outlive it. Their pages see
+    // them close and reconnect, through the new route.
+    crate::nostr_tor::close_renderer_sockets(&app).await;
+    crate::electrum_tcp::close_all(&app).await;
+    Ok(())
 }
 
 #[tauri::command]

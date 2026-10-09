@@ -28,36 +28,102 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::fusion::{connect_stream, Transport};
 
-/// Per-connection outbound channel; dropping it ends the writer task.
-static CONNECTIONS: Lazy<Mutex<HashMap<u32, mpsc::UnboundedSender<Message>>>> =
+/// Whether a socket is one of P2P CashFusion's Tor-only relay legs, or a
+/// renderer socket following the Tor switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SocketKind {
+    Fusion,
+    Renderer,
+}
+
+/// One open socket: its outbound channel, the page that opened it, its kind,
+/// and its reader task, which closing aborts.
+struct Connection {
+    tx: mpsc::UnboundedSender<Message>,
+    owner: String,
+    kind: SocketKind,
+    task: tokio::task::AbortHandle,
+    closed_event: String,
+}
+
+static CONNECTIONS: Lazy<Mutex<HashMap<u32, Connection>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// A renderer socket that has not connected and upgraded by now never will.
+const WS_OPEN_DEADLINE: Duration = Duration::from_secs(40);
 static NEXT_ID: Lazy<std::sync::atomic::AtomicU32> =
     Lazy::new(|| std::sync::atomic::AtomicU32::new(1));
 
-fn msg_event(id: u32) -> String {
-    format!("nostr-tor://msg/{id}")
+fn msg_event(key: &str) -> String {
+    format!("nostr-tor://msg/{key}")
 }
-fn open_event(id: u32) -> String {
-    format!("nostr-tor://open/{id}")
+fn open_event(key: &str) -> String {
+    format!("nostr-tor://open/{key}")
 }
-fn closed_event(id: u32) -> String {
-    format!("nostr-tor://closed/{id}")
+fn closed_event(key: &str) -> String {
+    format!("nostr-tor://closed/{key}")
 }
 
-/// Parse a secure WebSocket relay URL → (host, port). Only secure WebSockets
-/// are accepted, so a relay is never contacted over plaintext transport.
-fn parse_wss(url: &str) -> Result<(String, u16), String> {
-    let rest = url
-        .strip_prefix("wss://")
-        .ok_or_else(|| format!("only wss:// relays supported: {url}"))?;
-    let authority = rest.split('/').next().unwrap_or(rest);
-    match authority.rsplit_once(':') {
-        Some((h, p)) => {
-            let port = p.parse::<u16>().map_err(|_| format!("bad port in {url}"))?;
-            Ok((h.to_string(), port))
+/// Event keys a page chose before opening, so it is listening before the
+/// first frame can arrive. Bounded and plain so they make a safe event name.
+fn event_key(chosen: Option<String>, id: u32) -> Result<String, String> {
+    match chosen {
+        None => Ok(id.to_string()),
+        Some(key)
+            if (8..=64).contains(&key.len())
+                && key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-') =>
+        {
+            Ok(key)
         }
-        None => Ok((authority.to_string(), 443)),
+        Some(_) => Err("invalid socket event key".into()),
     }
+}
+
+/// A relay URL, parsed properly: `(host, port, tls, normalized URL)`.
+///
+/// `wss://` reaches any host; plain `ws://` only loopback. The host comes
+/// without brackets and without anything after it, so a URL whose query
+/// follows the host directly (`wss://relay.example?auth=...`, which is how
+/// WalletConnect builds its relay URL) still names the right host. The
+/// normalized URL, with its `/` before the query, is what the handshake uses.
+fn parse_ws(url: &str) -> Result<(String, u16, bool, String), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| format!("invalid relay URL: {url}"))?;
+    let tls = match parsed.scheme() {
+        "wss" => true,
+        "ws" => false,
+        _ => return Err(format!("only ws:// and wss:// URLs are supported: {url}")),
+    };
+    if !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some() {
+        return Err(format!(
+            "relay URLs carry no credentials or fragment: {url}"
+        ));
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| format!("relay URL has no host: {url}"))?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_owned();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| format!("relay URL has no port: {url}"))?;
+    if !tls && !optn_core::endpoint::is_loopback_host(&host) {
+        return Err(format!(
+            "plaintext ws:// is allowed only on this machine: {url}"
+        ));
+    }
+    Ok((host, port, tls, parsed.to_string()))
+}
+
+/// The Fusion relay legs accept only `wss://`.
+fn parse_wss(url: &str) -> Result<(String, u16, String), String> {
+    let (host, port, tls, normalized) = parse_ws(url)?;
+    if !tls {
+        return Err(format!("only wss:// relays supported: {url}"));
+    }
+    Ok((host, port, normalized))
 }
 
 /// Open a Tor-routed wss:// connection to a Nostr relay. Returns a connection id
@@ -66,6 +132,7 @@ fn parse_wss(url: &str) -> Result<(String, u16), String> {
 #[tauri::command]
 pub async fn nostr_tor_open(
     app: AppHandle,
+    webview: tauri::Webview,
     url: String,
     socks_host: String,
     socks_port: u16,
@@ -76,7 +143,7 @@ pub async fn nostr_tor_open(
     // resolved from provenance like every other Fusion leg, and only while the
     // holder's transport allows Fusion at all.
     let _ = (socks_host, socks_port);
-    let (host, port) = parse_wss(&url)?;
+    let (host, port, url) = parse_wss(&url)?;
     let socks_port = crate::verified_fusion_proxy_for_network(
         &[host.as_str()],
         &network_settings,
@@ -94,10 +161,73 @@ pub async fn nostr_tor_open(
     let (ws, _resp) = tokio_tungstenite::client_async(url.as_str(), stream)
         .await
         .map_err(|e| format!("ws handshake with {host} failed: {e}"))?;
+    serve_socket(
+        app,
+        ws,
+        webview.label().to_owned(),
+        SocketKind::Fusion,
+        None,
+    )
+    .await
+}
 
+/// Open a WebSocket for the renderer under the holder's Tor switch: chat,
+/// WalletConnect, CashConnect and WizardConnect relays. Same events and the
+/// same `nostr_tor_send` / `nostr_tor_close` as the Fusion relay socket, whose
+/// own command stays Tor-only.
+///
+/// `wss://` reaches any host; plain `ws://` only loopback. A relay named by a
+/// dApp or a peer must not aim a direct connection at the holder's network.
+///
+/// `network` is the requesting window's (see `egress::networks_for`), and
+/// `events` the key the page is already listening on.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn optn_ws_open(
+    app: AppHandle,
+    webview: tauri::Webview,
+    url: String,
+    network: Option<String>,
+    events: Option<String>,
+    runtime: tauri::State<'_, AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
+) -> Result<u32, String> {
+    let (host, port, tls, url) = parse_ws(&url)?;
+    let networks = crate::egress::networks_for(runtime.state().network, network.as_deref());
+    let ws = tokio::time::timeout(WS_OPEN_DEADLINE, async {
+        let decision = crate::egress::decide(&host, &network_settings, &networks).await?;
+        // A relay the holder declared as their own may be on their network;
+        // any other is reached only at a public address.
+        let stream =
+            crate::egress::open_stream(&host, port, tls, decision.route, !decision.own).await?;
+        tokio_tungstenite::client_async(url.as_str(), stream)
+            .await
+            .map(|(ws, _)| ws)
+            .map_err(|e| format!("ws handshake with {host} failed: {e}"))
+    })
+    .await
+    .map_err(|_| format!("connection to {host} timed out"))??;
+    serve_socket(
+        app,
+        ws,
+        webview.label().to_owned(),
+        SocketKind::Renderer,
+        events,
+    )
+    .await
+}
+
+/// Pipe an upgraded socket's text frames to the page that opened it.
+async fn serve_socket(
+    app: AppHandle,
+    ws: tokio_tungstenite::WebSocketStream<crate::fusion::FusionStream>,
+    owner: String,
+    kind: SocketKind,
+    events: Option<String>,
+) -> Result<u32, String> {
     let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let key = event_key(events, id)?;
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-    CONNECTIONS.lock().await.insert(id, tx);
 
     let (mut write, mut read) = ws.split();
 
@@ -111,13 +241,16 @@ pub async fn nostr_tor_open(
         let _ = write.close().await;
     });
 
-    // Reader: emit inbound text frames as events until close/error.
+    // Reader: emit inbound text frames as events until close/error. Registered
+    // under the lock, so it cannot remove its entry before it exists.
     let app_reader = app.clone();
-    tokio::spawn(async move {
+    let reader_key = key.clone();
+    let mut connections = CONNECTIONS.lock().await;
+    let task = tokio::spawn(async move {
         while let Some(next) = read.next().await {
             match next {
                 Ok(Message::Text(text)) => {
-                    if app_reader.emit(&msg_event(id), text).is_err() {
+                    if app_reader.emit(&msg_event(&reader_key), text).is_err() {
                         break;
                     }
                 }
@@ -126,19 +259,70 @@ pub async fn nostr_tor_open(
             }
         }
         CONNECTIONS.lock().await.remove(&id);
-        let _ = app_reader.emit(&closed_event(id), ());
+        let _ = app_reader.emit(&closed_event(&reader_key), ());
     });
+    connections.insert(
+        id,
+        Connection {
+            tx,
+            owner,
+            kind,
+            task: task.abort_handle(),
+            closed_event: closed_event(&key),
+        },
+    );
+    drop(connections);
 
-    let _ = app.emit(&open_event(id), ());
+    let _ = app.emit(&open_event(&key), ());
     Ok(id)
+}
+
+/// Close every socket a page opened. Called when it reloads or its window
+/// closes: a browser socket would have died with the page, and so does this.
+pub(crate) async fn close_owned_by(owner: &str) {
+    CONNECTIONS.lock().await.retain(|_, connection| {
+        let keep = connection.owner != owner;
+        if !keep {
+            let _ = connection.tx.send(Message::Close(None));
+            connection.task.abort();
+        }
+        keep
+    });
+}
+
+/// Close every renderer socket and tell its page, which reconnects through
+/// the current route. Called when the Tor switch changes. Fusion's relay legs
+/// are Tor-only whatever the switch, and are left alone.
+pub(crate) async fn close_renderer_sockets(app: &AppHandle) {
+    let closed: Vec<String> = {
+        let mut connections = CONNECTIONS.lock().await;
+        let ids: Vec<u32> = connections
+            .iter()
+            .filter(|(_, connection)| connection.kind == SocketKind::Renderer)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| connections.remove(&id))
+            .map(|connection| {
+                let _ = connection.tx.send(Message::Close(None));
+                connection.task.abort();
+                connection.closed_event
+            })
+            .collect()
+    };
+    for event in closed {
+        let _ = app.emit(&event, ());
+    }
 }
 
 /// Send a text frame on an open connection.
 #[tauri::command]
 pub async fn nostr_tor_send(id: u32, data: String) -> Result<(), String> {
     let conns = CONNECTIONS.lock().await;
-    let tx = conns.get(&id).ok_or("relay connection not open")?;
-    tx.send(Message::Text(data))
+    let connection = conns.get(&id).ok_or("relay connection not open")?;
+    connection
+        .tx
+        .send(Message::Text(data))
         .map_err(|_| "relay connection closed".to_string())
 }
 
@@ -146,8 +330,10 @@ pub async fn nostr_tor_send(id: u32, data: String) -> Result<(), String> {
 /// emits the closed event. Removing eagerly makes a re-close a no-op.
 #[tauri::command]
 pub async fn nostr_tor_close(id: u32) -> Result<(), String> {
-    if let Some(tx) = CONNECTIONS.lock().await.remove(&id) {
-        let _ = tx.send(Message::Close(None));
+    if let Some(connection) = CONNECTIONS.lock().await.remove(&id) {
+        // The writer sends the close frame; the reader ends when the relay
+        // answers it, or now, if this page is already gone.
+        let _ = connection.tx.send(Message::Close(None));
     }
     Ok(())
 }
@@ -501,6 +687,50 @@ pub async fn nostr_relay_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WalletConnect builds `wss://relay.example?auth=...`, with the query
+    /// straight after the host; that is still the host and port 443.
+    #[test]
+    fn relay_urls_parse_into_host_port_and_a_normalized_url() {
+        let (host, port, tls, url) =
+            parse_ws("wss://relay.walletconnect.org?auth=eyJ.a.b&projectId=x&ua=wc-2%2Fjs")
+                .unwrap();
+        assert_eq!(
+            (host.as_str(), port, tls),
+            ("relay.walletconnect.org", 443, true)
+        );
+        assert!(url.starts_with("wss://relay.walletconnect.org/?auth="));
+        assert_eq!(
+            parse_ws("wss://nostr.infra.cash/").unwrap().0,
+            "nostr.infra.cash"
+        );
+        let (host, port, tls, _) = parse_ws("wss://[::1]:7447").unwrap();
+        assert_eq!((host.as_str(), port, tls), ("::1", 7447, true));
+        let (host, port, tls, _) = parse_ws("ws://127.0.0.1:8080?x=1").unwrap();
+        assert_eq!((host.as_str(), port, tls), ("127.0.0.1", 8080, false));
+        for refused in [
+            "ws://relay.example.org/",
+            "wss://user@relay.example.org/",
+            "wss://relay.example.org/#frag",
+            "https://relay.example.org/",
+            "not a url",
+        ] {
+            assert!(parse_ws(refused).is_err(), "{refused}");
+        }
+        assert!(parse_wss("ws://127.0.0.1:1").is_err());
+    }
+
+    #[test]
+    fn a_page_chosen_event_key_is_plain_and_bounded() {
+        assert_eq!(event_key(None, 7), Ok("7".to_owned()));
+        assert_eq!(
+            event_key(Some("ws-0123456789abcdef".into()), 7),
+            Ok("ws-0123456789abcdef".to_owned())
+        );
+        for bad in ["short", "has/slash-0123", "x".repeat(65).as_str()] {
+            assert!(event_key(Some(bad.to_owned()), 7).is_err(), "{bad}");
+        }
+    }
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     fn relays(urls: &[&str]) -> Vec<HealthRelay> {

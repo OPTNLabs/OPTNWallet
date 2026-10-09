@@ -10,6 +10,7 @@ import { enqueueNotification } from '../../state/slices/notificationsSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 import { useI18n } from '../../i18n/useI18n';
 import WalletPopupSheet from '../ui/WalletPopupSheet';
+import RemoteImg from '../RemoteImg';
 
 function SessionProposalModal() {
   const dispatch = useDispatch<AppDispatch>();
@@ -112,7 +113,7 @@ function SessionProposalModal() {
       </h2>
       {dappMetadata.icons[0] ? (
         <div className="flex justify-center mb-3">
-          <img
+          <RemoteImg
             src={dappMetadata.icons[0]}
             alt={t('wc.unknownDapp')}
             className="h-12 w-12 rounded-full object-cover"

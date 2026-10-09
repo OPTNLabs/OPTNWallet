@@ -306,8 +306,9 @@ fn registry_client(route: RegistryRoute, limits: FetchLimits) -> Result<Client, 
 /// a host that resolves into this machine's own network, and the wallet would
 /// make requests there on the publisher's behalf. `registry_url` already
 /// refuses IP literals and `localhost`, so every connection is named and comes
-/// through here, redirects included.
-struct PublicAddressesOnly;
+/// through here, redirects included. The desktop shell's direct fetches of
+/// dApp- and peer-named URLs use it for the same reason.
+pub struct PublicAddressesOnly;
 
 impl reqwest::dns::Resolve for PublicAddressesOnly {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
@@ -328,7 +329,7 @@ impl reqwest::dns::Resolve for PublicAddressesOnly {
 /// Whether an address is on the public internet, rather than loopback,
 /// private, link-local, shared, documentation, multicast or reserved space.
 /// IPv6 forms that carry an IPv4 address are judged by that address.
-fn is_public_address(address: IpAddr) -> bool {
+pub fn is_public_address(address: IpAddr) -> bool {
     let v6 = match address {
         IpAddr::V4(v4) => return is_public_v4(v4),
         IpAddr::V6(v6) => v6,
