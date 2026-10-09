@@ -1413,3 +1413,24 @@ observed and the coordinator reports it as submitted.
 `txn-mempool-conflict` shares code 18 but means another transaction spends
 the same coins, so it is a rejection. Only exact wording counts: the same
 words under another RPC code, or with anything added, are handled as before.
+
+### 2026-10-09: an Electrum wallet loads even when its headers do not
+
+#75 (item 75-61). The sync worker advanced the verified header view before
+every wallet refresh. For any route, a failed header batch skipped that route
+with "header prerequisite failed". So a header fault or a reorg on an
+Electrum server kept the wallet from loading at all, though an Electrum
+snapshot is server-asserted and never tied to the header view.
+
+Now only BIP37 and Neutrino, whose snapshots must match the verified tip,
+take headers first; a header failure still refuses those routes. Electrum
+and other server-asserted routes refresh and reconcile first, then advance
+the headers best-effort. A failure there leaves the accepted snapshot fresh
+and says why in its degraded reason ("headers did not advance: ...").
+Nothing reads the header view between the refresh and the reconcile: token
+identities use the snapshot's tip, and wallet sync captures the view only
+after the refresh returns.
+
+Tests record the order of requests: Electrum asks for the wallet first and
+loads with misnumbered headers; BIP37 asks for headers first and sends no
+wallet query when they fail.

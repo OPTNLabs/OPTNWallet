@@ -84,6 +84,13 @@ impl<T: Clone> ReconciliationState<T> {
         ReconciliationDecision::Accepted
     }
 
+    /// Say why something beside the snapshot is behind (headers that did not
+    /// advance) without touching the snapshot, its freshness or what it is
+    /// verified by.
+    pub fn note_degraded(&mut self, reason: impl Into<String>) {
+        self.sync.degraded_reason = Some(reason.into());
+    }
+
     /// Record a provider/runtime failure without mutating the last valid wallet
     /// snapshot. This is the explicit "timeout != empty wallet" invariant.
     pub fn record_failure(&mut self, reason: impl Into<String>) -> ReconciliationDecision {

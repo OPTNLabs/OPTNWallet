@@ -596,7 +596,16 @@ impl ProgressiveSyncWorker {
         }
 
         for route in routes {
-            if self.header_view.is_some() {
+            // BIP37 and Neutrino snapshots must match the verified header tip,
+            // so their headers come first. An Electrum (or other server-
+            // asserted) snapshot is never tied to the header view: its headers
+            // follow, best-effort, and a header fault or reorg cannot keep the
+            // wallet from loading.
+            let headers_first = matches!(
+                route.protocol,
+                ProtocolFamily::Bip37 | ProtocolFamily::Neutrino
+            );
+            if headers_first && self.header_view.is_some() {
                 if let Err(error) = self
                     .prime_headers_for_scope(service, &route, from_height)
                     .await
@@ -684,6 +693,17 @@ impl ProgressiveSyncWorker {
                         observation.chain_tip,
                         true,
                     );
+                    if !headers_first && self.header_view.is_some() {
+                        if let Err(error) = self
+                            .prime_headers_for_scope(service, &route, from_height)
+                            .await
+                        {
+                            if decision == ReconciliationDecision::Accepted {
+                                self.reconciliation
+                                    .note_degraded(format!("headers did not advance: {error:?}"));
+                            }
+                        }
+                    }
                     return Ok(SyncOutcome { route, decision });
                 }
                 Err(error) => {
@@ -1194,6 +1214,8 @@ pub(crate) mod tests {
         requests: Vec<ChainRequest>,
         spans: Vec<Option<(u32, u32)>>,
         reject_published_during_replay: bool,
+        /// Every header and wallet request, in the order they arrived.
+        sequence: Vec<&'static str>,
     }
 
     type HeaderProbeHandle = (Arc<SharedHeaders>, Arc<std::sync::Mutex<HeaderProbe>>);
@@ -1251,6 +1273,7 @@ pub(crate) mod tests {
                         }
                         probe.requests.push(request.clone());
                         probe.spans.push(span);
+                        probe.sequence.push("headers");
                     }
                 }
                 if let ChainRequest::HeaderSync {
@@ -1283,6 +1306,9 @@ pub(crate) mod tests {
                         .lock()
                         .expect("floor recorder")
                         .push(*from_height);
+                    if let Some((_, probe)) = &self.probe {
+                        probe.lock().expect("header probe").sequence.push("wallet");
+                    }
                 }
                 Ok(BackendObservation {
                     payload: ChainPayload::WalletRefresh {
@@ -1366,7 +1392,11 @@ pub(crate) mod tests {
     ) -> ChainService {
         let id = SourceId::new("probe-server");
         let endpoint = Endpoint {
-            kind: EndpointKind::BchP2p,
+            kind: if protocol == ProtocolFamily::Electrum {
+                EndpointKind::ElectrumTcp
+            } else {
+                EndpointKind::BchP2p
+            },
             host: "probe-server".into(),
             port: Some(50002),
         };
@@ -1656,6 +1686,100 @@ pub(crate) mod tests {
             );
             assert!(worker.reconciliation().authoritative.is_none());
         }
+    }
+
+    /// A worker verified to height 2 and a provider whose headers continue
+    /// to height 4: numbered correctly, or one off so every batch is refused.
+    fn header_order_fixture(
+        protocol: ProtocolFamily,
+        misnumbered: bool,
+    ) -> (
+        ProgressiveSyncWorker,
+        ChainService,
+        Arc<std::sync::Mutex<HeaderProbe>>,
+        VerifiedHeaderView,
+    ) {
+        let (view, _, _) = shipped_regtest_view_to(2);
+        let (_, headers, genesis) = shipped_regtest_view_to(4);
+        let store = Arc::new(SharedHeaders::default());
+        store.write(|retained| retained.insert_hash_only(0, genesis));
+        let probe = Arc::new(std::sync::Mutex::new(HeaderProbe::default()));
+        let service = service_with_headers_probe(
+            protocol,
+            headers,
+            u32::from(misnumbered),
+            Evidence::ServerAssertion,
+            Some((store, probe.clone())),
+        );
+        let worker = ProgressiveSyncWorker::new(ProgressiveSyncConfig::default())
+            .with_header_view(view.clone())
+            .unwrap();
+        (worker, service, probe, view)
+    }
+
+    /// An Electrum snapshot is server-asserted and never tied to the header
+    /// view, so a header fault (a reorg, a bad batch) must not keep the wallet
+    /// from loading. Its headers follow, and their failure is only noted.
+    #[tokio::test]
+    async fn electrum_wallet_data_does_not_wait_for_headers() {
+        let (mut worker, mut service, probe, view) =
+            header_order_fixture(ProtocolFamily::Electrum, true);
+        let outcome = worker.refresh(&mut service, vec![], None).await.unwrap();
+        assert_eq!(outcome.decision, ReconciliationDecision::Accepted);
+        let reconciliation = worker.reconciliation();
+        assert_eq!(
+            reconciliation.authoritative.as_ref().unwrap().evidence,
+            Evidence::ServerAssertion
+        );
+        assert!(reconciliation.sync.history_fresh && reconciliation.sync.utxos_fresh);
+        assert!(reconciliation
+            .sync
+            .degraded_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("headers did not advance")));
+        assert_eq!(worker.header_view().unwrap().tip(), view.tip());
+        assert_eq!(
+            probe.lock().unwrap().sequence.first(),
+            Some(&"wallet"),
+            "the wallet is asked before the headers"
+        );
+
+        // With good headers the view still advances, after the wallet.
+        let (mut worker, mut service, probe, view) =
+            header_order_fixture(ProtocolFamily::Electrum, false);
+        let outcome = worker.refresh(&mut service, vec![], None).await.unwrap();
+        assert_eq!(outcome.decision, ReconciliationDecision::Accepted);
+        assert!(worker.reconciliation().sync.degraded_reason.is_none());
+        assert!(worker.header_view().unwrap().tip().unwrap().0 > view.tip().unwrap().0);
+        let sequence = probe.lock().unwrap().sequence.clone();
+        assert_eq!(sequence.first(), Some(&"wallet"));
+        assert!(sequence.contains(&"headers"));
+    }
+
+    /// A BIP37 snapshot must match the verified tip, so its headers still
+    /// come first and their failure still refuses the route.
+    #[tokio::test]
+    async fn bip37_wallet_data_still_waits_for_verified_headers() {
+        let (mut worker, mut service, probe, view) =
+            header_order_fixture(ProtocolFamily::Bip37, true);
+        assert_eq!(
+            worker.refresh(&mut service, vec![], None).await,
+            Err(ProgressiveSyncError::Exhausted)
+        );
+        assert!(worker.reconciliation().authoritative.is_none());
+        assert!(worker
+            .reconciliation()
+            .sync
+            .degraded_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("header prerequisite failed")));
+        assert_eq!(worker.header_view().unwrap().tip(), view.tip());
+        let sequence = probe.lock().unwrap().sequence.clone();
+        assert_eq!(sequence.first(), Some(&"headers"));
+        assert!(
+            !sequence.contains(&"wallet"),
+            "no wallet query before verified headers"
+        );
     }
 
     #[tokio::test]
