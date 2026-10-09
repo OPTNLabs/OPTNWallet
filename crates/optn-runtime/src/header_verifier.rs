@@ -204,6 +204,24 @@ impl ShvMmrHeaderVerifier {
         serde_json::to_string(&record).map_err(|_| ShvMmrError::InvalidStoredCheckpoint)
     }
 
+    /// The height and commitment a stored checkpoint claims, unverified.
+    ///
+    /// Only for a record that is then authenticated some other way, such as
+    /// replaying it forward to an independently trusted tip. Never pass the
+    /// result to [`Self::from_checkpoint_json`] and stop there.
+    pub fn claimed_checkpoint(json: &str) -> Result<HeaderCheckpoint, ShvMmrError> {
+        if json.len() > MAX_CHECKPOINT_BYTES {
+            return Err(ShvMmrError::StoredCheckpointTooLarge);
+        }
+        let record: StoredCheckpoint =
+            serde_json::from_str(json).map_err(|_| ShvMmrError::InvalidStoredCheckpoint)?;
+        Ok(HeaderCheckpoint {
+            height: record.height,
+            commitment: record.commitment,
+            provenance: CheckpointProvenance::SelfDerived,
+        })
+    }
+
     /// Restore against an independently trusted, network-scoped commitment.
     /// Never obtain `trusted` from the same unauthenticated file or peer.
     /// Difficulty rules are deliberately absent from the record: the host

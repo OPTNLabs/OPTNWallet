@@ -45,7 +45,14 @@ const MAX_PERSISTED_VIEW_BYTES: usize = 1024 * 1024;
 /// Bumped when the record shape changes. A record from an older schema is
 /// refused rather than partially understood; the view rebuilds from its
 /// checkpoint instead.
-const PERSISTED_VIEW_SCHEMA: u32 = 2;
+const PERSISTED_VIEW_SCHEMA: u32 = 3;
+/// Schema 2 is schema 3 without the reorg ring, so it is read as one whose
+/// ring is empty: nothing in it is misunderstood.
+const OLDEST_READABLE_VIEW_SCHEMA: u32 = 2;
+
+/// Blocks a reorg is expected to reach back. BCHN finalizes a block once ten
+/// more are built on it, so a deeper reorg is not an ordinary event.
+pub const REORG_WINDOW: u32 = 10;
 
 /// Durable form of a [`VerifiedHeaderView`].
 ///
@@ -69,6 +76,27 @@ struct PersistedHeaderView {
     anchors: Vec<PersistedAnchor>,
     window: Vec<u32>,
     anchor_interval: u32,
+    /// Absent before schema 3.
+    #[serde(default)]
+    ring: Option<PersistedRing>,
+}
+
+/// The reorg ring as stored: its oldest state and the headers after it. The
+/// states in between are never stored; restore re-derives them by extending
+/// the oldest one, and keeps them only if that reproduces the trusted tip.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedRing {
+    base: String,
+    headers: Vec<Vec<u8>>,
+}
+
+/// The view as it stood after one block.
+#[derive(Debug, Clone)]
+struct ViewSnapshot {
+    height: u32,
+    verifier: ShvMmrHeaderVerifier,
+    window: VecDeque<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +135,10 @@ pub enum HeaderViewError {
     /// The supplied median-time window is the wrong length, does not link, or
     /// carries no usable timestamps.
     UnusableTimeWindow {
+        height: u32,
+    },
+    /// A rollback named a height the reorg ring does not hold.
+    NoSnapshotAtHeight {
         height: u32,
     },
 }
@@ -162,6 +194,13 @@ pub struct VerifiedHeaderView {
     /// Trailing timestamps for the median-time-past window.
     window: VecDeque<u32>,
     anchor_interval: u32,
+    /// The view after each of the last [`REORG_WINDOW`] blocks and the one
+    /// before them, oldest first. A reorg rolls back to a state the verifier
+    /// really had: the accumulator is append-only and is never edited.
+    snapshots: VecDeque<ViewSnapshot>,
+    /// The headers after the oldest snapshot, one per later snapshot, so a
+    /// stored ring can be re-derived and checked against the trusted tip.
+    ring_headers: VecDeque<BlockHeaderBytes>,
 }
 
 impl VerifiedHeaderView {
@@ -180,6 +219,8 @@ impl VerifiedHeaderView {
             times: SparseHeaderIndex::new(),
             window: VecDeque::with_capacity(MEDIAN_TIME_SPAN),
             anchor_interval: anchor_interval.max(1),
+            snapshots: VecDeque::new(),
+            ring_headers: VecDeque::new(),
         }
     }
 
@@ -230,9 +271,15 @@ impl VerifiedHeaderView {
         // different heights, and the next extend would compute the wrong
         // median from a window that never saw the missing block.
         let mut staged = self.clone();
-        staged.verifier.extend(headers)?;
+        if staged.snapshots.is_empty() {
+            // The state before this batch is where a reorg of its first block
+            // would roll back to.
+            staged.push_snapshot(None);
+        }
         for (offset, header) in headers.iter().enumerate() {
             let height = first_height + offset as u64;
+            // One header at a time, so the ring holds the state after each.
+            staged.verifier.extend(std::slice::from_ref(header))?;
             // The leaf the accumulator just committed to is this block's hash;
             // retaining it is what lets a pruned client build a `getheaders`
             // locator and re-authenticate the anchor later.
@@ -241,9 +288,56 @@ impl VerifiedHeaderView {
                 crate::header_verifier::header_leaf(header),
                 header_timestamp(&header.0),
             )?;
+            staged.push_snapshot(Some(header));
         }
         *self = staged;
         Ok(())
+    }
+
+    /// Keep the current state in the reorg ring, `header` being the block
+    /// that produced it. The first state kept is the ring's base.
+    fn push_snapshot(&mut self, header: Option<&BlockHeaderBytes>) {
+        let Ok(state) = self.verifier.state() else {
+            return;
+        };
+        if let (Some(header), false) = (header, self.snapshots.is_empty()) {
+            self.ring_headers.push_back(header.clone());
+        }
+        self.snapshots.push_back(ViewSnapshot {
+            height: state.height,
+            verifier: self.verifier.clone(),
+            window: self.window.clone(),
+        });
+        while self.snapshots.len() > REORG_WINDOW as usize + 1 {
+            self.snapshots.pop_front();
+            self.ring_headers.pop_front();
+        }
+    }
+
+    /// Roll the view back to the state it had after block `height`, one of the
+    /// last [`REORG_WINDOW`] blocks.
+    ///
+    /// The accumulator is append-only, so this does not edit its peaks: it
+    /// returns to a state the verifier actually had. Extending from here gives
+    /// exactly what extending straight to the same headers would have.
+    pub fn rollback_to(&mut self, height: u32) -> Result<(), HeaderViewError> {
+        let index = self
+            .snapshots
+            .iter()
+            .position(|snapshot| snapshot.height == height)
+            .ok_or(HeaderViewError::NoSnapshotAtHeight { height })?;
+        let snapshot = self.snapshots[index].clone();
+        self.verifier = snapshot.verifier;
+        self.window = snapshot.window;
+        self.snapshots.truncate(index + 1);
+        self.ring_headers.truncate(index);
+        self.times.rewind_to(height.saturating_add(1));
+        Ok(())
+    }
+
+    /// The oldest height a rollback can reach, if any.
+    pub fn rollback_floor(&self) -> Option<u32> {
+        self.snapshots.front().map(|snapshot| snapshot.height)
     }
 
     fn record_anchor(
@@ -547,6 +641,20 @@ impl VerifiedHeaderView {
                 .collect(),
             window: self.window.iter().copied().collect(),
             anchor_interval: self.anchor_interval,
+            ring: self
+                .snapshots
+                .front()
+                .map(|base| -> Result<PersistedRing, HeaderViewError> {
+                    Ok(PersistedRing {
+                        base: base.verifier.encode_checkpoint_json(self.network)?,
+                        headers: self
+                            .ring_headers
+                            .iter()
+                            .map(|header| header.0.to_vec())
+                            .collect(),
+                    })
+                })
+                .transpose()?,
         };
         serde_json::to_string(&record).map_err(|_| HeaderViewError::InvalidPersistedView)
     }
@@ -570,7 +678,9 @@ impl VerifiedHeaderView {
         }
         let record: PersistedHeaderView =
             serde_json::from_str(json).map_err(|_| HeaderViewError::InvalidPersistedView)?;
-        if record.schema != PERSISTED_VIEW_SCHEMA || record.network != network.to_string() {
+        if !(OLDEST_READABLE_VIEW_SCHEMA..=PERSISTED_VIEW_SCHEMA).contains(&record.schema)
+            || record.network != network.to_string()
+        {
             return Err(HeaderViewError::InvalidPersistedView);
         }
         if record.window.len() > MEDIAN_TIME_SPAN {
@@ -599,6 +709,12 @@ impl VerifiedHeaderView {
         // The trailing window feeds the next median, so a restored one is
         // untrusted for the same reason and is rebuilt from live headers.
         view.window.clear();
+        if let Some(ring) = record.ring {
+            let (snapshots, ring_headers) =
+                replay_ring(ring, network, record.anchor_interval, trusted)?;
+            view.snapshots = snapshots;
+            view.ring_headers = ring_headers;
+        }
         Ok(view)
     }
 
@@ -620,6 +736,43 @@ impl VerifiedHeaderView {
         self.times.rewind_to(height);
         self.window.clear();
     }
+}
+
+/// Re-derive a stored reorg ring and keep it only if it reaches `trusted`.
+///
+/// The stored base is loaded at the commitment it claims and extended with
+/// the stored headers, which are checked like any others: linkage,
+/// proof-of-work, difficulty. Only if that ends at the trusted tip are the
+/// states kept, and they are the ones the replay produced, never stored ones.
+fn replay_ring(
+    ring: PersistedRing,
+    network: Network,
+    anchor_interval: u32,
+    trusted: &HeaderCheckpoint,
+) -> Result<(VecDeque<ViewSnapshot>, VecDeque<BlockHeaderBytes>), HeaderViewError> {
+    if ring.headers.len() > REORG_WINDOW as usize {
+        return Err(HeaderViewError::InvalidPersistedView);
+    }
+    let headers = ring
+        .headers
+        .into_iter()
+        .map(|bytes| <[u8; 80]>::try_from(bytes).map(BlockHeaderBytes))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| HeaderViewError::InvalidPersistedView)?;
+    let claimed = ShvMmrHeaderVerifier::claimed_checkpoint(&ring.base)?;
+    let base = ShvMmrHeaderVerifier::from_checkpoint_json(&ring.base, network, &claimed)?
+        .with_asert(
+            AsertParams::for_network(network),
+            AsertAnchor::for_network(network),
+        );
+    let mut replay = VerifiedHeaderView::with_anchor_interval(network, base, anchor_interval);
+    replay.push_snapshot(None);
+    replay.extend(&headers)?;
+    let reached = replay.checkpoint();
+    if reached.height != trusted.height || reached.commitment != trusted.commitment {
+        return Err(HeaderViewError::InvalidPersistedView);
+    }
+    Ok((replay.snapshots, replay.ring_headers))
 }
 
 #[cfg(test)]
@@ -1294,5 +1447,157 @@ mod tests {
             .accept_historical_proof(Network::Regtest, &proof)
             .is_err());
         proof.proof.clear();
+    }
+
+    /// Headers that build on `prev`, ground to the regtest limit.
+    fn chain_from(mut prev: Hash32, times: &[u32]) -> Vec<BlockHeaderBytes> {
+        use optn_core::header_pow::verify_declared_pow;
+        let mut out = Vec::new();
+        for &time in times {
+            let mut attempt = 0u32;
+            let block = loop {
+                let candidate = header(prev, time, attempt);
+                if verify_declared_pow(&candidate.0).is_ok() {
+                    break candidate;
+                }
+                attempt += 1;
+            };
+            prev = sha256d(&block.0);
+            out.push(block);
+        }
+        out
+    }
+
+    /// Rolling back to a block in the ring and extending again gives exactly
+    /// what a straight extension gives, and another branch is accepted from
+    /// the same point: a reorg, without editing the accumulator.
+    #[test]
+    fn a_rollback_then_extension_matches_a_straight_extension() {
+        let headers = chain(&wobbly_times(30));
+        let (mut straight, _) = bootstrapped_view();
+        straight.extend(&headers[1..]).unwrap();
+        let (mut rolled, _) = bootstrapped_view();
+        rolled.extend(&headers[1..]).unwrap();
+        let tip = rolled.tip().unwrap().0;
+        let fork_point = tip - 4;
+
+        rolled.rollback_to(fork_point).unwrap();
+        assert_eq!(
+            rolled.tip(),
+            Some((
+                fork_point,
+                crate::header_verifier::header_leaf(&headers[fork_point as usize])
+            ))
+        );
+        assert!(rolled
+            .times()
+            .anchors()
+            .iter()
+            .all(|anchor| anchor.height <= fork_point));
+        rolled.extend(&headers[fork_point as usize + 1..]).unwrap();
+        assert_eq!(rolled.checkpoint(), straight.checkpoint());
+
+        // Another branch from the same block.
+        rolled.rollback_to(fork_point).unwrap();
+        let branch = chain_from(
+            crate::header_verifier::header_leaf(&headers[fork_point as usize]),
+            &[
+                2_000_000_000,
+                2_000_000_600,
+                2_000_001_200,
+                2_000_001_800,
+                2_000_002_400,
+            ],
+        );
+        rolled.extend(&branch).unwrap();
+        assert_eq!(rolled.tip().unwrap().0, fork_point + 5);
+        assert_ne!(rolled.checkpoint(), straight.checkpoint());
+    }
+
+    #[test]
+    fn the_ring_holds_the_reorg_window_and_no_further() {
+        let headers = chain(&wobbly_times(30));
+        let (mut view, _) = bootstrapped_view();
+        view.extend(&headers[1..]).unwrap();
+        let tip = view.tip().unwrap().0;
+        assert_eq!(view.rollback_floor(), Some(tip - REORG_WINDOW));
+        let below = tip - REORG_WINDOW - 1;
+        assert_eq!(
+            view.rollback_to(below),
+            Err(HeaderViewError::NoSnapshotAtHeight { height: below })
+        );
+        assert_eq!(
+            view.tip().unwrap().0,
+            tip,
+            "a refused rollback changes nothing"
+        );
+
+        // Fewer blocks than the window: the ring reaches back to the start.
+        let (mut short, _) = bootstrapped_view();
+        short.extend(&headers[1..4]).unwrap();
+        assert_eq!(short.rollback_floor(), Some(0));
+        short.rollback_to(0).unwrap();
+        assert_eq!(short.tip().unwrap().0, 0);
+    }
+
+    /// A stored ring is re-derived from its oldest state and the headers
+    /// after it, and kept only if that reaches the trusted tip.
+    #[test]
+    fn a_stored_ring_is_rederived_and_must_reach_the_trusted_tip() {
+        let headers = chain(&wobbly_times(30));
+        let (mut view, _) = bootstrapped_view();
+        view.extend(&headers[1..]).unwrap();
+        let trusted = view.checkpoint();
+        let encoded = view.encode().unwrap();
+        let tip = view.tip().unwrap().0;
+
+        let mut restored =
+            VerifiedHeaderView::restore(&encoded, Network::Regtest, &trusted).unwrap();
+        assert_eq!(restored.rollback_floor(), view.rollback_floor());
+        restored.rollback_to(tip - 2).unwrap();
+        restored.extend(&headers[tip as usize - 1..]).unwrap();
+        assert_eq!(restored.checkpoint(), trusted);
+
+        // One stored header altered.
+        let mut altered: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        let byte = &mut altered["ring"]["headers"][3][40];
+        *byte = serde_json::json!(byte.as_u64().unwrap() ^ 1);
+        assert!(
+            VerifiedHeaderView::restore(&altered.to_string(), Network::Regtest, &trusted).is_err()
+        );
+        // A ring that stops short of the trusted tip.
+        let mut short: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        short["ring"]["headers"].as_array_mut().unwrap().pop();
+        assert!(
+            VerifiedHeaderView::restore(&short.to_string(), Network::Regtest, &trusted).is_err()
+        );
+        // A ring longer than the window is not read at all.
+        let mut long: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        let first = long["ring"]["headers"][0].clone();
+        long["ring"]["headers"].as_array_mut().unwrap().push(first);
+        assert!(
+            VerifiedHeaderView::restore(&long.to_string(), Network::Regtest, &trusted).is_err()
+        );
+    }
+
+    #[test]
+    fn a_schema_2_record_reads_with_an_empty_ring() {
+        let headers = chain(&wobbly_times(12));
+        let (mut view, _) = bootstrapped_view();
+        view.extend(&headers[1..]).unwrap();
+        let trusted = view.checkpoint();
+        let mut record: serde_json::Value = serde_json::from_str(&view.encode().unwrap()).unwrap();
+        assert_eq!(record["schema"], 3);
+        record["schema"] = serde_json::json!(2);
+        record.as_object_mut().unwrap().remove("ring");
+        let restored =
+            VerifiedHeaderView::restore(&record.to_string(), Network::Regtest, &trusted).unwrap();
+        assert_eq!(restored.rollback_floor(), None);
+        assert_eq!(restored.tip(), view.tip());
+
+        record["schema"] = serde_json::json!(4);
+        assert!(
+            VerifiedHeaderView::restore(&record.to_string(), Network::Regtest, &trusted).is_err()
+        );
     }
 }

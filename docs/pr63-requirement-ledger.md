@@ -1529,3 +1529,32 @@ A runtime test checks the whole path through the real actor:
 Part (2) of 71-1, the React renderer's authoritative slices and its
 TypeScript Electrum and UTXO services, belongs to the #75/#83 migration and
 is not this change.
+
+### 2026-10-09: a reorg rolls the header view back to a state it really had
+
+#75 (item 75-reorg ring, rank 15). The verified header accumulator is
+append-only. `rewind_to` could drop time anchors above a height, but the
+accumulator itself could not go back. A reorg below the verified tip
+therefore meant rebuilding from a checkpoint.
+
+- `VerifiedHeaderView` now keeps a ring of snapshots: the full verifier
+  state and median-time window after each of the last `REORG_WINDOW` (10)
+  blocks, plus the one before them. That is about 700 bytes each. BCHN
+  finalizes a block ten deep.
+- `rollback_to(height)` returns to one of those states rather than editing
+  peaks, and drops the time anchors above it. Extending from there gives
+  exactly what a straight extension gives, and another branch is accepted
+  from the same block.
+- The persisted view is schema 3. The ring is stored as its oldest state and
+  the headers after it, never as the intermediate states. On restore the
+  oldest state is loaded at the commitment it claims and extended with the
+  stored headers, which are checked like any others: linkage, proof-of-work,
+  difficulty. The ring is kept only if that replay reaches the trusted tip.
+  A ring longer than the window, an altered header, or one that stops short
+  is refused with the rest of the record.
+- Schema 2 is schema 3 without the ring, so it still reads, with an empty
+  ring. A later, unknown schema is refused.
+
+Automatic recovery, which detects a reorg and calls `rollback_to`, is the
+next item (rank 16). It needs this ring and the Electrum ordering change
+above.
