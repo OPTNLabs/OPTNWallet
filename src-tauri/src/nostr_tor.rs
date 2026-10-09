@@ -93,7 +93,11 @@ fn parse_ws(url: &str) -> Result<(String, u16, bool, String), String> {
     let tls = match parsed.scheme() {
         "wss" => true,
         "ws" => false,
-        _ => return Err(format!("only WebSocket URLs (ws or wss) are supported: {url}")),
+        _ => {
+            return Err(format!(
+                "only WebSocket URLs (ws or wss) are supported: {url}"
+            ))
+        }
     };
     if !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some() {
         return Err(format!(
