@@ -223,7 +223,7 @@ enum RuntimeRequest {
     FusionContribution(
         fusion_contribution::FusionContributionRequest,
         Box<WalletOperationGuard>,
-        oneshot::Sender<Result<fusion_contribution::FusionContribution, TransportError>>,
+        oneshot::Sender<Result<fusion_contribution::FusionContributionReply, TransportError>>,
     ),
     Airgap(
         optn_transport::AirgapRequest,
