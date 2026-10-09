@@ -30,6 +30,9 @@ optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
 # The same Tauri-free native adapter composition used by desktop. This keeps
 # CLI source selection, Tor policy, and protocol capability routing aligned.
 optn-chain-native = { path = "../optn-chain-native", version = "=1.7.3" }
+# CashFusion rounds run through the same native host as the desktop.
+optn-fusion = { path = "../optn-fusion", version = "=1.7.3" }
+optn-fusion-native = { path = "../optn-fusion-native", version = "=1.7.3" }
 optn-platform-native = { path = "../optn-platform-native", version = "=1.7.3", features = ["wallet-storage", "secure-storage"] }
 optn-transport = { path = "../optn-transport", version = "=1.7.3" }
 # Native terminal echo control; passwords must never be normal command arguments.
@@ -55,7 +58,7 @@ bip32 = { version = "0.5", default-features = false, features = ["alloc", "secp2
 # rejects everything shorter — but this wallet imports 12-, 15-, 18-, 21- and
 # 24-word phrases, so bip32's would have silently refused most real seeds.
 bip39 = { version = "2", default-features = false, features = ["std", "rand"] }
-tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread", "sync", "signal"] }
 # Same pure-Rust SOCKS client as the native chain adapters. Remote Electrum
 # routes fail closed unless this reaches a verified local Tor SOCKS proxy.
 tokio-socks = "0.5"

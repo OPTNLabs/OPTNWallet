@@ -2008,3 +2008,44 @@ rule, genesis for chipnet and mainnet against their known hashes, finding
 the wallet's outputs by script, and the depth file's round trip and
 refusals. The full round is exercised live with the fleet (next).
 `cargo run -p xtask -- architecture` passes.
+
+### 2026-10-09: `optn fusion` runs server rounds from the CLI
+
+The CLI could not fuse at all, so a fleet could only be desktop windows and
+the docker runner had nothing to run.
+
+`optn fusion --server HOST[:PORT][:s|:t] --yes` runs CashFusion server
+rounds for a saved wallet (`--wallet`) through `optn-fusion-native`, the
+same host the desktop's round code now lives in. Each round refreshes the
+wallet through the shared HD runtime, chooses coins with
+`optn_core::fusion::coin_selection` against the depth record, and runs
+`server_round`. Without `--auto` it runs one round (or `--rounds N`). With
+`--auto` it behaves like the desktop's Auto Fusion, with the same timing
+constants from `optn_app::fusion` (20 s after a paid round, 10 s after a
+failure, 30 min idle once every coin reaches `--fuse-depth`) and Electron
+Cash's 600 s pool inactivity rule. `--tier` pins tiers so wallets meet.
+Progress goes to stderr as JSON lines; the result is one JSON document on
+stdout. Ctrl-C cancels a round through the engine's cancellation registry,
+which still finishes what it must after components are disclosed.
+
+Tor follows the desktop's rule: no fusion while the holder's transport is
+Direct, and every remote leg through a proxy verified from the shared
+trusted ports. The lookup servers are the holder's selected Electrum
+servers (up to 8, as on the desktop). Depth moves only for a transaction a
+selected server holds.
+
+Known limits, stated rather than hidden:
+- server rounds only; P2P fusion is coordinated over Nostr and has no Rust
+  driver yet;
+- the depth record is a plaintext file beside the wallet, the same exposure
+  as the desktop's localStorage. Moving it into the encrypted checkpoint
+  waits on the checkpoint forward-compatibility fix;
+- the desktop still runs its rounds from the renderer for legacy wallets,
+  whose keys live in the TypeScript key database; the runtime refuses those
+  wallets' coins until they are runtime-managed;
+- not yet run live: that needs Tor and a local Electron Cash server for the
+  fleet.
+
+Each CLI process holds its wallet directory's session, so a CLI fleet uses
+one `--wallet-directory` per member. The skill manifest lists `fusion` as a
+spending command that requires confirmation.

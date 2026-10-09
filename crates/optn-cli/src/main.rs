@@ -12,6 +12,7 @@
 mod console;
 mod contract;
 mod electrum;
+mod fusion;
 mod keychain;
 mod lmots;
 mod msgsign;
@@ -247,6 +248,43 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
         /// Required to actually broadcast.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Fuse this wallet's coins in CashFusion server rounds (Electron Cash
+    /// protocol), through the same native fusion host as the desktop.
+    ///
+    /// Needs a saved wallet (--wallet) and --yes: every round pays fees. Tor is
+    /// required for any remote leg. Without --auto, runs one round (or
+    /// --rounds). With --auto, keeps fusing until every coin reaches
+    /// --fuse-depth, then idles and watches the wallet. Progress goes to
+    /// stderr as JSON lines; the result is on stdout. P2P fusion is not yet
+    /// available here.
+    Fusion {
+        /// CashFusion server: host[:port][:s|:t]. A local server defaults to
+        /// plain TCP, a remote one to TLS; port 8789 if omitted.
+        #[arg(long)]
+        server: String,
+        /// Keep fusing like the desktop's Auto Fusion.
+        #[arg(long)]
+        auto: bool,
+        /// Stop after this many completed rounds.
+        #[arg(long)]
+        rounds: Option<u32>,
+        /// Rounds each coin goes through before Auto leaves it alone.
+        #[arg(long, default_value_t = 3)]
+        fuse_depth: u32,
+        /// Register only this tier, in satoshis (repeatable), so wallets that
+        /// must meet do.
+        #[arg(long = "tier")]
+        tiers: Vec<u64>,
+        /// Addresses per chain to scan before each round.
+        #[arg(long, default_value_t = 20)]
+        gap: u32,
+        /// Fail a scan that reaches this bound before its unused gap.
+        #[arg(long, default_value_t = 200)]
+        max_addresses: u32,
+        /// Required: rounds pay fees.
         #[arg(long)]
         yes: bool,
     },
@@ -790,6 +828,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::TokenSend { .. } => "token-send",
         Command::Send { .. } => "send",
         Command::Rescan { .. } => "rescan",
+        Command::Fusion { .. } => "fusion",
         Command::History { .. } => "history",
         Command::Discover { .. } => "discover",
         Command::Contract { .. } => "contract",
@@ -880,6 +919,7 @@ fn timeout_seconds(cli: &Cli) -> u64 {
         if matches!(
             &cli.command,
             Command::Rescan { .. }
+                | Command::Fusion { .. }
                 | Command::History { .. }
                 | Command::Tokens { .. }
                 | Command::Wallet { .. }
@@ -2540,6 +2580,35 @@ async fn run(cli: &Cli) -> Result<Value> {
                 account_path.as_deref(),
                 xpub.as_deref(),
                 *from_height,
+            )
+            .await
+        }
+        Command::Fusion {
+            server,
+            auto,
+            rounds,
+            fuse_depth,
+            tiers,
+            gap,
+            max_addresses,
+            yes,
+        } => {
+            if !*yes {
+                return Err(CliError::Usage(
+                    "refusing to fuse without --yes: every round pays fees".to_string(),
+                ));
+            }
+            fusion::run(
+                cli,
+                fusion::FusionArgs {
+                    server,
+                    auto: *auto,
+                    rounds: *rounds,
+                    fuse_depth: *fuse_depth,
+                    tiers,
+                    gap: *gap,
+                    max_addresses: *max_addresses,
+                },
             )
             .await
         }
