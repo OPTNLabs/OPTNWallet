@@ -804,7 +804,11 @@ fn command_name(command: &Command) -> &'static str {
     }
 }
 
-fn client_for(cli: &Cli) -> Result<Client> {
+/// How long one candidate server gets to answer `server.version` before the
+/// next is tried.
+const CANDIDATE_PROBE_SECS: u64 = 20;
+
+async fn client_for(cli: &Cli) -> Result<Client> {
     // Read once, applied to whichever endpoint is chosen below: which proxy
     // the holder trusts does not depend on which server they are talking to.
     let trusted =
@@ -821,35 +825,54 @@ fn client_for(cli: &Cli) -> Result<Client> {
         .map(|client| client.trusting_socks_ports(trusted));
     }
 
-    let endpoint =
-        network_settings::shared_electrum(cli.network, cli.network_config_dir.as_deref())
+    let build = |host: String, port: u16, tls: bool| {
+        Client::new(host, port, tls, timeout_seconds(cli)).map(|client| {
+            // The holder's Tor switch and own-node declaration, from the same
+            // shared settings the desktop uses. Unreadable settings keep Tor on.
+            let (transport, own) = network_settings::transport_for_host(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                client.host(),
+            );
+            client
+                .trusting_socks_ports(trusted.clone())
+                .following(transport, own)
+        })
+    };
+    let servers =
+        network_settings::shared_electrum_servers(cli.network, cli.network_config_dir.as_deref())
             .map_err(CliError::Usage)?;
-    match endpoint {
-        Some(endpoint) => Client::new(
-            endpoint.host().to_owned(),
-            endpoint.port(),
-            endpoint.encrypted(),
-            timeout_seconds(cli),
-        ),
-        None => Client::new(
+    let Some(servers) = servers else {
+        return build(
             cli.network.default_host().to_owned(),
             cli.network.default_port(),
             true,
-            timeout_seconds(cli),
-        ),
-    }
-    .map(|client| {
-        // The holder's Tor switch and own-node declaration, from the same
-        // shared settings the desktop uses. Unreadable settings keep Tor on.
-        let (transport, own) = network_settings::transport_for_host(
-            cli.network,
-            cli.network_config_dir.as_deref(),
-            client.host(),
         );
-        client
-            .trusting_socks_ports(trusted)
-            .following(transport, own)
-    })
+    };
+    if let [only] = servers.as_slice() {
+        return build(only.host().to_owned(), only.port(), only.encrypted());
+    }
+    // Several selected servers: the first that answers, in the selection's
+    // order, as the shared stack would fail over. A down server is skipped,
+    // never replaced by one outside the selection.
+    let mut tried = Vec::new();
+    for server in &servers {
+        let client = build(server.host().to_owned(), server.port(), server.encrypted())?;
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(CANDIDATE_PROBE_SECS),
+            client.server_version(),
+        )
+        .await
+        {
+            Ok(Ok(_)) => return Ok(client),
+            Ok(Err(error)) => tried.push(format!("{}: {error}", client.endpoint())),
+            Err(_) => tried.push(format!("{}: no answer", client.endpoint())),
+        }
+    }
+    Err(CliError::Usage(format!(
+        "no selected Electrum server answered: {}",
+        tried.join("; ")
+    )))
 }
 
 fn timeout_seconds(cli: &Cli) -> u64 {
@@ -1015,7 +1038,7 @@ async fn fetch_headers_window(
             ));
         }
     }
-    let client = client_for(cli)?;
+    let client = client_for(cli).await?;
     let (tip_height, _) = client.tip().await?;
     let start_height = match start {
         Some(height) => height,
@@ -1139,7 +1162,7 @@ async fn ping_selected_chain(cli: &Cli) -> Result<Value> {
     // Command-line endpoint flags are an explicit per-invocation override.
     // Without one, the CLI uses the exact durable selection shared with Tauri.
     if cli.host.is_some() || cli.port.is_some() || cli.no_tls {
-        let client = client_for(cli)?;
+        let client = client_for(cli).await?;
         let version = client.server_version().await?;
         return Ok(json!({
             "ok": true,
@@ -1154,7 +1177,7 @@ async fn ping_selected_chain(cli: &Cli) -> Result<Value> {
         network_settings::shared_chain_selection(cli.network, cli.network_config_dir.as_deref())
             .map_err(CliError::Usage)?
     else {
-        let client = client_for(cli)?;
+        let client = client_for(cli).await?;
         let version = client.server_version().await?;
         return Ok(json!({
             "ok": true,
@@ -1256,7 +1279,7 @@ async fn transaction_selected_chain(cli: &Cli, txid: &str, verbose: bool) -> Res
     let mut requested = decode_hex32(txid)?;
     requested.reverse();
     let Some(selection) = configured_chain(cli)? else {
-        let transaction = client_for(cli)?.transaction(txid, verbose).await?;
+        let transaction = client_for(cli).await?.transaction(txid, verbose).await?;
         return Ok(json!({"ok": true, "txid": txid, "transaction": transaction}));
     };
     tokio::time::timeout(
@@ -1306,7 +1329,7 @@ async fn broadcast_selected_chain(cli: &Cli, raw: &str) -> Result<Value> {
     }
     let txid = optn_core::header_hash::sha256d(&bytes);
     let Some(selection) = configured_chain(cli)? else {
-        let txid = client_for(cli)?.broadcast(raw).await?;
+        let txid = client_for(cli).await?.broadcast(raw).await?;
         return Ok(json!({"ok": true, "network": cli.network.to_string(), "txid": txid}));
     };
     let budget = std::time::Duration::from_secs(timeout_seconds(cli));
@@ -1357,7 +1380,7 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
     let scripthash = parsed.electrum_scripthash();
     let Some(selection) = configured_chain(cli)? else {
         if include_outputs {
-            let utxos = client_for(cli)?.utxos(&scripthash).await?;
+            let utxos = client_for(cli).await?.utxos(&scripthash).await?;
             let total: u64 = utxos.iter().map(|output| output.value).sum();
             return Ok(
                 json!({"ok": true, "network": cli.network.to_string(), "address": address,
@@ -1366,7 +1389,7 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
                 })).collect::<Vec<_>>()}),
             );
         }
-        let balance = client_for(cli)?.balance(&scripthash).await?;
+        let balance = client_for(cli).await?.balance(&scripthash).await?;
         return Ok(
             json!({"ok": true, "network": cli.network.to_string(), "address": address,
             "scripthash": scripthash, "confirmed": balance.confirmed, "unconfirmed": balance.unconfirmed,
@@ -1985,13 +2008,8 @@ async fn run(cli: &Cli) -> Result<Value> {
 
     // Resolve the legacy route only when an operation actually needs it.
     // Cache it for the command so a settings edit cannot mix endpoints mid-scan.
-    let legacy_client = std::cell::OnceCell::new();
-    let client = || -> Result<&Client> {
-        if legacy_client.get().is_none() {
-            let _ = legacy_client.set(client_for(cli)?);
-        }
-        Ok(legacy_client.get().expect("client initialized above"))
-    };
+    let legacy_client = tokio::sync::OnceCell::new();
+    let client = || legacy_client.get_or_try_init(|| client_for(cli));
 
     match &cli.command {
         Command::Wallet { .. } => unreachable!("handled before network setup"),
@@ -2104,7 +2122,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             let destination = parse_address(to, cli.network)?;
             let wallet = read_wallet(cli).await?;
             let spend = spend_to(
-                client()?,
+                client().await?,
                 cli.network,
                 &wallet,
                 destination.script_pubkey(),
@@ -2174,7 +2192,11 @@ async fn run(cli: &Cli) -> Result<Value> {
                 for index in 0..*gap {
                     let path = hd::address_path(coin, 0, change, index);
                     let address = wallet.address(cli.network, &path)?;
-                    for u in client()?.utxos(&address.electrum_scripthash()).await? {
+                    for u in client()
+                        .await?
+                        .utxos(&address.electrum_scripthash())
+                        .await?
+                    {
                         let mut txid = decode_hex32(&u.tx_hash)?;
                         txid.reverse();
                         let utxo = tx::Utxo {
@@ -2307,7 +2329,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }));
             }
 
-            let txid = client()?.broadcast(&raw_hex).await?;
+            let txid = client().await?.broadcast(&raw_hex).await?;
             Ok(json!({
                 "ok": true,
                 "network": cli.network.to_string(),
@@ -2357,7 +2379,11 @@ async fn run(cli: &Cli) -> Result<Value> {
                 for index in 0..*gap {
                     let path = hd::address_path(coin, 0, change, index);
                     let address = wallet.address(cli.network, &path)?;
-                    for u in client()?.utxos(&address.electrum_scripthash()).await? {
+                    for u in client()
+                        .await?
+                        .utxos(&address.electrum_scripthash())
+                        .await?
+                    {
                         let mut txid = decode_hex32(&u.tx_hash)?;
                         txid.reverse();
                         let utxo = tx::Utxo {
@@ -2475,7 +2501,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }));
             }
 
-            let txid = client()?.broadcast(&raw_hex).await?;
+            let txid = client().await?.broadcast(&raw_hex).await?;
             Ok(json!({
                 "ok": true,
                 "network": cli.network.to_string(),
@@ -2551,7 +2577,10 @@ async fn run(cli: &Cli) -> Result<Value> {
                         for index in 0..*gap {
                             let path = hd::address_path(coin, account, change, index);
                             let address = wallet.address(cli.network, &path)?;
-                            let balance = client()?.balance(&address.electrum_scripthash()).await?;
+                            let balance = client()
+                                .await?
+                                .balance(&address.electrum_scripthash())
+                                .await?;
                             if balance.confirmed != 0 || balance.unconfirmed != 0 {
                                 used += 1;
                                 total += balance.confirmed + balance.unconfirmed;
@@ -3085,7 +3114,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                     .to_bytes()
                     .into();
                 let spend_pub = wallet.public_key(&rpa::spend_path(coin, *account))?;
-                let raw_hex = client()?.transaction(txid, false).await?;
+                let raw_hex = client().await?.transaction(txid, false).await?;
                 let raw_hex = raw_hex.as_str().ok_or_else(|| {
                     CliError::Protocol("server did not return raw transaction hex".into())
                 })?;
@@ -3168,7 +3197,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                         .await?
                 } else {
                     rpa_pay(
-                        client()?,
+                        client().await?,
                         cli.network,
                         &wallet,
                         &decoded,
@@ -3370,7 +3399,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                         )));
                     }
                     let spend = spend_to(
-                        client()?,
+                        client().await?,
                         cli.network,
                         &wallet,
                         destination.script_pubkey(),

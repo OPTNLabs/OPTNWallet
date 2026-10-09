@@ -1812,3 +1812,27 @@ The probe's timeout and SOCKS5 greeting now live once in `optn_core::tor`
 listening still refuses at once. Test: a trusted SOCKS port that answers
 after 2 s is verified. The fleet run's rounds are recorded in this PR's
 description.
+
+### 2026-10-09: the CLI's Electrum-only commands follow the shared selection
+
+Found while funding the fleet: under the desktop's default Auto selection,
+`send` refused with "shared network settings contain no Electrum route",
+while `rescan` on the same settings used the selected chipnet servers.
+`balance`, `utxos` and `broadcast` already go through the shared native
+stack; `send`, `tx` and the header fallback still use a single-server
+Electrum client, which read only the desktop's older one-server fields.
+
+`shared_electrum_servers` now gives that client the selection's own
+encrypted Electrum servers, in plan order (primary, then fallback): the
+named server when the older fields name one, otherwise every server the
+selection plan picks. `client_for` uses the first that answers
+`server.version`, so a down server (one refused connections in the fleet
+run) is skipped, never replaced by one outside the selection. A direct
+P2P-only selection, plaintext Electrum, or a selection with no Electrum is
+still refused.
+
+Test: under Auto the offered servers are the plan's Electrum endpoints in
+order, all encrypted; the existing refusals hold. Not yet run live (needs
+the trusted Tor). Follow-up in the Rust-first direction: move `send` and
+`tx` onto the shared native stack like `balance`, then retire the
+single-server client.

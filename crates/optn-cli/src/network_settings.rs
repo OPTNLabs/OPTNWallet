@@ -476,38 +476,111 @@ pub fn trusted_socks_ports(network: Network, configured_directory: Option<&Path>
         .unwrap_or_default()
 }
 
-/// Load the desktop-selected encrypted Electrum endpoint for one network.
-///
-/// Missing settings deliberately return `None`, preserving the CLI's built-in
-/// network default. A present but unsupported or corrupt setting returns an
-/// error: falling back would violate an explicit user selection.
-pub fn shared_electrum(
+/// Load the desktop-selected encrypted Electrum endpoint for one network: the
+/// first of [`shared_electrum_servers`].
+#[cfg(test)]
+fn shared_electrum(
     network: Network,
     configured_directory: Option<&Path>,
 ) -> Result<Option<ElectrumEndpoint>, String> {
+    Ok(shared_electrum_servers(network, configured_directory)?
+        .and_then(|servers| servers.into_iter().next()))
+}
+
+/// The encrypted Electrum servers an Electrum-only command may use on one
+/// network, in the order the shared settings rank them.
+///
+/// The one server the desktop's older fields name, when they name one. Under
+/// any other selection (Auto, Privacy, a preset), every encrypted Electrum
+/// endpoint the shared selection plan picks, primary sources first: the same
+/// servers `rescan` and the desktop would use, never a default of the CLI's.
+///
+/// Missing settings return `None`, preserving the CLI's built-in network
+/// default. A direct BCH P2P selection, plaintext Electrum, or a selection with
+/// no Electrum at all is refused: falling back would violate it.
+pub fn shared_electrum_servers(
+    network: Network,
+    configured_directory: Option<&Path>,
+) -> Result<Option<Vec<ElectrumEndpoint>>, String> {
     let Some(envelope) = shared_envelope(network, configured_directory)? else {
         return Ok(None);
     };
-    let servers = legacy_network_servers_from_overlay(&envelope.overlay).map_err(|error| {
-        format!("cannot enforce network settings in an Electrum-only command: {error}")
-    })?;
-    if servers.peer.is_some() {
-        return Err(
-            "shared network settings include a direct BCH P2P route that this Electrum-only CLI cannot enforce"
-                .into(),
-        );
+    let legacy = legacy_network_servers_from_overlay(&envelope.overlay);
+    if let Ok(servers) = &legacy {
+        if servers.peer.is_some() {
+            return Err(
+                "shared network settings include a direct BCH P2P route that this Electrum-only CLI cannot enforce"
+                    .into(),
+            );
+        }
+        if let Some(entry) = &servers.electrum {
+            let endpoint = parse_electrum_endpoint(entry, network.default_port())
+                .map_err(|error| format!("invalid shared Electrum endpoint: {error}"))?;
+            if !endpoint.encrypted() {
+                return Err("shared network settings selected plaintext Electrum".into());
+            }
+            return Ok(Some(vec![endpoint]));
+        }
     }
-    let Some(entry) = servers.electrum else {
-        return Err(
-            "shared network settings contain no Electrum route; refusing a default server".into(),
-        );
+    let selected = selected_electrum_servers(network, configured_directory)?;
+    if !selected.is_empty() {
+        return Ok(Some(selected));
+    }
+    Err(match legacy {
+        Err(error) => {
+            format!("cannot enforce network settings in an Electrum-only command: {error}")
+        }
+        Ok(_) => {
+            "shared network settings contain no Electrum route; refusing a default server".into()
+        }
+    })
+}
+
+/// Every encrypted Electrum endpoint the shared selection plan picks, primary
+/// sources before fallback ones, each once.
+fn selected_electrum_servers(
+    network: Network,
+    configured_directory: Option<&Path>,
+) -> Result<Vec<ElectrumEndpoint>, String> {
+    let Some(selection) = shared_chain_selection(network, configured_directory)? else {
+        return Ok(Vec::new());
     };
-    let endpoint = parse_electrum_endpoint(&entry, network.default_port())
-        .map_err(|error| format!("invalid shared Electrum endpoint: {error}"))?;
-    if !endpoint.encrypted() {
-        return Err("shared network settings selected plaintext Electrum".into());
+    if !selection
+        .policy
+        .protocols
+        .contains(optn_runtime::chain::ProtocolFamily::Electrum)
+    {
+        return Ok(Vec::new());
     }
-    Ok(Some(endpoint))
+    let plan = optn_runtime::chain::build_selection_plan(&selection.catalog, &selection.policy);
+    let mut servers: Vec<ElectrumEndpoint> = Vec::new();
+    for source in plan
+        .primary
+        .iter()
+        .chain(plan.fallback.iter())
+        .filter_map(|id| selection.catalog.get(id))
+    {
+        for endpoint in &source.endpoints {
+            if endpoint.kind != optn_runtime::chain::EndpointKind::ElectrumTls {
+                continue;
+            }
+            let Some(port) = endpoint.port else {
+                continue;
+            };
+            let Ok(server) = parse_electrum_endpoint(&format!("{}:{port}", endpoint.host), port)
+            else {
+                continue;
+            };
+            if server.encrypted()
+                && !servers
+                    .iter()
+                    .any(|known| known.host() == server.host() && known.port() == server.port())
+            {
+                servers.push(server);
+            }
+        }
+    }
+    Ok(servers)
 }
 
 fn shared_envelope(
@@ -1254,6 +1327,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Under the desktop's default Auto selection, Electrum-only commands use
+    /// the selection's own servers, in plan order, never a CLI default.
+    #[test]
+    fn auto_selection_offers_its_own_electrum_servers_in_order() {
+        let directory = TestDirectory::new();
+        directory.write(Network::Chipnet, UserNetworkOverlay::default());
+        let servers = shared_electrum_servers(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .expect("present configuration");
+        let selection = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        let plan = optn_runtime::chain::build_selection_plan(&selection.catalog, &selection.policy);
+        let planned: Vec<(String, u16)> = plan
+            .primary
+            .iter()
+            .filter_map(|id| selection.catalog.get(id))
+            .flat_map(|source| source.endpoints.iter())
+            .filter(|endpoint| endpoint.kind == EndpointKind::ElectrumTls)
+            .map(|endpoint| (endpoint.host.clone(), endpoint.port.unwrap()))
+            .collect();
+        assert!(!planned.is_empty());
+        let offered: Vec<(String, u16)> = servers
+            .iter()
+            .map(|server| (server.host().to_owned(), server.port()))
+            .collect();
+        assert_eq!(offered[..planned.len()], planned[..]);
+        assert!(servers.iter().all(ElectrumEndpoint::encrypted));
+        assert_eq!(
+            shared_electrum(Network::Chipnet, Some(&directory.0))
+                .unwrap()
+                .map(|server| server.host().to_owned()),
+            Some(planned[0].0.clone())
+        );
     }
 
     #[test]
