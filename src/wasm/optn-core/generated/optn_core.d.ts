@@ -243,6 +243,13 @@ export function looksLikeRpa(candidate: string): boolean;
 export function paymentAddress(spend_pubkey: Uint8Array, secret: Uint8Array, network: string, index: number): string;
 
 /**
+ * Plan a send that may spend token coins, as JSON; see
+ * `spend::TokenSpendPlan`. Any wallet kind can call this: it decides inputs
+ * and outputs, token and BCH change, and checks that nothing is burned.
+ */
+export function planTokenSpend(network: string, outpoints: string[], sats: BigUint64Array, addresses: string[], categories: string[], amounts: string[], capabilities: string[], commitments: string[], payment_kind: string, payment_target: string | null | undefined, payment_amount: string | null | undefined, amount_decimals: number, chosen: string[] | null | undefined, destination: string, change: string, fee_sats_per_kb: bigint): string;
+
+/**
  * Verify the signed return against the exact reviewed bytes. Never broadcasts.
  */
 export function psbtFinalizeCashTokensP2pkh(original: Uint8Array, signed: Uint8Array, network: string): Uint8Array;
@@ -287,6 +294,19 @@ export function spendingKey(spend_privkey: Uint8Array, secret: Uint8Array, index
  * (display order), as JSON. Refuses a parent that is not that transaction.
  */
 export function spentOutputLabel(parent: Uint8Array, txid: string, vout: number): string;
+
+/**
+ * The same plan as an unsigned PSBT for an air-gapped signer, as JSON
+ * `{psbt, plan, review}`: the PSBT as hex, and Rust's review of exactly
+ * those bytes for the holder to approve.
+ *
+ * Takes the same arguments as `planTokenSpend` -- the plan is made again
+ * here, so the PSBT cannot be built from a different one -- then each coin's
+ * key (`pubkeys` as hex, empty when unknown, with its HD `branches` and
+ * `indexes`), the account path, the signer's fingerprint if the wallet has
+ * one, and the complete parent transaction of every input, as hex.
+ */
+export function tokenSpendPsbt(network: string, outpoints: string[], sats: BigUint64Array, addresses: string[], categories: string[], amounts: string[], capabilities: string[], commitments: string[], payment_kind: string, payment_target: string | null | undefined, payment_amount: string | null | undefined, amount_decimals: number, chosen: string[] | null | undefined, destination: string, change: string, fee_sats_per_kb: bigint, pubkeys: string[], branches: Uint32Array, indexes: Uint32Array, account_path: string, fingerprint: string | null | undefined, parents: string[]): string;
 
 /**
  * Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
@@ -338,6 +358,7 @@ export interface InitOutput {
     readonly legacyPaycodeRejection: () => [number, number];
     readonly looksLikeRpa: (a: number, b: number) => number;
     readonly paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly planTokenSpend: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: bigint) => [number, number, number, number];
     readonly psbtFinalizeCashTokensP2pkh: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly psbtReviewP2pkh: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly rpaKeyPaths: (a: number, b: number) => [number, number];
@@ -346,12 +367,14 @@ export interface InitOutput {
     readonly sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly spentOutputLabel: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly tokenSpendPsbt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: bigint, e1: number, f1: number, g1: number, h1: number, i1: number, j1: number, k1: number, l1: number, m1: number, n1: number, o1: number, p1: number) => [number, number, number, number];
     readonly transactionOutpoints: (a: number, b: number) => [number, number, number, number];
-    readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_start: () => void;
 }
 

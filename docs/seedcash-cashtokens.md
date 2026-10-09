@@ -79,6 +79,25 @@ account `m/44'/145'/0'`. This account is explicit despite the Chipnet test scope
   parent output carries tokens not declared for it: before this, a token coin
   selected there was built into a PSBT whose outputs dropped its tokens.
 
+- Token sends are planned once, in the shared spend path
+  (`optn_core::spend::tokens`), for every wallet kind. A `Payment` is BCH, an
+  FT amount of one category, every FT of one category, or one NFT exactly as it
+  is; `CoinChoice::Exactly` is coin control (those coins or a refusal, never an
+  added one). Tokens the send spends but does not send return to the wallet's
+  token-aware change address: FT change as one output per category, each NFT on
+  its own output, unchanged. BCH for token outputs (1,000 sats each) and the fee
+  comes from the spent coins, then from BCH-only coins, never from coins of
+  another category. Every plan is checked before it is returned: its outputs
+  carry exactly the tokens its inputs do.
+- `airgap_spend::prepare_token_psbt` turns a plan into the PSBT SeedCash signs.
+  Each input is bound to its complete parent transaction, and a parent that
+  disagrees with the plan about a coin's value, script or tokens refuses the
+  PSBT; the PSBT is then reviewed with `psbt::review_p2pkh`, and must say exactly
+  what the plan says. WASM: `planTokenSpend`, `tokenSpendPsbt`.
+- Not yet: the SeedCash send screen's token mode on top of these, and the CLI's
+  `token-send` / `send-nft` moved onto the same planner. The hot wallet's
+  Simple Send moves onto it with the PR #63 Rust migration.
+
 These APIs do not prove parent chain inclusion/unspentness or authorize a spend.
 The GUI token selection/approval flow is not enabled by this patch. A caller must
 show the exact review, obtain approval (including intentional burns/authority
