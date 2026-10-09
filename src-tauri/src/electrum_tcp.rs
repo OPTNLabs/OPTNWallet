@@ -24,11 +24,16 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 /// One open socket: the channel the JS `write()` path pushes outbound bytes
-/// into, the page that opened it, and its task, which closing aborts so the
-/// socket goes away at once rather than when the server hangs up.
+/// into, the page that opened it, the server and network it was allowed for,
+/// and its task, which closing aborts so the socket goes away at once rather
+/// than when the server hangs up.
 struct Connection {
     tx: mpsc::UnboundedSender<Vec<u8>>,
     owner: String,
+    network: optn_core::network::Network,
+    host: String,
+    port: u16,
+    tls: bool,
     task: tokio::task::AbortHandle,
 }
 
@@ -155,6 +160,10 @@ async fn secure(tcp: TcpStream, host: &str, use_ssl: bool) -> Result<ElectrumStr
 /// frontend uses for `electrum_tcp_send` / `electrum_tcp_close`, and listens on
 /// `electrum-tcp://data/{id}` and `electrum-tcp://closed/{id}`.
 ///
+/// Only a server the holder's source selection includes is dialled (see
+/// `electrum_selection`); anything else is refused before any connection,
+/// with a reason starting `electrum-not-selected`.
+///
 /// The connection follows the holder's Tor switch like every other route (see
 /// `egress`): with Tor on, a public server is reached only through verified
 /// Tor, so the addresses this socket asks about are never tied to this IP.
@@ -172,6 +181,17 @@ pub async fn electrum_tcp_connect(
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
     network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<u32, String> {
+    let selected_for =
+        crate::electrum_selection::requested_network(runtime.state().network, network.as_deref())?;
+    crate::electrum_selection::check_dial(
+        &runtime,
+        &network_settings,
+        selected_for,
+        &host,
+        port,
+        use_ssl,
+    )
+    .await?;
     let networks = crate::egress::networks_for(runtime.state().network, network.as_deref());
     let route = crate::egress::decide(&host, &network_settings, &networks)
         .await?
@@ -190,6 +210,10 @@ pub async fn electrum_tcp_connect(
         Connection {
             tx,
             owner: webview.label().to_owned(),
+            network: selected_for,
+            host,
+            port,
+            tls: use_ssl,
             task: task.abort_handle(),
         },
     );
@@ -226,6 +250,57 @@ pub(crate) async fn close_owned_by(owner: &str) {
         }
         keep
     });
+}
+
+/// Close the sockets on `network` that its selection no longer includes, and
+/// tell their pages. Called after the network's settings change: a server the
+/// holder just disabled, banned or excluded by policy must not stay connected.
+pub(crate) async fn revoke_unselected(
+    app: &AppHandle,
+    runtime: &optn_runtime::AppRuntime,
+    settings: &crate::network_config::NetworkSettingsStore,
+    network: optn_core::network::Network,
+) {
+    let targets: Vec<(u32, String, u16, bool)> = CONNECTIONS
+        .lock()
+        .await
+        .iter()
+        .filter(|(_, connection)| connection.network == network)
+        .map(|(id, connection)| {
+            (
+                *id,
+                connection.host.clone(),
+                connection.port,
+                connection.tls,
+            )
+        })
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+    let mut revoke = Vec::new();
+    for (id, host, port, tls) in targets {
+        if crate::electrum_selection::check_dial(runtime, settings, network, &host, port, tls)
+            .await
+            .is_err()
+        {
+            revoke.push(id);
+        }
+    }
+    let closed: Vec<u32> = {
+        let mut connections = CONNECTIONS.lock().await;
+        revoke
+            .into_iter()
+            .filter_map(|id| connections.remove(&id).map(|connection| (id, connection)))
+            .map(|(id, connection)| {
+                connection.task.abort();
+                id
+            })
+            .collect()
+    };
+    for id in closed {
+        let _ = app.emit(&closed_event(id), ());
+    }
 }
 
 /// Close every socket and tell its page, which reconnects through the

@@ -16,7 +16,7 @@ use crate::chain_runtime::NativeChainRuntime;
 use crate::network_config::NetworkSettingsStore;
 use optn_core::network::Network;
 use optn_runtime::chain::{
-    ConnectionPolicy, ProtocolFamily, SourceCatalog, SourceDisposition, SourceId, TransportPolicy,
+    ConnectionPolicy, ProtocolFamily, SourceDisposition, SourceId, TransportPolicy,
 };
 use optn_runtime::chain_service::ChainOperation;
 use optn_runtime::network_config::{
@@ -53,35 +53,16 @@ pub async fn optn_chain_sources(
         Some(value) => parse_network(&value)?,
         None => runtime.state().network,
     };
+    // The same resolution the renderer's Electrum gate uses: listing is not
+    // dialling, so with nothing saved the shipped servers are shown even
+    // before a wallet is open.
     let settings = (*network_settings).clone();
-    let persisted = tokio::task::spawn_blocking(move || settings.chain_selection(network))
-        .await
-        .map_err(|_| "network settings reader stopped".to_string())??;
-    let (catalog, policy) = match persisted {
-        Some(selection) => selection,
-        None => {
-            // The runtime's own fallback withholds the shipped catalog until a
-            // wallet is open, because an idle install must not dial anyone.
-            // Listing is not dialling: with nothing to show, this screen would
-            // claim the wallet has no servers at all, which is false and leaves
-            // no way to disable one before opening a wallet. `wallet_routes`
-            // still reports what is actually connected.
-            let state = runtime.state();
-            let (catalog, policy) = if state.network == network {
-                crate::chain_runtime::catalog_and_policy_from_app_state(&state)
-            } else {
-                (SourceCatalog::default(), ConnectionPolicy::auto())
-            };
-            if catalog.iter().next().is_none() {
-                (
-                    optn_runtime::bootstrap::shipped_source_catalog(network),
-                    policy,
-                )
-            } else {
-                (catalog, policy)
-            }
-        }
-    };
+    let state = runtime.state();
+    let (catalog, policy) = tokio::task::spawn_blocking(move || {
+        crate::electrum_selection::listed_selection(&settings, &state, network)
+    })
+    .await
+    .map_err(|_| "network settings reader stopped".to_string())??;
     // Listed as routes are built, discovered servers included, so the holder
     // can disable or ban one.
     let catalog = {
@@ -551,7 +532,7 @@ pub async fn optn_chain_rpc_credentials(
 mod tests {
     use super::*;
     use optn_runtime::{
-        chain::{ChainSource, Endpoint, EndpointKind, SourceOrigin},
+        chain::{ChainSource, Endpoint, EndpointKind, SourceCatalog, SourceOrigin},
         chain_service::RegisteredCapabilityObservation,
     };
     use optn_transport_native::disposition_label;

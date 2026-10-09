@@ -14,6 +14,7 @@ mod chain_sources;
 pub mod clipboard;
 mod coin_holds;
 mod egress;
+mod electrum_selection;
 pub mod electrum_tcp;
 pub mod fusion;
 #[cfg(desktop)]
@@ -411,17 +412,55 @@ struct FusionRunInputReq {
 
 fn fusion_run_destination_hosts<'a>(
     host: &'a str,
-    lookup_host: &'a str,
-    lookup_fallbacks: &'a [FusionLookupEndpointReq],
+    lookups: &'a [fusion::electrum_input::ElectrumEndpoint],
 ) -> Vec<&'a str> {
     std::iter::once(host)
-        .chain(std::iter::once(lookup_host))
-        .chain(
-            lookup_fallbacks
-                .iter()
-                .map(|endpoint| endpoint.host.as_str()),
-        )
+        .chain(lookups.iter().map(|endpoint| endpoint.host.as_str()))
         .collect()
+}
+
+/// The Electrum servers a Fusion call checks peer inputs with: those offered
+/// that the holder's source selection includes, then the rest of the
+/// selection (see `electrum_selection::fusion_lookup_endpoints`).
+async fn fusion_lookups(
+    runtime: &optn_runtime::AppRuntime,
+    network_settings: &crate::network_config::NetworkSettingsStore,
+    primary: fusion::electrum_input::ElectrumEndpoint,
+    fallbacks: Vec<FusionLookupEndpointReq>,
+) -> Result<Vec<fusion::electrum_input::ElectrumEndpoint>, String> {
+    use electrum_selection::SelectedElectrum;
+
+    let network = runtime.state().network;
+    let pool = electrum_selection::electrum_pool(runtime, network_settings, network).await?;
+    let offered = std::iter::once(SelectedElectrum {
+        host: primary.host,
+        port: primary.port,
+        tls: primary.use_ssl,
+    })
+    .chain(fallbacks.into_iter().map(|endpoint| SelectedElectrum {
+        host: endpoint.host,
+        port: endpoint.port,
+        tls: endpoint.use_ssl,
+    }));
+    let chosen = electrum_selection::fusion_lookup_endpoints(
+        &pool,
+        offered,
+        electrum_selection::FUSION_LOOKUP_LIMIT,
+    );
+    if chosen.is_empty() {
+        let why = pool.reason.unwrap_or_else(|| {
+            "No Electrum server selected for this network can check this round's inputs.".into()
+        });
+        return Err(format!("{}: {why}", electrum_selection::NOT_SELECTED));
+    }
+    Ok(chosen
+        .into_iter()
+        .map(|server| fusion::electrum_input::ElectrumEndpoint {
+            host: server.host,
+            port: server.port,
+            use_ssl: server.tls,
+        })
+        .collect())
 }
 
 #[derive(serde::Serialize)]
@@ -520,10 +559,21 @@ async fn fusion_run(
     if lookup_host.trim().is_empty() || lookup_port == 0 {
         return Err("CashFusion peer-input lookup endpoint is invalid".into());
     }
+    let lookup_endpoints = fusion_lookups(
+        &runtime,
+        &network_settings,
+        fusion::electrum_input::ElectrumEndpoint {
+            host: lookup_host,
+            port: lookup_port,
+            use_ssl: lookup_use_ssl,
+        },
+        lookup_fallbacks,
+    )
+    .await?;
     // The lookup transport is reused by each configured fallback. Resolve Tor
     // against the complete destination set first, so a local primary cannot
     // make a remote fallback inherit a direct route.
-    let destination_hosts = fusion_run_destination_hosts(&host, &lookup_host, &lookup_fallbacks);
+    let destination_hosts = fusion_run_destination_hosts(&host, &lookup_endpoints);
     let verified_proxy = verified_fusion_proxy_for_network(
         &destination_hosts,
         &network_settings,
@@ -574,23 +624,11 @@ async fn fusion_run(
         output_scripts: scripts,
         main_transport: transport,
         remote_transport,
-        // Every configured Electrum server, primary first, not just one. A
+        // Every selected Electrum server, primary first, not just one. A
         // single unreachable host otherwise makes peer inputs unverifiable —
         // and since missing evidence must never become an accusation, that
         // aborts every round rather than blaming anyone.
-        lookup_endpoints: std::iter::once(fusion::electrum_input::ElectrumEndpoint {
-            host: lookup_host,
-            port: lookup_port,
-            use_ssl: lookup_use_ssl,
-        })
-        .chain(lookup_fallbacks.into_iter().map(|endpoint| {
-            fusion::electrum_input::ElectrumEndpoint {
-                host: endpoint.host,
-                port: endpoint.port,
-                use_ssl: endpoint.use_ssl,
-            }
-        }))
-        .collect(),
+        lookup_endpoints,
         lookup_remote_transport: remote_transport,
         timing: fusion::run::FusionTiming::default(),
         join_inactive_timeout,
@@ -717,20 +755,17 @@ async fn fusion_transaction_is_known(
     network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<bool, String> {
     let _ = (tor_host, tor_port);
-    let endpoints: Vec<fusion::electrum_input::ElectrumEndpoint> =
-        std::iter::once(fusion::electrum_input::ElectrumEndpoint {
+    let endpoints = fusion_lookups(
+        &runtime,
+        &network_settings,
+        fusion::electrum_input::ElectrumEndpoint {
             host: lookup_host,
             port: lookup_port,
             use_ssl: lookup_use_ssl,
-        })
-        .chain(lookup_fallbacks.into_iter().map(|endpoint| {
-            fusion::electrum_input::ElectrumEndpoint {
-                host: endpoint.host,
-                port: endpoint.port,
-                use_ssl: endpoint.use_ssl,
-            }
-        }))
-        .collect();
+        },
+        lookup_fallbacks,
+    )
+    .await?;
 
     let hosts: Vec<&str> = endpoints.iter().map(|e| e.host.as_str()).collect();
     let verified_proxy =
@@ -1375,6 +1410,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_transport::optn_app_dispatch,
             chain_sources::optn_chain_sources,
+            electrum_selection::optn_chain_electrum_pool,
             chain_sources::optn_chain_rpc_credentials,
             chain_sources::optn_chain_set_policy,
             chain_sources::optn_chain_transport,
@@ -1558,6 +1594,28 @@ pub fn run() {
                 app_runtime.clone(),
                 network_settings.clone(),
             );
+            // A settings change reaches the renderer's Electrum client: its
+            // pool is fetched again, and sockets to servers the selection no
+            // longer includes close now rather than at the next reload.
+            {
+                let handle = app.handle().clone();
+                let runtime = app_runtime.clone();
+                let settings = network_settings.clone();
+                network_settings.on_change(move |network| {
+                    let handle = handle.clone();
+                    let runtime = runtime.clone();
+                    let settings = settings.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = tauri::Emitter::emit(
+                            &handle,
+                            electrum_selection::POOL_CHANGED,
+                            network.to_string(),
+                        );
+                        electrum_tcp::revoke_unselected(&handle, &runtime, &settings, network)
+                            .await;
+                    });
+                });
+            }
             app.manage(appearance);
             app.manage(network_settings);
             app.manage(native_chain);
@@ -2002,20 +2060,20 @@ mod tests {
 
     #[test]
     fn fusion_run_includes_every_lookup_fallback_in_proxy_decision() {
-        let fallbacks = vec![
-            FusionLookupEndpointReq {
-                host: "remote-fallback.example".into(),
-                port: 50002,
-                use_ssl: true,
+        let lookups = [
+            ("localhost", 50001, false),
+            ("remote-fallback.example", 50002, true),
+            ("127.0.0.1", 50001, false),
+        ]
+        .map(
+            |(host, port, use_ssl)| fusion::electrum_input::ElectrumEndpoint {
+                host: host.into(),
+                port,
+                use_ssl,
             },
-            FusionLookupEndpointReq {
-                host: "127.0.0.1".into(),
-                port: 50001,
-                use_ssl: false,
-            },
-        ];
+        );
         assert_eq!(
-            fusion_run_destination_hosts("fusion.example", "localhost", &fallbacks),
+            fusion_run_destination_hosts("fusion.example", &lookups),
             vec![
                 "fusion.example",
                 "localhost",

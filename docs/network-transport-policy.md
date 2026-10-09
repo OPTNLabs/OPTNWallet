@@ -97,6 +97,18 @@ which applies the switch through one rule (`decide`):
 - **The legacy TypeScript Electrum client's native socket**
   (`electrum_tcp_connect`) follows the switch. So do the price fetch and the
   update check.
+- **Which Electrum servers** that socket may reach is the source selection's
+  call, not the renderer's (`src-tauri/src/electrum_selection.rs`). The
+  renderer takes its server list from `optn_chain_electrum_pool`, and the
+  socket refuses anything else with `electrum-not-selected`. That covers
+  disabled and banned servers, and policies without Electrum (Privacy, own
+  infrastructure only, BIP37 or Neutrino only).
+  - CashFusion's peer-input lookups follow the same list.
+  - When settings change, sockets to servers no longer selected close.
+  - Loopback and Cauldron's Rostrum indexer (an app service, like the HTTP
+    indexers) are not chain sources and are not covered.
+  - With nothing saved, the shipped servers are the selection, as the
+    Servers screen lists them.
 - **With Tor off**, a public name must resolve to public addresses, and the
   connection goes to the address that was checked, so DNS cannot point a
   request at the holder's own network. The holder's declared nodes and

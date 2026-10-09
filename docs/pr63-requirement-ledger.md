@@ -1330,3 +1330,58 @@ Two `header_view` fixtures had ground regtest-difficulty chains and verified
 them under chipnet's rules. They now say regtest, which is what they are.
 The legacy DAA/EDA rules before the anchor remain unchecked. Shipped
 checkpoints are option (2) of the item.
+
+### 2026-10-09: the renderer's Electrum servers come from the source selection
+
+#75 §20 and §21 (items 75-16 to 75-21, 75-26, 75-96 and 75-98). The native
+stack chose Electrum servers from the holder's source selection. The
+renderer's Electrum client kept its own list (shipped defaults, its own user
+servers, desktop-only extras), and `electrum_tcp_connect` dialled whatever it
+was given. A server the holder disabled or banned in *Settings → Servers* was
+still dialled, and so was every server under Privacy, own infrastructure
+only, BIP37 only or Neutrino only. CashFusion's peer-input lookups took
+servers from the renderer too.
+
+`src-tauri/src/electrum_selection.rs` is now the one rule:
+
+- `listed_selection` resolves a network's catalog and policy. The Servers
+  screen lists from it as well, so the two cannot disagree.
+- `pool_from` turns it into Electrum servers, in plan order. Electrum must be
+  among the policy's protocols, since under Privacy a source is selected for
+  its P2P endpoint. Onion servers are left out with Tor off.
+- `optn_chain_electrum_pool` gives the renderer that list. The desktop
+  router uses it in place of its own, and fails at once with the policy's
+  reason when it allows no Electrum. The desktop Home screen then says so
+  instead of showing an empty wallet.
+- `electrum_tcp_connect` refuses any other server before dialling, with
+  `electrum-not-selected`. Loopback and Cauldron's Rostrum indexer are
+  exempt: neither is a chain source.
+- Every settings save now notifies, whatever screen made it. Renderers fetch
+  the pool again, and sockets to servers the new selection excludes close.
+- Fusion lookups use the servers the renderer offered that the selection
+  includes, then the rest of the selection, eight at most. A round with none
+  is refused.
+
+With nothing saved, the selection is the shipped catalog under Auto, as the
+Servers screen already listed it. A fresh install therefore still connects
+during onboarding.
+
+The renderer used to dial some servers that are not in the shipped catalog.
+None of them are dialled now:
+
+- chipnet `electrum-chipnet.optnlabs.com`, which answers neither raw TLS
+  (50002) nor TCP (50001) as of today, so the desktop could not use it;
+- testnet3 and testnet4 servers on their WSS ports (60004, 62004), which the
+  desktop dialled as raw TLS;
+- mainnet `electron.jochen-hoenicke.de` on 50002, where the catalog has 51002.
+
+Legacy servers in the renderer's local storage are not imported, and are
+refused like any server outside the selection.
+
+Not covered yet:
+
+- cashscript's `ElectrumNetworkProvider` names its own hosts. They are in the
+  shipped catalog, so they pass under Auto and are refused under narrower
+  policies.
+- Plain-TCP Electrum servers cannot be written in the renderer's server
+  format and are left out of its list.

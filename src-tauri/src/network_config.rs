@@ -22,6 +22,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Told which network's settings were just saved.
+type ChangeListener = Arc<dyn Fn(Network) + Send + Sync>;
+
 /// Tauri-owned files, one per chain network because the runtime envelope has no
 /// network discriminator.
 #[derive(Clone)]
@@ -43,6 +46,9 @@ pub struct NetworkSettingsStore {
     /// Where the per-network caches of discovered servers live, beside the
     /// settings files and never inside them.
     directory: PathBuf,
+    /// Called after every save through this store, whatever screen made it.
+    /// Set once at startup.
+    listener: Arc<std::sync::RwLock<Option<ChangeListener>>>,
 }
 
 impl NetworkSettingsStore {
@@ -56,6 +62,27 @@ impl NetworkSettingsStore {
             regtest: NetworkConfigFile::new(directory.join("network-regtest.json")),
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
             directory,
+            listener: Arc::default(),
+        }
+    }
+
+    /// Be told, after each save, which network's settings changed: the
+    /// selection, the Tor switch, proxy trust or an import. A cache of
+    /// discovered servers is not a setting and tells nobody.
+    pub fn on_change(&self, listener: impl Fn(Network) + Send + Sync + 'static) {
+        if let Ok(mut slot) = self.listener.write() {
+            *slot = Some(Arc::new(listener));
+        }
+    }
+
+    fn changed(&self, network: Network) {
+        let listener = self
+            .listener
+            .read()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(Arc::clone));
+        if let Some(listener) = listener {
+            listener(network);
         }
     }
 
@@ -135,9 +162,9 @@ impl NetworkSettingsStore {
     }
 
     pub fn import_portable(&self, network: Network, json: &str) -> Result<(), String> {
-        self.file_for(network)
-            .import_portable(network, json)
-            .map(|_| ())
+        self.file_for(network).import_portable(network, json)?;
+        self.changed(network);
+        Ok(())
     }
 
     /// Restore every network into a clone, publishing only after all reads
@@ -228,8 +255,9 @@ impl NetworkSettingsStore {
             // The server fields say which servers, never how they are reached.
             envelope.overlay.connection_policy.transport = transport;
             Ok(envelope)
-        })
-        .map(|_| ())
+        })?;
+        self.changed(network);
+        Ok(())
     }
 
     /// Edit the durable overlay for one network.
@@ -244,16 +272,16 @@ impl NetworkSettingsStore {
         network: Network,
         edit: impl FnOnce(&mut UserNetworkOverlay) -> Result<(), String>,
     ) -> Result<(), String> {
-        self.file_for(network)
-            .update(|existing| {
-                let mut envelope = existing.unwrap_or_else(|| {
-                    NetworkConfigEnvelope::current(SHIPPED_CATALOG_VERSION, Default::default())
-                });
-                promote_legacy_policy(&mut envelope);
-                edit(&mut envelope.overlay)?;
-                Ok(envelope)
-            })
-            .map(|_| ())
+        self.file_for(network).update(|existing| {
+            let mut envelope = existing.unwrap_or_else(|| {
+                NetworkConfigEnvelope::current(SHIPPED_CATALOG_VERSION, Default::default())
+            });
+            promote_legacy_policy(&mut envelope);
+            edit(&mut envelope.overlay)?;
+            Ok(envelope)
+        })?;
+        self.changed(network);
+        Ok(())
     }
 
     /// Select the file whose contents belong exclusively to this chain network.
