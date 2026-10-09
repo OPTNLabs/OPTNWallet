@@ -12,6 +12,7 @@ use optn_runtime::chain_service::{
     BackendObservation, ChainBackend, ChainBackendError, ChainFuture, ChainOperation, ChainPayload,
     ChainRequest, ChainTip, ObservedTransaction, OutpointSpentness, WalletInterest,
 };
+use optn_runtime::tx_broadcast::{classify_node_message, NodeBroadcastReply, MEMPOOL_CONFLICT};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -797,12 +798,31 @@ impl ElectrumBackend {
         // wallet's second open connection to the server.
         drop(self.idle.lock().await.take());
         let mut session = self.session().await?;
-        let returned = session
+        let returned = match session
             .call(
                 "blockchain.transaction.broadcast",
                 json!([hex::encode(raw_tx)]),
             )
-            .await?;
+            .await
+        {
+            Ok(returned) => returned,
+            Err(ChainBackendError::Protocol(error)) => {
+                return match broadcast_error_reply(&error) {
+                    // The server's node has this exact transaction: observed,
+                    // not rejected.
+                    NodeBroadcastReply::AlreadyHas => Ok(BackendObservation {
+                        payload: ChainPayload::BroadcastObserved { txid },
+                        evidence: Evidence::ServerAssertion,
+                        chain_tip: None,
+                    }),
+                    NodeBroadcastReply::Conflict => Err(ChainBackendError::Rejected(format!(
+                        "another transaction already spends these coins ({MEMPOOL_CONFLICT})"
+                    ))),
+                    NodeBroadcastReply::Other => Err(ChainBackendError::Protocol(error)),
+                };
+            }
+            Err(error) => return Err(error),
+        };
         let returned_txid = returned.as_str().ok_or_else(|| {
             ChainBackendError::InvalidResponse("broadcast result is not a txid".into())
         })?;
@@ -1725,6 +1745,27 @@ fn validate_genesis(features: &Value, expected: [u8; 32]) -> Result<(), ChainBac
     Ok(())
 }
 
+/// What a server's error reply to `blockchain.transaction.broadcast` says.
+///
+/// Fulcrum and ElectrumX pass the node's message on after a fixed preamble,
+/// `the transaction was rejected by network rules.`, a blank line, and then
+/// the message on a line of its own (ElectrumX then appends the transaction).
+/// Only the node's own words are read, and only exactly (see
+/// `classify_node_message`).
+fn broadcast_error_reply(error: &str) -> NodeBroadcastReply {
+    let message = serde_json::from_str::<Value>(error).ok().and_then(|error| {
+        error
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    });
+    let node = message
+        .as_deref()
+        .and_then(|message| message.strip_prefix("the transaction was rejected by network rules."))
+        .and_then(|rest| rest.trim_start().lines().next());
+    node.map_or(NodeBroadcastReply::Other, classify_node_message)
+}
+
 fn decode_display_hash(value: &str) -> Result<[u8; 32], ChainBackendError> {
     let mut bytes = hex::decode(value)
         .map_err(|e| ChainBackendError::InvalidResponse(format!("invalid hash hex: {e}")))?;
@@ -2414,5 +2455,105 @@ mod tests {
         assert_eq!(parse_headers_result(&v).unwrap().len(), 2);
         let v = json!({"hex":format!("{}{}","22".repeat(80),"33".repeat(80))});
         assert_eq!(parse_headers_result(&v).unwrap().len(), 2);
+    }
+
+    /// Broadcast once against a loopback server that answers with `error`,
+    /// Fulcrum's way: code 1 and the node's message after its preamble.
+    async fn broadcast_meeting(
+        node_message: &str,
+    ) -> Result<BackendObservation, ChainBackendError> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let message = format!("the transaction was rejected by network rules.\n\n{node_message}\n");
+        let server = tokio::spawn(async move {
+            while let Ok(Ok((stream, _))) =
+                timeout(Duration::from_millis(500), listener.accept()).await
+            {
+                let mut stream = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if stream.read_line(&mut line).await.unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    let response = match request["method"].as_str().unwrap() {
+                        "blockchain.transaction.broadcast" => json!({"id": request["id"],
+                            "result": null, "error": {"code": 1, "message": message}}),
+                        method => {
+                            let result = match method {
+                                "server.version" => json!(["broadcast-test", "1.5"]),
+                                "server.features" => {
+                                    json!({"genesis_hash": display_hash([9; 32])})
+                                }
+                                "server.peers.subscribe" => json!([]),
+                                "blockchain.headers.subscribe" => {
+                                    json!({"height": 500, "hex": "11".repeat(80)})
+                                }
+                                other => panic!("unexpected request: {other}"),
+                            };
+                            json!({"id": request["id"], "result": result, "error": null})
+                        }
+                    };
+                    if stream
+                        .get_mut()
+                        .write_all(format!("{response}\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
+        let backend = ElectrumBackend::connect(ElectrumConfig::new(
+            SourceId::new("broadcast-test"),
+            Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "127.0.0.1".into(),
+                port: Some(port),
+            },
+            ElectrumTransport::Tcp,
+            [9; 32],
+        ))
+        .await
+        .unwrap();
+        let raw = one_output_transaction(&[0x51], 1234);
+        let txid = sha256d(&raw);
+        let result = backend
+            .execute(&ChainRequest::Broadcast { raw_tx: raw, txid })
+            .await;
+        drop(backend);
+        server.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn a_transaction_the_node_already_has_was_broadcast_not_rejected() {
+        for node_message in [
+            "txn-already-in-mempool (code 18)",
+            "txn-already-known (code 18)",
+            "transaction already in block chain",
+        ] {
+            let observation = broadcast_meeting(node_message)
+                .await
+                .unwrap_or_else(|error| panic!("{node_message}: {error:?}"));
+            assert!(
+                matches!(observation.payload, ChainPayload::BroadcastObserved { .. }),
+                "{node_message}"
+            );
+            assert_eq!(observation.evidence, Evidence::ServerAssertion);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_conflicting_spend_is_rejected_and_other_refusals_stay_uncertain() {
+        assert!(matches!(
+            broadcast_meeting("txn-mempool-conflict (code 18)").await,
+            Err(ChainBackendError::Rejected(reason)) if reason.contains("txn-mempool-conflict")
+        ));
+        assert!(matches!(
+            broadcast_meeting("bad-txns-inputs-missingorspent (code 16)").await,
+            Err(ChainBackendError::Protocol(_))
+        ));
     }
 }

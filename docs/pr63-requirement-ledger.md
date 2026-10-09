@@ -1385,3 +1385,31 @@ Not covered yet:
   policies.
 - Plain-TCP Electrum servers cannot be written in the renderer's server
   format and are left out of its list.
+
+### 2026-10-09: a transaction the node already has is not a rejection
+
+#75 (item 75-69). A broadcast that met a node already holding the
+transaction was reported as rejected, or as uncertain. The desktop then told
+the holder their sources had refused a transaction that was in the mempool.
+
+- **BCHN RPC.** BCHN answers a JSON-RPC error with HTTP 500 and the error in
+  the body (`JSONErrorReply`, httprpc.cpp). The adapter read only the status,
+  so every refusal arrived as "BCHN RPC HTTP status 500". It now reads the
+  node's code and message.
+- **Electrum servers** pass the node's message on after Fulcrum's preamble.
+- **BIP37 peers** send a `reject` (BIP61) naming the transaction.
+
+All three now read the node's own words through one classifier
+(`optn_runtime::tx_broadcast::classify_node_message` and `classify_reject`).
+The strings come from BCHN's source:
+
+- `transaction already in block chain` (RPC -27);
+- `txn-already-in-mempool` and `txn-already-known`, reject code 18,
+  formatted as `<reason> (code 18)` by `FormatStateMessage`.
+
+Any of these means the node has the transaction, so the broadcast counts as
+observed and the coordinator reports it as submitted.
+
+`txn-mempool-conflict` shares code 18 but means another transaction spends
+the same coins, so it is a rejection. Only exact wording counts: the same
+words under another RPC code, or with anything added, are handled as before.

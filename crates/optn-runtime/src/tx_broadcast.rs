@@ -59,6 +59,57 @@ impl BroadcastState {
     }
 }
 
+/// BCHN's words for "this node already has this exact transaction".
+///
+/// From BCHN's `validation.cpp` (`AcceptToMemoryPool`, reject code
+/// `REJECT_DUPLICATE`, 0x12) and `node/transaction.cpp`
+/// (`BroadcastTransaction`, RPC -27). A node that already holds the
+/// transaction has observed it: a broadcast that meets one of these was not
+/// rejected.
+pub const ALREADY_IN_MEMPOOL: &str = "txn-already-in-mempool";
+pub const ALREADY_KNOWN: &str = "txn-already-known";
+pub const ALREADY_IN_CHAIN: &str = "transaction already in block chain";
+/// Shares `REJECT_DUPLICATE` with the two above, but means a different
+/// transaction already spends the same coins: a rejection. Matching is
+/// therefore on the exact reason, never on the code.
+pub const MEMPOOL_CONFLICT: &str = "txn-mempool-conflict";
+const REJECT_DUPLICATE: u8 = 0x12;
+
+/// What a node's answer to a broadcast says about the transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeBroadcastReply {
+    /// The node already has this exact transaction.
+    AlreadyHas,
+    /// Another transaction already spends the same coins.
+    Conflict,
+    /// Anything else, decided by the caller as before.
+    Other,
+}
+
+/// Read a P2P `reject` for this transaction (BIP61): code and bare reason.
+pub fn classify_reject(code: u8, reason: &str) -> NodeBroadcastReply {
+    match (code, reason) {
+        (REJECT_DUPLICATE, ALREADY_IN_MEMPOOL | ALREADY_KNOWN) => NodeBroadcastReply::AlreadyHas,
+        (REJECT_DUPLICATE, MEMPOOL_CONFLICT) => NodeBroadcastReply::Conflict,
+        _ => NodeBroadcastReply::Other,
+    }
+}
+
+/// Read `sendrawtransaction`'s error message, as BCHN words it: RPC -27's
+/// text, or a reject reason followed by ` (code N)` (`FormatStateMessage`).
+/// Exact matches only, so nothing that merely mentions a phrase is read as
+/// success.
+pub fn classify_node_message(message: &str) -> NodeBroadcastReply {
+    let message = message.trim();
+    if message == ALREADY_IN_CHAIN {
+        return NodeBroadcastReply::AlreadyHas;
+    }
+    let Some(reason) = message.strip_suffix(" (code 18)") else {
+        return NodeBroadcastReply::Other;
+    };
+    classify_reject(REJECT_DUPLICATE, reason)
+}
+
 #[derive(Default)]
 pub struct BroadcastCoordinator;
 
@@ -493,5 +544,70 @@ mod tests {
             .await;
         let observed = BroadcastCoordinator.observe(&mut service, submitted).await;
         assert!(matches!(observed, BroadcastState::Uncertain { .. }));
+    }
+}
+
+#[cfg(test)]
+mod node_replies {
+    use super::*;
+
+    #[test]
+    fn a_node_that_already_has_the_transaction_did_not_reject_it() {
+        for message in [
+            "transaction already in block chain",
+            "txn-already-in-mempool (code 18)",
+            "txn-already-known (code 18)",
+            "  txn-already-in-mempool (code 18)\n",
+        ] {
+            assert_eq!(
+                classify_node_message(message),
+                NodeBroadcastReply::AlreadyHas,
+                "{message:?}"
+            );
+        }
+        assert_eq!(
+            classify_reject(0x12, ALREADY_IN_MEMPOOL),
+            NodeBroadcastReply::AlreadyHas
+        );
+        assert_eq!(
+            classify_reject(0x12, ALREADY_KNOWN),
+            NodeBroadcastReply::AlreadyHas
+        );
+    }
+
+    #[test]
+    fn a_conflict_is_a_rejection_though_it_shares_the_code() {
+        assert_eq!(
+            classify_node_message("txn-mempool-conflict (code 18)"),
+            NodeBroadcastReply::Conflict
+        );
+        assert_eq!(
+            classify_reject(0x12, MEMPOOL_CONFLICT),
+            NodeBroadcastReply::Conflict
+        );
+    }
+
+    #[test]
+    fn only_exact_wording_counts() {
+        for message in [
+            "txn-already-in-mempool",
+            "txn-already-in-mempool (code 16)",
+            "txn-already-in-mempool, extra (code 18)",
+            "bad-txns-inputs-missingorspent (code 16)",
+            "missing inputs: transaction already in block chain",
+            "Missing inputs",
+            "",
+        ] {
+            assert_eq!(
+                classify_node_message(message),
+                NodeBroadcastReply::Other,
+                "{message:?}"
+            );
+        }
+        assert_eq!(
+            classify_reject(0x10, ALREADY_IN_MEMPOOL),
+            NodeBroadcastReply::Other
+        );
+        assert_eq!(classify_reject(0x12, "bad"), NodeBroadcastReply::Other);
     }
 }
