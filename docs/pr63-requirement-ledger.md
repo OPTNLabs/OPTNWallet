@@ -2208,9 +2208,11 @@ What the run found:
   - `ReorgBeyondWindow { floor: 325540 }` was a one-block chipnet orphan
     sealed in a view with no reorg ring. Fixed below ("a view sealed
     without a reorg ring steps back one block").
-  - The wallet whose receive branch reaches index 1,368 refreshes completely
-    through the shared runtime (CLI, 2,951 addresses, 87 s). Its desktop
-    refresh is to be rechecked with both fixes.
+  - The wallet whose receive branch reaches index 1,368 refreshed completely
+    through the CLI (2,951 addresses, 87 s), and after that the desktop
+    refused it every time: "retained wallet scripts are outside this HD
+    account or scan cap". Fixed below ("a refresh covers what the last scan
+    kept").
   - "Wallet changed or needs a refresh" after reopening the engine by hand
     is the unlock-epoch check doing its job.
 
@@ -2267,3 +2269,28 @@ counts too), and the wait re-checks the installed service each time, so a
 stale stack is never used. A build that never lands still fails as before.
 Test: a refresh started with no stack waits, then proceeds the moment a
 build installs one; with nothing building the wait gives up at its bound.
+
+Live, desktop rebuilt with this: one wallet unlocked right after launch
+waited for the stack, refreshed from +19 s and was fresh at +31 s, headers
+at the tip.
+
+### 2026-10-10: a refresh covers what the last scan kept
+
+#75. Found in the fleet run: once `optn rescan --max-addresses 3000` had
+reached used addresses past index 1,368, every desktop refresh of that
+wallet refused "retained wallet scripts are outside this HD account or scan
+cap", shown as "Wallet refresh unavailable". A refresh must cover the scope
+the last accepted scan kept, and the desktop's discovery budget (200 per
+branch, or the issued inventory plus a gap) was smaller than that scope.
+
+The budget now also grows to the longest branch the last scan kept, plus
+one gap so that branch can still grow, the same way it grows for issued
+addresses. A provider can move it by at most one gap per accepted scan,
+never past the 10,000 hard cap; a scan that needs more still fails as
+incomplete. Tests: a scan on a larger budget that reaches index 9, then a
+refresh on a six-address budget, is accepted with index 9 still in scope;
+the cap-failure test pushes past the grown budget.
+
+Live, desktop rebuilt with all three fixes: that wallet (its own sealed
+view also at the orphaned 325,540) waited for the stack, refreshed from
++30 s and was fresh at +88 s with headers at the tip, 327,174.
