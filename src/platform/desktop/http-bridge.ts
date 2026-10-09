@@ -11,10 +11,12 @@
 // `Origin`, which the price server rejects. Upstream callers are unchanged;
 // they get an ordinary `Response`.
 //
-// Loopback requests (the local Trezor Bridge) stay on the webview fetch.
+// Loopback requests (the local Trezor Bridge) stay on the webview fetch, and so
+// do the app's own hosts: Tauri's IPC is a fetch to `ipc.localhost` on Windows,
+// and the bridge itself is an IPC call (see `bridgedToRust`).
 
 import { invoke } from '@tauri-apps/api/core';
-import { isLoopbackHost, rendererNetwork } from './rendererNetwork';
+import { bridgedToRust, rendererNetwork } from './rendererNetwork';
 
 const nativeFetch = window.fetch.bind(window);
 
@@ -37,15 +39,7 @@ function urlOf(input: RequestInfo | URL): string {
 }
 
 function routedNatively(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url, window.location.href);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-  if (parsed.origin === window.location.origin) return false;
-  return !isLoopbackHost(parsed.hostname);
+  return bridgedToRust(url, window.location.href);
 }
 
 function toBase64(bytes: Uint8Array): string {

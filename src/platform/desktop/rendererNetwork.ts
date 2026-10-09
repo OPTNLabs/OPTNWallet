@@ -16,6 +16,37 @@ export function rendererNetwork(): string | null {
   return typeof value === 'string' ? value : null;
 }
 
+/**
+ * The app's own hosts. On Windows, Tauri serves the page, its IPC and its
+ * asset protocol from `<scheme>.localhost` (`http://ipc.localhost/<command>`),
+ * and RFC 6761 keeps every `.localhost` name on this machine. None of them is
+ * the network.
+ */
+export function isAppHost(host: string): boolean {
+  return host.toLowerCase().replace(/\.$/, '').endsWith('.localhost');
+}
+
+/**
+ * Whether the fetch bridge hands `url` to Rust: remote http(s) only.
+ *
+ * Never the app's own hosts. Tauri's IPC is itself a `fetch` to
+ * `ipc.localhost`, so bridging it would send each command back through IPC,
+ * which is another fetch, wrapping the last request in the next without end:
+ * the renderer grew past 7 GB and died before anything else ran.
+ */
+export function bridgedToRust(url: string, pageHref: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url, pageHref);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  if (parsed.origin === new URL(pageHref).origin) return false;
+  if (isAppHost(parsed.hostname)) return false;
+  return !isLoopbackHost(parsed.hostname);
+}
+
 /** Exactly what Rust's `is_loopback_host` accepts. */
 export function isLoopbackHost(host: string): boolean {
   const h = host

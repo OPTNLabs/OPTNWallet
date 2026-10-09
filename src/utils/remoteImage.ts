@@ -1,4 +1,5 @@
 import { isDesktopPlatform } from './platform';
+import { isAppHost } from '../platform/desktop/rendererNetwork';
 
 /**
  * A remote image named by a dApp, a peer, an add-on or an indexer, as something
@@ -26,6 +27,16 @@ export function localImageSrc(
     return url;
   }
   if (!isDesktopPlatform()) return url;
+  // The app's own asset protocol (`http://asset.localhost/...` on Windows)
+  // never leaves the machine and is not Rust's to fetch.
+  try {
+    const parsed = new URL(url);
+    if (/^https?:$/.test(parsed.protocol) && isAppHost(parsed.hostname)) {
+      return url;
+    }
+  } catch {
+    /* not an absolute URL; asked of Rust as before */
+  }
   return undefined;
 }
 

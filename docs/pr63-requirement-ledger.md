@@ -1744,3 +1744,40 @@ the Tor-only and isolation rule; server ordering, partial answers, exact
 transaction bytes; the token refusal.
 
 Not proven yet: a live chipnet round with the desktop app.
+
+### 2026-10-09: the fetch bridge never bridges Tauri's own IPC
+
+A regression from "the webview cannot reach the network" above, on Windows
+only, found by a live run: the desktop renderer grew to 7.5 GB within
+seconds of launch and crashed ("Out of Memory"), before any wallet opened.
+
+On Windows, WebView2 carries every Tauri `invoke` as a `fetch` to
+`http://ipc.localhost/<command>`. The fetch bridge sent every non-loopback
+http(s) request to Rust, and `isLoopbackHost` (which mirrors Rust's
+`is_loopback_host`) does not count `ipc.localhost`. So each IPC call was
+bridged, the bridge's own `optn_http_fetch` invoke was bridged again, and each
+level base64-wrapped the request before it. A CPU trace put nearly all time in
+the bridge's body encoder, called from the bridge, called from Tauri's
+`sendIpcMessage`. None of it reached Rust. Linux was unaffected, because
+WebKitGTK's IPC is an `ipc://` URL, which the bridge ignores; the desktop E2E
+job runs only on Linux, and no job launched the Windows build.
+
+The routing decision is now one pure function, `bridgedToRust`
+(`src/platform/desktop/rendererNetwork.ts`), used by the bridge:
+
+- the page's own origin, loopback (exactly Rust's rule, unchanged), and any
+  `*.localhost` app host (`ipc.localhost`, `asset.localhost`; RFC 6761 keeps
+  `.localhost` on the machine) stay on the webview;
+- only other http(s) hosts go to Rust.
+
+`localImageSrc` passes the app's asset protocol through for the same reason.
+
+Tests pin the rule: IPC and asset URLs in both schemes, the page, loopback and
+non-http schemes stay local; remote hosts, including look-alikes such as
+`ipc.localhost.example.com`, are bridged. On the real app with the holder's
+largest chipnet wallet (2,821 addresses): heap 39-69 MB over a minute idle,
+wallet open in 15 s with the heap at 42-61 MB, where before the page froze
+at 4 s and died.
+
+Follow-up worth doing: a Windows desktop launch in CI (start the app, render
+the landing page, stay responsive for 30 s) would have caught this.
