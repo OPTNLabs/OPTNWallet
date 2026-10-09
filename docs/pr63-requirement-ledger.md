@@ -2049,3 +2049,30 @@ Known limits, stated rather than hidden:
 Each CLI process holds its wallet directory's session, so a CLI fleet uses
 one `--wallet-directory` per member. The skill manifest lists `fusion` as a
 spending command that requires confirmation.
+
+### 2026-10-09: the docker fusion lab runs Auto Fusion headless
+
+The fusion-lab profile held Tor and waited for an `OPTN_HEADLESS_CMD` that
+did not exist ("separate product milestone"). Two things also stood in the
+way of any native runner: Tor ran in another container at `tor:9050`, while
+fusion trusts a proxy only by its local port; and only the desktop could
+declare a trusted port.
+
+- `optn network tor-trust PORT [--remove]` declares the holder's Tor the
+  way the desktop's Privacy & Transport does, in the same shared overlay.
+- `packages/docker-dev/scripts/fusion-lab-headless.sh` is the runner: it
+  builds the CLI from the mounted repository (or uses `OPTN_CLI_BIN`),
+  turns Tor on, trusts the container's own Tor port, and runs
+  `optn fusion --auto` for `OPTN_WALLET` against `OPTN_FUSION_SERVER`. It
+  refuses `p2p` with a clear message, since P2P has no Rust driver yet.
+- The `fusion-lab` service shares the `tor` service's network namespace
+  (`network_mode: service:tor`), so Tor is on its loopback; both compose
+  files validate with `docker compose config`.
+- The image creates `/optn-data` owned by uid 1000. Without it a new named
+  volume is root's and the lab could not write its health file, wallets or
+  build cache. `docker buildx build --check` passes.
+- VPS.md, README.md, SCOPE.md and PRODUCTION.md describe the runner and its
+  settings instead of "future CLI".
+
+Not yet run live in a container: that needs a CashFusion server and Tor,
+the same as the fleet run.

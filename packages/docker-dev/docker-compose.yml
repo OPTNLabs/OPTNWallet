@@ -57,6 +57,7 @@ services:
     user: "1000:1000"
     depends_on:
       - tor
+    network_mode: "service:tor"
     volumes:
       - ../..:/optn
       - optn-fusion-data:/optn-data
@@ -65,15 +66,25 @@ services:
       OPTN_ROOT: "/optn"
       # P2P CashFusion: Tor mandatory (desktop fail-closed policy)
       OPTN_TOR_REQUIRED: "1"
-      OPTN_TOR_SOCKS: "tor:9050"
+      # Shares the tor service's network (network_mode above), so Tor is on
+      # loopback: fusion trusts a proxy by its local port only.
+      OPTN_TOR_SOCKS: "127.0.0.1:9050"
       # Match desktop: P2P is the default; set OPTN_FUSION_MODE=server for classic server path
       OPTN_FUSION_MODE: "${OPTN_FUSION_MODE:-p2p}"
       OPTN_NETWORK: "${OPTN_NETWORK:-chipnet}"
       OPTN_DATA_DIR: "/optn-data"
       OPTN_TOR_PROBE_MS: "${OPTN_TOR_PROBE_MS:-5000}"
       OPTN_TOR_RECHECK_MS: "${OPTN_TOR_RECHECK_MS:-30000}"
-      # Optional full wallet Auto runner (not in this image). Empty = Tor hold loop.
+      # Headless Auto Fusion: set OPTN_HEADLESS_CMD to
+      # /optn/packages/docker-dev/scripts/fusion-lab-headless.sh with
+      # OPTN_FUSION_MODE=server, OPTN_WALLET and OPTN_FUSION_SERVER. Empty
+      # keeps the Tor hold loop.
       OPTN_HEADLESS_CMD: "${OPTN_HEADLESS_CMD:-}"
+      OPTN_WALLET: "${OPTN_WALLET:-}"
+      OPTN_FUSION_SERVER: "${OPTN_FUSION_SERVER:-}"
+      OPTN_WALLET_PASSWORD_FILE: "${OPTN_WALLET_PASSWORD_FILE:-}"
+      OPTN_FUSION_DEPTH: "${OPTN_FUSION_DEPTH:-3}"
+      OPTN_FUSION_TIER: "${OPTN_FUSION_TIER:-}"
       OPTN_FUSION_HEALTH_FILE: "${OPTN_FUSION_HEALTH_FILE:-/optn-data/fusion-lab.health.json}"
     restart: unless-stopped
     init: true

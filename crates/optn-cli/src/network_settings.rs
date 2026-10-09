@@ -374,6 +374,42 @@ pub fn set_policy_preset(
 
 /// Turn Tor on or off for this network. Which sources are selected is left
 /// exactly as it was.
+/// Trust, or stop trusting, the SOCKS proxy on `127.0.0.1:port` as the
+/// holder's Tor: the same edit the desktop's Privacy & Transport makes. A
+/// greeting alone never proves Tor; the holder's declaration is the
+/// provenance, and every surface reads it from this one overlay.
+pub fn set_trusted_socks_port(
+    network: Network,
+    directory: Option<&Path>,
+    port: u16,
+    trusted: bool,
+) -> Result<Vec<u16>, String> {
+    if port == 0 {
+        return Err("0 is not a port".into());
+    }
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    let mut ports = Vec::new();
+    NetworkConfigFile::new(directory.join(file_name(network))).update(|existing| {
+        let mut envelope = existing.unwrap_or_else(|| {
+            NetworkConfigEnvelope::current(
+                optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
+                Default::default(),
+            )
+        });
+        optn_runtime::network_config::promote_legacy_policy(&mut envelope);
+        let trusted_ports = &mut envelope.overlay.trusted_socks_ports;
+        trusted_ports.retain(|entry| *entry != port);
+        if trusted {
+            trusted_ports.push(port);
+            trusted_ports.sort_unstable();
+        }
+        ports = trusted_ports.clone();
+        Ok(envelope)
+    })?;
+    Ok(ports)
+}
+
 pub fn set_transport(
     network: Network,
     directory: Option<&Path>,
@@ -825,6 +861,35 @@ mod tests {
             .unwrap();
         assert_eq!(selection.policy.transport, TransportPolicy::Direct);
         assert!(selection.policy.selects_like(&pinned));
+    }
+
+    /// The CLI declares a Tor proxy the way the desktop does, in the same
+    /// overlay, so a headless runner can fuse without the desktop.
+    #[test]
+    fn trusting_a_tor_port_is_one_shared_overlay_edit() {
+        let directory = TestDirectory::new();
+        directory.write(Network::Chipnet, UserNetworkOverlay::default());
+        assert_eq!(
+            set_trusted_socks_port(Network::Chipnet, Some(&directory.0), 9150, true).unwrap(),
+            vec![9150]
+        );
+        assert_eq!(
+            set_trusted_socks_port(Network::Chipnet, Some(&directory.0), 9050, true).unwrap(),
+            vec![9050, 9150]
+        );
+        // Trusting twice keeps one entry; removing leaves the other.
+        set_trusted_socks_port(Network::Chipnet, Some(&directory.0), 9050, true).unwrap();
+        assert_eq!(
+            set_trusted_socks_port(Network::Chipnet, Some(&directory.0), 9150, false).unwrap(),
+            vec![9050]
+        );
+        assert_eq!(
+            trusted_socks_ports(Network::Chipnet, Some(&directory.0)),
+            vec![9050]
+        );
+        assert!(set_trusted_socks_port(Network::Chipnet, Some(&directory.0), 0, true).is_err());
+        // Other networks are untouched.
+        assert!(trusted_socks_ports(Network::Mainnet, Some(&directory.0)).is_empty());
     }
 
     #[test]

@@ -29,15 +29,15 @@ Desktop P2P fusion is **Tor fail-closed**. Any Docker/VPS fusion path must match
 | Rule | Meaning |
 |------|---------|
 | Tor **mandatory** for fusion | No clearnet Nostr fusion |
-| `fusion-lab` profile | Always brings up `tor` + lab with `OPTN_TOR_SOCKS=tor:9050` |
+| `fusion-lab` profile | Always brings up `tor` + lab sharing its network, `OPTN_TOR_SOCKS=127.0.0.1:9050` |
 | Default network | **chipnet**; mainnet only if operator sets `OPTN_NETWORK=mainnet` |
 | Secrets | Volume `optn-fusion-data` only — never bake keys into the image |
 
 **Supervisor** (`scripts/fusion-lab-supervisor.mjs`) enforces Tor fail-closed,
 validates `OPTN_FUSION_MODE` / `OPTN_NETWORK`, writes a health file, and optionally
-execs `OPTN_HEADLESS_CMD`. **Auto fusion rounds** (wallet unlock +
-`FusionRunnerService` + Tauri Tor WebSocket) are a **separate product milestone**,
-not part of this lab image — see [VPS.md](./VPS.md).
+execs `OPTN_HEADLESS_CMD`. **Server-mode Auto Fusion** runs headless through
+`scripts/fusion-lab-headless.sh` (the Rust CLI's `optn fusion --auto`); P2P (Nostr)
+has no headless driver yet — see [VPS.md](./VPS.md).
 
 ## What we will not claim
 

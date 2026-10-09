@@ -444,6 +444,13 @@ enum NetworkCommand {
         #[arg(value_parser = ["on", "off"])]
         state: String,
     },
+    /// Trust the SOCKS proxy on 127.0.0.1:PORT as your Tor, as the desktop's
+    /// Privacy & Transport does. --remove stops trusting it.
+    TorTrust {
+        port: u16,
+        #[arg(long)]
+        remove: bool,
+    },
     /// Add one source using an AddSourceRequest JSON file.
     Add { file: std::path::PathBuf },
     /// Enable, disable, or ban a source known to this network catalog.
@@ -803,6 +810,7 @@ fn command_name(command: &Command) -> &'static str {
                 NetworkCommand::Configure { .. }
                 | NetworkCommand::Policy { .. }
                 | NetworkCommand::Tor { .. }
+                | NetworkCommand::TorTrust { .. }
                 | NetworkCommand::Add { .. }
                 | NetworkCommand::Disposition { .. }
                 | NetworkCommand::Remove { .. },
@@ -1909,6 +1917,7 @@ fn authorize_command(cli: &Cli) -> Result<()> {
                 | NetworkCommand::Import { .. }
                 | NetworkCommand::Policy { .. }
                 | NetworkCommand::Tor { .. }
+                | NetworkCommand::TorTrust { .. }
                 | NetworkCommand::Add { .. }
                 | NetworkCommand::Disposition { .. }
                 | NetworkCommand::Remove { .. }
@@ -1953,6 +1962,22 @@ async fn run(cli: &Cli) -> Result<Value> {
             )
             .map_err(CliError::Usage)?;
             return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::TorTrust { port, remove },
+        } => {
+            let trusted = network_settings::set_trusted_socks_port(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                *port,
+                !*remove,
+            )
+            .map_err(CliError::Usage)?;
+            return Ok(json!({
+                "ok": true,
+                "network": cli.network.to_string(),
+                "trusted_socks_ports": trusted,
+            }));
         }
         Command::Network {
             action: NetworkCommand::Export,
