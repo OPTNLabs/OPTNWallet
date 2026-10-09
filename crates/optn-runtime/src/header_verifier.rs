@@ -32,10 +32,16 @@ struct StoredCheckpoint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShvMmrError {
     InvalidCheckpointProof,
-    CheckpointCommitmentMismatch { expected: Hash32, actual: Hash32 },
+    CheckpointCommitmentMismatch {
+        expected: Hash32,
+        actual: Hash32,
+    },
     Header(HeaderPowError),
     Difficulty(AsertError),
-    HistoricalTargetMismatch { expected: Hash32, actual: Hash32 },
+    HistoricalTargetMismatch {
+        expected: Hash32,
+        actual: Hash32,
+    },
     HistoricalProofInvalid,
     HeightOverflow,
     EmptyAccumulator,
@@ -774,10 +780,17 @@ mod tests {
             assert_eq!(parent.state(), expected.state());
             assert_eq!(parent.last_hash(), expected.last_hash());
             assert_eq!(parent.last_time(), expected.last_time());
-            assert_eq!(parent.tip_checkpoint_proof(), expected.tip_checkpoint_proof());
+            assert_eq!(
+                parent.tip_checkpoint_proof(),
+                expected.tip_checkpoint_proof()
+            );
             let json = parent.encode_checkpoint_json(Network::Regtest).unwrap();
-            ShvMmrHeaderVerifier::from_checkpoint_json(&json, Network::Regtest, &parent.checkpoint())
-                .expect("the stepped-back state persists like any other");
+            ShvMmrHeaderVerifier::from_checkpoint_json(
+                &json,
+                Network::Regtest,
+                &parent.checkpoint(),
+            )
+            .expect("the stepped-back state persists like any other");
             let mut again = parent.clone();
             again.extend(&chain[tip..=tip]).unwrap();
             assert_eq!(again.state(), verifier.state());
@@ -790,7 +803,10 @@ mod tests {
             if below > 0 {
                 assert_eq!(
                     verifier
-                        .parent(&chain[parent_height], &chain[parent_height - below + 1..=parent_height])
+                        .parent(
+                            &chain[parent_height],
+                            &chain[parent_height - below + 1..=parent_height]
+                        )
                         .err(),
                     Some(ShvMmrError::ParentMismatch)
                 );

@@ -285,7 +285,8 @@ struct StackChanged<'a>(&'a watch::Sender<u64>);
 
 impl Drop for StackChanged<'_> {
     fn drop(&mut self) {
-        self.0.send_modify(|revision| *revision = revision.wrapping_add(1));
+        self.0
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
     }
 }
 

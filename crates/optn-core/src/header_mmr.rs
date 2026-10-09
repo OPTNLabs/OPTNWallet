@@ -458,13 +458,19 @@ mod tests {
             let proof = accumulator.proof_for_next_leaf(leaf);
             accumulator.extend(leaf);
 
-            assert_eq!(accumulator.before_last_leaf(leaf, &proof), Some(before.clone()));
+            assert_eq!(
+                accumulator.before_last_leaf(leaf, &proof),
+                Some(before.clone())
+            );
             let merges = index.trailing_ones();
             let preceding: Vec<Hash32> = (index + 1 - (1 << merges)..index).map(leaf_at).collect();
             assert_eq!(accumulator.before_append(leaf, &preceding), Some(before));
 
             // Anything that does not reproduce this accumulator is refused.
-            assert_eq!(accumulator.before_last_leaf(leaf_at(index + 1), &proof), None);
+            assert_eq!(
+                accumulator.before_last_leaf(leaf_at(index + 1), &proof),
+                None
+            );
             if !proof.is_empty() {
                 let mut corrupt = proof.clone();
                 corrupt[0][0] ^= 1;

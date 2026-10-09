@@ -963,7 +963,9 @@ impl ProgressiveSyncWorker {
             return Err(ProgressiveSyncError::InvalidHeaderRange);
         }
         let headers: Vec<BlockHeaderBytes> = headers.into_iter().map(BlockHeaderBytes).collect();
-        let (parent, below) = headers.split_last().expect("at least the parent was requested");
+        let (parent, below) = headers
+            .split_last()
+            .expect("at least the parent was requested");
         let parent = view
             .verifier()
             .parent(parent, below)
@@ -2852,12 +2854,19 @@ pub(crate) mod tests {
                 .await
                 .unwrap_or_else(|error| panic!("{protocol:?}: {error:?}"));
             let view = worker.header_view().unwrap();
-            assert_eq!(view.checkpoint(), straight_view(&new).checkpoint(), "{protocol:?}");
+            assert_eq!(
+                view.checkpoint(),
+                straight_view(&new).checkpoint(),
+                "{protocol:?}"
+            );
             // What it seals now carries a ring, so a later orphan is followed
             // the ordinary way.
-            let restored =
-                VerifiedHeaderView::restore(&view.encode().unwrap(), Network::Regtest, &view.checkpoint())
-                    .unwrap();
+            let restored = VerifiedHeaderView::restore(
+                &view.encode().unwrap(),
+                Network::Regtest,
+                &view.checkpoint(),
+            )
+            .unwrap();
             assert!(restored.rollback_floor().is_some_and(|floor| floor < 14));
         }
 
@@ -2865,8 +2874,15 @@ pub(crate) mod tests {
         let mut worker = ringless();
         let before = worker.header_view().unwrap().checkpoint();
         assert_eq!(
-            header_pass(&mut worker, ProtocolFamily::Electrum, regtest_headers(14, Some(8))).await,
-            Err(ProgressiveSyncError::HeaderVerification(ShvMmrError::ParentMismatch))
+            header_pass(
+                &mut worker,
+                ProtocolFamily::Electrum,
+                regtest_headers(14, Some(8))
+            )
+            .await,
+            Err(ProgressiveSyncError::HeaderVerification(
+                ShvMmrError::ParentMismatch
+            ))
         );
         assert_eq!(worker.header_view().unwrap().checkpoint(), before);
     }
