@@ -1558,3 +1558,46 @@ therefore meant rebuilding from a checkpoint.
 Automatic recovery, which detects a reorg and calls `rollback_to`, is the
 next item (rank 16). It needs this ring and the Electrum ordering change
 above.
+
+### 2026-10-09: a reorg within the window is followed automatically
+
+#75 (items 75-60, 75-65 and 75-77; rank 16). With the snapshot ring in
+place, a header pass now handles a source on another branch rather than
+failing on it.
+
+- **Detection.** The pass's first batch does not build on the verified tip.
+- **Fork.** The worker asks the same route once for the blocks the ring
+  covers. The fork is the highest block both chains share.
+- **Rollback.** The view rolls back to the fork with `rollback_to`, a state
+  it really had, and the pass continues from there.
+- **The new branch wins only with more work.** Its blocks must declare more
+  total work than the ones they replace (`optn_core::header_pow::more_work`,
+  BCHN's `GetBlockProof`). A longer branch of easier blocks is refused
+  (`ReorgWithLessWork`), and nothing is written. After a rollback the pass
+  runs until the source has no more, so the branch is weighed whole and
+  never cut short by the per-pass limit.
+- **Store.** The accepted store drops the orphaned blocks and takes the new
+  ones. That happens on a copy, published only if the join holds. The
+  store's generation moves, so caches stamped with the old one (token
+  identities, scan progress) see the reorg.
+- **Deeper than ten blocks.** A source whose chain leaves this one below the
+  window is refused (`ReorgBeyondWindow`). BCHN finalizes a block ten deep
+  and will not reorg past it, so neither does the wallet. A source cannot
+  force a rebuild by claiming such a fork.
+- **Restart.** The sealed view after a reorg carries the new tip and its
+  ring, so a restart does not bring the orphaned tip back.
+
+Tests run against regtest-difficulty chains through the worker and a shared
+header store:
+
+- 1- and 3-block reorgs on Electrum and BIP37: the result equals a straight
+  build of the new chain, the store keeps the fork block, takes the new ones,
+  and changes generation;
+- a longer but lighter branch is refused with nothing written;
+- a fork below the window is refused;
+- a restored view keeps the new tip.
+
+Not covered yet: a store that must first be replayed from a peer after a
+restart, if that peer has already reorged. The replay stops at the
+divergence and the pass fails. The next pass, with the store intact,
+recovers.

@@ -93,6 +93,22 @@ pub fn verify_link(
     Ok(parsed)
 }
 
+/// Whether blocks declaring the `candidate` targets carry more total work
+/// than blocks declaring the `current` ones: the rule for leaving one branch
+/// for another. Work per block is `2^256 / (target + 1)`, as in BCHN's
+/// `GetBlockProof`. Each block's proof of its declared target is checked
+/// elsewhere; this only sums what they declare.
+pub fn more_work(candidate: &[u32], current: &[u32]) -> Result<bool, HeaderPowError> {
+    let total = |bits: &[u32]| -> Result<BigUint, HeaderPowError> {
+        let space = BigUint::from(1u8) << 256usize;
+        bits.iter().try_fold(BigUint::from(0u8), |sum, &bits| {
+            let target = target_from_compact(bits)?;
+            Ok(sum + &space / (target + 1u8))
+        })
+    };
+    Ok(total(candidate)? > total(current)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +148,25 @@ mod tests {
     fn wrong_link_is_rejected_even_when_pow_is_valid() {
         let err = verify_link([1; 32], &mainnet_genesis()).unwrap_err();
         assert!(matches!(err, HeaderPowError::LinkMismatch { .. }));
+    }
+
+    #[test]
+    fn a_branch_wins_only_with_more_work() {
+        let easy = 0x207f_ffff;
+        let hard = 0x1d00_ffff;
+        assert!(more_work(&[easy, easy, easy], &[easy, easy]).unwrap());
+        assert!(
+            !more_work(&[easy, easy], &[easy, easy]).unwrap(),
+            "a tie is not more"
+        );
+        assert!(!more_work(&[easy, easy], &[easy, easy, easy]).unwrap());
+        // One harder block outweighs many easy ones.
+        assert!(more_work(&[hard], &[easy; 1000]).unwrap());
+        assert!(!more_work(&[easy; 1000], &[hard]).unwrap());
+        assert!(more_work(&[easy], &[]).unwrap());
+        assert_eq!(
+            more_work(&[0x1d80_ffff], &[]),
+            Err(HeaderPowError::NegativeTarget)
+        );
     }
 }

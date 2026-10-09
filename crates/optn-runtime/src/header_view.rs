@@ -340,6 +340,28 @@ impl VerifiedHeaderView {
         self.snapshots.front().map(|snapshot| snapshot.height)
     }
 
+    /// The hash of this view's block at `height`, while the ring holds it.
+    pub fn ring_hash_at(&self, height: u32) -> Option<Hash32> {
+        self.snapshots
+            .iter()
+            .find(|snapshot| snapshot.height == height)
+            .and_then(|snapshot| snapshot.verifier.last_hash())
+    }
+
+    /// This view's headers above `height` that the ring holds, oldest first:
+    /// what a rollback to `height` would orphan.
+    pub fn ring_headers_above(&self, height: u32) -> Vec<BlockHeaderBytes> {
+        let Some(floor) = self.rollback_floor() else {
+            return Vec::new();
+        };
+        self.ring_headers
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| floor.saturating_add(1).saturating_add(*index as u32) > height)
+            .map(|(_, header)| header.clone())
+            .collect()
+    }
+
     fn record_anchor(
         &mut self,
         height: u64,
