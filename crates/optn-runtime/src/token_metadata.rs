@@ -42,6 +42,16 @@ use crate::chain_service::{CapabilityRoute, ObservedTransaction};
 
 const MAX_IDENTITY_CATEGORIES: usize = 32;
 const MAX_AUTHCHAIN_HOPS: u32 = 64;
+/// Spender lookups that must answer per hop: two, so that two disagreeing
+/// sources are still caught, without asking every selected server.
+const SPENDER_CROSS_CHECK: usize = 2;
+
+/// Routes in plan order, a full node's first: it validates what it answers,
+/// and a walk it completes is never asked of a server that only reports.
+fn full_node_first(mut routes: Vec<CapabilityRoute>) -> Vec<CapabilityRoute> {
+    routes.sort_by_key(|route| route.protocol != crate::chain::ProtocolFamily::BchnRpc);
+    routes
+}
 
 fn identity_budget() -> AuthchainBudget {
     AuthchainBudget {
@@ -849,7 +859,9 @@ async fn resolve_selected_identities_inner(
         for category in categories.into_iter().take(MAX_IDENTITY_CATEGORIES) {
             let category_key = category_hex(&category);
             let mut identity = OwnedCategoryIdentity::Unresolved;
-            for route in service.routes_for_operation(ChainOperation::OutpointSpentness) {
+            for route in
+                full_node_first(service.routes_for_operation(ChainOperation::OutpointSpentness))
+            {
                 let Some(transaction_route) =
                     service.matching_route_for_operation(&route, ChainOperation::TransactionLookup)
                 else {
@@ -1055,9 +1067,13 @@ async fn resolve_selected_identities_inner(
                         };
                         let mut discovered_successor: Option<ChainTransaction> = None;
                         let mut ambiguous = false;
-                        for discovery in
-                            service.routes_for_operation(ChainOperation::OutpointSpender)
-                        {
+                        let mut answered = 0usize;
+                        for discovery in full_node_first(
+                            service.routes_for_operation(ChainOperation::OutpointSpender),
+                        ) {
+                            if answered >= SPENDER_CROSS_CHECK {
+                                break;
+                            }
                             let Ok(candidate) = service
                                 .execute_optional_on_route(
                                     &discovery,
@@ -1072,6 +1088,7 @@ async fn resolve_selected_identities_inner(
                             else {
                                 continue;
                             };
+                            answered += 1;
                             let ChainPayload::OutpointSpender {
                                 spender: Some(spender),
                                 descendants,
@@ -2574,6 +2591,153 @@ pub(crate) mod tests {
             })
             .collect();
         assert_eq!(lookups, chain.iter().map(|tx| tx.txid).collect::<Vec<_>>());
+    }
+
+    /// An Electrum server at `name`, reporting what `transactions` hold.
+    fn electrum_server(
+        name: &str,
+        transactions: Vec<ObservedTransaction>,
+        terminal: Option<Hash32>,
+    ) -> CacheBackend {
+        let mut server = server_backend(transactions, terminal);
+        server.source = SourceId::new(name);
+        server.endpoint = Endpoint {
+            kind: EndpointKind::ElectrumTls,
+            host: format!("{name}.invalid"),
+            port: Some(50002),
+        };
+        server.protocol = ProtocolFamily::Electrum;
+        server
+    }
+
+    /// The given backends, all selected and ranked in the order given.
+    fn ranked_service(backends: Vec<CacheBackend>, body: Vec<u8>) -> ChainService {
+        let mut catalog = SourceCatalog::default();
+        for backend in &backends {
+            catalog
+                .insert(ChainSource {
+                    id: backend.source.clone(),
+                    label: "route economy".into(),
+                    origin: SourceOrigin::UserAdded,
+                    endpoints: vec![backend.endpoint.clone()],
+                    capabilities: Default::default(),
+                    disposition: SourceDisposition::Enabled,
+                    priority: 0,
+                })
+                .unwrap();
+        }
+        let ranked: Vec<SourceId> = backends
+            .iter()
+            .map(|backend| backend.source.clone())
+            .collect();
+        let mut policy = ConnectionPolicy::auto();
+        policy.primary_scope =
+            crate::chain::SourceScope::Explicit(ranked.iter().cloned().collect());
+        policy.preferred = ranked;
+        let mut service = ChainService::new(catalog, policy);
+        for backend in backends {
+            service.register(Arc::new(backend));
+        }
+        service.set_registry_fetcher(Arc::new(CacheFetcher {
+            body,
+            calls: Arc::new(AtomicUsize::new(0)),
+            revoke: None,
+        }));
+        service
+    }
+
+    fn spender_requests(requests: &Arc<Mutex<Vec<ChainRequest>>>) -> usize {
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| matches!(request, ChainRequest::OutpointSpender { .. }))
+            .count()
+    }
+
+    /// A full node validates what it answers, so it walks the chain even when
+    /// a server is ranked ahead of it, and the server is not asked to.
+    #[tokio::test]
+    async fn a_full_node_walks_the_chain_before_a_server_ranked_ahead_of_it() {
+        let (category, chain, body) = hinted_chain();
+        let head = chain[3].txid;
+        let server = electrum_server("server", chain.clone(), Some(head));
+        let server_requests = server.requests.clone();
+        let node = cache_backend(chain.clone(), Some(head));
+        let mut service = ranked_service(vec![server, node], body);
+        let resolved = run_cached(
+            &mut service,
+            category,
+            &BcmrIdentityCache::default(),
+            Some(CACHE_CLOCK),
+        )
+        .await;
+        let identity = projected_identity(&resolved, category);
+        assert_eq!(identity.name, "Far");
+        assert_eq!(identity.basis.assurance, IdentityAssurance::NodeValidated);
+        let asked = server_requests.lock().unwrap().clone();
+        assert!(
+            asked
+                .iter()
+                .all(|request| matches!(request, ChainRequest::OutpointSpender { .. })),
+            "the server only cross-checks spenders: {asked:?}"
+        );
+    }
+
+    /// Spender discovery asks two sources per hop, enough to catch two that
+    /// disagree, rather than every selected server.
+    #[tokio::test]
+    async fn spender_discovery_asks_two_sources_per_hop_not_every_one() {
+        let (category, chain, body) = hinted_chain();
+        let head = chain[3].txid;
+        let node = cache_backend(chain.clone(), Some(head));
+        let node_requests = node.requests.clone();
+        let servers =
+            ["one", "two", "three"].map(|name| electrum_server(name, chain.clone(), None));
+        let asked: Vec<_> = servers
+            .iter()
+            .map(|server| server.requests.clone())
+            .collect();
+        let mut backends = vec![node];
+        backends.extend(servers);
+        let mut service = ranked_service(backends, body);
+        let resolved = run_cached(
+            &mut service,
+            category,
+            &BcmrIdentityCache::default(),
+            Some(CACHE_CLOCK),
+        )
+        .await;
+        assert_eq!(projected_identity(&resolved, category).name, "Far");
+        let hops = spender_requests(&node_requests);
+        assert!(hops > 0, "the walk needed spender discovery");
+        assert_eq!(spender_requests(&asked[0]), hops, "one cross-check per hop");
+        assert_eq!(spender_requests(&asked[1]), 0);
+        assert_eq!(spender_requests(&asked[2]), 0);
+    }
+
+    /// Two sources naming different spenders of the same output still leave
+    /// the identity unresolved.
+    #[tokio::test]
+    async fn two_sources_naming_different_spenders_still_leave_it_unresolved() {
+        let (category, chain, body) = hinted_chain();
+        let head = chain[3].txid;
+        let node = cache_backend(chain.clone(), Some(head));
+        let rival = cache_transaction(Some(chain[0].txid), Some(&registry_body("Rival", category)));
+        assert_ne!(rival.txid, chain[1].txid);
+        let server = electrum_server("rival", vec![chain[0].clone(), rival], None);
+        let mut service = ranked_service(vec![node, server], body);
+        let resolved = run_cached(
+            &mut service,
+            category,
+            &BcmrIdentityCache::default(),
+            Some(CACHE_CLOCK),
+        )
+        .await;
+        assert_eq!(
+            projected_identity(&resolved, category).status,
+            IdentityStatus::Unresolved
+        );
     }
 
     #[tokio::test]

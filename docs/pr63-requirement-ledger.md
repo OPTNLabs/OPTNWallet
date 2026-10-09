@@ -1470,3 +1470,24 @@ Counting fake servers show the behaviour:
 - three that hang up lead to the next three;
 - a public fallback gets no connection while the own node serves, and does
   when the own node is down.
+
+### 2026-10-09: token identities ask fewer servers
+
+#75 (items 75-132 and 75-153). The identity resolver walked a category's
+authchain on the outpoint-spentness routes in plan order, so a public
+Electrum server ranked ahead of the holder's full node was asked first even
+though the node could answer with node-validated evidence. On each hop
+without a known successor it asked every spender-lookup route, so every
+selected server learned which token chains the wallet follows.
+
+- A full node's routes now come first for both the walk and spender
+  discovery; a walk the node completes is never asked of a server.
+- Spender discovery stops once two sources have answered. Two is enough to
+  catch two sources naming different spenders, which still leaves the
+  identity unresolved.
+
+Tests show a node resolving with node-validated assurance while a server
+ranked ahead of it only cross-checks spenders. Of three servers behind the
+node, one is asked per hop and two never are. A rival spender from a second
+source still leaves the identity unresolved. The fan-out test fails without
+the cap.
