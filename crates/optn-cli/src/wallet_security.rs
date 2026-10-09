@@ -15,7 +15,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-fn message(error: TransportError) -> String {
+pub(crate) fn message(error: TransportError) -> String {
     match error {
         TransportError::Other(message) | TransportError::InvalidData(message) => message,
         _ => "Wallet security is unavailable on this interface.".into(),

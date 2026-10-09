@@ -2094,3 +2094,28 @@ stays intact. Damage and foreign formats keep their old messages.
 
 Test: an unknown field and a v9 format are refused by name; a foreign
 format and damaged JSON are reported as before.
+
+### 2026-10-09: `send` from a saved wallet runs on the shared native stack
+
+Found while funding the fleet: `optn send --wallet ...` could never spend.
+The wallet runtime releases signing keys only after a refresh in the same
+session, and `send` never refreshed, so every saved-wallet send was refused
+with "Refresh the wallet before preparing or authorizing a spend".
+
+For a saved wallet, `send` now refreshes through the shared HD runtime
+(`--max-addresses` bounds the scan, as for `rescan`), spends the runtime's
+own ordinary HD coins with `optn_runtime::wallet_spend::prepare_spend`
+(tokens never, every hold honoured), sends change to a change address the
+runtime reserved durably, and broadcasts through the selected chain stack.
+`--dry-run` plans and signs against the next change index without
+reserving it. A phrase or keychain wallet keeps the old path.
+
+The change reservation is the same runtime operation fusion rounds use,
+renamed `reserve_change_outputs`. Its guard refuses a wallet migrated from
+the desktop's TypeScript key database, because the desktop may hold its
+coins in records the runtime cannot see. That refusal is correct and
+showed up live: the desktop's wallets fund other wallets from the desktop.
+
+Live: a dry run from a desktop-migrated chipnet wallet (3,000-address scan)
+planned one input, a 226-sat fee and change to a fresh address; the real
+send was refused by that guard, as designed.

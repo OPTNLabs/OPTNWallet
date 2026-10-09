@@ -265,7 +265,7 @@ pub async fn run_server_round(
         .unwrap_or(0);
     registration.flag().check()?;
     let output_scripts = runtime
-        .reserve_fusion_outputs(outputs)
+        .reserve_change_outputs(outputs)
         .await
         .map_err(runtime_refusal)?;
 

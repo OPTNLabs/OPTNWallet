@@ -15,7 +15,9 @@
 //! (`reserve_change_addresses`). They are reserved durably before any script
 //! leaves the runtime, so a round that fails after disclosing them never hands
 //! them out again. Change has no BIP44 receive-gap limit, and the runtime scans
-//! every allocated index, so a saved wallet always finds the outputs.
+//! every allocated index, so a saved wallet always finds the outputs. A host's
+//! ordinary send reserves its change the same way
+//! ([`AppRuntime::reserve_change_outputs`]).
 
 use crate::{AppRuntime, AppRuntimeDriver, PublicationGuard, RuntimeRequest};
 use optn_app::{AppEvent, AuthScope, HdBranch};
@@ -35,7 +37,7 @@ pub enum FusionContributionRequest {
     /// display-order `txid:vout`. Changes nothing.
     InputKeys { outpoints: Vec<String> },
     /// Reserve `count` fresh change outputs, durably.
-    ReserveOutputs { count: usize },
+    ReserveChange { count: usize },
 }
 
 /// One offered coin and the key that signs it.
@@ -108,13 +110,14 @@ impl AppRuntime {
         }
     }
 
-    /// Trusted host API: `count` fresh change outputs, reserved durably.
-    pub async fn reserve_fusion_outputs(
+    /// Trusted host API: `count` fresh change outputs, reserved durably, for
+    /// a fusion round's outputs or a send's change.
+    pub async fn reserve_change_outputs(
         &self,
         count: usize,
     ) -> Result<Vec<Vec<u8>>, TransportError> {
         match self
-            .fusion_contribution(FusionContributionRequest::ReserveOutputs { count })
+            .fusion_contribution(FusionContributionRequest::ReserveChange { count })
             .await?
         {
             FusionContributionReply::Outputs(scripts) => Ok(scripts),
@@ -137,8 +140,8 @@ impl AppRuntimeDriver {
             FusionContributionRequest::InputKeys { outpoints } => self
                 .fusion_input_keys(outpoints, &operation_guard, &reply)
                 .map(FusionContributionReply::InputKeys),
-            FusionContributionRequest::ReserveOutputs { count } => self
-                .reserve_fusion_outputs(count, &operation_guard, &reply)
+            FusionContributionRequest::ReserveChange { count } => self
+                .reserve_change_outputs(count, &operation_guard, &reply)
                 .map(FusionContributionReply::Outputs),
         };
         if matches!(result, Err(TransportError::AuthenticationRequired)) {
@@ -164,7 +167,7 @@ impl AppRuntimeDriver {
             || !guard.allows(&self.state, reply_closed)
             || self.state.surface.is_viewer_only()
         {
-            return Err(failure("Wallet fusion session changed."));
+            return Err(failure("Wallet session changed."));
         }
         let security = self.security.as_ref().ok_or(TransportError::Unsupported)?;
         security.require_durable_session(&self.state)?;
@@ -172,18 +175,18 @@ impl AppRuntimeDriver {
         // absence here proves nothing.
         if security.status(&self.state)?.legacy_source_id.is_some() {
             return Err(failure(
-                "This migrated wallet still uses legacy reservations. Fusing from the shared runtime needs a runtime-managed wallet.",
+                "This migrated wallet still uses legacy reservations. This needs a runtime-managed wallet.",
             ));
         }
         if !self.wallet_sync.coins_are_fresh() || self.state.wallet_sync.refreshing {
-            return Err(failure("Refresh the wallet before fusing."));
+            return Err(failure("Refresh the wallet first."));
         }
         let snapshot = self
             .wallet_sync
             .reconciliation()
             .authoritative
             .as_ref()
-            .ok_or_else(|| failure("Sync the wallet before fusing."))?;
+            .ok_or_else(|| failure("Sync the wallet first."))?;
         let book = snapshot
             .value
             .hd
@@ -198,9 +201,7 @@ impl AppRuntimeDriver {
             || opened.account_xpub.as_ref() != Some(&book.account_xpub)
             || opened.account_path != book.account.to_string()
         {
-            return Err(failure(
-                "Fusion account differs from the synchronized wallet.",
-            ));
+            return Err(failure("Account differs from the synchronized wallet."));
         }
         Ok((book.account_xpub.clone(), book.allocation_last_used()))
     }
@@ -222,7 +223,7 @@ impl AppRuntimeDriver {
             .reconciliation()
             .authoritative
             .as_ref()
-            .ok_or_else(|| failure("Sync the wallet before fusing."))?;
+            .ok_or_else(|| failure("Sync the wallet first."))?;
         // Ordinary HD coins only: token outputs never appear here.
         let coins = crate::wallet_spend::snapshot_spendable_coins(&snapshot.value, held.network)
             .map_err(failure)?;
@@ -275,7 +276,7 @@ impl AppRuntimeDriver {
             .collect()
     }
 
-    fn reserve_fusion_outputs(
+    fn reserve_change_outputs(
         &mut self,
         count: usize,
         operation_guard: &crate::WalletOperationGuard,
@@ -284,7 +285,7 @@ impl AppRuntimeDriver {
         let (account_xpub, last_used) =
             self.fusion_preconditions(operation_guard, reply.is_closed())?;
         if count == 0 || count > MAX_CONTRIBUTION_ITEMS {
-            return Err(failure("A fusion round reserves 1 to 40 outputs."));
+            return Err(failure("Reserve 1 to 40 change outputs."));
         }
         let mut candidate = self.state.clone();
         let allocation = candidate
@@ -331,7 +332,7 @@ impl AppRuntimeDriver {
         if event != AppEvent::CoinsChanged {
             self.publish(event);
             return Err(failure(
-                "Fusion outputs could not be reserved. Reopen the wallet before retrying.",
+                "Change outputs could not be reserved. Reopen the wallet before retrying.",
             ));
         }
         security.checkpoint_published();
@@ -359,7 +360,7 @@ mod tests {
             .fusion_input_keys(vec!["00:0".into()])
             .await
             .is_err());
-        assert!(runtime.reserve_fusion_outputs(1).await.is_err());
+        assert!(runtime.reserve_change_outputs(1).await.is_err());
         sync_fixture(&runtime).await;
         let outpoint = funded_outpoint(&runtime);
         let before = runtime.state().hd_addresses.unwrap().next_indexes();
@@ -387,7 +388,7 @@ mod tests {
         // Asking for keys reserves nothing.
         assert_eq!(runtime.state().hd_addresses.unwrap().next_indexes(), before);
 
-        let outputs = runtime.reserve_fusion_outputs(3).await.unwrap();
+        let outputs = runtime.reserve_change_outputs(3).await.unwrap();
         assert_eq!(outputs.len(), 3);
         let after = runtime.state().hd_addresses.unwrap().next_indexes();
         assert_eq!(after[1], before[1] + 3);
@@ -397,7 +398,7 @@ mod tests {
         distinct.dedup();
         assert_eq!(distinct.len(), 3);
         // A second round never gets the same outputs.
-        let again = runtime.reserve_fusion_outputs(3).await.unwrap();
+        let again = runtime.reserve_change_outputs(3).await.unwrap();
         assert!(again.iter().all(|script| !outputs.contains(script)));
     }
 
@@ -412,13 +413,13 @@ mod tests {
             .await
             .is_err());
         assert!(keys(vec![]).await.is_err());
-        assert!(runtime.reserve_fusion_outputs(0).await.is_err());
-        assert!(runtime.reserve_fusion_outputs(41).await.is_err());
+        assert!(runtime.reserve_change_outputs(0).await.is_err());
+        assert!(runtime.reserve_change_outputs(41).await.is_err());
 
         // A failed save reserves nothing.
         let allocation = runtime.state().hd_addresses;
         checkpoints.fail.store(true, Ordering::SeqCst);
-        assert!(runtime.reserve_fusion_outputs(1).await.is_err());
+        assert!(runtime.reserve_change_outputs(1).await.is_err());
         assert_eq!(runtime.state().hd_addresses, allocation);
         checkpoints.fail.store(false, Ordering::SeqCst);
         // As with a payment, a failed save asks for the wallet to be reopened.
@@ -431,7 +432,7 @@ mod tests {
             .await
             .unwrap();
         sync_fixture(&runtime).await;
-        assert!(runtime.reserve_fusion_outputs(1).await.is_ok());
+        assert!(runtime.reserve_change_outputs(1).await.is_ok());
         assert!(keys(vec![outpoint.clone()]).await.is_ok());
 
         // A payment's held input cannot join.

@@ -244,6 +244,10 @@ enum Command {
         /// Addresses per chain to scan for spendable outputs.
         #[arg(long, default_value_t = 20)]
         gap: u32,
+        /// Saved wallets: fail a scan that reaches this bound before its
+        /// unused gap (as for rescan).
+        #[arg(long, default_value_t = 200)]
+        max_addresses: u32,
         /// Build and sign, print the raw transaction, but do not broadcast.
         #[arg(long)]
         dry_run: bool,
@@ -2176,6 +2180,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             sats,
             fee_rate,
             gap,
+            max_addresses,
             dry_run,
             yes,
         } => {
@@ -2185,6 +2190,19 @@ async fn run(cli: &Cli) -> Result<Value> {
                 ));
             }
             let destination = parse_address(to, cli.network)?;
+            if cli.wallet.is_some() {
+                return send_from_saved_wallet(
+                    cli,
+                    to,
+                    &destination,
+                    *sats,
+                    *fee_rate,
+                    *gap,
+                    *max_addresses,
+                    *dry_run,
+                )
+                .await;
+            }
             let wallet = read_wallet(cli).await?;
             let spend = spend_to(
                 client().await?,
@@ -4134,6 +4152,95 @@ fn build_rpa_payment(
         protocol: None,
         includes_mempool: true,
     })
+}
+
+/// `send` for a saved wallet, on the shared native stack.
+///
+/// The wallet runtime releases signing keys only after a refresh in the same
+/// session, so this refreshes through the shared HD runtime first. It then
+/// spends the runtime's own coins (ordinary HD coins; tokens never), honours
+/// every hold, sends change to a change address the runtime reserved durably,
+/// and broadcasts through the selected chain stack. A dry run plans and signs
+/// against the next change index without reserving it, and broadcasts nothing.
+#[allow(clippy::too_many_arguments)]
+async fn send_from_saved_wallet(
+    cli: &Cli,
+    to: &str,
+    destination: &Address,
+    sats: u64,
+    fee_rate: u64,
+    gap: u32,
+    max_addresses: u32,
+    dry_run: bool,
+) -> Result<Value> {
+    let synced = sync_shared_wallet(cli, gap, max_addresses, None, None, None).await?;
+    let runtime = wallet_security::open_managed_runtime(cli).await?;
+    let coins =
+        optn_runtime::wallet_spend::snapshot_spendable_coins(&synced.snapshot.value, cli.network)
+            .map_err(CliError::Protocol)?;
+    let held: std::collections::BTreeSet<String> = synced
+        .state
+        .coins
+        .iter()
+        .filter(|coin| coin.freeze().is_some())
+        .map(|coin| coin.outpoint().to_string())
+        .collect();
+    let wallet = wallet_security::read_managed_wallet(cli).await?;
+    let change_script = if dry_run {
+        let book = synced.address_book()?;
+        let next = synced
+            .state
+            .hd_addresses
+            .as_ref()
+            .map_or(0, |allocation| allocation.next_indexes()[1]);
+        let change =
+            optn_core::watch_only::address_under_account(cli.network, &book.account_xpub, 1, next)?;
+        Address::decode(&change.address)
+            .map_err(CliError::Protocol)?
+            .script_pubkey()
+    } else {
+        runtime
+            .reserve_change_outputs(1)
+            .await
+            .map_err(|error| CliError::Usage(wallet_security::message(error)))?
+            .pop()
+            .ok_or_else(|| CliError::Internal("no change output was reserved".into()))?
+    };
+    let prepared = optn_runtime::wallet_spend::prepare_spend(
+        &wallet,
+        &coins,
+        &optn_runtime::wallet_spend::SpendRequest {
+            destination_script: destination.script_pubkey(),
+            amount_sats: sats,
+            fee_per_byte: fee_rate,
+            change_script,
+            held,
+        },
+    )?;
+    if dry_run {
+        return Ok(json!({
+            "ok": true,
+            "dry_run": true,
+            "network": cli.network.to_string(),
+            "to": to,
+            "sats": sats,
+            "fee": prepared.fee_sats,
+            "change": prepared.change_sats,
+            "inputs": prepared.input_count,
+            "size_bytes": prepared.size_bytes,
+            "raw": prepared.raw_hex,
+        }));
+    }
+    let mut broadcast = broadcast_selected_chain(cli, &prepared.raw_hex).await?;
+    if let Some(result) = broadcast.as_object_mut() {
+        result.insert("to".into(), json!(to));
+        result.insert("sats".into(), json!(sats));
+        result.insert("fee".into(), json!(prepared.fee_sats));
+        result.insert("change".into(), json!(prepared.change_sats));
+        result.insert("inputs".into(), json!(prepared.input_count));
+        result.insert("spent".into(), json!(prepared.inputs));
+    }
+    Ok(broadcast)
 }
 
 /// Build, sign, and broadcast a payment out of the wallet's own coins.
