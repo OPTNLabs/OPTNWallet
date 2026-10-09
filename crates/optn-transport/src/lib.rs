@@ -13,10 +13,11 @@ use optn_app::{
     parse_account_path, AppAction, AppEvent, AppLockState, AppRoute, AppState, AppSurface,
     AuthScope, AutoLockMinutes, CampaignOutput, Coin, ConnectState, CreateStep, FeatureFlag,
     FeatureFlags, FeeMode, FeePreferences, FeeRate, FlipstarterPledge, FreezeReason,
-    HardwareSessionState, HardwareSetupPreview, HardwareVendor, HistoryEntry, HistoryKind,
-    IdentityAssurance, IdentityBasis, IdentityStatus, ImportStep, LedgerLink, MultisigSetupPreview,
-    MultisigStep, Network, NetworkServers, OpenedWallet, Outpoint, PledgeStatus, ScanCoverageView,
-    ServerKind, ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, TokenIdentity,
+    HardwareSessionState, HardwareSetupPreview, HardwareVendor, HeaderCheckpointView, HistoryEntry,
+    HistoryKind, IdentityAssurance, IdentityBasis, IdentityStatus, ImportStep, LedgerLink,
+    MultisigSetupPreview, MultisigStep, Network, NetworkServers, OpenedWallet, Outpoint,
+    PledgeStatus, ProviderHealthView, ProviderStatusView, ScanCoverageView, ServerKind,
+    ServerOverrides, SettingsRowId, SpendKind, SpendPlan, ThemeMode, TokenIdentity,
     TokenPresentation, UiSkin, WalletKind, WalletSyncView, WatchOnlyKind, WatchOnlySetupPreview,
     RELAY_MINIMUM_FEE_RATE,
 };
@@ -519,6 +520,64 @@ pub struct WireWalletSyncView {
     pub error: Option<String>,
     pub scan_coverage: Option<WireScanCoverage>,
     pub rescan_requested: Option<u32>,
+    pub snapshot_at_unix_ms: Option<u64>,
+    pub providers: Vec<WireProviderStatus>,
+    pub header_checkpoint: Option<WireHeaderCheckpoint>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireProviderHealth {
+    #[default]
+    Unknown,
+    Healthy,
+    Degraded,
+    Offline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WireProviderStatus {
+    pub source: String,
+    pub protocol: String,
+    pub health: WireProviderHealth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WireHeaderCheckpoint {
+    pub height: u32,
+    pub provenance: String,
+}
+
+impl From<&ProviderStatusView> for WireProviderStatus {
+    fn from(value: &ProviderStatusView) -> Self {
+        Self {
+            source: value.source.clone(),
+            protocol: value.protocol.clone(),
+            health: match value.health {
+                ProviderHealthView::Unknown => WireProviderHealth::Unknown,
+                ProviderHealthView::Healthy => WireProviderHealth::Healthy,
+                ProviderHealthView::Degraded => WireProviderHealth::Degraded,
+                ProviderHealthView::Offline => WireProviderHealth::Offline,
+            },
+        }
+    }
+}
+
+impl From<WireProviderStatus> for ProviderStatusView {
+    fn from(value: WireProviderStatus) -> Self {
+        Self {
+            source: value.source,
+            protocol: value.protocol,
+            health: match value.health {
+                WireProviderHealth::Unknown => ProviderHealthView::Unknown,
+                WireProviderHealth::Healthy => ProviderHealthView::Healthy,
+                WireProviderHealth::Degraded => ProviderHealthView::Degraded,
+                WireProviderHealth::Offline => ProviderHealthView::Offline,
+            },
+        }
+    }
 }
 
 impl From<&WalletSyncView> for WireWalletSyncView {
@@ -536,6 +595,18 @@ impl From<&WalletSyncView> for WireWalletSyncView {
             error: value.error.clone(),
             scan_coverage: value.scan_coverage.as_ref().map(WireScanCoverage::from),
             rescan_requested: value.rescan_requested,
+            snapshot_at_unix_ms: value.snapshot_at_unix_ms,
+            providers: value
+                .providers
+                .iter()
+                .map(WireProviderStatus::from)
+                .collect(),
+            header_checkpoint: value.header_checkpoint.as_ref().map(|checkpoint| {
+                WireHeaderCheckpoint {
+                    height: checkpoint.height,
+                    provenance: checkpoint.provenance.clone(),
+                }
+            }),
         }
     }
 }
@@ -555,6 +626,18 @@ impl From<WireWalletSyncView> for WalletSyncView {
             error: value.error,
             scan_coverage: value.scan_coverage.map(ScanCoverageView::from),
             rescan_requested: value.rescan_requested,
+            snapshot_at_unix_ms: value.snapshot_at_unix_ms,
+            providers: value
+                .providers
+                .into_iter()
+                .map(ProviderStatusView::from)
+                .collect(),
+            header_checkpoint: value
+                .header_checkpoint
+                .map(|checkpoint| HeaderCheckpointView {
+                    height: checkpoint.height,
+                    provenance: checkpoint.provenance,
+                }),
         }
     }
 }
@@ -2776,6 +2859,25 @@ mod tests {
                     chosen_by_holder: true,
                 }),
                 rescan_requested: Some(200_000),
+                snapshot_at_unix_ms: Some(1_760_000_000_000),
+                providers: [
+                    ProviderHealthView::Unknown,
+                    ProviderHealthView::Healthy,
+                    ProviderHealthView::Degraded,
+                    ProviderHealthView::Offline,
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, health)| ProviderStatusView {
+                    source: format!("chip{index}.example"),
+                    protocol: "Fulcrum / Electrum".into(),
+                    health,
+                })
+                .collect(),
+                header_checkpoint: Some(HeaderCheckpointView {
+                    height: 249_990,
+                    provenance: "shipped-reviewed".into(),
+                }),
             },
             ..AppState::default()
         };
@@ -2806,6 +2908,17 @@ mod tests {
         let mut invalid = serde_json::to_value(WireState::from(&state)).unwrap();
         invalid["wallet_sync"]["history"][0]["kind"] = "unknown".into();
         assert!(serde_json::from_value::<WireState>(invalid).is_err());
+        // A payload from before the status fields reads as "not known".
+        let mut older = serde_json::to_value(WireState::from(&state)).unwrap();
+        for field in ["snapshot_at_unix_ms", "providers", "header_checkpoint"] {
+            older["wallet_sync"].as_object_mut().unwrap().remove(field);
+        }
+        let restored =
+            AppState::try_from(serde_json::from_value::<WireState>(older).unwrap()).unwrap();
+        assert_eq!(restored.wallet_sync.snapshot_at_unix_ms, None);
+        assert!(restored.wallet_sync.providers.is_empty());
+        assert_eq!(restored.wallet_sync.header_checkpoint, None);
+        assert_eq!(restored.wallet_sync.history, state.wallet_sync.history);
         assert_eq!(
             futures_lite::future::block_on(NeverTransport.refresh_wallet()),
             Err(TransportError::Unsupported)

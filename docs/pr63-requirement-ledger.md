@@ -1659,5 +1659,41 @@ A wallet with no header view at all, such as Electrum without a shipped
 checkpoint for its network, still cannot be downgraded. That stays on
 purpose: without headers nothing vouches for the newer tip.
 
-Next, the second half (75-56): `snapshot_age`, `providers` and
-`header_checkpoint` on the sync status, over the wire and in the UI.
+### 2026-10-09: the sync status says how old, through whom, and to where
+
+#75 (item 75-56; rank 14, second half). The status could say "stale" but
+not how stale, which providers were down, or how far the verified headers
+went. `WalletSyncState` now carries three more fields, and so do
+`WalletSyncView` and its wire form:
+
+- **`snapshot_at_unix_ms`.** Stamped by wallet-sync finish when a snapshot
+  is accepted, and kept while a later refresh is refused. It is a time, not
+  an age: the view is not republished as it ages, so each surface takes its
+  own clock minus this. The checkpoint seals it, so a reopened wallet still
+  says how old its snapshot is; older checkpoints read as not known.
+- **`providers`.** `ChainService::provider_statuses` lists each registered
+  provider once per source and protocol. A route this stack marked degraded
+  or offline wins over the backend's own report. The refresh paths capture
+  it into the lease, and finish publishes it whatever becomes of the
+  snapshot. Finishes that ran no refresh here, such as air-gapped imports,
+  leave the last list as it was.
+- **`header_checkpoint`.** The verified view's checkpoint from the round's
+  header progress: the height it reached, and who vouches for where it
+  began. A restore brings it back from the sealed header progress.
+
+The wire stays version 1: `WireWalletSyncView` is `serde(default)`, so a
+payload without these fields reads as "not known". A test removes them from
+a payload and checks that.
+
+Three pure helpers give the wording: `snapshot_age_label`,
+`provider_health_summary` and `header_checkpoint_label` in optn-app, and
+their mirror in `src/platform/desktop/engineSyncStatus.ts`. The two sets
+are tested against the same table. The Leptos wallet panel and the React
+Sync page show the age after the tip, then the header line, then any
+providers that are not usable.
+
+Tests: provider health with an override, a backend going offline, and a
+revoked stack; the checkpoint keeps the time across a reopen and a reseal;
+finish publishes the header checkpoint and the time, and providers still
+appear after a refused refresh; wire round trip and an older payload; the
+wording on both sides.

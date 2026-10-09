@@ -114,7 +114,7 @@ struct StoredHeaderView {
     provenance: String,
 }
 
-fn provenance_name(provenance: &CheckpointProvenance) -> &'static str {
+pub(crate) fn provenance_name(provenance: &CheckpointProvenance) -> &'static str {
     match provenance {
         CheckpointProvenance::SelfDerived => "self-derived",
         CheckpointProvenance::ShippedReviewed => "shipped-reviewed",
@@ -172,6 +172,10 @@ struct StoredCheckpoint {
     /// version. They confer no freshness and carry no restored proof status.
     #[serde(default)]
     bcmr_cache: BcmrIdentityCache,
+    /// When the retained snapshot was accepted, so a reopened wallet can say
+    /// how old it is. Absent in older checkpoints, which then cannot.
+    #[serde(default)]
+    snapshot_at_unix_ms: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -678,6 +682,7 @@ impl WalletCheckpoint {
             source: snapshot.map(|snapshot| snapshot.source.clone()),
             evidence: snapshot.map(|snapshot| snapshot.evidence.clone()),
             tip: snapshot.and_then(|snapshot| snapshot.chain_tip),
+            snapshot_at_unix_ms: snapshot.and(self.state.sync.snapshot_at_unix_ms),
             transactions: snapshot
                 .into_iter()
                 .flat_map(|snapshot| &snapshot.value.transactions)
@@ -849,7 +854,15 @@ impl WalletCheckpoint {
                     scan_coverage: None,
                     rescan_requested: stored.rescan_requested,
                     restore_state,
-                    state: WalletReconciliation::default(),
+                    state: WalletReconciliation {
+                        sync: crate::chain::WalletSyncState {
+                            header_checkpoint: header_progress
+                                .as_ref()
+                                .map(|progress| progress.trusted.clone()),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
                     coins: CoinSet::new(),
                     payment_outbox: stored.payment_outbox,
                     token_identities: BTreeMap::new(),
@@ -921,6 +934,11 @@ impl WalletCheckpoint {
         // Authenticated old observations are still old. No fresh/spend flag is
         // accepted from disk, and a restored file is not a trusted header anchor.
         state.record_failure("restored wallet state requires a live refresh");
+        // Its age and where its headers stood are still true after a restart.
+        state.sync.snapshot_at_unix_ms = stored.snapshot_at_unix_ms;
+        state.sync.header_checkpoint = header_progress
+            .as_ref()
+            .map(|progress| progress.trusted.clone());
         Ok(Self {
             network,
             account,
@@ -979,6 +997,7 @@ mod tests {
                 allocation: Some(HdAddressAllocation::default()),
                 token_identities: BTreeMap::new(),
                 bcmr_cache: BcmrIdentityCache::default(),
+                snapshot_at_unix_ms: None,
             },
         )
     }
@@ -993,6 +1012,31 @@ mod tests {
         let mut bytes = nonce.to_vec();
         bytes.extend(wallet_pack::seal(key, &nonce, &serde_json::to_vec(value).unwrap()).unwrap());
         bytes
+    }
+
+    /// A reopened wallet still knows when its snapshot was accepted, and
+    /// says nothing of an age it never recorded.
+    #[test]
+    fn snapshot_time_survives_a_reopen() {
+        let (key, mut stored) = fixture();
+        stored.source = Some("node".into());
+        stored.evidence = Some(Evidence::ServerAssertion);
+        stored.tip = Some((100, [7; 32]));
+        stored.branch_lengths = vec![1; 4];
+        for (sequence, at) in [(220, Some(1_760_000_000_000u64)), (222, None)] {
+            stored.snapshot_at_unix_ms = at;
+            let opened = WalletCheckpoint::open(&key, &encoded(&key, &stored, sequence)).unwrap();
+            assert_eq!(opened.state.sync.snapshot_at_unix_ms, at);
+            let resealed = opened
+                .seal(&key, &fixture_nonce(u64::from(sequence) + 1))
+                .unwrap();
+            let twice = WalletCheckpoint::open(&key, &resealed).unwrap();
+            assert_eq!(twice.state.sync.snapshot_at_unix_ms, at);
+            assert!(
+                !twice.state.sync.utxos_fresh,
+                "an old snapshot is not fresh"
+            );
+        }
     }
 
     #[tokio::test]

@@ -857,6 +857,14 @@ pub enum VerificationState {
     Degraded,
 }
 
+/// A registered provider and the health its chain service gives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderStatus {
+    pub source: SourceId,
+    pub protocol: ProtocolFamily,
+    pub health: ProviderHealth,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletSyncState {
     pub primary_source: Option<SourceId>,
@@ -865,6 +873,13 @@ pub struct WalletSyncState {
     pub chain_tip: Option<(u32, Hash32)>,
     pub verification: VerificationState,
     pub degraded_reason: Option<String>,
+    /// When the retained snapshot was accepted, in Unix milliseconds: its
+    /// age is the reader's clock minus this. Sealed into the checkpoint.
+    pub snapshot_at_unix_ms: Option<u64>,
+    /// The selected providers and their health at the last refresh.
+    pub providers: Vec<ProviderStatus>,
+    /// Where the verified headers stood at the last refresh.
+    pub header_checkpoint: Option<HeaderCheckpoint>,
 }
 
 impl Default for WalletSyncState {
@@ -876,6 +891,9 @@ impl Default for WalletSyncState {
             chain_tip: None,
             verification: VerificationState::Unknown,
             degraded_reason: None,
+            snapshot_at_unix_ms: None,
+            providers: Vec::new(),
+            header_checkpoint: None,
         }
     }
 }

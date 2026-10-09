@@ -5,8 +5,8 @@
 
 use crate::chain::{
     build_selection_plan, Capability, CapabilityConfidence, CapabilitySet, ChainObservation,
-    ConnectionPolicy, Endpoint, Evidence, Hash32, ProtocolFamily, ProviderHealth, SourceCatalog,
-    SourceId,
+    ConnectionPolicy, Endpoint, Evidence, Hash32, ProtocolFamily, ProviderHealth, ProviderStatus,
+    SourceCatalog, SourceId,
 };
 use std::{future::Future, pin::Pin, sync::Arc};
 
@@ -536,6 +536,44 @@ impl ChainService {
         } else {
             self.registry_fetcher.clone()
         }
+    }
+
+    /// Each registered provider once per source and protocol, with the
+    /// health this service gives it. A route this stack marked down wins over
+    /// what the backend says of itself, and the best endpoint stands for the
+    /// pair. A revoked stack lists none.
+    pub fn provider_statuses(&self) -> Vec<ProviderStatus> {
+        if self.revocation.is_revoked() {
+            return Vec::new();
+        }
+        let mut statuses = std::collections::BTreeMap::new();
+        for provider in &self.registry.providers {
+            let health = self
+                .health_overrides
+                .iter()
+                .find(|entry| {
+                    entry.source == *provider.source_id()
+                        && entry.protocol == provider.protocol()
+                        && entry.endpoint.as_ref() == provider.endpoint()
+                })
+                .map_or_else(|| provider.health(), |entry| entry.health);
+            statuses
+                .entry((provider.source_id().clone(), provider.protocol()))
+                .and_modify(|best: &mut ProviderHealth| {
+                    if health_rank(health) < health_rank(*best) {
+                        *best = health;
+                    }
+                })
+                .or_insert(health);
+        }
+        statuses
+            .into_iter()
+            .map(|((source, protocol), health)| ProviderStatus {
+                source,
+                protocol,
+                health,
+            })
+            .collect()
     }
 
     pub fn clear_health_override(&mut self, source: &SourceId, protocol: ProtocolFamily) {
@@ -1289,6 +1327,36 @@ mod tests {
         assert_eq!(follow_on.protocol, spentness_route.protocol);
         assert_eq!(follow_on.endpoint, spentness_route.endpoint);
         assert_eq!(follow_on.capability, header_route.capability);
+    }
+
+    /// The status lists each provider once, with the health this service
+    /// gives it: an override from this stack's life wins over the backend's
+    /// own report. A revoked stack lists none.
+    #[test]
+    fn provider_statuses_follow_route_health() {
+        let (mut service, backend, route) = routed_service();
+        let health = |service: &ChainService| {
+            service
+                .provider_statuses()
+                .into_iter()
+                .map(|status| (status.source, status.protocol, status.health))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            health(&service),
+            vec![(
+                route.source.clone(),
+                ProtocolFamily::Electrum,
+                ProviderHealth::Healthy
+            )]
+        );
+        service.set_route_health(&route, ProviderHealth::Degraded);
+        assert_eq!(health(&service)[0].2, ProviderHealth::Degraded);
+        service.clear_health_override(&route.source, route.protocol);
+        backend.offline.store(true, Ordering::SeqCst);
+        assert_eq!(health(&service)[0].2, ProviderHealth::Offline);
+        service.revocation().revoke();
+        assert!(health(&service).is_empty());
     }
 
     #[tokio::test]

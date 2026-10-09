@@ -1,6 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { isDesktopPlatform } from '../../utils/platform';
 import { findWalletFileRelForSourceId } from './walletFile';
+import {
+  parseEngineHeaderCheckpoint,
+  parseEngineProviders,
+  type EngineHeaderCheckpoint,
+  type EngineProviderStatus,
+} from './engineSyncStatus';
 import type { NftCategory } from '@bitauth/libauth';
 import type { BcmrTokenMetadataState } from '../../types/bcmr';
 
@@ -27,6 +33,12 @@ export type EngineWalletSync = {
   confirmedSats: number | null;
   pendingSats: number;
   error: string | null;
+  /** When the shown snapshot was accepted (Unix ms); its age is now minus this. */
+  snapshotAtUnixMs: number | null;
+  /** The selected providers and their health at the last refresh. */
+  providers: EngineProviderStatus[];
+  /** Where the verified headers stood at the last refresh. */
+  headerCheckpoint: EngineHeaderCheckpoint | null;
 };
 
 /** The runtime addresses a wallet by its file name. */
@@ -225,6 +237,9 @@ export async function readEngineWalletSync(): Promise<EngineWalletSync | null> {
         confirmed_sats?: number | null;
         pending_sats?: number;
         error?: string | null;
+        snapshot_at_unix_ms?: number | null;
+        providers?: unknown;
+        header_checkpoint?: unknown;
       };
     }>('optn_app_snapshot');
     const sync = snapshot?.wallet_sync;
@@ -240,6 +255,13 @@ export async function readEngineWalletSync(): Promise<EngineWalletSync | null> {
         typeof sync.confirmed_sats === 'number' ? sync.confirmed_sats : null,
       pendingSats: sync.pending_sats ?? 0,
       error: sync.error ?? null,
+      // Older runtimes send none of these: that reads as "not known".
+      snapshotAtUnixMs:
+        typeof sync.snapshot_at_unix_ms === 'number'
+          ? sync.snapshot_at_unix_ms
+          : null,
+      providers: parseEngineProviders(sync.providers),
+      headerCheckpoint: parseEngineHeaderCheckpoint(sync.header_checkpoint),
     };
   } catch {
     return null;
@@ -394,7 +416,9 @@ function engineTokenIcon(
       .then((url) => {
         engineIcons.set(key, {
           url:
-            typeof url === 'string' && url.startsWith('data:image/') ? url : null,
+            typeof url === 'string' && url.startsWith('data:image/')
+              ? url
+              : null,
           at: Date.now(),
         });
       })

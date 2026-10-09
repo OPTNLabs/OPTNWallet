@@ -78,6 +78,8 @@ pub(super) struct WalletSyncLease {
     cancelled: watch::Receiver<()>,
     source_lifetime: Option<crate::chain_service::ChainRevocation>,
     header_progress: Option<crate::wallet_checkpoint::StoredHeaderProgress>,
+    /// The chain service's providers once the refresh ran, when it ran here.
+    providers: Option<Vec<crate::chain::ProviderStatus>>,
     bcmr_cache: BcmrIdentityCache,
     identities: Option<SelectedIdentityResolution>,
     // Closing this sender also covers caller timeouts and aborted tasks. The
@@ -385,6 +387,7 @@ impl AppRuntime {
                         worker.reconciliation_mut().record_failure(reason.clone());
                     }
                     lease.capture_header_progress(worker.header_view())?;
+                    lease.providers = Some(service.provider_statuses());
                     let decision = self
                         .finish_wallet_sync(lease, worker.reconciliation().clone())
                         .await?;
@@ -452,6 +455,7 @@ impl AppRuntime {
             result = worker.refresh(service, lease.interests.clone(), from_height) => result,
         };
         lease.capture_header_progress(worker.header_view())?;
+        lease.providers = Some(service.provider_statuses());
         let decision = self
             .finish_wallet_sync(lease, worker.reconciliation().clone())
             .await?;
@@ -690,6 +694,39 @@ impl WalletSyncSession {
             .authoritative
             .as_ref()
             .and_then(|snapshot| snapshot.chain_tip.map(|tip| tip.0));
+        view.snapshot_at_unix_ms = self
+            .state
+            .authoritative
+            .as_ref()
+            .and(self.state.sync.snapshot_at_unix_ms);
+        view.providers = self
+            .state
+            .sync
+            .providers
+            .iter()
+            .map(|status| optn_app::ProviderStatusView {
+                source: status.source.as_str().to_owned(),
+                protocol: status.protocol.label().to_owned(),
+                health: match status.health {
+                    crate::chain::ProviderHealth::Unknown => optn_app::ProviderHealthView::Unknown,
+                    crate::chain::ProviderHealth::Healthy => optn_app::ProviderHealthView::Healthy,
+                    crate::chain::ProviderHealth::Degraded => {
+                        optn_app::ProviderHealthView::Degraded
+                    }
+                    crate::chain::ProviderHealth::Offline => optn_app::ProviderHealthView::Offline,
+                },
+            })
+            .collect();
+        view.header_checkpoint = self
+            .state
+            .sync
+            .header_checkpoint
+            .as_ref()
+            .map(|checkpoint| optn_app::HeaderCheckpointView {
+                height: checkpoint.height,
+                provenance: crate::wallet_checkpoint::provenance_name(&checkpoint.provenance)
+                    .to_owned(),
+            });
         if !view.utxos_fresh || !view.history_fresh {
             for identity in app.token_identities.values_mut() {
                 identity.status = match identity.status {
@@ -1015,6 +1052,7 @@ impl WalletSyncSession {
             cancelled,
             source_lifetime: None,
             header_progress: None,
+            providers: None,
             bcmr_cache: self.bcmr_cache.clone(),
             identities: None,
             _completion: completion,
@@ -1193,6 +1231,14 @@ impl WalletSyncSession {
         self.active = None;
         self.cancellation_tx = None;
         self.abandoned = None;
+        // What the round saw of its providers and headers stands whatever
+        // becomes of its snapshot.
+        if let Some(providers) = &lease.providers {
+            self.state.sync.providers.clone_from(providers);
+        }
+        if let Some(progress) = &lease.header_progress {
+            self.state.sync.header_checkpoint = Some(progress.trusted.clone());
+        }
         if !result.sync.history_fresh || !result.sync.utxos_fresh || result.authoritative.is_none()
         {
             self.state.record_failure(
@@ -1269,6 +1315,8 @@ impl WalletSyncSession {
             if let Some(note) = worker_note {
                 next.note_degraded(note);
             }
+            next.sync.snapshot_at_unix_ms =
+                crate::token_metadata::checked_unix_ms().and_then(|now| u64::try_from(now).ok());
             let mut next_restore_state = self.restore_state.clone();
             if let Some((height, _)) = candidate.chain_tip {
                 // A complete accepted rescan can end below the previous tip
@@ -2101,6 +2149,13 @@ mod tests {
                 assert_eq!(published.evidence, Evidence::ServerAssertion);
                 assert_eq!(status.sync.chain_tip, Some((height, hash)));
                 assert!(status.sync.utxos_fresh);
+                assert_eq!(status.sync.header_checkpoint, Some(view.checkpoint()));
+                let shown = runtime.state().wallet_sync;
+                assert!(shown.snapshot_at_unix_ms.is_some());
+                assert_eq!(
+                    shown.header_checkpoint.map(|checkpoint| checkpoint.height),
+                    Some(view.checkpoint().height)
+                );
                 assert_eq!(
                     status.sync.degraded_reason.as_deref(),
                     Some(
@@ -2115,6 +2170,9 @@ mod tests {
                     Evidence::FullNodeValidated { .. }
                 ));
                 assert_eq!(published.chain_tip, Some((height - 1, [1; 32])));
+                // The retained snapshot keeps the time it was accepted.
+                assert!(status.sync.snapshot_at_unix_ms.is_some());
+                assert_eq!(status.sync.header_checkpoint, None);
             }
         }
     }
@@ -2149,6 +2207,12 @@ mod tests {
             ReconciliationDecision::PreservedWeakerEvidence
         );
         assert_eq!(runtime.state().coins, before);
+        // The refresh's providers are shown though its snapshot was refused.
+        let providers = runtime.state().wallet_sync.providers;
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].source, "server");
+        assert_eq!(providers[0].protocol, "Fulcrum / Electrum");
+        assert_eq!(providers[0].health, optn_app::ProviderHealthView::Healthy);
         let status = runtime.subscribe_wallet_sync();
         assert!(matches!(
             status.borrow().authoritative.as_ref().unwrap().evidence,

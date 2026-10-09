@@ -2413,6 +2413,40 @@ pub struct WalletSyncView {
     pub scan_coverage: Option<ScanCoverageView>,
     /// A rescan the holder asked for that has not produced a result yet.
     pub rescan_requested: Option<u32>,
+    /// When the shown snapshot was accepted, in Unix milliseconds. Its age is
+    /// the viewer's clock minus this; the view is not republished as it ages.
+    pub snapshot_at_unix_ms: Option<u64>,
+    /// The selected providers and the health the runtime gave them at the
+    /// last refresh.
+    pub providers: Vec<ProviderStatusView>,
+    /// Where the verified headers stood at the last refresh.
+    pub header_checkpoint: Option<HeaderCheckpointView>,
+}
+
+/// How the runtime rates one of the selected providers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderHealthView {
+    Unknown,
+    Healthy,
+    Degraded,
+    Offline,
+}
+
+/// One selected provider in the wallet's sync status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderStatusView {
+    pub source: String,
+    /// The protocol's label, such as "Fulcrum / Electrum".
+    pub protocol: String,
+    pub health: ProviderHealthView,
+}
+
+/// Where the verified headers stood at the last refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeaderCheckpointView {
+    pub height: u32,
+    /// Who vouches for the view's starting point, such as "shipped-reviewed".
+    pub provenance: String,
 }
 
 impl WalletSyncView {
@@ -2430,6 +2464,9 @@ impl WalletSyncView {
             error: None,
             scan_coverage: None,
             rescan_requested: None,
+            snapshot_at_unix_ms: None,
+            providers: Vec::new(),
+            header_checkpoint: None,
         }
     }
 
@@ -2442,6 +2479,58 @@ impl Default for WalletSyncView {
     fn default() -> Self {
         Self::empty()
     }
+}
+
+/// How old a snapshot accepted at `snapshot_at_unix_ms` is at `now_unix_ms`,
+/// for the holder. A clock behind the snapshot reads as just now, never as a
+/// negative age.
+pub fn snapshot_age_label(snapshot_at_unix_ms: u64, now_unix_ms: u64) -> String {
+    let minutes = now_unix_ms.saturating_sub(snapshot_at_unix_ms) / 60_000;
+    match minutes {
+        0 => "updated just now".into(),
+        1..=59 => format!("updated {minutes} min ago"),
+        60..=2_879 => format!("updated {} h ago", minutes / 60),
+        _ => format!("updated {} days ago", minutes / 1_440),
+    }
+}
+
+/// The selected providers that are degraded or offline, for the holder, or
+/// `None` while every known provider is usable.
+pub fn provider_health_summary(providers: &[ProviderStatusView]) -> Option<String> {
+    let troubled: Vec<String> = providers
+        .iter()
+        .filter_map(|provider| {
+            let state = match provider.health {
+                ProviderHealthView::Degraded => "degraded",
+                ProviderHealthView::Offline => "offline",
+                ProviderHealthView::Unknown | ProviderHealthView::Healthy => return None,
+            };
+            Some(format!(
+                "{} ({}) {state}",
+                provider.source, provider.protocol
+            ))
+        })
+        .collect();
+    (!troubled.is_empty()).then(|| {
+        format!(
+            "{} of {} providers not usable: {}",
+            troubled.len(),
+            providers.len(),
+            troubled.join(", ")
+        )
+    })
+}
+
+/// Where the verified headers stand, and who vouches for where they began.
+pub fn header_checkpoint_label(checkpoint: &HeaderCheckpointView) -> String {
+    let anchor = match checkpoint.provenance.as_str() {
+        "shipped-reviewed" => " from the checkpoint shipped with the wallet",
+        "self-derived" => " from a start derived on this device",
+        "sampled-independent-sources" => " from a checkpoint sampled across independent sources",
+        "user-provided" => " from a checkpoint you provided",
+        _ => "",
+    };
+    format!("Headers verified to {}{anchor}", checkpoint.height)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6401,5 +6490,69 @@ mod amount_tests {
             assert!(!text.is_empty(), "{error:?} has no message");
             assert!(text.ends_with('.'), "{error:?} is not a sentence");
         }
+    }
+}
+
+#[cfg(test)]
+mod sync_status_labels {
+    use super::*;
+
+    #[test]
+    fn snapshot_age_reads_in_the_largest_whole_unit() {
+        let at = 1_760_000_000_000;
+        let minute = 60_000;
+        for (elapsed, label) in [
+            (0, "updated just now"),
+            (minute - 1, "updated just now"),
+            (minute, "updated 1 min ago"),
+            (59 * minute, "updated 59 min ago"),
+            (60 * minute, "updated 1 h ago"),
+            (47 * 60 * minute, "updated 47 h ago"),
+            (48 * 60 * minute, "updated 2 days ago"),
+        ] {
+            assert_eq!(snapshot_age_label(at, at + elapsed), label);
+        }
+        assert_eq!(snapshot_age_label(at, at - minute), "updated just now");
+    }
+
+    #[test]
+    fn provider_summary_names_only_the_unusable_ones() {
+        let provider = |source: &str, health| ProviderStatusView {
+            source: source.into(),
+            protocol: "BIP37".into(),
+            health,
+        };
+        assert_eq!(provider_health_summary(&[]), None);
+        assert_eq!(
+            provider_health_summary(&[
+                provider("a", ProviderHealthView::Healthy),
+                provider("b", ProviderHealthView::Unknown),
+            ]),
+            None
+        );
+        assert_eq!(
+            provider_health_summary(&[
+                provider("a", ProviderHealthView::Healthy),
+                provider("b", ProviderHealthView::Offline),
+                provider("c", ProviderHealthView::Degraded),
+            ])
+            .as_deref(),
+            Some("2 of 3 providers not usable: b (BIP37) offline, c (BIP37) degraded")
+        );
+    }
+
+    #[test]
+    fn header_label_names_its_anchor_when_known() {
+        let label = |provenance: &str| {
+            header_checkpoint_label(&HeaderCheckpointView {
+                height: 900_000,
+                provenance: provenance.into(),
+            })
+        };
+        assert_eq!(
+            label("shipped-reviewed"),
+            "Headers verified to 900000 from the checkpoint shipped with the wallet"
+        );
+        assert_eq!(label("something-newer"), "Headers verified to 900000");
     }
 }

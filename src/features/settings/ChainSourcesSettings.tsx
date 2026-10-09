@@ -42,6 +42,11 @@ import {
   refreshEngineWallet,
   type EngineWalletSync,
 } from '../../platform/desktop/engineWalletBridge';
+import {
+  headerCheckpointLabel,
+  providerHealthSummary,
+  snapshotAgeLabel,
+} from '../../platform/desktop/engineSyncStatus';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { refusedForWantOfTor } from './chainSourceStatus';
 
@@ -1391,7 +1396,20 @@ export function ChainSourcesSettings({
                   }`}
               {engineSync.source ? ` · ${engineSync.source}` : ''}
               {engineSync.tipHeight ? ` · tip ${engineSync.tipHeight}` : ''}
+              {engineSync.snapshotAtUnixMs !== null
+                ? ` · ${snapshotAgeLabel(engineSync.snapshotAtUnixMs, Date.now())}`
+                : ''}
             </p>
+            {engineSync.headerCheckpoint && (
+              <p className="mt-1 text-[11px] wallet-muted">
+                {headerCheckpointLabel(engineSync.headerCheckpoint)}
+              </p>
+            )}
+            {providerHealthSummary(engineSync.providers) && (
+              <p className="mt-1 text-[11px] text-amber-400">
+                {providerHealthSummary(engineSync.providers)}
+              </p>
+            )}
             {engineSync.error && (
               <p className="mt-1 text-[11px] text-amber-400">
                 {engineSync.error}
