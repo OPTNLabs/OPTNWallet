@@ -1285,3 +1285,48 @@ The prelude is now a chunk of its own, imported before any other.
 `scripts/__tests__/desktopPrelude.test.mts` checks the chunking, the import
 order and the dev-server CSP.
 
+
+### 2026-10-09: headers before the ASERT anchor are bounded by the network's limit
+
+#75 §20 (item 75-62). `verify_header_extension` checked a header's link and
+its own declared proof-of-work everywhere, and the expected ASERT difficulty
+only from the anchor on. Below the anchor nothing bounded the declared
+target. A mainnet header below 661,647 that declared `0x207fffff` (regtest's
+limit) and met it passed. Nor was the anchor tied to a chain: a chain that
+crossed the anchor height on different blocks was judged by the anchor's
+bits and time all the same.
+
+Two checks now run wherever an `AsertCheck` is attached. The shipped
+verifiers, header recovery, the desktop SPV walk and the CLI all attach one:
+
+- **The proof-of-work limit, at every height.** The declared target may not
+  be easier than the network's `powLimit`. Mainnet, chipnet, testnet3 and
+  testnet4 use `0x1d00ffff`, and regtest `0x207fffff`. These are the compact
+  forms of the `powLimit` values in BCHN's `chainparams.cpp`, and they were
+  already `AsertParams::max_bits`.
+- **The anchor's chain.** BCHN keeps the ASERT anchor by height, bits and
+  previous time, and requires "the block after this height" to be
+  checkpointed. `AsertAnchor::successor_hash` is that checkpoint, copied
+  from `chainparams.cpp`:
+  - mainnet 661,648;
+  - testnet3 1,421,482;
+  - testnet4 and chipnet 16,845.
+
+  The header at that height must have that hash. Regtest pins none.
+
+Tests use real mainnet headers fetched from a public Fulcrum server. None of
+them is taken on trust:
+
+- genesis and block 661,648 match BCHN's hardcoded hashes;
+- block 661,646's timestamp is the anchor's `prev_time`;
+- the rest link to those.
+
+They show that block 1 (exactly at the limit) is accepted, and that a forged
+easy-target header after it is refused even though it meets its own target.
+Crossing the anchor on BCHN's chain is accepted; the same header against a
+different pinned successor is refused.
+
+Two `header_view` fixtures had ground regtest-difficulty chains and verified
+them under chipnet's rules. They now say regtest, which is what they are.
+The legacy DAA/EDA rules before the anchor remain unchecked. Shipped
+checkpoints are option (2) of the item.

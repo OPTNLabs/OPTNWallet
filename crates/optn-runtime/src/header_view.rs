@@ -628,8 +628,10 @@ mod tests {
     use crate::chain::CheckpointProvenance;
     use optn_core::header_hash::sha256d;
 
-    /// Build a linkable header. `bits` stays at the regtest-friendly maximum so
-    /// declared proof-of-work passes without mining.
+    /// Build a linkable header. `bits` stays at regtest's proof-of-work limit
+    /// so declared proof-of-work passes with little grinding, which makes
+    /// these regtest chains: under any other network's limit the headers
+    /// would be refused.
     // The parameter is the grinding attempt, and it is named that way on
     // purpose: it lands in the header's nonce field, but it is a
     // proof-of-work search counter, not a cryptographic nonce. Calling it
@@ -671,7 +673,7 @@ mod tests {
 
     fn view_with_interval(interval: u32) -> VerifiedHeaderView {
         VerifiedHeaderView::with_anchor_interval(
-            Network::Chipnet,
+            Network::Regtest,
             ShvMmrHeaderVerifier::empty(CheckpointProvenance::SelfDerived),
             interval,
         )
@@ -844,8 +846,8 @@ mod tests {
         )
         .expect("single-leaf checkpoint bootstraps")
         .with_asert(
-            AsertParams::for_network(Network::Chipnet),
-            AsertAnchor::for_network(Network::Chipnet),
+            AsertParams::for_network(Network::Regtest),
+            AsertAnchor::for_network(Network::Regtest),
         );
         let trusted = HeaderCheckpoint {
             height: 0,
@@ -853,7 +855,7 @@ mod tests {
             provenance: CheckpointProvenance::SelfDerived,
         };
         (
-            VerifiedHeaderView::with_anchor_interval(Network::Chipnet, verifier, 4),
+            VerifiedHeaderView::with_anchor_interval(Network::Regtest, verifier, 4),
             trusted,
         )
     }
@@ -863,7 +865,7 @@ mod tests {
         let (view, trusted) = bootstrapped_view();
         let encoded = view.encode().expect("a bootstrapped view encodes");
 
-        let restored = VerifiedHeaderView::restore(&encoded, Network::Chipnet, &trusted)
+        let restored = VerifiedHeaderView::restore(&encoded, Network::Regtest, &trusted)
             .expect("restores against the trusted checkpoint");
         assert_eq!(restored.tip(), view.tip());
         assert_eq!(restored.times().anchors(), view.times().anchors());
@@ -880,19 +882,19 @@ mod tests {
         // the record is internally consistent with itself.
         let mut foreign = trusted.clone();
         foreign.commitment[0] ^= 1;
-        assert!(VerifiedHeaderView::restore(&encoded, Network::Chipnet, &foreign).is_err());
+        assert!(VerifiedHeaderView::restore(&encoded, Network::Regtest, &foreign).is_err());
 
         // Wrong network.
         assert!(VerifiedHeaderView::restore(&encoded, Network::Mainnet, &trusted).is_err());
 
         // Garbage and oversized records are refused rather than parsed.
         assert!(matches!(
-            VerifiedHeaderView::restore("not json", Network::Chipnet, &trusted),
+            VerifiedHeaderView::restore("not json", Network::Regtest, &trusted),
             Err(HeaderViewError::InvalidPersistedView)
         ));
         let oversized = "x".repeat(MAX_PERSISTED_VIEW_BYTES + 1);
         assert!(matches!(
-            VerifiedHeaderView::restore(&oversized, Network::Chipnet, &trusted),
+            VerifiedHeaderView::restore(&oversized, Network::Regtest, &trusted),
             Err(HeaderViewError::InvalidPersistedView)
         ));
     }
@@ -915,7 +917,7 @@ mod tests {
             "fixture must actually change the anchors"
         );
         assert!(matches!(
-            VerifiedHeaderView::restore(&tampered, Network::Chipnet, &trusted),
+            VerifiedHeaderView::restore(&tampered, Network::Regtest, &trusted),
             Err(HeaderViewError::TimeIndex(_))
         ));
     }
@@ -985,7 +987,7 @@ mod tests {
 
         let encoded = view.encode().expect("encodes");
         let restored =
-            VerifiedHeaderView::restore(&encoded, Network::Chipnet, &trusted).expect("restores");
+            VerifiedHeaderView::restore(&encoded, Network::Regtest, &trusted).expect("restores");
 
         let (authenticated, retained) = restored.anchor_authentication();
         assert_eq!(authenticated, 0, "nothing comes back authenticated");
@@ -1024,7 +1026,7 @@ mod tests {
 
         // Honest snapshot: the window re-derives the stored median.
         let mut restored =
-            VerifiedHeaderView::restore(&encoded, Network::Chipnet, &trusted).expect("restores");
+            VerifiedHeaderView::restore(&encoded, Network::Regtest, &trusted).expect("restores");
         restored
             .reauthenticate_anchor_window(anchor.height, window)
             .expect("an honest window re-derives the stored median");
@@ -1036,7 +1038,7 @@ mod tests {
 
         // A window that does not terminate at the block the anchor names.
         let mut restored =
-            VerifiedHeaderView::restore(&encoded, Network::Chipnet, &trusted).expect("restores");
+            VerifiedHeaderView::restore(&encoded, Network::Regtest, &trusted).expect("restores");
         let wrong = &headers[..window_len];
         assert!(matches!(
             restored.reauthenticate_anchor_window(anchor.height, wrong),
@@ -1063,7 +1065,7 @@ mod tests {
         let bumped = format!("\"median_time_past\":{}", anchor.median_time_past + 1);
         let altered = encoded.replace(&stored, &bumped);
         assert_ne!(altered, encoded, "fixture must change the saved median");
-        let mut tampered = VerifiedHeaderView::restore(&altered, Network::Chipnet, &trusted)
+        let mut tampered = VerifiedHeaderView::restore(&altered, Network::Regtest, &trusted)
             .expect("an altered-but-monotonic snapshot still loads");
         let error = tampered
             .reauthenticate_anchor_window(anchor.height, window)
@@ -1142,7 +1144,7 @@ mod tests {
             target: root,
         };
         assert!(matches!(
-            view.reauthenticate_anchor(Network::Chipnet, &orphan),
+            view.reauthenticate_anchor(Network::Regtest, &orphan),
             Err(HeaderViewError::NoAnchorAtHeight { .. })
         ));
 
@@ -1155,14 +1157,14 @@ mod tests {
             target: root,
         };
         assert!(view
-            .reauthenticate_anchor(Network::Chipnet, &impostor)
+            .reauthenticate_anchor(Network::Regtest, &impostor)
             .is_err());
 
         // And the accepted-root binding still applies underneath.
         let mut foreign = impostor.clone();
         foreign.target[0] ^= 1;
         assert!(matches!(
-            view.reauthenticate_anchor(Network::Chipnet, &foreign),
+            view.reauthenticate_anchor(Network::Regtest, &foreign),
             Err(HeaderViewError::UnacceptedRoot { .. })
         ));
     }
@@ -1211,7 +1213,7 @@ mod tests {
             target: tallest,
         };
         assert_eq!(
-            view.accept_historical_peak_proof(Network::Chipnet, &proof),
+            view.accept_historical_peak_proof(Network::Regtest, &proof),
             Ok(Evidence::HeaderMmrProven {
                 block_hash: leaves[0],
                 height: 0,
@@ -1222,7 +1224,7 @@ mod tests {
         let mut foreign = proof.clone();
         foreign.target[0] ^= 1;
         assert!(matches!(
-            view.accept_historical_peak_proof(Network::Chipnet, &foreign),
+            view.accept_historical_peak_proof(Network::Regtest, &foreign),
             Err(HeaderViewError::UnacceptedRoot { .. })
         ));
 
@@ -1234,7 +1236,7 @@ mod tests {
         let mut too_high = proof.clone();
         too_high.height = 10_000;
         assert!(matches!(
-            view.accept_historical_peak_proof(Network::Chipnet, &too_high),
+            view.accept_historical_peak_proof(Network::Regtest, &too_high),
             Err(HeaderViewError::HeightOutsideAccumulator { .. })
         ));
 
@@ -1242,7 +1244,7 @@ mod tests {
         let mut tampered = proof.clone();
         tampered.proof[0][0] ^= 1;
         assert!(view
-            .accept_historical_peak_proof(Network::Chipnet, &tampered)
+            .accept_historical_peak_proof(Network::Regtest, &tampered)
             .is_err());
     }
 
@@ -1264,7 +1266,7 @@ mod tests {
         assert_eq!(
             view.accept_historical_proof(Network::Mainnet, &proof),
             Err(HeaderViewError::NetworkMismatch {
-                expected: Network::Chipnet,
+                expected: Network::Regtest,
                 actual: Network::Mainnet,
             })
         );
@@ -1274,7 +1276,7 @@ mod tests {
         let mut foreign = proof.clone();
         foreign.target[0] ^= 1;
         assert!(matches!(
-            view.accept_historical_proof(Network::Chipnet, &foreign),
+            view.accept_historical_proof(Network::Regtest, &foreign),
             Err(HeaderViewError::UnacceptedRoot { .. })
         ));
 
@@ -1282,14 +1284,14 @@ mod tests {
         let mut too_high = proof.clone();
         too_high.height = 10_000;
         assert!(matches!(
-            view.accept_historical_proof(Network::Chipnet, &too_high),
+            view.accept_historical_proof(Network::Regtest, &too_high),
             Err(HeaderViewError::HeightOutsideAccumulator { .. })
         ));
 
         // An empty sibling list for a non-trivial tree fails verification
         // rather than being waved through.
         assert!(view
-            .accept_historical_proof(Network::Chipnet, &proof)
+            .accept_historical_proof(Network::Regtest, &proof)
             .is_err());
         proof.proof.clear();
     }

@@ -1479,6 +1479,7 @@ pub(crate) mod tests {
             height: 0,
             bits: params.max_bits,
             prev_time: 0,
+            successor_hash: None,
         };
         let mut previous_hash = [0; 32];
         let mut headers = Vec::new();
