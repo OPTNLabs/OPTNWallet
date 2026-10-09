@@ -17,6 +17,7 @@ mod egress;
 mod electrum_selection;
 pub mod electrum_tcp;
 pub mod fusion;
+mod fusion_lookups;
 #[cfg(desktop)]
 pub mod hw;
 mod network_config;
@@ -412,10 +413,10 @@ struct FusionRunInputReq {
 
 fn fusion_run_destination_hosts<'a>(
     host: &'a str,
-    lookups: &'a [fusion::electrum_input::ElectrumEndpoint],
+    lookups: &'a [electrum_selection::SelectedElectrum],
 ) -> Vec<&'a str> {
     std::iter::once(host)
-        .chain(lookups.iter().map(|endpoint| endpoint.host.as_str()))
+        .chain(lookups.iter().map(|server| server.host.as_str()))
         .collect()
 }
 
@@ -425,9 +426,9 @@ fn fusion_run_destination_hosts<'a>(
 async fn fusion_lookups(
     runtime: &optn_runtime::AppRuntime,
     network_settings: &crate::network_config::NetworkSettingsStore,
-    primary: fusion::electrum_input::ElectrumEndpoint,
+    primary: FusionLookupEndpointReq,
     fallbacks: Vec<FusionLookupEndpointReq>,
-) -> Result<Vec<fusion::electrum_input::ElectrumEndpoint>, String> {
+) -> Result<Vec<electrum_selection::SelectedElectrum>, String> {
     use electrum_selection::SelectedElectrum;
 
     let network = runtime.state().network;
@@ -453,14 +454,7 @@ async fn fusion_lookups(
         });
         return Err(format!("{}: {why}", electrum_selection::NOT_SELECTED));
     }
-    Ok(chosen
-        .into_iter()
-        .map(|server| fusion::electrum_input::ElectrumEndpoint {
-            host: server.host,
-            port: server.port,
-            use_ssl: server.tls,
-        })
-        .collect())
+    Ok(chosen)
 }
 
 #[derive(serde::Serialize)]
@@ -559,10 +553,10 @@ async fn fusion_run(
     if lookup_host.trim().is_empty() || lookup_port == 0 {
         return Err("CashFusion peer-input lookup endpoint is invalid".into());
     }
-    let lookup_endpoints = fusion_lookups(
+    let lookup_servers = fusion_lookups(
         &runtime,
         &network_settings,
-        fusion::electrum_input::ElectrumEndpoint {
+        FusionLookupEndpointReq {
             host: lookup_host,
             port: lookup_port,
             use_ssl: lookup_use_ssl,
@@ -570,10 +564,9 @@ async fn fusion_run(
         lookup_fallbacks,
     )
     .await?;
-    // The lookup transport is reused by each configured fallback. Resolve Tor
-    // against the complete destination set first, so a local primary cannot
-    // make a remote fallback inherit a direct route.
-    let destination_hosts = fusion_run_destination_hosts(&host, &lookup_endpoints);
+    // Resolve Tor against the complete destination set first, so a local
+    // primary cannot leave a remote lookup server without a proxy.
+    let destination_hosts = fusion_run_destination_hosts(&host, &lookup_servers);
     let verified_proxy = verified_fusion_proxy_for_network(
         &destination_hosts,
         &network_settings,
@@ -585,6 +578,13 @@ async fn fusion_run(
         host: fusion::tor::DEFAULT_TOR_HOST,
         port,
     });
+    // Connections of this round's own: loopback directly, anything else only
+    // through the verified proxy, never on the wallet's connections.
+    let lookups = std::sync::Arc::new(fusion_lookups::ChainInputLookups::electrum(
+        runtime.state().network,
+        lookup_servers,
+        verified_proxy,
+    ));
 
     let join_inactive_timeout = match join_inactive_timeout_ms {
         None => None,
@@ -628,8 +628,7 @@ async fn fusion_run(
         // single unreachable host otherwise makes peer inputs unverifiable —
         // and since missing evidence must never become an accusation, that
         // aborts every round rather than blaming anyone.
-        lookup_endpoints,
-        lookup_remote_transport: remote_transport,
+        lookups,
         timing: fusion::run::FusionTiming::default(),
         join_inactive_timeout,
         cancel,
@@ -754,11 +753,14 @@ async fn fusion_transaction_is_known(
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
     network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<bool, String> {
+    use fusion::lookup::InputLookups;
+
     let _ = (tor_host, tor_port);
-    let endpoints = fusion_lookups(
+    let txid = display_txid_bytes(&txid)?;
+    let servers = fusion_lookups(
         &runtime,
         &network_settings,
-        fusion::electrum_input::ElectrumEndpoint {
+        FusionLookupEndpointReq {
             host: lookup_host,
             port: lookup_port,
             use_ssl: lookup_use_ssl,
@@ -767,31 +769,27 @@ async fn fusion_transaction_is_known(
     )
     .await?;
 
-    let hosts: Vec<&str> = endpoints.iter().map(|e| e.host.as_str()).collect();
+    let hosts: Vec<&str> = servers.iter().map(|server| server.host.as_str()).collect();
+    let network = runtime.state().network;
     let verified_proxy =
-        verified_fusion_proxy_for_network(&hosts, &network_settings, runtime.state().network)
-            .await?;
+        verified_fusion_proxy_for_network(&hosts, &network_settings, network).await?;
+    // A server that HAS it settles the question. A server that does not may
+    // simply be behind, so the others are asked too.
+    fusion_lookups::ChainInputLookups::electrum(network, servers, verified_proxy)
+        .transaction_is_known(txid)
+        .await
+}
 
-    let mut last_error = String::from("no Electrum server could answer");
-    for endpoint in &endpoints {
-        let transport = match fusion_transport_for_host(&endpoint.host, verified_proxy) {
-            Ok(transport) => transport,
-            Err(error) => {
-                last_error = error;
-                continue;
-            }
-        };
-        match fusion::electrum_input::transaction_is_known(endpoint, transport, &txid).await {
-            // A server that HAS it settles the question. A server that does not
-            // may simply be behind, so keep asking the others.
-            Ok(true) => return Ok(true),
-            Ok(false) => {
-                last_error = format!("{}:{} does not have it", endpoint.host, endpoint.port)
-            }
-            Err(error) => last_error = format!("{}:{}: {error}", endpoint.host, endpoint.port),
-        }
+/// A transaction id as the renderer shows it, in internal byte order.
+fn display_txid_bytes(txid: &str) -> Result<[u8; 32], String> {
+    if txid.len() != 64 {
+        return Err("not a transaction id".into());
     }
-    Err(last_error)
+    let mut bytes: [u8; 32] = decode_hex(txid)?
+        .try_into()
+        .map_err(|_| "not a transaction id".to_string())?;
+    bytes.reverse();
+    Ok(bytes)
 }
 
 /// Remote peers are routed only through a proxy freshly verified as Tor at this
@@ -2066,13 +2064,11 @@ mod tests {
             ("remote-fallback.example", 50002, true),
             ("127.0.0.1", 50001, false),
         ]
-        .map(
-            |(host, port, use_ssl)| fusion::electrum_input::ElectrumEndpoint {
-                host: host.into(),
-                port,
-                use_ssl,
-            },
-        );
+        .map(|(host, port, tls)| electrum_selection::SelectedElectrum {
+            host: host.into(),
+            port,
+            tls,
+        });
         assert_eq!(
             fusion_run_destination_hosts("fusion.example", &lookups),
             vec![

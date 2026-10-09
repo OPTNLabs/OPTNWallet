@@ -23,7 +23,10 @@ pub mod wallet_checkpoint;
 pub use optn_chain_bip37::{
     relay_tx_on_stream, Bip37Backend, Bip37Config, Bip37Transport, TxRelayOutcome,
 };
-use optn_chain_electrum::{ElectrumBackend, ElectrumConfig, ElectrumTransport};
+// A CashFusion round checks inputs on Electrum connections of its own; the
+// host drives them directly (see `connect_fusion_lookup`).
+pub use optn_chain_electrum::ElectrumBackend;
+use optn_chain_electrum::{ElectrumConfig, ElectrumTransport};
 use optn_chain_neutrino::{NeutrinoBackend, NeutrinoConfig, NeutrinoTransport};
 use optn_chain_zmq::{BchnZmqConfig, BchnZmqEventSource};
 use optn_core::endpoint::is_loopback_host;
@@ -571,6 +574,69 @@ fn electrum_transport(endpoint: &Endpoint, route: TorRoute) -> Option<ElectrumTr
         }
         TorRoute::Refused(_) => None,
     }
+}
+
+/// Per request on a CashFusion round's lookup connection. A round's phases
+/// are measured in seconds; a server slower than this is skipped for the next.
+const FUSION_LOOKUP_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// The configuration of a CashFusion round's own connection to the Electrum
+/// server at `host:port`, for checking claimed inputs and broadcasts.
+///
+/// Never the wallet's connection: Tor isolation credentials of its own keep
+/// the server from tying the round's questions to the wallet's subscriptions.
+/// Only a loopback server is reached directly; any other needs a verified Tor
+/// `socks_port`, and is refused without one.
+pub fn fusion_lookup_config(
+    network: optn_core::network::Network,
+    host: &str,
+    port: u16,
+    tls: bool,
+    socks_port: Option<u16>,
+) -> Result<ElectrumConfig, String> {
+    let endpoint = Endpoint {
+        kind: if tls {
+            EndpointKind::ElectrumTls
+        } else {
+            EndpointKind::ElectrumTcp
+        },
+        host: host.to_owned(),
+        port: Some(port),
+    };
+    let route = if is_loopback_host(host) {
+        TorRoute::Direct
+    } else {
+        TorRoute::Through {
+            socks_port: socks_port.ok_or_else(|| {
+                format!("{host}: CashFusion lookups reach remote servers only through Tor")
+            })?,
+        }
+    };
+    let transport = electrum_transport(&endpoint, route)
+        .ok_or_else(|| format!("{host}: no route for a CashFusion lookup"))?;
+    let mut config = ElectrumConfig::new(
+        SourceId::new(format!("fusion-lookup:{host}:{port}")),
+        endpoint,
+        transport,
+        optn_chain_bip37::genesis_hash(&network.to_string()),
+    );
+    config.request_timeout = FUSION_LOOKUP_TIMEOUT;
+    Ok(config)
+}
+
+/// Connect a CashFusion round's lookup connection (see
+/// [`fusion_lookup_config`]). The server must be on `network`.
+pub async fn connect_fusion_lookup(
+    network: optn_core::network::Network,
+    host: &str,
+    port: u16,
+    tls: bool,
+    socks_port: Option<u16>,
+) -> Result<ElectrumBackend, String> {
+    let config = fusion_lookup_config(network, host, port, tls, socks_port)?;
+    ElectrumBackend::connect(config)
+        .await
+        .map_err(|error| format!("{host}:{port}: {error:?}"))
 }
 
 fn fresh_tor_isolation_token() -> String {
@@ -1746,6 +1812,51 @@ mod tests {
             }
             _ => panic!("remote endpoint must not use a direct Electrum transport"),
         }
+    }
+
+    /// A round's lookup connection reaches a remote server only through Tor,
+    /// with isolation credentials no other connection shares, and a loopback
+    /// one directly.
+    #[test]
+    fn fusion_lookups_are_tor_only_and_isolated_except_on_loopback() {
+        use optn_core::network::Network;
+
+        let tor = |config: ElectrumConfig| match config.transport {
+            ElectrumTransport::Tor {
+                proxy_port,
+                username,
+                password,
+                tls,
+                ..
+            } => (proxy_port, username, password, tls),
+            other => panic!("a remote lookup went {other:?}"),
+        };
+        let first =
+            tor(
+                fusion_lookup_config(Network::Chipnet, "chip.example", 50002, true, Some(9050))
+                    .unwrap(),
+            );
+        let second =
+            tor(
+                fusion_lookup_config(Network::Chipnet, "chip.example", 50002, true, Some(9050))
+                    .unwrap(),
+            );
+        assert_eq!((first.0, first.3), (9050, true));
+        assert_eq!(first.1, first.2);
+        assert_ne!(first.1, second.1, "each connection is isolated");
+        assert!(
+            fusion_lookup_config(Network::Chipnet, "chip.example", 50002, true, None)
+                .unwrap_err()
+                .contains("only through Tor")
+        );
+        let local =
+            fusion_lookup_config(Network::Chipnet, "127.0.0.1", 50001, false, None).unwrap();
+        assert_eq!(local.transport, ElectrumTransport::Tcp);
+        assert_eq!(
+            local.expected_genesis,
+            optn_chain_bip37::genesis_hash("chipnet")
+        );
+        assert_eq!(local.request_timeout, FUSION_LOOKUP_TIMEOUT);
     }
 
     #[tokio::test]

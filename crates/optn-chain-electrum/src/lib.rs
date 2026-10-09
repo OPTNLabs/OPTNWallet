@@ -45,6 +45,9 @@ const MAX_SPENDER_HEURISTIC_FETCHES: usize = 30;
 /// the fetch cap alone bounds it.
 const MAX_WALK_BACK_DEPTH: u32 = 3;
 const MAX_SPENDER_RAW_BYTES: usize = 2 * 1024 * 1024;
+/// A script's unspent list longer than this is refused when it is evidence
+/// against someone (see [`ElectrumBackend::script_unspent_values`]).
+const MAX_SCRIPT_UNSPENT_ENTRIES: usize = 1_024;
 const SPENDER_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long a parked connection stays eligible for reuse: long enough to carry
 /// one refresh and the lookups that follow it, short enough that a silently
@@ -286,6 +289,64 @@ impl ElectrumBackend {
     pub async fn raw_call(&self, method: &str, params: Value) -> Result<Value, ChainBackendError> {
         let mut session = self.session().await?;
         session.call(method, params).await
+    }
+
+    /// For each `(script_pubkey, txid, vout)` (txid in internal byte order),
+    /// the value at which the script's unspent list holds that output, or
+    /// `None` when it does not: the check a CashFusion peer's claimed input
+    /// must pass. All are asked together on one connection.
+    ///
+    /// "Not unspent" can count against a peer, so each list must be well
+    /// formed throughout -- canonical hashes, every field present, no output
+    /// listed twice, at most [`MAX_SCRIPT_UNSPENT_ENTRIES`] entries -- or that
+    /// answer is an error. Fields beyond those, such as an output's
+    /// `token_data`, are ignored. An error answers only its own question; the
+    /// outer error is a connection that failed them all.
+    pub async fn script_unspent_values(
+        &self,
+        outputs: &[(Vec<u8>, [u8; 32], u32)],
+    ) -> Result<Vec<Result<Option<u64>, ChainBackendError>>, ChainBackendError> {
+        if outputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let scripthashes: Vec<String> = outputs
+            .iter()
+            .map(|(script, _, _)| electrum_scripthash(script))
+            .collect();
+        let (mut session, reused) = self.checkout().await?;
+        let mut listed = Self::list_unspent(&mut session, &scripthashes).await;
+        // As for other read-only requests: a parked connection the server has
+        // since closed gets one fresh attempt.
+        if reused && matches!(listed, Err(ChainBackendError::Offline)) {
+            session = self.session().await?;
+            listed = Self::list_unspent(&mut session, &scripthashes).await;
+        }
+        let listed = listed?;
+        if !session.poisoned {
+            self.park(session).await;
+        }
+        Ok(outputs
+            .iter()
+            .zip(listed)
+            .map(|((_, txid, vout), reply)| {
+                reply.and_then(|list| strict_unspent_value(&list, &display_hash(*txid), *vout))
+            })
+            .collect())
+    }
+
+    async fn list_unspent(
+        session: &mut Session,
+        scripthashes: &[String],
+    ) -> Result<Vec<Result<Value, ChainBackendError>>, ChainBackendError> {
+        let mut replies = Vec::with_capacity(scripthashes.len());
+        for chunk in scripthashes.chunks(MAX_PENDING_REQUESTS) {
+            let requests: Vec<(&str, Value)> = chunk
+                .iter()
+                .map(|scripthash| ("blockchain.scripthash.listunspent", json!([scripthash])))
+                .collect();
+            replies.extend(session.call_many_lenient(&requests).await?);
+        }
+        Ok(replies)
     }
 
     async fn session(&self) -> Result<Session, ChainBackendError> {
@@ -1620,6 +1681,56 @@ fn listed_unspent_value(
     Ok(None)
 }
 
+/// The value of `tx_hash:tx_pos` in a script's unspent list, or `None` when
+/// the list, well formed throughout, does not hold it.
+fn strict_unspent_value(
+    listed: &Value,
+    tx_hash: &str,
+    tx_pos: u32,
+) -> Result<Option<u64>, ChainBackendError> {
+    let invalid = |why: &str| ChainBackendError::InvalidResponse(format!("listunspent {why}"));
+    let entries = listed
+        .as_array()
+        .ok_or_else(|| invalid("result is not an array"))?;
+    if entries.len() > MAX_SCRIPT_UNSPENT_ENTRIES {
+        return Err(invalid("result has too many entries"));
+    }
+    let mut seen = BTreeSet::new();
+    let mut found = None;
+    for entry in entries {
+        let hash = entry
+            .get("tx_hash")
+            .and_then(Value::as_str)
+            .filter(|hash| {
+                hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+            .ok_or_else(|| invalid("entry has no canonical tx_hash"))?;
+        let pos = entry
+            .get("tx_pos")
+            .and_then(Value::as_u64)
+            .and_then(|pos| u32::try_from(pos).ok())
+            .ok_or_else(|| invalid("entry has no tx_pos"))?;
+        let value = entry
+            .get("value")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| invalid("entry has no value"))?;
+        entry
+            .get("height")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| invalid("entry has no height"))?;
+        if !seen.insert((hash, pos)) {
+            return Err(invalid("lists an output twice"));
+        }
+        if hash == tx_hash && pos == tx_pos {
+            found = Some(value);
+        }
+    }
+    Ok(found)
+}
+
 fn electrum_scripthash(script: &[u8]) -> String {
     let mut hash = Sha256::digest(script).to_vec();
     hash.reverse();
@@ -2428,6 +2539,88 @@ mod tests {
         assert!(calls
             .iter()
             .any(|call| call["method"] == "blockchain.scripthash.listunspent"));
+    }
+
+    async fn script_unspent(
+        listed: Value,
+        outputs: &[(Vec<u8>, [u8; 32], u32)],
+    ) -> (
+        Result<Vec<Result<Option<u64>, ChainBackendError>>, ChainBackendError>,
+        usize,
+        Vec<Value>,
+    ) {
+        let (port, server) = spentness_server("1.5", vec![], Value::Null, listed).await;
+        let backend = ElectrumBackend::connect(ElectrumConfig::new(
+            SourceId::new("fusion-lookup-test"),
+            Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "127.0.0.1".into(),
+                port: Some(port),
+            },
+            ElectrumTransport::Tcp,
+            [9; 32],
+        ))
+        .await
+        .unwrap();
+        let result = backend.script_unspent_values(outputs).await;
+        drop(backend);
+        let (connections, calls) = server.await.unwrap();
+        (result, connections, calls)
+    }
+
+    #[tokio::test]
+    async fn a_script_unspent_list_answers_each_output_on_one_connection() {
+        let txid = [7; 32];
+        let listed = json!([
+            {"tx_hash": display_hash(txid), "tx_pos": 3, "height": 0, "value": 200_000},
+            {"tx_hash": display_hash([8; 32]), "tx_pos": 0, "height": 9, "value": 1,
+             "token_data": {"category": "aa".repeat(32), "amount": "1"}},
+        ]);
+        let script = vec![0x76, 0xa9, 0x14, 1, 2, 0x88, 0xac];
+        let (result, connections, calls) = script_unspent(
+            listed,
+            &[(script.clone(), txid, 3), (script.clone(), txid, 4)],
+        )
+        .await;
+        let answers: Vec<_> = result.unwrap().into_iter().map(Result::unwrap).collect();
+        // Unconfirmed counts; a token output beside it does not spoil the list.
+        assert_eq!(answers, vec![Some(200_000), None]);
+        assert_eq!(connections, 1, "the probe's connection carried both");
+        let asked: Vec<_> = calls
+            .iter()
+            .filter(|call| call["method"] == "blockchain.scripthash.listunspent")
+            .map(|call| call["params"].clone())
+            .collect();
+        assert_eq!(asked, vec![json!([electrum_scripthash(&script)]); 2]);
+    }
+
+    #[tokio::test]
+    async fn a_malformed_script_unspent_list_is_never_an_absence() {
+        // Letters in the hash, so its case can be wrong.
+        let txid = [0xab; 32];
+        let good = json!({"tx_hash": display_hash(txid), "tx_pos": 3, "height": 1, "value": 5});
+        for listed in [
+            json!({"not": "a list"}),
+            json!([good.clone(), good.clone()]),
+            json!([{"tx_hash": display_hash(txid).to_uppercase(), "tx_pos": 3, "height": 1, "value": 5}]),
+            json!([{"tx_hash": display_hash(txid), "tx_pos": 3, "value": 5}]),
+            json!([{"tx_hash": display_hash(txid), "tx_pos": 3, "height": 1}]),
+            json!([{"tx_hash": "00", "tx_pos": 3, "height": 1, "value": 5}]),
+            Value::Array(
+                (0..=MAX_SCRIPT_UNSPENT_ENTRIES as u32)
+                    .map(|pos| json!({"tx_hash": display_hash(txid), "tx_pos": pos, "height": 1, "value": 5}))
+                    .collect(),
+            ),
+        ] {
+            let (result, ..) = script_unspent(listed.clone(), &[(vec![0x51], [6; 32], 0)]).await;
+            assert!(
+                matches!(
+                    result.unwrap().as_slice(),
+                    [Err(ChainBackendError::InvalidResponse(_))]
+                ),
+                "{listed}"
+            );
+        }
     }
 
     #[test]

@@ -39,6 +39,14 @@ export async function gatherInputs(
 
   const inputs: FusionRunInput[] = [];
   for (const utxo of utxos) {
+    // CashFusion carries no token data, as in Electron Cash: a token coin in
+    // a round would be burned. Coin selection already leaves them out; this is
+    // the last step before signing, so it refuses them too.
+    if (utxo.token != null || utxo.token_data != null) {
+      throw new Error(
+        `Token coins cannot be fused: ${utxo.tx_hash}:${utxo.tx_pos}`
+      );
+    }
     const publicKey = byAddress.get(utxo.address);
     if (!publicKey) {
       throw new Error(`No key for UTXO address ${utxo.address}`);

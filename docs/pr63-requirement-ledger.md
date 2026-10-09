@@ -1697,3 +1697,50 @@ revoked stack; the checkpoint keeps the time across a reopen and a reseal;
 finish publishes the header checkpoint and the time, and providers still
 appear after a refused refresh; wire round trip and an older payload; the
 wording on both sides.
+
+### 2026-10-09: CashFusion checks inputs through the shared chain adapter
+
+#75 (items 75-75, 75-80 and 75-94) and #83 (items 83-3 and 83-31). optn-fusion
+spoke Electrum itself: its own JSON-RPC client, its own connection handling,
+and no check that the server was on the round's chain. It now asks through an
+`InputLookups` trait (`optn_fusion::lookup`) and holds only the verdict:
+
+- a claimed input matches only when the source's unspent list for the
+  pubkey's P2PKH script holds that exact outpoint at the exact value;
+- a lookup that could not be made is an error, and an error never becomes
+  blame, as before.
+
+The desktop shell implements the trait (`src-tauri/src/fusion_lookups.rs`)
+over the holder's selected Electrum servers, through the shared adapter:
+
+- `ElectrumBackend::script_unspent_values` asks all of a round's questions
+  on one connection. A list that is malformed anywhere (a non-canonical
+  hash, a missing field, an output listed twice, more than 1,024 entries) is
+  an error for that question, never "not unspent". Extra fields are ignored:
+  the old parser refused `token_data`, so a peer whose address also held a
+  token output made the round abort unverified.
+- `optn_chain_native::connect_fusion_lookup` gives each server a connection
+  of the round's own: loopback directly, anything else only through the
+  verified Tor proxy, with isolation credentials no wallet connection shares.
+  The server's genesis is checked, which the old client never did.
+- A definite answer from any server settles a question; only unanswered
+  questions move to the next server. `fusion_transaction_is_known` asks the
+  same way and accepts only the exact bytes.
+
+The chain layer's `OutpointSpentness` was not used for this: it fetches the
+previous transaction first, so a peer claiming a transaction that does not
+exist would make the check fail as unavailable instead of "not unspent", and
+that peer would escape blame.
+
+Token coins stay out of fusion, as in Electron Cash. Coin selection already
+excluded them on every path; `gatherInputs`, the last step before signing,
+now refuses them too.
+
+Tests: the verdict rules and reference P2PKH script; questions batched and
+kept in order; run.rs's revalidation (exact match, spent between
+boundaries, no source, cancellation) and two full mock rounds on a fake
+source; the adapter's batching on one connection and every malformed list;
+the Tor-only and isolation rule; server ordering, partial answers, exact
+transaction bytes; the token refusal.
+
+Not proven yet: a live chipnet round with the desktop app.
