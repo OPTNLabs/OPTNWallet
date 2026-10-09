@@ -2143,7 +2143,7 @@ desktop wallet to CLI w1 (`cbee36e0bdd45be90584a481c1b16f82509977077df1955863ec7
 and to the docker wallet (`c92d5302d55318f4b19e799bacd6834fd2b1ac71b0e21e89bd9a983837c7bf02`).
 The send meant for CLI w2 never happened, so w2 kept 2 x 60,000.
 
-Six rounds, each broadcast and then seen by the selected servers:
+Eight rounds, each broadcast and on chain:
 
 | Round | Tier | Players | Who |
 | --- | --- | --- | --- |
@@ -2153,13 +2153,16 @@ Six rounds, each broadcast and then seen by the selected servers:
 | `a992a0963e39dab66d7ba285e3121b1fc8a1aae05e3dff69a7fccaf6a80ba73c` | 12,000 | 2 | docker, desktop |
 | `87f43d10a4bb0833e1fbe146f274d18530bfec0cdc2040563aca8bfc811f0b25` | 12,000 | 2 | docker, desktop |
 | `6945d0ad3fbe82c9045865fac2224dea077de44bc55ebba90cad91f9f1334b48` | 18,000 | 2 | docker, desktop |
+| `4709406db83e3ad3e1618d7ab1a4a76bf5ab4b9ef649651ae4970da8156e976d` | 15,000 | 2 | docker, desktop |
+| `970dc0a660686dd5f0715ab887062fb773134e81547e0e4e4f724e8e85a12233` | 15,000 | 2 | docker, desktop |
 
 Player counts are the server's ("Starting fusion with N players"). Who
 took part comes from each member's own record: CLI w1's result lists the
-first two rounds, the docker runner's log all six, the desktop's fusion
-record the last five. Depth reached 2 on every surface (CLI w1's second
-round spent only the first round's outputs), each step recorded only after
-the selected servers held the round.
+first two rounds, the docker runner's log the first seven, the desktop's
+log the last six. Depth reached 2 on every surface (CLI w1's second round
+spent only the first round's outputs), each step recorded only after the
+selected servers held the round. The docker lab was stopped while round 8
+was being broadcast, so its record ends at round 7.
 
 What the run found:
 
@@ -2181,14 +2184,86 @@ What the run found:
   change address for every spend. Open: Simple Send's change through the
   runtime's reservation; it is refused for wallets whose keys are still in
   the TypeScript key database, which these were.
-- **Desktop engine sessions.** The desktop broadcasts only when the shared
-  engine holds the window's wallet. Unlocking a wallet in a secondary window
-  never opened it in the engine, silently, so that window could not send.
-  The first refresh after launch failed with "Wallet refresh unavailable;
-  retained history remains stale."; a manual retry worked for one wallet,
-  while another (receive branch at index 1,368) never became fresh. One
-  refresh reported "headers did not advance: ReorgBeyondWindow { floor:
-  325540 }" with the tip at 327,163, far below any ten-block reorg. After
-  the engine was reopened by hand, a send reviewed before it was refused
-  with "Wallet changed or needs a refresh", which is the unlock-epoch check
-  doing its job. Open: the first three.
+- **The desktop's depth record does not survive a hard stop.** The desktop
+  logged round 8's depth as recorded ("depths 2-3, 22 coins") two minutes
+  before the app was killed; after a restart its record ended at round 7.
+  The record lives in renderer storage (localStorage and the sql.js
+  database), whose writes reach disk later. Open: the depth record in the
+  runtime's encrypted checkpoint, written with the wallet state.
+- **Desktop engine sessions, rechecked.** Each finding was reproduced
+  before anything was changed:
+  - "A secondary window never opens its wallet in the engine" was the test
+    harness: it named its windows `send-...`, which the `desktop`
+    capability (`main`, `wallet-*`) does not cover. With the app's own
+    `wallet-*` label a second window's unlock opens its wallet in the
+    engine. The engine holds one wallet per process, so that moves the
+    session from the first window, whose sends are then refused with
+    "Wallet session is unavailable or changed. Reopen this wallet before
+    sending."
+  - The failed first refresh was the chain stack still being built: for
+    about half a minute after launch or an unlock every refresh failed with
+    "Chain source is still connecting", shown as "Wallet refresh
+    unavailable". Fixed below ("the first refresh waits for the chain
+    stack").
+  - `ReorgBeyondWindow { floor: 325540 }` was a one-block chipnet orphan
+    sealed in a view with no reorg ring. Fixed below ("a view sealed
+    without a reorg ring steps back one block").
+  - The wallet whose receive branch reaches index 1,368 refreshes completely
+    through the shared runtime (CLI, 2,951 addresses, 87 s). Its desktop
+    refresh is to be rechecked with both fixes.
+  - "Wallet changed or needs a refresh" after reopening the engine by hand
+    is the unlock-epoch check doing its job.
+
+### 2026-10-10: a view sealed without a reorg ring steps back one block
+
+#75 (header verification). Found in the fleet run and traced to the block:
+chipnet's 325,540 has two blocks, `00000000de317af8...` (06:47) and
+`00000000179eff3b...` (06:44), and 325,541 builds on the second. Wallets
+here had sealed the first, in a view written before reorg rings were kept.
+Such a view restores with no ring and cannot step back even one block, so
+every header pass since 2026-09-29 ended in `ReorgBeyondWindow` at its tip:
+no header-proven evidence above 325,540, and no verified chain for BIP37
+or Neutrino.
+
+A ring is no longer needed for one block. The accumulator keeps only peaks,
+but the tip's own proof lists every peak the tip was appended to:
+
+- `MmrAccumulator::before_last_leaf` reads the previous peaks out of the
+  last leaf's proof, and `before_append` rebuilds them from the leaves that
+  append merged with. Each is accepted only if appending the leaf again
+  reproduces the accumulator.
+- `ShvMmrHeaderVerifier::parent` is the verifier one block back. The parent
+  header is believed because its hash is the tip's previous-block hash, the
+  2^m - 1 headers under it because together they reproduce the state the
+  view already holds. For 325,539 that is three headers.
+- `VerifiedHeaderView::seed_ring` gives a ring-less view that one block of
+  ring. A header pass that meets a fork seeds it first, so the existing
+  reorg path (more-work check, store rewind) runs unchanged. A fork deeper
+  than the tip still refuses, as before.
+
+Tests:
+- every MMR shape from 0 to 300 leaves steps back both ways, and corrupt
+  or wrong material is refused;
+- the parent verifier equals the real one at every height 1 to 70 and
+  persists like any other;
+- a regtest view sealed without a ring follows a one-block orphan over
+  Electrum and BIP37 and seals a ring afterwards, while a two-block orphan
+  is refused.
+
+Live: the stuck chipnet wallet followed the chain to 327,171 in one CLI
+refresh, header-proven, and its sealed view now carries a ring.
+
+### 2026-10-10: the first refresh waits for the chain stack
+
+#75 / #71. The host rebuilds its chain stack on launch and when the
+selection changes, and a refresh that ran meanwhile failed at once with
+"Chain source is still connecting". Reproduced right after an unlock: the
+manual refresh failed for 24 s, and the worker showed "Wallet refresh
+unavailable; retained history remains stale" and backed off 5, 10, 20 s.
+
+`sync_wallet_from` now waits up to two minutes for the build in progress.
+Every rebuild wakes waiters however it ends (a drop guard, so cancellation
+counts too), and the wait re-checks the installed service each time, so a
+stale stack is never used. A build that never lands still fails as before.
+Test: a refresh started with no stack waits, then proceeds the moment a
+build installs one; with nothing building the wait gives up at its bound.
