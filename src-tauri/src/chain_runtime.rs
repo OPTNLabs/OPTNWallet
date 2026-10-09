@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 
 pub use optn_chain_native::{
     build_native_chain_stack, build_native_chain_stack_with_headers, NativeChainProbeFailure,
@@ -271,6 +271,22 @@ pub struct NativeChainRuntime {
     rebuild_lock: Mutex<()>,
     /// Survives stack rebuilds; replaced only when the network changes.
     accepted: Mutex<Option<AcceptedChain>>,
+    /// Bumped whenever a rebuild finishes or gives up, so a refresh waiting
+    /// for the stack looks again instead of failing while it is built.
+    stack_changes: watch::Sender<u64>,
+}
+
+/// How long a refresh waits for a stack build in progress. Builds probe
+/// through Tor and took about half a minute after launch in the fleet run.
+const STACK_BUILD_WAIT: Duration = Duration::from_secs(120);
+
+/// Wakes stack waiters however a rebuild ends, cancellation included.
+struct StackChanged<'a>(&'a watch::Sender<u64>);
+
+impl Drop for StackChanged<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
 }
 
 impl NativeChainRuntime {
@@ -286,6 +302,7 @@ impl NativeChainRuntime {
             network_settings,
             rebuild_lock: Mutex::new(()),
             accepted: Mutex::new(None),
+            stack_changes: watch::channel(0).0,
         }
     }
 
@@ -692,6 +709,8 @@ impl NativeChainRuntime {
     /// false means the owner could not acknowledge invalidation.
     async fn rebuild_selection_after_invalidation(&self, reason: &str) -> bool {
         let _rebuild = self.rebuild_lock.lock().await;
+        // Declared after the lock, so waiters wake once it is released.
+        let _changed = StackChanged(&self.stack_changes);
         if !self.invalidate_current_wallet_sync(reason).await {
             return false;
         }
@@ -891,6 +910,28 @@ impl NativeChainRuntime {
         Some(f(&installed.stack.service))
     }
 
+    /// The current service, waiting up to `wait` for a build in progress.
+    ///
+    /// Right after launch or an unlock the stack is still being built, and a
+    /// refresh that ran then failed with "Chain source is still connecting",
+    /// which the refresh worker shows as a stale wallet until a retry happens
+    /// to land after the build. Found in the fleet run: the first refresh
+    /// after every unlock failed for about half a minute.
+    async fn installed_service(&self, wait: Duration) -> Option<Arc<Mutex<ChainService>>> {
+        let deadline = tokio::time::Instant::now() + wait;
+        let mut changes = self.stack_changes.subscribe();
+        loop {
+            changes.borrow_and_update();
+            if let Some(service) = self.with_service(Arc::clone).await {
+                return Some(service);
+            }
+            match tokio::time::timeout_at(deadline, changes.changed()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) | Err(_) => return None,
+            }
+        }
+    }
+
     /// The host supplies its selected provider; HD discovery and durable
     /// publication remain the same runtime use case invoked by the CLI.
     pub async fn refresh_wallet(&self) -> Result<(), String> {
@@ -966,11 +1007,11 @@ impl NativeChainRuntime {
     }
 
     async fn sync_wallet_from(&self, floor: Option<u32>) -> Result<RefreshOutcome, String> {
-        self.top_up_wallet_routes().await;
         let service = self
-            .with_service(Arc::clone)
+            .installed_service(STACK_BUILD_WAIT)
             .await
             .ok_or("Chain source is still connecting. Select a source in Settings and retry.")?;
+        self.top_up_wallet_routes().await;
         let Ok(mut service) = service.try_lock() else {
             return Ok(RefreshOutcome::Busy);
         };
@@ -1779,6 +1820,52 @@ mod tests {
         // No selection worker or provider was run: the old stack remains
         // installed, proving acquisition itself rejects the stale context.
         assert!(native.stack.read().await.is_some());
+    }
+
+    /// A refresh that starts while the stack is still being built waits for
+    /// the build instead of failing. Found in the fleet run: the first refresh
+    /// after every unlock failed for about half a minute, shown as a stale
+    /// wallet, until a retry happened to land after the build.
+    #[tokio::test]
+    async fn a_refresh_waits_for_the_stack_build_in_progress() {
+        let directory = test_directory("stack-wait");
+        let runtime = AppRuntime::spawn(AppState::default());
+        let native = Arc::new(NativeChainRuntime::new(
+            runtime.clone(),
+            NetworkSettingsStore::new(directory),
+        ));
+        // Nothing installed and nothing finishing: the wait is bounded.
+        assert!(native
+            .installed_service(Duration::from_millis(50))
+            .await
+            .is_none());
+
+        let waiting = tokio::spawn({
+            let native = native.clone();
+            async move {
+                native
+                    .installed_service(Duration::from_secs(30))
+                    .await
+                    .is_some()
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished(), "nothing is installed yet");
+        {
+            // How a rebuild ends: the stack written, then waiters woken.
+            let _changed = StackChanged(&native.stack_changes);
+            let selection = native.selection(&runtime.state()).await;
+            *native.stack.write().await = Some(InstalledStack {
+                stack: NativeChainStack::unavailable("public context fixture"),
+                selection,
+                generation: 0,
+                credential_revision: 0,
+            });
+        }
+        assert!(tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("the waiting refresh wakes when the build lands")
+            .unwrap());
     }
 
     async fn assert_cancelled(refresh: PendingHdRefresh, reason: &str) {
