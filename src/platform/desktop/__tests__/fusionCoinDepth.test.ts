@@ -2,14 +2,23 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   clearFusionDepth,
   coinDepth,
-  coinsBelowDepth,
+  exportFusionDepthState,
+  fuseDepthEligibility,
+  importFusionDepthState,
   isFusionTransaction,
-  pruneSpentDepth,
   recordFusionRound,
   recordFusionTxid,
 } from '../fusionCoinDepth';
 
+// The rules are Rust (optn-core fusion::depth) and tested there; these run
+// them through the real WASM core behind the desktop's storage.
+
 const utxo = (txid: string, pos = 0) => ({ tx_hash: txid, tx_pos: pos });
+const belowDepth = (
+  walletId: number,
+  utxos: Array<{ tx_hash: string; tx_pos: number }>,
+  target: number
+) => fuseDepthEligibility(walletId, utxos, target).eligible;
 
 // A minimal localStorage so this state can be exercised without a DOM,
 // matching fusionRoundState.test.ts (vitest runs the node environment).
@@ -38,7 +47,7 @@ describe('per-coin fuse depth', () => {
 
   it('treats never-fused coins as depth 0 and fusable', () => {
     expect(coinDepth(1, 'aaa:0')).toBe(0);
-    expect(coinsBelowDepth(1, [utxo('aaa')], 3)).toHaveLength(1);
+    expect(belowDepth(1, [utxo('aaa')], 3)).toBe(1);
   });
 
   it('looks up depth case-insensitively on the txid half of the outpoint', () => {
@@ -47,9 +56,7 @@ describe('per-coin fuse depth', () => {
     expect(coinDepth(1, `${tx.toLowerCase()}:1`)).toBe(1);
     expect(coinDepth(1, `${tx.toUpperCase()}:1`)).toBe(1);
     // maxDepth 1 means "only fuse coins with depth < 1" — depth-1 coin excluded.
-    expect(
-      coinsBelowDepth(1, [utxo(tx.toUpperCase(), 1)], 1)
-    ).toHaveLength(0);
+    expect(belowDepth(1, [utxo(tx.toUpperCase(), 1)], 1)).toBe(0);
   });
 
   it('advances created coins one round beyond the deepest coin consumed', () => {
@@ -85,10 +92,10 @@ describe('per-coin fuse depth', () => {
     recordFusionRound(1, ['b:0'], ['c:0']);
     recordFusionRound(1, ['c:0'], ['d:0']); // d:0 is depth 3
 
-    expect(coinsBelowDepth(1, [utxo('d')], 3)).toHaveLength(0);
+    expect(belowDepth(1, [utxo('d')], 3)).toBe(0);
     // Raising the limit puts it back in play — the bound is the setting, not
     // a permanent mark on the coin.
-    expect(coinsBelowDepth(1, [utxo('d')], 4)).toHaveLength(1);
+    expect(belowDepth(1, [utxo('d')], 4)).toBe(1);
   });
 
   it('inherits depth via parent txid when outpoint keys do not match exactly', () => {
@@ -143,12 +150,21 @@ describe('per-coin fuse depth', () => {
     recordFusionRound(1, ['done:0'], ['done2:0']);
     recordFusionRound(1, ['done2:0'], ['maxed:0']); // depth 3
 
-    const survivors = coinsBelowDepth(
+    const eligibility = fuseDepthEligibility(
       1,
       [utxo('maxed'), utxo('brandnew')],
       3
-    ).map((u) => u.tx_hash);
-    expect(survivors).toEqual(['brandnew']);
+    );
+    expect(eligibility).toMatchObject({
+      total: 2,
+      eligible: 1,
+      atOrAboveDepth: 1,
+      minDepth: 0,
+      maxCoinDepth: 3,
+    });
+    expect(eligibility.gateLog).toBe(
+      '1 eligible below rounds-per-coin (target = box 3; current depth 0–3)'
+    );
   });
 });
 
@@ -163,7 +179,7 @@ describe('depth eviction is evidence-based, never age or size based', () => {
     // Nothing here may expire it. Forgetting reads as depth 0, and auto-fusion
     // would pay again to redo mixing this coin already has.
     expect(coinDepth(1, 'ancient:0')).toBe(1);
-    expect(coinsBelowDepth(1, [utxo('ancient')], 1)).toHaveLength(0);
+    expect(belowDepth(1, [utxo('ancient')], 1)).toBe(0);
   });
 
   it('survives a large number of tracked coins without evicting', () => {
@@ -175,20 +191,56 @@ describe('depth eviction is evidence-based, never age or size based', () => {
     expect(coinDepth(1, 'out199:0')).toBe(1);
   });
 
-  it('drops only coins a fresh snapshot proves are spent', () => {
-    recordFusionRound(1, ['a:0'], ['still:0']);
-    recordFusionRound(1, ['b:0'], ['gone:0']);
+});
 
-    pruneSpentDepth(1, new Set(['still:0']));
-
-    expect(coinDepth(1, 'still:0')).toBe(1);
-    expect(coinDepth(1, 'gone:0')).toBe(0);
+describe('the desktop keeps each book where earlier builds kept it', () => {
+  beforeEach(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+    clearFusionDepth(9);
   });
 
-  it('refuses to wipe the map when the snapshot is empty or unavailable', () => {
-    recordFusionRound(1, ['a:0'], ['kept:0']);
-    // An empty snapshot means "we do not know", not "everything is spent".
-    pruneSpentDepth(1, new Set());
-    expect(coinDepth(1, 'kept:0')).toBe(1);
+  it('reads the depth an earlier build stored, so an upgrade loses nothing', () => {
+    const fused = 'cd'.repeat(32);
+    localStorage.setItem(
+      'optn-fusion-coin-depth-9',
+      JSON.stringify({ 'AB:0': { d: 2, at: 1 } })
+    );
+    localStorage.setItem(
+      'optn-fusion-tx-depth-9',
+      JSON.stringify({ [fused]: 3 })
+    );
+    localStorage.setItem('optn-fusion-txids-9', JSON.stringify([fused]));
+
+    expect(coinDepth(9, 'ab:0')).toBe(2);
+    expect(coinDepth(9, `${fused}:5`)).toBe(3);
+    expect(isFusionTransaction(9, fused.toUpperCase())).toBe(true);
+  });
+
+  it('writes every change back in the same stored forms', () => {
+    const txid = 'ef'.repeat(32);
+    recordFusionRound(9, ['in:0'], [`${txid}:1`]);
+    expect(
+      JSON.parse(localStorage.getItem('optn-fusion-coin-depth-9') ?? '{}')
+    ).toMatchObject({ [`${txid}:1`]: { d: 1 } });
+    expect(
+      JSON.parse(localStorage.getItem('optn-fusion-tx-depth-9') ?? '{}')
+    ).toEqual({ [txid]: 1 });
+    expect(
+      JSON.parse(localStorage.getItem('optn-fusion-txids-9') ?? '[]')
+    ).toEqual([txid]);
+  });
+
+  it('round-trips a cold export into another wallet, keeping the deeper record', () => {
+    recordFusionRound(9, ['a:0'], ['b:0']);
+    recordFusionRound(9, ['b:0'], ['deep:0']);
+    recordFusionTxid(9, 'aa'.repeat(32));
+    const exported = exportFusionDepthState(9);
+    expect(exported.coinDepth['deep:0'].d).toBe(2);
+
+    clearFusionDepth(10);
+    recordFusionRound(10, ['x:0'], ['deep:0']);
+    expect(importFusionDepthState(10, exported)).toEqual({ coins: 1, txids: 1 });
+    expect(coinDepth(10, 'deep:0')).toBe(2);
+    expect(isFusionTransaction(10, 'aa'.repeat(32))).toBe(true);
   });
 });

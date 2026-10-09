@@ -8,6 +8,7 @@
 // Nothing in here draws randomness. Nonces, blinding factors and selection
 // draws are parameters, so every value is reproducible from a test vector.
 pub mod coin_selection;
+pub mod depth;
 pub mod pedersen;
 pub mod schnorr;
 

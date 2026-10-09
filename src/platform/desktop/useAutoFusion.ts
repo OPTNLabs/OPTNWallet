@@ -43,7 +43,7 @@ import {
 } from './fusionAutoEngine';
 import { SERVER_AUTOFUSE_INACTIVE_MS } from './fusionTiming';
 // Continuity: after each round ends, re-arm like EC's plugin loop.
-import { coinsBelowDepth } from './fusionCoinDepth';
+import { fuseDepthEligibility } from './fusionCoinDepth';
 import {
   clearAutoCooldown,
   isAutoCooldownReady,
@@ -530,8 +530,12 @@ export function useAutoFusion(policyReady = true): void {
             const nonToken = Object.values(snapshot)
               .flat()
               .filter((c) => c && !c.token && !c.token_data);
-            const below = coinsBelowDepth(walletId, nonToken, fuseDepth);
-            await wakeAutoFromWalletActivity(walletId, below.length > 0);
+            const { eligible } = fuseDepthEligibility(
+              walletId,
+              nonToken,
+              fuseDepth
+            );
+            await wakeAutoFromWalletActivity(walletId, eligible > 0);
           } catch {
             /* wake is best-effort; still try the tick below */
           }

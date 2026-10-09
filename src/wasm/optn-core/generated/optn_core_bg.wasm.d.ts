@@ -1,6 +1,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const __wbg_fusiondepthbook_free: (a: number, b: number) => void;
 export const addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
 export const connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
 export const connectPublicKey: (a: number, b: number) => [number, number, number, number];
@@ -20,6 +21,7 @@ export const fusionBlindIssuerPublicKey: (a: number, b: number) => [number, numb
 export const fusionBlindIssuerSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const fusionBlindRequest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
 export const fusionFinalizeBlindSignature: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+export const fusionNormalizeOutpoint: (a: number, b: number) => [number, number];
 export const fusionPedersenBalanceHolds: (a: number, b: number, c: bigint, d: number, e: number) => [number, number, number];
 export const fusionPedersenCommit: (a: bigint, b: number, c: number) => [number, number, number, number];
 export const fusionPedersenCommitSigned: (a: bigint, b: number, c: number) => [number, number, number, number];
@@ -28,6 +30,20 @@ export const fusionScalarIsCanonical: (a: number, b: number) => number;
 export const fusionScalarSum: (a: number, b: number) => [number, number, number, number];
 export const fusionSelectCoins: (a: number, b: number) => [number, number, number, number];
 export const fusionVerifySchnorr: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+export const fusiondepthbook_addTxids: (a: number, b: number, c: number) => number;
+export const fusiondepthbook_depthOf: (a: number, b: number, c: number) => number;
+export const fusiondepthbook_eligibility: (a: number, b: number, c: number, d: number) => [number, number];
+export const fusiondepthbook_fromStored: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+export const fusiondepthbook_fusionTxids: (a: number) => [number, number];
+export const fusiondepthbook_importState: (a: number, b: number, c: number, d: number) => [number, number];
+export const fusiondepthbook_isFusionTransaction: (a: number, b: number, c: number) => number;
+export const fusiondepthbook_mergeStored: (a: number, b: number, c: number, d: number, e: number) => void;
+export const fusiondepthbook_pruneSpent: (a: number, b: number, c: number) => number;
+export const fusiondepthbook_recordFusionTxid: (a: number, b: number, c: number) => number;
+export const fusiondepthbook_recordRound: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+export const fusiondepthbook_storedCoins: (a: number) => [number, number];
+export const fusiondepthbook_storedTxDepth: (a: number) => [number, number];
+export const fusiondepthbook_storedTxids: (a: number) => [number, number];
 export const grindBudget: (a: number) => [number, number, number];
 export const grindRpaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
 export const grindSequence: (a: number) => [number, number, number];
@@ -47,11 +63,12 @@ export const sendBlockReason: (a: number, b: number) => [number, number, number,
 export const sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const transactionOutpoints: (a: number, b: number) => [number, number, number, number];
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
 export const __wbindgen_exn_store: (a: number) => void;
 export const __externref_table_alloc: () => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
-export const __wbindgen_malloc: (a: number, b: number) => number;
-export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
 export const __externref_table_dealloc: (a: number) => void;
 export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __externref_drop_slice: (a: number, b: number) => void;
 export const __wbindgen_start: () => void;

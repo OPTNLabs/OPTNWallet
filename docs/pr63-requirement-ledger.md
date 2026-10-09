@@ -1916,3 +1916,38 @@ The committed WASM was also stale before this change: the Tor probe change
 connectors" check would have refused once this PR targets `dev`. The
 regenerated artifact passes `build-optn-core-wasm.mts --check`, and the
 connector tests that run against it pass.
+
+### 2026-10-09: fusion depth is one Rust record
+
+Auto's stopping condition, each coin's fusion depth (Electron Cash's
+`fuse_depth`), was a 907-line TypeScript module mixing its rules with its
+storage. The CLI and the docker runner could not read or keep it.
+
+`optn_core::fusion::depth::FusionDepthBook` holds the rules: a coin's depth
+from its own entry, else its parent fusion's depth, else 1 when the parent
+is a recorded fusion; a round's outputs one deeper than the shallowest coin
+it spent (Electron Cash's `is_fuz_coin` ancestry rule, so the claim can
+understate privacy and never overstate it); eviction only on evidence (a
+round's spent inputs, or a snapshot that no longer holds the coin, never an
+empty one); cold-import merging by the deeper record; cross-window merging
+that an empty copy cannot wipe; and Auto's eligibility and its two status
+lines.
+
+The desktop holds one book per wallet as a WASM object and keeps the same
+three localStorage keys and the SQL label table every earlier build wrote,
+so an upgrade reads existing depth unchanged (a test seeds the old stored
+forms and reads them back). `fusionCoinDepth.ts` is now storage, the
+BroadcastChannel, the change event and the history stub rows. The
+renderer's `formatAutoDepthMetMessage`, `formatAutoDepthGateLog`,
+`coinsBelowDepth` and the unused `pruneSpentDepth` are gone; their callers
+read the book's eligibility. The process-global `__optnFusionTxidSql`
+cache is gone too: the book is the cache.
+
+The freshness test now accepts exported classes and their members. The
+shared WASM grew from 782 KB to 924 KB; Android already loads it
+asynchronously, so no load path changes.
+
+Tests: 11 Rust tests port the TypeScript ones and add the stored-form,
+merge and import cases. The desktop tests now run the real book through
+WASM, including an upgrade read of the old stored forms and a cold
+export/import round trip.

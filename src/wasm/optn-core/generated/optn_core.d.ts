@@ -2,6 +2,45 @@
 /* eslint-disable */
 
 /**
+ * A wallet's fusion depth record.
+ */
+export class FusionDepthBook {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Add fusion txids from durable storage; returns how many were new.
+     */
+    addTxids(txids: string[]): number;
+    depthOf(outpoint: string): number;
+    /**
+     * The coins against a depth target, with Auto's two status lines, as
+     * JSON.
+     */
+    eligibility(outpoints: string[], target: number): string;
+    /**
+     * Read the stored forms; a missing or unreadable part reads as empty.
+     */
+    static fromStored(coins?: string | null, tx_depth?: string | null, txids?: string | null): FusionDepthBook;
+    fusionTxids(): string[];
+    /**
+     * Merge a cold-export record; returns `[coins taken, txids added]`.
+     */
+    importState(state: string, now_ms: number): Uint32Array;
+    isFusionTransaction(txid: string): boolean;
+    /**
+     * Fold in another window's copy; the deeper entry wins.
+     */
+    mergeStored(coins?: string | null, tx_depth?: string | null): void;
+    pruneSpent(live: string[]): boolean;
+    recordFusionTxid(txid: string): boolean;
+    recordRound(spent: string[], created: string[], now_ms: number): void;
+    storedCoins(): string;
+    storedTxDepth(): string;
+    storedTxids(): string;
+}
+
+/**
  * Shared Rust ceiling for the legacy untrusted iframe bridge.
  */
 export function addonLegacyGuestCallAllowed(module: string, method: string): boolean;
@@ -102,6 +141,11 @@ export function fusionBlindRequest(round_pubkey: Uint8Array, r_point: Uint8Array
  * rather than a rejected signature later in the round.
  */
 export function fusionFinalizeBlindSignature(round_pubkey: Uint8Array, r_point: Uint8Array, message: Uint8Array, a: Uint8Array, b: Uint8Array, issuer_response: Uint8Array): Uint8Array;
+
+/**
+ * `txid:vout` with the txid lower-cased (`fusion::depth::normalize_outpoint`).
+ */
+export function fusionNormalizeOutpoint(outpoint: string): string;
 
 /**
  * Check packed 65-byte uncompressed commitments against one signed amount and
@@ -285,6 +329,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly __wbg_fusiondepthbook_free: (a: number, b: number) => void;
     readonly addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
     readonly connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
     readonly connectPublicKey: (a: number, b: number) => [number, number, number, number];
@@ -304,6 +349,7 @@ export interface InitOutput {
     readonly fusionBlindIssuerSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly fusionBlindRequest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly fusionFinalizeBlindSignature: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+    readonly fusionNormalizeOutpoint: (a: number, b: number) => [number, number];
     readonly fusionPedersenBalanceHolds: (a: number, b: number, c: bigint, d: number, e: number) => [number, number, number];
     readonly fusionPedersenCommit: (a: bigint, b: number, c: number) => [number, number, number, number];
     readonly fusionPedersenCommitSigned: (a: bigint, b: number, c: number) => [number, number, number, number];
@@ -312,6 +358,20 @@ export interface InitOutput {
     readonly fusionScalarSum: (a: number, b: number) => [number, number, number, number];
     readonly fusionSelectCoins: (a: number, b: number) => [number, number, number, number];
     readonly fusionVerifySchnorr: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly fusiondepthbook_addTxids: (a: number, b: number, c: number) => number;
+    readonly fusiondepthbook_depthOf: (a: number, b: number, c: number) => number;
+    readonly fusiondepthbook_eligibility: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly fusiondepthbook_fromStored: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly fusiondepthbook_fusionTxids: (a: number) => [number, number];
+    readonly fusiondepthbook_importState: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly fusiondepthbook_isFusionTransaction: (a: number, b: number, c: number) => number;
+    readonly fusiondepthbook_mergeStored: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly fusiondepthbook_pruneSpent: (a: number, b: number, c: number) => number;
+    readonly fusiondepthbook_recordFusionTxid: (a: number, b: number, c: number) => number;
+    readonly fusiondepthbook_recordRound: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly fusiondepthbook_storedCoins: (a: number) => [number, number];
+    readonly fusiondepthbook_storedTxDepth: (a: number) => [number, number];
+    readonly fusiondepthbook_storedTxids: (a: number) => [number, number];
     readonly grindBudget: (a: number) => [number, number, number];
     readonly grindRpaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly grindSequence: (a: number) => [number, number, number];
@@ -331,13 +391,14 @@ export interface InitOutput {
     readonly sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly transactionOutpoints: (a: number, b: number) => [number, number, number, number];
+    readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __externref_drop_slice: (a: number, b: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

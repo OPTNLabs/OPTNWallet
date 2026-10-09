@@ -20,11 +20,7 @@ import OutboundTransactionTracker from '../../services/OutboundTransactionTracke
 import { reconcileOutboundTransactions } from '../../services/OutboundTransactionReconciler';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
-import {
-  formatAutoDepthGateLog,
-  formatAutoDepthMetMessage,
-  fuseDepthEligibility,
-} from './fusionCoinDepth';
+import { fuseDepthEligibility } from './fusionCoinDepth';
 import {
   acquireRoundLease,
   hasLiveRoundLease,
@@ -735,8 +731,7 @@ export async function startFusionRound(
           selection.depthCoins,
           options.fuseDepth
         );
-        const detail =
-          selection.emptyReason ?? formatAutoDepthMetMessage(elig);
+        const detail = selection.emptyReason ?? elig.metMessage;
         // Long depth-met idle so Auto does not thrash every engine tick.
         await stampAutoDepthMetIdle(
           walletId,
@@ -762,16 +757,7 @@ export async function startFusionRound(
         );
         void import('./logger')
           .then(({ log }) =>
-            log.info(
-              'p2p-live',
-              `w${walletId} depth gate: ` +
-                formatAutoDepthGateLog(
-                  coinsQuiet.length,
-                  options.fuseDepth,
-                  eligStart.minDepth,
-                  eligStart.maxCoinDepth
-                )
-            )
+            log.info('p2p-live', `w${walletId} depth gate: ${eligStart.gateLog}`)
           )
           .catch(() => undefined);
         pushProgress({
