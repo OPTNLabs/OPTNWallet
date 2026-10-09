@@ -2294,3 +2294,25 @@ the cap-failure test pushes past the grown budget.
 Live, desktop rebuilt with all three fixes: that wallet (its own sealed
 view also at the orphaned 325,540) waited for the stack, refreshed from
 +30 s and was fresh at +88 s with headers at the tip, 327,174.
+
+### 2026-10-10: `optn fusion --auto` waits when no choice of coins can fund a tier
+
+Found in the fleet run: a CLI wallet holding 2 x 60,000 sats asked the
+server for a round every 10 s for as long as it ran (47 times), each ending
+"Selected inputs cannot afford any fusion tier".
+
+Whether a contribution funds a tier is partly chance (Electron Cash draws
+the output count), so the CLI now tells two cases apart.
+`optn_fusion::allocate::never_affordable` checks the floor every tier
+shares: at least `11 - distinct keys` outputs of `MIN_OUTPUT` plus fee, out
+of the inputs' value after their own fees and the server's minimum excess
+fee. Taken over every eligible coin, it is a bound no subset can beat, so
+when it fails the CLI says why and idles until the wallet changes,
+re-asking the server each idle period. Above the floor, a miss is the draw,
+and retries back off from 20 s, doubling to the 30 min idle wait. A round
+that fuses, or a wallet that changes, resets both. `server_round::server_hello`
+is the hello a round already fetched, now also callable on its own.
+
+Test: for 1 to 6 keys at 5,000 to 400,000 sats each, whenever "never" is
+claimed, forty different draws all fail to fund a tier; one 60,000 coin is
+never affordable and two at two addresses are not.

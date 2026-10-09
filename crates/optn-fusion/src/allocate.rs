@@ -229,7 +229,7 @@ pub fn plan_contribution(
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            None => "Selected inputs cannot afford any fusion tier.".into(),
+            None => UNAFFORDABLE.into(),
         });
     }
     Ok(plans
@@ -240,6 +240,40 @@ pub fn plan_contribution(
             excess_fee: plan.excess_fee,
         })
         .collect())
+}
+
+/// [`plan_contribution`]'s refusal when no tier is pinned and none fits.
+pub const UNAFFORDABLE: &str = "Selected inputs cannot afford any fusion tier.";
+
+/// Whether `error` is [`UNAFFORDABLE`].
+pub fn is_unaffordable(error: &str) -> bool {
+    error == UNAFFORDABLE
+}
+
+/// Whether no choice among coins worth `values`, held at `distinct_keys`
+/// distinct addresses, could fund any tier `hello` offers.
+///
+/// Every tier needs at least `11 - distinct keys` outputs, each at least
+/// `MIN_OUTPUT` plus its own fee, out of what the inputs leave after their
+/// fees and the server's minimum excess fee. A subset has fewer keys, so it
+/// needs more outputs, and no more value, so if the whole set cannot meet that
+/// floor no subset can. `false` promises nothing: the output count is drawn at
+/// random, so a set above the floor can still miss in a given round.
+pub fn never_affordable(
+    hello: &ExpectedHello,
+    distinct_keys: usize,
+    values: &[u64],
+) -> Result<bool, String> {
+    validate_expected_hello(hello)?;
+    let input_fee = component_fee(size_of_input(33), hello.component_feerate)?;
+    let available = values
+        .iter()
+        .map(|value| u128::from(value.saturating_sub(input_fee)))
+        .sum::<u128>()
+        .saturating_sub(u128::from(hello.min_excess_fee));
+    let outputs = MIN_TX_COMPONENTS.saturating_sub(distinct_keys).max(1) as u128;
+    let per_output = u128::from(MIN_OUTPUT) + u128::from(fee_per_output(hello.component_feerate)?);
+    Ok(available < outputs * per_output)
 }
 
 /// Uniform samples from the operating system's random source.
@@ -525,6 +559,40 @@ mod tests {
             .unwrap_err()
             .contains("overflow"));
         assert!(plan_contribution(&pinning_hello(), &[], None, never).is_err());
+    }
+
+    /// "Never" must be sound: when it says no choice of the coins can fund a
+    /// tier, no draw of the random output counts may fund one either. Found
+    /// in the fleet run: a CLI wallet with one or two 60,000-sat coins retried
+    /// every 10 s for ever.
+    #[test]
+    fn never_affordable_is_never_wrong_and_names_the_fleet_case() {
+        let hello = pinning_hello();
+        let key = |b: u8| [vec![0x02], vec![b; 32]].concat();
+        // One 60,000 coin needs ten outputs of 10,034 each: never.
+        assert!(never_affordable(&hello, 1, &[60_000]).unwrap());
+        // Two at two addresses need nine: possible, if rarely drawn.
+        assert!(!never_affordable(&hello, 2, &[60_000, 60_000]).unwrap());
+        assert!(never_affordable(&hello, 0, &[]).unwrap());
+
+        for keys in 1..=6u8 {
+            for value in (5_000..=400_000).step_by(5_000) {
+                let values = vec![value; usize::from(keys)];
+                if !never_affordable(&hello, usize::from(keys), &values).unwrap() {
+                    continue;
+                }
+                let inputs: Vec<(Vec<u8>, u64)> = (1..=keys).map(|b| (key(b), value)).collect();
+                for seed in 0..40 {
+                    assert!(
+                        plan_contribution(&hello, &inputs, None, &mut sequence(seed)).is_err(),
+                        "{keys} keys at {value} sats were called unaffordable but fund a tier"
+                    );
+                }
+            }
+        }
+        assert!(is_unaffordable(
+            &plan_contribution(&hello, &[(key(1), 60_000)], None, &mut sequence(1)).unwrap_err()
+        ));
     }
 
     #[test]

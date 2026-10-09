@@ -203,6 +203,38 @@ async fn pause(milliseconds: u64) -> bool {
     }
 }
 
+/// Why no choice of `eligible` can fund a tier on the server, or `None` when
+/// one might (or the server could not be asked, which proves nothing).
+async fn unaffordable_reason(
+    settings: &ServerRoundSettings,
+    eligible: &[&FusionCoin],
+) -> Option<String> {
+    let hello = optn_fusion_native::server_round::server_hello(settings)
+        .await
+        .ok()?;
+    let addresses: std::collections::BTreeSet<&str> =
+        eligible.iter().map(|coin| coin.address.as_str()).collect();
+    let values: Vec<u64> = eligible.iter().map(|coin| coin.value_sats).collect();
+    optn_fusion::allocate::never_affordable(&hello, addresses.len(), &values)
+        .ok()?
+        .then(|| {
+            format!(
+                "No choice of this wallet's {} eligible coin(s) ({} sats at {} address(es)) can fund a fusion tier on this server; waiting for the wallet to change.",
+                values.len(),
+                values.iter().sum::<u64>(),
+                addresses.len()
+            )
+        })
+}
+
+/// After `streak` rounds in a row that missed every tier by the draw: the
+/// retry wait doubled each time, up to the idle wait.
+fn unaffordable_backoff(streak: u32) -> u64 {
+    AUTO_FUSION_RETRY_MS
+        .saturating_mul(1u64 << streak.min(16))
+        .min(AUTO_FUSION_DEPTH_MET_IDLE_MS)
+}
+
 pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
     let handle = cli
         .wallet
@@ -234,6 +266,10 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
     let mut fused = Vec::new();
     let mut attempts = 0u32;
     let mut stopped = None;
+    // The eligible coins no choice of which can fund a tier, and how many
+    // rounds in a row missed every tier by the draw.
+    let mut never_for: Option<Vec<String>> = None;
+    let mut unaffordable_streak = 0u32;
 
     loop {
         let synced =
@@ -248,6 +284,31 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
             &mut optn_fusion::allocate::os_uniform(),
         )
         .map_err(CliError::Usage)?;
+        let eligible: Vec<&FusionCoin> = selection
+            .classification
+            .iter()
+            .flat_map(|split| split.eligible.iter().flat_map(|bucket| bucket.coins.iter()))
+            .collect();
+        let mut eligible_outpoints: Vec<String> =
+            eligible.iter().map(|coin| coin.outpoint.clone()).collect();
+        eligible_outpoints.sort();
+        if never_for.as_ref() == Some(&eligible_outpoints) {
+            match unaffordable_reason(&settings, &eligible).await {
+                Some(reason) => {
+                    report(json!({"event": "idle", "reason": reason}));
+                    if !pause(AUTO_FUSION_DEPTH_MET_IDLE_MS).await {
+                        stopped = Some("interrupted".into());
+                        break;
+                    }
+                    continue;
+                }
+                None => never_for = None,
+            }
+        } else if never_for.is_some() {
+            // The wallet changed: rounds are worth trying again.
+            never_for = None;
+            unaffordable_streak = 0;
+        }
         if selection.selected.is_empty() {
             let outpoints: Vec<String> = coins
                 .iter()
@@ -303,6 +364,7 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
         }
         match attempt {
             Ok(round) => {
+                unaffordable_streak = 0;
                 // Only a transaction the network holds moves depth; a round
                 // the network never saw leaves its coins where they were.
                 if round.seen {
@@ -328,6 +390,29 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
             Err(error) => {
                 if !args.auto {
                     return Err(CliError::Network(error));
+                }
+                if optn_fusion::allocate::is_unaffordable(&error) {
+                    if let Some(reason) = unaffordable_reason(&settings, &eligible).await {
+                        never_for = Some(eligible_outpoints.clone());
+                        report(json!({"event": "idle", "reason": reason}));
+                        if !pause(AUTO_FUSION_DEPTH_MET_IDLE_MS).await {
+                            stopped = Some("interrupted".into());
+                            break;
+                        }
+                        continue;
+                    }
+                    // Above the floor, but the random output count missed
+                    // every tier. Try again, less often each time.
+                    unaffordable_streak += 1;
+                    let delay = unaffordable_backoff(unaffordable_streak);
+                    report(
+                        json!({"event": "retry", "error": error, "transient": false, "next_in_ms": delay}),
+                    );
+                    if !pause(delay).await {
+                        stopped = Some("interrupted".into());
+                        break;
+                    }
+                    continue;
                 }
                 let transient = optn_app::fusion::is_auto_transient_failure(&error);
                 report(json!({"event": "retry", "error": error, "transient": transient}));

@@ -199,6 +199,27 @@ pub async fn wait_until_seen(lookups: &dyn InputLookups, txid: &str, limit: Dura
     }
 }
 
+/// What the server advertises, from a hello declaring this chain, over the
+/// same verified transport a round uses. Joins no pool.
+pub async fn server_hello(settings: &ServerRoundSettings) -> Result<ExpectedHello, String> {
+    let server = &settings.server;
+    let advertised = optn_fusion::server_status(
+        &server.host,
+        server.port,
+        server.use_ssl,
+        transport_for(&server.host, settings.verified_proxy)?,
+        Some(genesis_hash(settings.network)?.to_vec()),
+    )
+    .await?;
+    Ok(ExpectedHello {
+        tiers: advertised.tiers,
+        num_components: advertised.num_components,
+        component_feerate: advertised.component_feerate,
+        min_excess_fee: advertised.min_excess_fee,
+        max_excess_fee: advertised.max_excess_fee,
+    })
+}
+
 /// Run one server round for `coins` (display-order `txid:vout`) of the wallet
 /// open in `runtime`. `round_id` names the round in the cancellation registry
 /// (`optn_fusion::round_cancel::cancel_round`). `status` receives short
@@ -226,21 +247,7 @@ pub async fn run_server_round(
         "Contacting fusion server {}:{}…",
         server.host, server.port
     ));
-    let advertised = optn_fusion::server_status(
-        &server.host,
-        server.port,
-        server.use_ssl,
-        main_transport,
-        Some(genesis.to_vec()),
-    )
-    .await?;
-    let expected_hello = ExpectedHello {
-        tiers: advertised.tiers,
-        num_components: advertised.num_components,
-        component_feerate: advertised.component_feerate,
-        min_excess_fee: advertised.min_excess_fee,
-        max_excess_fee: advertised.max_excess_fee,
-    };
+    let expected_hello = server_hello(settings).await?;
     registration.flag().check()?;
 
     status("Preparing inputs…");
