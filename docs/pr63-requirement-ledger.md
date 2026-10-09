@@ -2076,3 +2076,21 @@ declare a trusted port.
 
 Not yet run live in a container: that needs a CashFusion server and Tor,
 the same as the fleet run.
+
+### 2026-10-09: a newer build's checkpoint is refused by name
+
+Found in the fleet run: a CLI built before `snapshot_at_unix_ms` existed met
+a checkpoint the newer desktop had saved and refused it as "invalid wallet
+checkpoint data", which reads as damage.
+
+The refusal itself is right and stays. A build cannot see a field a newer
+build added, and some such fields hold coins (the payment outbox was one);
+reading the rest and saving again would drop it and release them. What
+changed is the message: a field the build does not know, or a newer
+`optn-hd-restart-vN` format, is now reported as "written by a newer OPTN
+build (it records `field`) ... Update this build to open it; the saved
+state was left unchanged." A failed open never stores, so the newer record
+stays intact. Damage and foreign formats keep their old messages.
+
+Test: an unknown field and a v9 format are refused by name; a foreign
+format and damaged JSON are reported as before.

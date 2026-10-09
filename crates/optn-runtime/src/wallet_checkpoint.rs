@@ -114,6 +114,17 @@ struct StoredHeaderView {
     provenance: String,
 }
 
+/// A record written by a newer build is refused, never read in part or
+/// rewritten: a field this build cannot see may be one that holds coins (the
+/// payment outbox was such an addition), and dropping it on the next save would
+/// release them. The refusal says what happened and what to do.
+fn newer_build(detail: &str) -> String {
+    format!(
+        "This wallet's saved state was written by a newer OPTN build ({detail}). \
+         Update this build to open it; the saved state was left unchanged."
+    )
+}
+
 pub(crate) fn provenance_name(provenance: &CheckpointProvenance) -> &'static str {
     match provenance {
         CheckpointProvenance::SelfDerived => "self-derived",
@@ -749,10 +760,32 @@ impl WalletCheckpoint {
         let nonce: &[u8; NONCE_LEN] = bytes[..NONCE_LEN].try_into().expect("checked length");
         let plaintext = wallet_pack::open(key, nonce, &bytes[NONCE_LEN..])
             .map_err(|error| error.to_string())?;
-        let stored: StoredCheckpoint =
-            serde_json::from_slice(&plaintext).map_err(|_| "invalid wallet checkpoint data")?;
+        let stored: StoredCheckpoint = serde_json::from_slice(&plaintext).map_err(|error| {
+            // serde names a field this build does not know: a newer build
+            // wrote it. Anything else is damage.
+            let message = error.to_string();
+            match message
+                .strip_prefix("unknown field `")
+                .and_then(|rest| rest.split('`').next())
+            {
+                Some(field) => newer_build(&format!(
+                    "it records `{field}`, which this build does not know"
+                )),
+                None => "invalid wallet checkpoint data".to_string(),
+            }
+        })?;
         if ![FORMAT, ALLOCATION_FORMAT, LEGACY_FORMAT].contains(&stored.format.as_str()) {
-            return Err("unsupported wallet checkpoint format or source".into());
+            let version = |format: &str| {
+                format
+                    .strip_prefix("optn-hd-restart-v")
+                    .and_then(|version| version.parse::<u32>().ok())
+            };
+            return Err(match (version(&stored.format), version(FORMAT)) {
+                (Some(found), Some(current)) if found > current => {
+                    newer_build(&format!("checkpoint format v{found}"))
+                }
+                _ => "unsupported wallet checkpoint format or source".into(),
+            });
         }
         if stored.format != FORMAT
             && (stored.scan_coverage.is_some() || stored.rescan_requested.is_some())
@@ -1012,6 +1045,45 @@ mod tests {
         let mut bytes = nonce.to_vec();
         bytes.extend(wallet_pack::seal(key, &nonce, &serde_json::to_vec(value).unwrap()).unwrap());
         bytes
+    }
+
+    /// Found when an older CLI met a checkpoint the newer desktop had saved:
+    /// it refused, correctly, but called the record invalid. A newer build's
+    /// record is refused by name; damage is still called damage.
+    #[test]
+    fn a_newer_builds_record_is_refused_by_name() {
+        let (key, stored) = fixture();
+        let mut value = serde_json::to_value(&stored).unwrap();
+        value["field_from_a_newer_build"] = serde_json::json!(1);
+        let error = WalletCheckpoint::open(&key, &encoded_value(&key, &value, 250))
+            .err()
+            .unwrap();
+        assert!(error.contains("newer OPTN build"), "{error}");
+        assert!(error.contains("field_from_a_newer_build"), "{error}");
+        assert!(error.contains("left unchanged"), "{error}");
+
+        let mut newer = serde_json::to_value(&stored).unwrap();
+        newer["format"] = serde_json::json!("optn-hd-restart-v9");
+        let error = WalletCheckpoint::open(&key, &encoded_value(&key, &newer, 251))
+            .err()
+            .unwrap();
+        assert!(error.contains("format v9"), "{error}");
+
+        let mut foreign = serde_json::to_value(&stored).unwrap();
+        foreign["format"] = serde_json::json!("something-else");
+        assert_eq!(
+            WalletCheckpoint::open(&key, &encoded_value(&key, &foreign, 252))
+                .err()
+                .unwrap(),
+            "unsupported wallet checkpoint format or source"
+        );
+        let damaged = serde_json::json!({"format": 5});
+        assert_eq!(
+            WalletCheckpoint::open(&key, &encoded_value(&key, &damaged, 253))
+                .err()
+                .unwrap(),
+            "invalid wallet checkpoint data"
+        );
     }
 
     /// A reopened wallet still knows when its snapshot was accepted, and
