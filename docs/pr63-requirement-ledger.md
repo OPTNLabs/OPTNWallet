@@ -1491,3 +1491,41 @@ ranked ahead of it only cross-checks spenders. Of three servers behind the
 node, one is asked per hop and two never are. A rival spender from a second
 source still leaves the identity unresolved. The fan-out test fails without
 the cap.
+
+### 2026-10-09: the runtime draws a new wallet's phrase (#71)
+
+#71 (part (1) of item 71-1). The Leptos renderer generated new wallets'
+recovery phrases itself: Web Crypto `getRandomValues`, then
+`mnemonic_from_entropy`, held in a signal. `Create` then carried those words
+back to the runtime. So the phrase existed in the renderer before the
+runtime had seen it, and the runtime stored whatever words it was sent.
+
+- **`seed_draft(word_count)`**, a new transport call (Tauri command
+  `optn_wallet_seed_draft`), draws the phrase in the runtime from the
+  platform's entropy (`WalletStorage::entropy`, `getrandom` on native). The
+  runtime keeps it under a draft id and returns the id and the words to
+  display. The words are a `SecretText`: never `Debug`, zeroized when dropped,
+  and never in the shared state.
+- **`Create { draft: Some(id) }`** creates the wallet from the runtime's own
+  copy. A drafted create carrying words of its own is refused, and so is a
+  stale or unknown draft id. The draft is used once.
+- **`DiscardSeedDraft`** forgets the draft when the screen closes. A lock or
+  unlock, which changes the security epoch, forgets it too.
+- **Import** still sends the typed phrase. The web preview, which has no
+  runtime holding keys, reports that a new phrase is unavailable, as wallet
+  security already did there.
+- **`xtask architecture`** now fails if any renderer crate draws entropy
+  itself (`get_random_values`, `getRandomValues`, `mnemonic_from_entropy`,
+  `OsRng`, `getrandom`). It fails on the old UI source and passes on the new.
+
+A runtime test checks the whole path through the real actor:
+
+- 12- and 24-word phrases are valid BIP39;
+- no drafted word reaches the serialized shared state;
+- a stale, discarded or reused draft is refused, as is a draft whose epoch
+  was ended by a lock;
+- a wallet created from a draft holds that phrase's account key.
+
+Part (2) of 71-1, the React renderer's authoritative slices and its
+TypeScript Electrum and UTXO services, belongs to the #75/#83 migration and
+is not this change.

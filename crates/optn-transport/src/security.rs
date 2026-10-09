@@ -48,6 +48,19 @@ pub enum WalletBirthdayInput {
     },
 }
 
+/// A recovery phrase the runtime drew for a new wallet, shown once for the
+/// holder to write down.
+///
+/// The renderer never draws entropy: the runtime does, and keeps the phrase.
+/// `Create` then names the draft rather than sending words back, so what is
+/// stored is exactly what the runtime drew. Never `Clone`; `Debug` redacts.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SeedDraft {
+    pub draft: String,
+    /// The words, separated by single spaces.
+    pub phrase: SecretText,
+}
+
 /// Read-only birthday information returned by the authenticated runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -84,6 +97,7 @@ pub enum WalletSecurityRequest {
     },
     Create {
         name: String,
+        /// Empty when `draft` names a phrase the runtime drew.
         mnemonic: SecretText,
         #[serde(default)]
         bip39_passphrase: SecretText,
@@ -91,7 +105,12 @@ pub enum WalletSecurityRequest {
         confirmation: SecretText,
         network: String,
         account_path: String,
+        /// A [`SeedDraft`] to create from, in place of `mnemonic`.
+        #[serde(default)]
+        draft: Option<String>,
     },
+    /// Forget an unused [`SeedDraft`]: the holder left the create screen.
+    DiscardSeedDraft,
     ImportWatchOnly {
         name: String,
         account_xpub: SecretText,
@@ -154,4 +173,61 @@ pub struct WalletSecurityStatus {
 pub struct StoredWallet {
     pub handle: String,
     pub name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_drafted_create_names_its_draft_and_older_requests_still_read() {
+        let request = WalletSecurityRequest::Create {
+            name: "Drafted".into(),
+            mnemonic: SecretText::default(),
+            bip39_passphrase: SecretText::default(),
+            password: SecretText::new("pw".into()),
+            confirmation: SecretText::new("pw".into()),
+            network: "chipnet".into(),
+            account_path: "m/44'/1'/0'".into(),
+            draft: Some("00ff".into()),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["command"], "create");
+        assert_eq!(json["draft"], "00ff");
+        let back: WalletSecurityRequest = serde_json::from_value(json).unwrap();
+        assert!(
+            matches!(back, WalletSecurityRequest::Create { draft: Some(id), .. } if id == "00ff")
+        );
+
+        // A request written before drafts existed carries no draft.
+        let older = serde_json::json!({
+            "command": "create", "name": "Typed", "mnemonic": "words",
+            "password": "", "confirmation": "", "network": "chipnet",
+            "account_path": "m/44'/1'/0'",
+        });
+        let older: WalletSecurityRequest = serde_json::from_value(older).unwrap();
+        assert!(matches!(
+            older,
+            WalletSecurityRequest::Create { draft: None, .. }
+        ));
+
+        let discard = serde_json::to_value(WalletSecurityRequest::DiscardSeedDraft).unwrap();
+        assert_eq!(
+            discard,
+            serde_json::json!({"command": "discard_seed_draft"})
+        );
+    }
+
+    #[test]
+    fn a_seed_draft_travels_but_never_prints() {
+        let draft = SeedDraft {
+            draft: "00ff".into(),
+            phrase: SecretText::new("abandon ability able".into()),
+        };
+        assert!(!format!("{draft:?}").contains("abandon"));
+        let json = serde_json::to_value(&draft).unwrap();
+        let back: SeedDraft = serde_json::from_value(json).unwrap();
+        assert_eq!(back.phrase.expose(), "abandon ability able");
+        assert_eq!(back.draft, "00ff");
+    }
 }

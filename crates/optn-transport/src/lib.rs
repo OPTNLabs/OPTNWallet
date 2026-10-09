@@ -28,7 +28,7 @@ pub use airgap::{AirgapRequest, AirgapResponse};
 pub mod security;
 pub use host::{block_on_ready, run, Renderer};
 pub use security::{
-    StoredWallet, WalletBirthdayInput, WalletBirthdayView, WalletSecurityRequest,
+    SeedDraft, StoredWallet, WalletBirthdayInput, WalletBirthdayView, WalletSecurityRequest,
     WalletSecurityStatus,
 };
 
@@ -101,6 +101,12 @@ pub trait AppTransport {
         &'a self,
         _request: WalletSecurityRequest,
     ) -> TransportFuture<'a, WalletSecurityStatus> {
+        Box::pin(async { Err(TransportError::Unsupported) })
+    }
+
+    /// Draw a recovery phrase of `word_count` words for a new wallet, in the
+    /// runtime (see [`SeedDraft`]). Unsupported where no runtime holds keys.
+    fn seed_draft<'a>(&'a self, _word_count: usize) -> TransportFuture<'a, SeedDraft> {
         Box::pin(async { Err(TransportError::Unsupported) })
     }
 

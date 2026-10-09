@@ -72,6 +72,7 @@ async fn fixture() -> (AppRuntime, Storage, Checkpoints, String) {
             confirmation: secret(""),
             network: "chipnet".into(),
             account_path: AccountPath::default_for(Network::Chipnet).to_string(),
+            draft: None,
         })
         .await
         .unwrap();

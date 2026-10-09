@@ -748,6 +748,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                                 runtime.state().network,
                             )
                             .path(),
+                            draft: None,
                         })
                     }
                 }

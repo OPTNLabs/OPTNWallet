@@ -762,6 +762,7 @@ mod tests {
                 confirmation: SecretText::default(),
                 network: "chipnet".into(),
                 account_path: "m/44'/1'/8'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -983,6 +984,7 @@ mod tests {
                 network: "chipnet".into(),
                 // Separate public account for this fixture's checkpoint nonce stream.
                 account_path: "m/44'/1'/4'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -1175,6 +1177,7 @@ mod tests {
                 network: "chipnet".into(),
                 // Distinct public account keeps this mock nonce stream on its own key.
                 account_path: "m/44'/1'/2'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -1300,6 +1303,7 @@ mod tests {
                 network: "chipnet".into(),
                 // Keep deterministic checkpoint nonces separate from other test keys.
                 account_path: "m/44'/1'/3'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -1397,6 +1401,7 @@ mod tests {
                 confirmation: SecretText::default(),
                 network: "chipnet".into(),
                 account_path: path.into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -1662,6 +1667,7 @@ mod tests {
                 // Separate public fixture account keeps the checkpoint key
                 // distinct from the lifecycle test's deterministic nonce stream.
                 account_path: "m/44'/1'/1'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -2100,6 +2106,7 @@ mod tests {
                 confirmation: SecretText::default(),
                 network: "chipnet".into(),
                 account_path: "m/44'/1'/0'".into(),
+                draft: None,
             })
             .await
             .unwrap();

@@ -143,6 +143,16 @@ pub struct WalletSecurity {
     biometrics: Option<Box<dyn WalletBiometrics>>,
     session: Option<Session>,
     checkpoints: Option<Box<dyn WalletCheckpointStorage>>,
+    /// The one recovery phrase drawn for a wallet not yet created.
+    draft: Option<SeedDraftState>,
+}
+
+/// A phrase the runtime drew, held until `Create` names it. Bound to the
+/// security epoch it was drawn in, so a lock or unlock forgets it.
+struct SeedDraftState {
+    id: String,
+    phrase: SecretText,
+    epoch: u64,
 }
 
 impl WalletSecurity {
@@ -200,7 +210,37 @@ impl WalletSecurity {
             biometrics,
             session: None,
             checkpoints: None,
+            draft: None,
         }
+    }
+
+    /// Draw a recovery phrase of `word_count` words for a new wallet from the
+    /// platform's entropy, and hold it under a new draft id. Replaces any
+    /// earlier draft.
+    pub(crate) fn draft_seed(
+        &mut self,
+        state: &AppState,
+        word_count: usize,
+    ) -> Result<optn_transport::SeedDraft, TransportError> {
+        let length = hd::entropy_len_for_word_count(word_count).map_err(crypto)?;
+        let entropy = Zeroizing::new(self.storage.entropy().map_err(platform)?);
+        // The phrase uses the first bytes, the id the last sixteen: never the same ones.
+        let phrase =
+            SecretText::new(hd::mnemonic_from_entropy(&entropy[..length]).map_err(crypto)?);
+        let id = entropy[entropy.len() - 16..]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let shown = SecretText::new(phrase.expose().to_owned());
+        self.draft = Some(SeedDraftState {
+            id: id.clone(),
+            phrase,
+            epoch: state.lock.unlock_epoch,
+        });
+        Ok(optn_transport::SeedDraft {
+            draft: id,
+            phrase: shown,
+        })
     }
 
     pub fn with_checkpoints(mut self, storage: Box<dyn WalletCheckpointStorage>) -> Self {
@@ -599,8 +639,16 @@ impl WalletSecurity {
             state.reduce(AppAction::LockWallet);
             self.reconcile(state);
         }
+        if self
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.epoch != state.lock.unlock_epoch)
+        {
+            self.draft = None;
+        }
         match request {
             Request::Status => {}
+            Request::DiscardSeedDraft => self.draft = None,
             Request::SetBirthday { epoch, .. } | Request::ClearRescan { epoch } => {
                 self.bound(state, epoch)?;
                 if self.checkpoints.is_none() {
@@ -752,7 +800,26 @@ impl WalletSecurity {
                 confirmation,
                 network,
                 account_path,
+                draft,
             } => {
+                // A drafted wallet is created from the phrase the runtime drew,
+                // never from words the renderer sends back.
+                let mnemonic = match draft {
+                    Some(id) => {
+                        if !mnemonic.expose().is_empty() {
+                            return Err(failure("A drafted wallet takes no phrase of its own."));
+                        }
+                        let current = self
+                            .draft
+                            .as_ref()
+                            .filter(|draft| draft.id == id)
+                            .ok_or_else(|| {
+                                failure("This new phrase is no longer available. Start again.")
+                            })?;
+                        SecretText::new(current.phrase.expose().to_owned())
+                    }
+                    None => mnemonic,
+                };
                 let network: Network = network.parse().map_err(failure)?;
                 let account = hd::parse_account_path(&account_path).map_err(crypto)?;
                 let entropy = self.storage.entropy().map_err(platform)?;
@@ -775,6 +842,7 @@ impl WalletSecurity {
                 self.storage
                     .save(&handle, None, &file.encode().map_err(crypto)?)
                     .map_err(platform)?;
+                self.draft = None;
                 self.open(state, handle, password)?;
             }
             Request::ImportWatchOnly {
@@ -1102,6 +1170,7 @@ pub(crate) mod tests {
             confirmation: secret(""),
             network: "chipnet".into(),
             account_path: "m/44'/1'/0'".into(),
+            draft: None,
         }
     }
 
@@ -1537,6 +1606,7 @@ pub(crate) mod tests {
             confirmation: SecretText::default(),
             network: "chipnet".into(),
             account_path: "m/44'/1'/0'".into(),
+            draft: None,
         };
 
         let closed = state.clone();
@@ -1598,6 +1668,7 @@ pub(crate) mod tests {
                     confirmation: secret(""),
                     network: "chipnet".into(),
                     account_path: "m/44'/1'/0'".into(),
+                    draft: None,
                 },
                 1,
                 &WalletReconciliation::default(),
@@ -1643,6 +1714,7 @@ pub(crate) mod tests {
                     confirmation: secret(""),
                     network: "chipnet".into(),
                     account_path: "m/44'/1'/0'".into(),
+                    draft: None,
                 },
                 0,
                 reply,
@@ -1677,6 +1749,7 @@ pub(crate) mod tests {
                 confirmation: secret(""),
                 network: "chipnet".into(),
                 account_path: "m/44'/1'/0'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -1837,5 +1910,107 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(status.has_password, Some(true));
+    }
+
+    /// The runtime draws a new wallet's phrase, keeps it out of every shared
+    /// state, and creates the wallet from its own copy when `Create` names it.
+    #[tokio::test]
+    async fn the_runtime_draws_a_new_phrase_and_creates_from_its_own_copy() {
+        use crate::{AppRuntime, DirectTransport};
+        use optn_transport::AppTransport;
+        let storage = Storage::default();
+        let (runtime, driver) = AppRuntime::new_with_security(
+            AppState::default(),
+            WalletSecurity::new(Box::new(storage.clone()), None),
+        )
+        .unwrap();
+        tokio::spawn(driver.run());
+        let transport = DirectTransport::new(runtime.clone());
+        let create = |draft: Option<String>, mnemonic: &str| Request::Create {
+            name: "Public drafted wallet".into(),
+            mnemonic: secret(mnemonic),
+            bip39_passphrase: secret(""),
+            password: secret(""),
+            confirmation: secret(""),
+            network: "chipnet".into(),
+            account_path: "m/44'/1'/0'".into(),
+            draft,
+        };
+
+        for words in [12, 24] {
+            let draft = transport.seed_draft(words).await.unwrap();
+            let phrase = draft.phrase.expose().to_owned();
+            assert_eq!(phrase.split(' ').count(), words);
+            hd::Wallet::from_mnemonic(&phrase, "").expect("a valid BIP39 phrase");
+            assert!(
+                !format!("{draft:?}").contains(&phrase),
+                "Debug never shows it"
+            );
+            let shared =
+                serde_json::to_string(&optn_transport::WireState::from(&runtime.state())).unwrap();
+            assert!(
+                phrase
+                    .split(' ')
+                    .all(|word| !shared.contains(&format!("\"{word}\""))),
+                "no drafted word reaches the shared state"
+            );
+        }
+        assert!(transport.seed_draft(13).await.is_err());
+
+        // Only the latest draft can be created, and only from the runtime's copy.
+        let stale = transport.seed_draft(12).await.unwrap();
+        let current = transport.seed_draft(12).await.unwrap();
+        assert!(transport
+            .wallet_security(create(Some(stale.draft.clone()), ""))
+            .await
+            .is_err());
+        assert!(transport
+            .wallet_security(create(
+                Some(current.draft.clone()),
+                hd::BIP39_TEST_VECTOR_MNEMONIC
+            ))
+            .await
+            .is_err());
+        transport
+            .wallet_security(Request::DiscardSeedDraft)
+            .await
+            .unwrap();
+        assert!(transport
+            .wallet_security(create(Some(current.draft.clone()), ""))
+            .await
+            .is_err());
+        assert!(storage.list().unwrap().is_empty());
+
+        let draft = transport.seed_draft(12).await.unwrap();
+        let expected = hd::Wallet::from_mnemonic(draft.phrase.expose(), "")
+            .unwrap()
+            .account_xpub_at(hd::parse_account_path("m/44'/1'/0'").unwrap())
+            .unwrap();
+        let status = transport
+            .wallet_security(create(Some(draft.draft.clone()), ""))
+            .await
+            .unwrap();
+        assert!(status.active.is_some());
+        assert_eq!(
+            runtime
+                .state()
+                .wallet
+                .and_then(|wallet| wallet.account_xpub),
+            Some(expected),
+            "the wallet holds the phrase the runtime drew"
+        );
+        // Used once.
+        assert!(transport
+            .wallet_security(create(Some(draft.draft), ""))
+            .await
+            .is_err());
+
+        // A draft does not outlive a lock.
+        let draft = transport.seed_draft(12).await.unwrap();
+        transport.dispatch(AppAction::LockWallet).await.unwrap();
+        assert!(transport
+            .wallet_security(create(Some(draft.draft), ""))
+            .await
+            .is_err());
     }
 }
