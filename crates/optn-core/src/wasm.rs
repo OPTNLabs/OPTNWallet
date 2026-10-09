@@ -70,6 +70,40 @@ pub fn psbt_finalize_cash_tokens_p2pkh(
     crate::psbt::finalize_cash_tokens_p2pkh(original, signed, network_from(network)?).map_err(err)
 }
 
+/// The coin-control label of one reported coin, as JSON; see
+/// `coin_control::ReportedCoin`. Flat arguments keep a JSON parser out of
+/// this binary.
+#[wasm_bindgen(js_name = coinControlLabel)]
+pub fn coin_control_label(
+    category: Option<String>,
+    amount: Option<String>,
+    nft_capability: Option<String>,
+    identity_name: Option<String>,
+    identity_ticker: Option<String>,
+    identity_decimals: Option<u32>,
+    identity_status: Option<String>,
+) -> Result<String, JsValue> {
+    let label = crate::coin_control::ReportedCoin {
+        category,
+        amount,
+        nft_capability,
+        identity_name,
+        identity_ticker,
+        identity_decimals,
+        identity_status,
+    }
+    .label();
+    serde_json::to_string(&label).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// The label of output `vout` of the complete parent transaction `txid`
+/// (display order), as JSON. Refuses a parent that is not that transaction.
+#[wasm_bindgen(js_name = spentOutputLabel)]
+pub fn spent_output_label(parent: &[u8], txid: &str, vout: u32) -> Result<String, JsValue> {
+    let label = crate::coin_control::spent_output_label(parent, txid, vout).map_err(err)?;
+    serde_json::to_string(&label).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 /// Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
 /// display order, matching the shared coin-hold record. This does not sign.
 #[wasm_bindgen(js_name = transactionOutpoints)]

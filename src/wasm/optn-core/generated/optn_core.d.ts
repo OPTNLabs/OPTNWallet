@@ -6,6 +6,13 @@
  */
 export function addonLegacyGuestCallAllowed(module: string, method: string): boolean;
 
+/**
+ * The coin-control label of one reported coin, as JSON; see
+ * `coin_control::ReportedCoin`. Flat arguments keep a JSON parser out of
+ * this binary.
+ */
+export function coinControlLabel(category?: string | null, amount?: string | null, nft_capability?: string | null, identity_name?: string | null, identity_ticker?: string | null, identity_decimals?: number | null, identity_status?: string | null): string;
+
 export function connectP2pkhLock(public_key: Uint8Array): Uint8Array;
 
 export function connectPublicKey(private_key: Uint8Array): Uint8Array;
@@ -276,6 +283,12 @@ export function sharedSecret(privkey: Uint8Array, counterpart_pubkey: Uint8Array
 export function spendingKey(spend_privkey: Uint8Array, secret: Uint8Array, index: number): Uint8Array;
 
 /**
+ * The label of output `vout` of the complete parent transaction `txid`
+ * (display order), as JSON. Refuses a parent that is not that transaction.
+ */
+export function spentOutputLabel(parent: Uint8Array, txid: string, vout: number): string;
+
+/**
  * Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
  * display order, matching the shared coin-hold record. This does not sign.
  */
@@ -286,6 +299,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
+    readonly coinControlLabel: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
     readonly connectPublicKey: (a: number, b: number) => [number, number, number, number];
     readonly connectSignInput: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
@@ -331,6 +345,7 @@ export interface InitOutput {
     readonly sendBlockReason: (a: number, b: number) => [number, number, number, number];
     readonly sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly spentOutputLabel: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly transactionOutpoints: (a: number, b: number) => [number, number, number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;

@@ -16,6 +16,50 @@ export function addonLegacyGuestCallAllowed(module, method) {
 }
 
 /**
+ * The coin-control label of one reported coin, as JSON; see
+ * `coin_control::ReportedCoin`. Flat arguments keep a JSON parser out of
+ * this binary.
+ * @param {string | null} [category]
+ * @param {string | null} [amount]
+ * @param {string | null} [nft_capability]
+ * @param {string | null} [identity_name]
+ * @param {string | null} [identity_ticker]
+ * @param {number | null} [identity_decimals]
+ * @param {string | null} [identity_status]
+ * @returns {string}
+ */
+export function coinControlLabel(category, amount, nft_capability, identity_name, identity_ticker, identity_decimals, identity_status) {
+    let deferred8_0;
+    let deferred8_1;
+    try {
+        var ptr0 = isLikeNone(category) ? 0 : passStringToWasm0(category, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(amount) ? 0 : passStringToWasm0(amount, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        var ptr2 = isLikeNone(nft_capability) ? 0 : passStringToWasm0(nft_capability, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len2 = WASM_VECTOR_LEN;
+        var ptr3 = isLikeNone(identity_name) ? 0 : passStringToWasm0(identity_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len3 = WASM_VECTOR_LEN;
+        var ptr4 = isLikeNone(identity_ticker) ? 0 : passStringToWasm0(identity_ticker, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len4 = WASM_VECTOR_LEN;
+        var ptr5 = isLikeNone(identity_status) ? 0 : passStringToWasm0(identity_status, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len5 = WASM_VECTOR_LEN;
+        const ret = wasm.coinControlLabel(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, isLikeNone(identity_decimals) ? Number.MAX_SAFE_INTEGER : (identity_decimals) >>> 0, ptr5, len5);
+        var ptr7 = ret[0];
+        var len7 = ret[1];
+        if (ret[3]) {
+            ptr7 = 0; len7 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred8_0 = ptr7;
+        deferred8_1 = len7;
+        return getStringFromWasm0(ptr7, len7);
+    } finally {
+        wasm.__wbindgen_free(deferred8_0, deferred8_1, 1);
+    }
+}
+
+/**
  * @param {Uint8Array} public_key
  * @returns {Uint8Array}
  */
@@ -1068,6 +1112,37 @@ export function spendingKey(spend_privkey, secret, index) {
 }
 
 /**
+ * The label of output `vout` of the complete parent transaction `txid`
+ * (display order), as JSON. Refuses a parent that is not that transaction.
+ * @param {Uint8Array} parent
+ * @param {string} txid
+ * @param {number} vout
+ * @returns {string}
+ */
+export function spentOutputLabel(parent, txid, vout) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passArray8ToWasm0(parent, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(txid, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.spentOutputLabel(ptr0, len0, ptr1, len1, vout);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
  * display order, matching the shared coin-hold record. This does not sign.
  * @param {string} raw_tx_hex
@@ -1162,6 +1237,10 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function isLikeNone(x) {
+    return x === undefined || x === null;
 }
 
 function passArray32ToWasm0(arg, malloc) {
