@@ -17,7 +17,6 @@ mod egress;
 mod electrum_selection;
 pub mod electrum_tcp;
 pub mod fusion;
-mod fusion_lookups;
 #[cfg(desktop)]
 pub mod hw;
 mod network_config;
@@ -615,9 +614,9 @@ async fn fusion_run(
     });
     // Connections of this round's own: loopback directly, anything else only
     // through the verified proxy, never on the wallet's connections.
-    let lookups = std::sync::Arc::new(fusion_lookups::ChainInputLookups::electrum(
+    let lookups = std::sync::Arc::new(optn_fusion_native::lookups::ChainInputLookups::electrum(
         runtime.state().network,
-        lookup_servers,
+        lookup_endpoints(&lookup_servers),
         verified_proxy,
     ));
 
@@ -811,9 +810,27 @@ async fn fusion_transaction_is_known(
         verified_fusion_proxy_for_network(&hosts, &network_settings, network).await?;
     // A server that HAS it settles the question. A server that does not may
     // simply be behind, so the others are asked too.
-    fusion_lookups::ChainInputLookups::electrum(network, servers, verified_proxy)
-        .transaction_is_known(txid)
-        .await
+    optn_fusion_native::lookups::ChainInputLookups::electrum(
+        network,
+        lookup_endpoints(&servers),
+        verified_proxy,
+    )
+    .transaction_is_known(txid)
+    .await
+}
+
+/// The selected servers, as the shared round host takes them.
+fn lookup_endpoints(
+    servers: &[electrum_selection::SelectedElectrum],
+) -> Vec<optn_fusion_native::lookups::LookupEndpoint> {
+    servers
+        .iter()
+        .map(|server| optn_fusion_native::lookups::LookupEndpoint {
+            host: server.host.clone(),
+            port: server.port,
+            tls: server.tls,
+        })
+        .collect()
 }
 
 /// A transaction id as the renderer shows it, in internal byte order.

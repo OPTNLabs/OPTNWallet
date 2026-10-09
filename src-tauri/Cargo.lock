@@ -3449,6 +3449,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "optn-fusion-native"
+version = "1.7.3"
+dependencies = [
+ "optn-chain-native",
+ "optn-core",
+ "optn-fusion",
+ "optn-runtime",
+ "optn-transport",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "optn-multisig-core"
 version = "1.7.3"
 dependencies = [
@@ -3523,6 +3536,7 @@ dependencies = [
  "optn-chain-native",
  "optn-core",
  "optn-fusion",
+ "optn-fusion-native",
  "optn-multisig-core",
  "optn-platform",
  "optn-platform-native",

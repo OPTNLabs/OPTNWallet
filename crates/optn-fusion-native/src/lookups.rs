@@ -1,10 +1,9 @@
 //! A CashFusion round's chain evidence: are claimed inputs unspent, and does
 //! the network have a transaction.
 //!
-//! The round asks the holder's selected Electrum servers (see
-//! `electrum_selection::fusion_lookup_endpoints`), each over a connection of
-//! the round's own: a loopback server directly, any other only through Tor,
-//! with isolation credentials no wallet connection shares
+//! The round asks the holder's selected Electrum servers, each over a
+//! connection of the round's own: a loopback server directly, any other only
+//! through Tor, with isolation credentials no wallet connection shares
 //! (`optn_chain_native::connect_fusion_lookup`). So a server cannot tie the
 //! round's questions about other players' coins to this wallet's own
 //! subscriptions.
@@ -20,10 +19,17 @@ use std::time::Duration;
 use optn_chain_native::ElectrumBackend;
 use optn_runtime::chain_service::{ChainBackend, ChainPayload, ChainRequest};
 
-use crate::electrum_selection::SelectedElectrum;
-use crate::fusion::lookup::{
+use optn_fusion::lookup::{
     InputLookups, LookupFuture, OutputAnswer, OutputAnswers, OutputQuestion,
 };
+
+/// An Electrum server a round may ask: the holder's selection, primary first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LookupEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub tls: bool,
+}
 
 /// Opening a round's connection: Tor circuit, TLS, `server.version`,
 /// `server.features` and the genesis check.
@@ -36,7 +42,7 @@ type Outputs = [OutputQuestion];
 type ServerValues = Vec<Result<Option<u64>, String>>;
 
 /// One server a round may ask.
-pub(crate) trait LookupServer: Send + Sync {
+pub trait LookupServer: Send + Sync {
     fn label(&self) -> String;
     /// The value at which each script's unspent list holds each output, or
     /// `None` when it does not.
@@ -51,7 +57,7 @@ pub(crate) trait LookupServer: Send + Sync {
 /// An Electrum server, connected on first use and kept for the round.
 struct ElectrumLookupServer {
     network: optn_core::network::Network,
-    server: SelectedElectrum,
+    server: LookupEndpoint,
     socks_port: Option<u16>,
     backend: tokio::sync::Mutex<Option<Arc<ElectrumBackend>>>,
 }
@@ -118,16 +124,16 @@ impl LookupServer for ElectrumLookupServer {
 }
 
 /// The servers a round asks, in the holder's order.
-pub(crate) struct ChainInputLookups {
+pub struct ChainInputLookups {
     servers: Vec<Box<dyn LookupServer>>,
 }
 
 impl ChainInputLookups {
     /// The selected Electrum servers on `network`. `socks_port` is the round's
     /// verified Tor proxy; without one, only loopback servers can be asked.
-    pub(crate) fn electrum(
+    pub fn electrum(
         network: optn_core::network::Network,
-        servers: Vec<SelectedElectrum>,
+        servers: Vec<LookupEndpoint>,
         socks_port: Option<u16>,
     ) -> Self {
         Self::over(
@@ -145,7 +151,7 @@ impl ChainInputLookups {
         )
     }
 
-    pub(crate) fn over(servers: Vec<Box<dyn LookupServer>>) -> Self {
+    pub fn over(servers: Vec<Box<dyn LookupServer>>) -> Self {
         Self { servers }
     }
 }

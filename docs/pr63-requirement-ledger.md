@@ -1977,3 +1977,34 @@ Tests: keys match the coin's own derivation and reserve nothing; three
 outputs advance the change counter by three and nothing else; a second round gets different
 outputs; foreign, duplicate, held and out-of-range requests are refused; a
 failed save reserves nothing, and the same request succeeds after a reopen.
+
+### 2026-10-09: one native fusion host for every surface
+
+The pieces around the protocol engine that a native surface needs to fuse a
+wallet lived in `src-tauri`, where only the desktop could reach them.
+
+`crates/optn-fusion-native` is that host, for the CLI, the docker runner and
+the desktop:
+- `lookups`: the round's chain evidence through the holder's selected
+  Electrum servers, on connections of the round's own (moved from
+  `src-tauri/src/fusion_lookups.rs` with its tests; the desktop now calls
+  it);
+- `depth_file`: the fusion depth record on disk, in the same three stored
+  forms the desktop keeps, written by temporary file and rename. A document
+  that is not JSON is refused rather than read as empty, because an empty
+  record reads every coin as depth 0 and Auto would pay to redo mixing;
+- `server_round`: one server round. It runs the handshake (declaring the
+  chain and refusing a server outside the limits), gets the coins' keys from
+  the runtime, plans tiers, reserves the largest plan's outputs, runs the
+  round with peers' inputs checked through the holder's servers, then waits
+  up to a minute for a selected server to hold the transaction (Electron
+  Cash waits the same). Every remote leg needs the verified Tor proxy.
+  Server addresses parse as the desktop's do. The chain's genesis is the
+  hash of the runtime's own anchored genesis header, not a fourth copy of
+  the table.
+
+Tests: the moved lookup tests; server address parsing, the per-leg Tor
+rule, genesis for chipnet and mainnet against their known hashes, finding
+the wallet's outputs by script, and the depth file's round trip and
+refusals. The full round is exercised live with the fleet (next).
+`cargo run -p xtask -- architecture` passes.

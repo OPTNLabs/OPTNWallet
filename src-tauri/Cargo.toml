@@ -69,6 +69,7 @@ sha2 = "0.10"
 k256 = "0.13"
 optn-core = { path = "../crates/optn-core", version = "=1.7.3" }
 optn-fusion = { path = "../crates/optn-fusion", version = "=1.7.3" }
+optn-fusion-native = { path = "../crates/optn-fusion-native", version = "=1.7.3" }
 optn-app = { path = "../crates/optn-app", version = "=1.7.3" }
 optn-platform = { path = "../crates/optn-platform", version = "=1.7.3" }
 optn-runtime = { path = "../crates/optn-runtime", version = "=1.7.3" }
