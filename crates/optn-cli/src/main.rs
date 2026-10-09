@@ -838,7 +838,18 @@ fn client_for(cli: &Cli) -> Result<Client> {
             timeout_seconds(cli),
         ),
     }
-    .map(|client| client.trusting_socks_ports(trusted))
+    .map(|client| {
+        // The holder's Tor switch and own-node declaration, from the same
+        // shared settings the desktop uses. Unreadable settings keep Tor on.
+        let (transport, own) = network_settings::transport_for_host(
+            cli.network,
+            cli.network_config_dir.as_deref(),
+            client.host(),
+        );
+        client
+            .trusting_socks_ports(trusted)
+            .following(transport, own)
+    })
 }
 
 fn timeout_seconds(cli: &Cli) -> u64 {

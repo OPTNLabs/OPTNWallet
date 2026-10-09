@@ -396,6 +396,31 @@ pub fn set_transport(
         .map(|_| ())
 }
 
+/// The holder's Tor switch for `network`, and whether `host` is a node they
+/// declared as their own. Unreadable settings read as Tor on and not their
+/// own: a broken file must never be what allows a direct connection.
+pub fn transport_for_host(
+    network: Network,
+    directory: Option<&Path>,
+    host: &str,
+) -> (optn_runtime::chain::TransportPolicy, bool) {
+    let Ok(Some(selection)) = shared_chain_selection(network, directory) else {
+        return (optn_runtime::chain::TransportPolicy::default(), false);
+    };
+    let host = host.trim_end_matches('.');
+    let own = selection.catalog.iter().any(|source| {
+        source.is_enabled()
+            && source.is_user_infrastructure()
+            && source.endpoints.iter().any(|endpoint| {
+                endpoint
+                    .host
+                    .trim_end_matches('.')
+                    .eq_ignore_ascii_case(host)
+            })
+    });
+    (selection.policy.transport, own)
+}
+
 /// `on` or `off`, as typed after `network tor`.
 pub fn parse_tor_switch(value: &str) -> Result<optn_runtime::chain::TransportPolicy, String> {
     match value.trim() {
