@@ -59,6 +59,30 @@ fn fresh_seedcash_returns_finalize_and_supplied_broken_origins_are_rejected() {
 }
 
 #[test]
+fn only_plain_transfers_leave_every_token_unchanged() {
+    let mut checked = 0;
+    for case in support::cases().into_iter().filter(|case| case.valid) {
+        let review = psbt::review_p2pkh(&case.psbt, Network::Chipnet).unwrap();
+        let id = case.id.as_str();
+        let expected = if id == "bch-control" || id.starts_with("transfer-") {
+            true
+        } else if [
+            "genesis-", "mint", "burn-", "mutable-", "split-", "dual-", "mega-",
+        ]
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+        {
+            false
+        } else {
+            continue;
+        };
+        assert_eq!(review.tokens_unchanged, expected, "{id}");
+        checked += 1;
+    }
+    assert!(checked > 40, "only {checked} cases were classified");
+}
+
+#[test]
 fn exported_corpus_reviews_token_transitions() {
     for case in support::cases() {
         assert_eq!(

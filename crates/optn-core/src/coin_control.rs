@@ -18,7 +18,7 @@ use crate::bcmr::{bounded_text, MAX_DECIMALS, MAX_NAME_BYTES, MAX_TICKER_BYTES};
 use crate::coins::hex_encode;
 use crate::error::{CliError, Result};
 use crate::spend::SpendError;
-use crate::token::{self, Capability, TokenData, MAX_FUNGIBLE_AMOUNT};
+use crate::token::{self, Capability, TokenData};
 use crate::tx;
 
 /// How far the wallet's BCMR resolution got for a category.
@@ -138,6 +138,9 @@ pub struct CoinLabel {
     /// Fungible amount, scaled by the identity's decimals; base units when no
     /// identity may name the category.
     pub amount: Option<String>,
+    /// The decimals `amount` is scaled by, and that an amount typed against
+    /// this label is read with: the naming identity's, else zero.
+    pub decimals: u8,
     /// `Immutable`, `Mutable` or `Minting`, when the coin carries an NFT.
     pub nft_capability: Option<&'static str>,
     /// Why the identity is not current, when it is not.
@@ -156,6 +159,7 @@ impl CoinLabel {
             category: None,
             category_short: None,
             amount: None,
+            decimals: 0,
             nft_capability: None,
             caveat: None,
             bch_send_refusal: None,
@@ -194,6 +198,7 @@ impl CoinLabel {
             category: Some(category),
             amount: (tokens.amount > 0 || tokens.nft.is_none())
                 .then(|| scaled_amount(tokens.amount, decimals)),
+            decimals,
             nft_capability: tokens.nft.map(capability_label),
             caveat,
             bch_send_refusal: Some(SpendError::TokenCoin.to_string()),
@@ -279,11 +284,14 @@ impl ReportedCoin {
 
     fn tokens(&self, category: &str) -> Result<CoinTokens> {
         let category = token::parse_category(category)?;
-        let amount = self.amount.as_deref().map_or(Ok(0), parse_amount)?;
+        let amount = self
+            .amount
+            .as_deref()
+            .map_or(Ok(0), token::parse_fungible_amount)?;
         let nft = self
             .nft_capability
             .as_deref()
-            .map(parse_capability)
+            .map(Capability::from_name)
             .transpose()?;
         if amount == 0 && nft.is_none() {
             return Err(usage(
@@ -307,27 +315,6 @@ impl ReportedCoin {
                 .as_deref()
                 .map_or(IdentityStatus::Unresolved, IdentityStatus::from_name),
         })
-    }
-}
-
-/// Digits only: `str::parse` would also take a sign.
-fn parse_amount(text: &str) -> Result<u64> {
-    let amount = if text.bytes().all(|byte| byte.is_ascii_digit()) {
-        text.parse::<u64>().ok()
-    } else {
-        None
-    };
-    amount
-        .filter(|amount| *amount <= MAX_FUNGIBLE_AMOUNT)
-        .ok_or_else(|| usage(format!("'{text}' is not a fungible token amount")))
-}
-
-fn parse_capability(text: &str) -> Result<Capability> {
-    match text {
-        "none" => Ok(Capability::None),
-        "mutable" => Ok(Capability::Mutable),
-        "minting" => Ok(Capability::Minting),
-        other => Err(usage(format!("'{other}' is not an NFT capability"))),
     }
 }
 
@@ -355,6 +342,33 @@ fn scaled_amount(amount: u64, decimals: u8) -> String {
     }
 }
 
+/// Read an amount typed in a label's units -- `12.34` with two decimals -- as
+/// base units: the inverse of the scaling a label shows, and as exact. More
+/// fractional digits than `decimals` allow is refused rather than rounded.
+pub fn parse_scaled_amount(text: &str, decimals: u8) -> Result<u64> {
+    let invalid = || {
+        usage(format!(
+            "'{text}' is not a token amount with at most {decimals} decimal places"
+        ))
+    };
+    if decimals > MAX_DECIMALS {
+        return Err(invalid());
+    }
+    let trimmed = text.trim();
+    let (whole, fraction) = trimmed.split_once('.').unwrap_or((trimmed, ""));
+    let places = usize::from(decimals);
+    if (whole.is_empty() && fraction.is_empty())
+        || fraction.len() > places
+        || !whole
+            .bytes()
+            .chain(fraction.bytes())
+            .all(|byte| byte.is_ascii_digit())
+    {
+        return Err(invalid());
+    }
+    token::parse_fungible_amount(&format!("{whole}{fraction:0<places$}")).map_err(|_| invalid())
+}
+
 /// `category` is 64 ASCII hex characters, so both slices fall on boundaries.
 fn short_category(category: &str) -> String {
     format!("{}…{}", &category[..8], &category[category.len() - 8..])
@@ -367,7 +381,7 @@ fn usage(message: String) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::token::Nft;
+    use crate::token::{Nft, MAX_FUNGIBLE_AMOUNT};
 
     /// SeedCash pins this category as MUSD with two decimals; PR #108's live
     /// BCMR run resolved Moria USD / MUSD / 2 decimals. The identity below is
@@ -424,6 +438,7 @@ mod tests {
         assert_eq!(label.title, "MUSD");
         assert_eq!(label.name.as_deref(), Some("Moria USD"));
         assert_eq!(label.amount.as_deref(), Some("123.45"));
+        assert_eq!(label.decimals, 2);
         assert_eq!(label.category.as_deref(), Some(MUSD));
         assert_eq!(label.category_short.as_deref(), Some("b38a33f7…ed87f366"));
         assert_eq!(label.caveat, None);
@@ -453,6 +468,7 @@ mod tests {
             assert_eq!(label.name, None);
             // Without decimals from an authenticated identity, base units.
             assert_eq!(label.amount.as_deref(), Some("12345"));
+            assert_eq!(label.decimals, 0);
             assert_eq!(label.caveat, Some(caveat));
             assert_eq!(label.category.as_deref(), Some(MUSD));
             assert!(!label.spendable_in_bch_send());
@@ -579,6 +595,52 @@ mod tests {
     }
 
     #[test]
+    fn typed_amounts_read_back_exactly() {
+        for (text, decimals, base_units) in [
+            ("12.34", 2, 1_234),
+            ("12.3", 2, 1_230),
+            ("12", 2, 1_200),
+            ("12.", 2, 1_200),
+            (".05", 2, 5),
+            (" 0.05 ", 2, 5),
+            ("0", 2, 0),
+            ("42", 0, 42),
+            ("92233720368547758.07", 2, MAX_FUNGIBLE_AMOUNT),
+            ("0.000000000000000001", MAX_DECIMALS, 1),
+        ] {
+            assert_eq!(
+                parse_scaled_amount(text, decimals).unwrap(),
+                base_units,
+                "{text} at {decimals}"
+            );
+            if base_units > 0 {
+                assert_eq!(
+                    parse_scaled_amount(&scaled_amount(base_units, decimals), decimals).unwrap(),
+                    base_units
+                );
+            }
+        }
+        for (text, decimals) in [
+            ("12.345", 2),
+            ("1.5", 0),
+            ("", 2),
+            (".", 2),
+            ("-1", 2),
+            ("+1", 2),
+            ("1e3", 2),
+            ("1,5", 2),
+            ("1.2.3", 2),
+            ("92233720368547758.08", 2),
+            ("1", MAX_DECIMALS + 1),
+        ] {
+            assert!(
+                parse_scaled_amount(text, decimals).is_err(),
+                "{text} at {decimals}"
+            );
+        }
+    }
+
+    #[test]
     fn unreadable_token_data_is_still_a_token_coin() {
         let unreadable = [
             ReportedCoin {
@@ -614,6 +676,7 @@ mod tests {
         assert_eq!(json["kind"], "fungible");
         assert_eq!(json["title"], "MUSD");
         assert_eq!(json["amount"], "123.45");
+        assert_eq!(json["decimals"], 2);
         assert_eq!(json["nft_capability"], serde_json::Value::Null);
         let json = serde_json::to_value(CoinLabel::bch()).expect("labels serialize");
         assert_eq!(json["kind"], "bch");

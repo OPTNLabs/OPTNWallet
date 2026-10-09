@@ -29,6 +29,8 @@ const HAS_COMMITMENT_LENGTH: u8 = 0x40;
 const HAS_NFT: u8 = 0x20;
 const HAS_AMOUNT: u8 = 0x10;
 pub const MAX_FUNGIBLE_AMOUNT: u64 = i64::MAX as u64;
+/// The consensus limit on an NFT commitment.
+pub const MAX_COMMITMENT_BYTES: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Capability {
@@ -67,6 +69,34 @@ impl Capability {
             Capability::Minting => "minting",
         }
     }
+
+    /// Read the name [`Capability::as_str`] writes, which is also how
+    /// Electrum servers report it. Nothing else is accepted.
+    pub fn from_name(name: &str) -> Result<Self> {
+        match name {
+            "none" => Ok(Capability::None),
+            "mutable" => Ok(Capability::Mutable),
+            "minting" => Ok(Capability::Minting),
+            other => Err(CliError::Usage(format!(
+                "'{other}' is not an NFT capability"
+            ))),
+        }
+    }
+}
+
+/// A fungible amount written as decimal digits, as servers report it.
+///
+/// Digits only: `str::parse` would also take a sign. Amounts reach 2^63 - 1,
+/// past what a JSON number carries exactly, which is why they travel as text.
+pub fn parse_fungible_amount(text: &str) -> Result<u64> {
+    let amount = if text.bytes().all(|byte| byte.is_ascii_digit()) {
+        text.parse::<u64>().ok()
+    } else {
+        None
+    };
+    amount
+        .filter(|amount| *amount <= MAX_FUNGIBLE_AMOUNT)
+        .ok_or_else(|| CliError::Usage(format!("'{text}' is not a fungible token amount")))
 }
 
 /// The token content of one output.
@@ -95,6 +125,47 @@ impl TokenData {
         }
     }
 
+    /// Read a coin's tokens as a server's coin list or a wallet record
+    /// reports them: the category in display order, the fungible amount as
+    /// decimal digits, the NFT's capability by name and its commitment as hex.
+    ///
+    /// Strict, because these come from outside the wallet and decide what a
+    /// spend has to carry forward: a coin read as holding fewer tokens than it
+    /// does is a burn waiting for a send. Anything that does not read cleanly
+    /// is refused rather than guessed. A commitment without a capability is
+    /// refused too -- it is half an NFT.
+    pub fn from_reported(
+        category: &str,
+        amount: Option<&str>,
+        capability: Option<&str>,
+        commitment: Option<&str>,
+    ) -> Result<Self> {
+        let category = parse_category(category)?;
+        let amount = amount.map_or(Ok(0), parse_fungible_amount)?;
+        let nft = match (capability, commitment) {
+            (None, None) => None,
+            (None, Some(_)) => {
+                return Err(CliError::Usage(
+                    "an NFT commitment was reported without a capability".into(),
+                ))
+            }
+            (Some(capability), commitment) => Some(Nft {
+                capability: Capability::from_name(capability)?,
+                commitment: parse_commitment(commitment.unwrap_or_default())?,
+            }),
+        };
+        if amount == 0 && nft.is_none() {
+            return Err(CliError::Usage(
+                "a token coin must carry a fungible amount or an NFT".into(),
+            ));
+        }
+        Ok(TokenData {
+            category,
+            amount,
+            nft,
+        })
+    }
+
     /// Serialize the prefix that precedes the locking script.
     pub fn encode_prefix(&self) -> Result<Vec<u8>> {
         if self.amount > MAX_FUNGIBLE_AMOUNT {
@@ -108,9 +179,9 @@ impl TokenData {
             ));
         }
         if let Some(nft) = &self.nft {
-            if nft.commitment.len() > 40 {
+            if nft.commitment.len() > MAX_COMMITMENT_BYTES {
                 return Err(CliError::Usage(format!(
-                    "NFT commitment is {} bytes; the consensus limit is 40",
+                    "NFT commitment is {} bytes; the consensus limit is {MAX_COMMITMENT_BYTES}",
                     nft.commitment.len()
                 )));
             }
@@ -177,10 +248,10 @@ impl TokenData {
             let capability = Capability::from_bits(bitfield)?;
             let commitment = if bitfield & HAS_COMMITMENT_LENGTH != 0 {
                 let (len, used) = read_varint(&bytes[i..])?;
-                if !(1..=40).contains(&len) {
-                    return Err(CliError::Protocol(
-                        "NFT commitment length must be 1..=40".into(),
-                    ));
+                if !(1..=MAX_COMMITMENT_BYTES as u64).contains(&len) {
+                    return Err(CliError::Protocol(format!(
+                        "NFT commitment length must be 1..={MAX_COMMITMENT_BYTES}"
+                    )));
                 }
                 i += used;
                 let len = usize::try_from(len).map_err(|_| {
@@ -280,6 +351,14 @@ pub fn parse_category(s: &str) -> Result<[u8; 32]> {
             .map_err(|e| CliError::Usage(format!("bad category hex: {e}")))?;
     }
     Ok(out)
+}
+
+/// Parse an NFT commitment written as hex: empty, or up to
+/// [`MAX_COMMITMENT_BYTES`] bytes.
+pub fn parse_commitment(hex: &str) -> Result<Vec<u8>> {
+    crate::coins::hex_decode(hex)
+        .filter(|commitment| commitment.len() <= MAX_COMMITMENT_BYTES)
+        .ok_or_else(|| CliError::Usage(format!("'{hex}' is not an NFT commitment")))
 }
 
 #[cfg(test)]
@@ -412,6 +491,61 @@ mod tests {
     fn category_parsing_rejects_the_wrong_length() {
         assert!(parse_category("abcd").is_err());
         assert!(parse_category(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn reported_tokens_read_exactly_or_not_at_all() {
+        let category = "ab".repeat(32);
+        let both = TokenData::from_reported(&category, Some("250"), Some("minting"), Some("0a0B"))
+            .expect("a fungible amount and an NFT");
+        assert_eq!(both.category, [0xab; 32]);
+        assert_eq!(both.amount, 250);
+        assert_eq!(
+            both.nft,
+            Some(Nft {
+                capability: Capability::Minting,
+                commitment: vec![0x0a, 0x0b],
+            })
+        );
+        let bare = TokenData::from_reported(&category, None, Some("none"), None).unwrap();
+        assert_eq!(bare.amount, 0);
+        assert_eq!(bare.nft.unwrap().commitment, Vec::<u8>::new());
+        let maximum = MAX_FUNGIBLE_AMOUNT.to_string();
+        assert_eq!(
+            TokenData::from_reported(&category, Some(&maximum), None, None)
+                .unwrap()
+                .amount,
+            MAX_FUNGIBLE_AMOUNT
+        );
+
+        let too_much = (MAX_FUNGIBLE_AMOUNT + 1).to_string();
+        let long_commitment = "00".repeat(MAX_COMMITMENT_BYTES + 1);
+        for (amount, capability, commitment) in [
+            (None, None, None),
+            (Some("0"), None, None),
+            (Some("+5"), None, None),
+            (Some("-5"), None, None),
+            (Some("1e3"), None, None),
+            (Some(""), None, None),
+            (Some(too_much.as_str()), None, None),
+            (None, Some("burnable"), None),
+            (None, Some("None"), None),
+            (None, None, Some("0a")),
+            (None, Some("none"), Some("0")),
+            (None, Some("none"), Some("zz")),
+            (None, Some("none"), Some("+a")),
+            (None, Some("none"), Some(long_commitment.as_str())),
+        ] {
+            assert!(
+                TokenData::from_reported(&category, amount, capability, commitment).is_err(),
+                "{amount:?} {capability:?} {commitment:?}"
+            );
+        }
+        assert!(TokenData::from_reported("ab", Some("1"), None, None).is_err());
+        assert_eq!(
+            parse_commitment(&"cc".repeat(MAX_COMMITMENT_BYTES)).unwrap(),
+            vec![0xcc; MAX_COMMITMENT_BYTES]
+        );
     }
 
     #[test]

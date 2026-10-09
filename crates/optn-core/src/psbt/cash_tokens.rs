@@ -47,6 +47,12 @@ pub struct P2pkhReview {
     /// Eligible parent txids in display order. Eligibility alone is not genesis.
     pub genesis_candidates: Vec<String>,
     pub categories: Vec<CategoryReview>,
+    /// The outputs carry exactly the tokens the spent outputs do: every
+    /// fungible amount and every NFT, capability and commitment included,
+    /// and nothing else. Nothing burned, minted or altered -- what a send must
+    /// be. Unlike NFT counts, this does establish that no NFT was destroyed
+    /// or replaced: every one leaves exactly as it came.
+    pub tokens_unchanged: bool,
 }
 
 /// Validate and review before approval/signing. Chipnet, complete parents,
@@ -257,13 +263,33 @@ pub(super) fn review_maps(maps: &ParsedMaps) -> Result<P2pkhReview> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let tokens_unchanged = categories.iter().all(CategoryReview::unchanged);
     Ok(P2pkhReview {
         fee_satoshis,
         spent_outputs: spent,
         outputs,
         genesis_candidates: genesis.iter().map(|c| hex(c)).collect(),
         categories,
+        tokens_unchanged,
     })
+}
+
+impl CategoryReview {
+    /// Whether this category leaves the transaction exactly as it came in:
+    /// the same fungible amount, and the same NFTs, each with its capability
+    /// and commitment.
+    pub fn unchanged(&self) -> bool {
+        fn identities(nfts: &[Nft]) -> Vec<(&'static str, &[u8])> {
+            let mut identities: Vec<_> = nfts
+                .iter()
+                .map(|nft| (nft.capability.as_str(), nft.commitment.as_slice()))
+                .collect();
+            identities.sort_unstable();
+            identities
+        }
+        self.input_fungible == self.output_fungible
+            && identities(&self.input_nfts) == identities(&self.output_nfts)
+    }
 }
 
 #[cfg(test)]

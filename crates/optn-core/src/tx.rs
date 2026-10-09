@@ -12,9 +12,22 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::{CliError, Result};
+use crate::fee::FeeRate;
+use crate::token::TokenData;
 
 /// SIGHASH_ALL | SIGHASH_FORKID. FORKID is mandatory on BCH.
 pub const SIGHASH_ALL_FORKID: u32 = 0x41;
+
+/// A signed P2PKH input: outpoint (36), script length (1), a pushed low-S DER
+/// signature with its sighash byte (73), a pushed compressed public key (34),
+/// sequence (4). The worst case; a Schnorr signature is seven bytes shorter.
+pub const P2PKH_INPUT_BYTES: usize = 148;
+
+/// A P2PKH output: value (8), script length (1), script (25).
+pub const P2PKH_OUTPUT_BYTES: usize = 34;
+
+/// Version and locktime, four bytes each, and one-byte input and output counts.
+const TRANSACTION_OVERHEAD_BYTES: usize = 10;
 
 /// A P2PKH output being spent.
 #[derive(Debug, Clone)]
@@ -67,6 +80,23 @@ impl Output {
             }
             None => self.script_pubkey.clone(),
         }
+    }
+
+    /// Bytes this output takes in a serialized transaction: its value, the
+    /// length of the prefix and script together, and then both.
+    pub fn serialized_size(&self) -> usize {
+        let field = self.token_prefix.as_ref().map_or(0, Vec::len) + self.script_pubkey.len();
+        8 + varint(field as u64).len() + field
+    }
+
+    /// The smallest value the network relays for this output.
+    ///
+    /// The node's dust rule: three times what creating this output and later
+    /// spending it with a P2PKH input would cost at the 1 sat/byte dust relay
+    /// fee. A token prefix makes the output larger, so a token output's
+    /// threshold sits above the familiar 546.
+    pub fn dust_threshold(&self) -> u64 {
+        3 * (self.serialized_size() + P2PKH_INPUT_BYTES) as u64
     }
 }
 
@@ -232,6 +262,44 @@ impl Transaction {
     /// the recipient's scan prefix, so the sender needs the scriptSig back
     /// rather than only the assembled transaction.
     pub fn sign_detailed(&self, keys: &[SigningKey]) -> Result<(Vec<u8>, Vec<Vec<u8>>)> {
+        self.sign_with_spent_prefixes(keys, &vec![Vec::new(); self.inputs.len()])
+    }
+
+    /// Sign a transaction whose inputs may spend CashTokens.
+    ///
+    /// `spent[i]` is the token data input `i`'s coin carries, read from the
+    /// transaction that created it. Since CashTokens, a signature commits to
+    /// the token prefix of the output it spends, so a token input signed the
+    /// way [`Transaction::sign`] signs -- as if it carried none -- is rejected
+    /// by every node.
+    pub fn sign_spending_tokens(
+        &self,
+        keys: &[SigningKey],
+        spent: &[Option<TokenData>],
+    ) -> Result<Vec<u8>> {
+        if spent.len() != self.inputs.len() {
+            return Err(CliError::Internal(format!(
+                "{} inputs but token data for {}",
+                self.inputs.len(),
+                spent.len()
+            )));
+        }
+        let prefixes = spent
+            .iter()
+            .map(|token| {
+                token
+                    .as_ref()
+                    .map_or(Ok(Vec::new()), TokenData::encode_prefix)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(self.sign_with_spent_prefixes(keys, &prefixes)?.0)
+    }
+
+    fn sign_with_spent_prefixes(
+        &self,
+        keys: &[SigningKey],
+        prefixes: &[Vec<u8>],
+    ) -> Result<(Vec<u8>, Vec<Vec<u8>>)> {
         if keys.len() != self.inputs.len() {
             return Err(CliError::Internal(format!(
                 "{} inputs but {} keys",
@@ -240,9 +308,11 @@ impl Transaction {
             )));
         }
 
+        let sequences = vec![self.sequence; self.inputs.len()];
         let mut script_sigs = Vec::with_capacity(self.inputs.len());
-        for (index, key) in keys.iter().enumerate() {
-            let digest = self.sighash(index)?;
+        for ((index, key), prefix) in keys.iter().enumerate().zip(prefixes) {
+            let digest =
+                double_sha256(&self.sighash_preimage_with_token(index, &sequences, prefix)?);
             let signature: Signature = key
                 .sign_prehash(&digest)
                 .map_err(|e| CliError::Internal(format!("signing failed: {e}")))?;
@@ -358,10 +428,49 @@ pub(crate) fn verified_p2pkh_script_sig(
 /// transaction rejected, so the worst case is the right side to err on.
 pub fn estimate_size(inputs: usize, outputs: usize) -> Result<usize> {
     inputs
-        .checked_mul(148)
-        .and_then(|bytes| bytes.checked_add(outputs.checked_mul(34)?))
-        .and_then(|bytes| bytes.checked_add(10))
+        .checked_mul(P2PKH_INPUT_BYTES)
+        .and_then(|bytes| bytes.checked_add(outputs.checked_mul(P2PKH_OUTPUT_BYTES)?))
+        .and_then(|bytes| bytes.checked_add(TRANSACTION_OVERHEAD_BYTES))
         .ok_or_else(|| CliError::Usage("transaction size exceeds this platform".into()))
+}
+
+/// Serialized size of a signed transaction spending `inputs` P2PKH coins into
+/// exactly `outputs`.
+///
+/// [`estimate_size`] counts every output as a 34-byte P2PKH one, which a
+/// token output is not: its prefix is up to 84 bytes more. The inputs are the
+/// same worst case; the outputs are measured.
+pub fn estimate_size_for(inputs: usize, outputs: &[Output]) -> Result<usize> {
+    let too_large = || CliError::Usage("transaction size exceeds this platform".into());
+    let outputs_size = outputs
+        .iter()
+        .try_fold(0usize, |sum, output| {
+            sum.checked_add(output.serialized_size())
+        })
+        .ok_or_else(too_large)?;
+    inputs
+        .checked_mul(P2PKH_INPUT_BYTES)
+        .and_then(|bytes| bytes.checked_add(outputs_size))
+        .and_then(|bytes| bytes.checked_add(varint(inputs as u64).len()))
+        .and_then(|bytes| bytes.checked_add(varint(outputs.len() as u64).len()))
+        // Version and locktime.
+        .and_then(|bytes| bytes.checked_add(8))
+        .ok_or_else(too_large)
+}
+
+/// `available` in the order both selectors take coins: largest first. An
+/// outpoint listed twice is refused, since spending it twice is impossible
+/// and counting it twice overstates what can be paid.
+fn largest_first(available: &[Utxo]) -> Result<Vec<Utxo>> {
+    let mut outpoints = BTreeSet::new();
+    for utxo in available {
+        if !outpoints.insert((utxo.txid, utxo.vout)) {
+            return Err(CliError::Protocol("duplicate funding outpoint".into()));
+        }
+    }
+    let mut sorted = available.to_vec();
+    sorted.sort_by_key(|u| std::cmp::Reverse(u.value));
+    Ok(sorted)
 }
 
 /// Select UTXOs to cover `target` plus fee, largest first.
@@ -385,19 +494,10 @@ pub fn select_coins(
         Ok((needed, fee))
     };
     let (mut needed, mut fee) = cost(1)?;
-    let mut outpoints = BTreeSet::new();
-    for utxo in available {
-        if !outpoints.insert((utxo.txid, utxo.vout)) {
-            return Err(CliError::Protocol("duplicate funding outpoint".into()));
-        }
-    }
-    let mut sorted = available.to_vec();
-    sorted.sort_by_key(|u| std::cmp::Reverse(u.value));
-
     let mut chosen: Vec<Utxo> = Vec::new();
     let mut total: u64 = 0;
 
-    for utxo in sorted {
+    for utxo in largest_first(available)? {
         total = total
             .checked_add(utxo.value)
             .ok_or_else(|| CliError::Protocol("funding total exceeds the amount range".into()))?;
@@ -416,6 +516,108 @@ pub fn select_coins(
         fee,
         total
     )))
+}
+
+/// What a transaction already has before any coin is added to pay for it.
+#[derive(Debug, Clone, Copy)]
+pub struct Committed<'a> {
+    /// Inputs it must spend: a token send's token coins, or every coin the
+    /// holder picked by hand.
+    pub inputs: usize,
+    /// Their BCH, which pays first.
+    pub value: u64,
+    /// Outputs it must pay, token prefixes included.
+    pub outputs: &'a [Output],
+}
+
+/// How [`select_funding`] completed a transaction, or how far short it fell.
+#[derive(Debug, Clone)]
+pub enum Funding {
+    Paid {
+        /// Coins added from `available`, largest first. Empty when the
+        /// committed inputs already pay for everything.
+        chosen: Vec<Utxo>,
+        fee: u64,
+        /// BCH for the change output. Zero means none: what was left could
+        /// not clear the change output's dust threshold and went to the fee.
+        change: u64,
+    },
+    /// Every available coin together does not pay. `needed` is the committed
+    /// outputs plus the fee with all of them spent.
+    Short { needed: u64, available: u64 },
+}
+
+/// Add coins from `available`, largest first, until the committed outputs
+/// and the fee are paid -- the same order and duplicate rule as
+/// [`select_coins`], with the fee measured from the actual outputs (token
+/// prefixes included) at an exact rate rather than counted as P2PKH ones.
+///
+/// Change is decided here too, because whether there is a change output
+/// changes the fee: one is added only when what remains after paying for it
+/// clears its dust threshold. `change` is that output; its value is ignored.
+pub fn select_funding(
+    available: &[Utxo],
+    committed: Committed<'_>,
+    change: &Output,
+    fee_rate: FeeRate,
+) -> Result<Funding> {
+    let overflow = || CliError::Protocol("funding total exceeds the amount range".into());
+    let pays = committed
+        .outputs
+        .iter()
+        .try_fold(0u64, |sum, output| sum.checked_add(output.value))
+        .ok_or_else(overflow)?;
+    let with_change: Vec<Output> = committed
+        .outputs
+        .iter()
+        .cloned()
+        .chain(std::iter::once(Output {
+            value: 0,
+            ..change.clone()
+        }))
+        .collect();
+    let fee_for = |inputs: usize, outputs: &[Output]| -> Result<u64> {
+        Ok(fee_rate.fee_for_bytes(estimate_size_for(inputs, outputs)? as u64))
+    };
+    let change_dust = change.dust_threshold();
+
+    let mut coins = largest_first(available)?.into_iter();
+    let mut chosen = Vec::new();
+    let mut inputs = committed.inputs;
+    let mut value = committed.value;
+    loop {
+        let fee = fee_for(inputs, committed.outputs)?;
+        let needed = pays.checked_add(fee).ok_or_else(overflow)?;
+        if value >= needed {
+            let fee_with_change = fee_for(inputs, &with_change)?;
+            let change_value = value
+                .checked_sub(pays)
+                .and_then(|left| left.checked_sub(fee_with_change))
+                .filter(|left| *left >= change_dust);
+            return Ok(match change_value {
+                Some(change) => Funding::Paid {
+                    chosen,
+                    fee: fee_with_change,
+                    change,
+                },
+                // Below dust: the remainder is fee, not an output nobody relays.
+                None => Funding::Paid {
+                    chosen,
+                    fee: value - pays,
+                    change: 0,
+                },
+            });
+        }
+        let Some(coin) = coins.next() else {
+            return Ok(Funding::Short {
+                needed,
+                available: value,
+            });
+        };
+        value = value.checked_add(coin.value).ok_or_else(overflow)?;
+        inputs += 1;
+        chosen.push(coin);
+    }
 }
 
 /// One decoded output.
@@ -1076,6 +1278,205 @@ mod tests {
             ..huge.clone()
         };
         assert!(select_coins(&[huge, other], u64::MAX - 500, 1, 2).is_err());
+    }
+
+    fn p2pkh_script(fill: u8) -> Vec<u8> {
+        [vec![0x76, 0xa9, 0x14], vec![fill; 20], vec![0x88, 0xac]].concat()
+    }
+
+    fn token_output(value: u64, token: &TokenData) -> Output {
+        Output::with_tokens(value, p2pkh_script(5), token.encode_prefix().unwrap())
+    }
+
+    #[test]
+    fn output_sizes_and_dust_count_the_token_prefix() {
+        let plain = Output::new(1, p2pkh_script(1));
+        assert_eq!(plain.serialized_size(), P2PKH_OUTPUT_BYTES);
+        assert_eq!(plain.dust_threshold(), 546);
+
+        let fungible = token_output(1, &TokenData::fungible([3; 32], 252));
+        // 0xef, category, bitfield, one-byte amount: 35 bytes before the script.
+        assert_eq!(fungible.serialized_size(), 8 + 1 + 35 + 25);
+        assert_eq!(fungible.dust_threshold(), 3 * (69 + 148));
+
+        let largest = token_output(
+            1,
+            &TokenData {
+                category: [3; 32],
+                amount: crate::token::MAX_FUNGIBLE_AMOUNT,
+                nft: Some(crate::token::Nft {
+                    capability: crate::token::Capability::Minting,
+                    commitment: vec![0xcc; crate::token::MAX_COMMITMENT_BYTES],
+                }),
+            },
+        );
+        // 0xef, category, bitfield, commitment length, 40 bytes, 9-byte amount.
+        assert_eq!(largest.serialized_size(), 8 + 1 + 84 + 25);
+        assert!(largest.dust_threshold() < 1_000);
+    }
+
+    #[test]
+    fn measured_sizes_match_the_p2pkh_estimate_for_p2pkh_outputs() {
+        for (inputs, outputs) in [(0, 0), (1, 1), (1, 2), (7, 3), (252, 252)] {
+            let measured =
+                estimate_size_for(inputs, &vec![Output::new(1, p2pkh_script(2)); outputs]).unwrap();
+            assert_eq!(measured, estimate_size(inputs, outputs).unwrap());
+        }
+        let token = token_output(1_000, &TokenData::fungible([3; 32], 252));
+        assert_eq!(
+            estimate_size_for(2, &[token, Output::new(1, p2pkh_script(2))]).unwrap(),
+            estimate_size(2, 2).unwrap() + 35
+        );
+        // Counts past 252 take a three-byte CompactSize.
+        assert_eq!(
+            estimate_size_for(253, &[]).unwrap(),
+            253 * P2PKH_INPUT_BYTES + 3 + 1 + 8
+        );
+        assert!(estimate_size_for(usize::MAX, &[]).is_err());
+    }
+
+    fn coins(values: &[u64]) -> Vec<Utxo> {
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| Utxo {
+                vout: index as u32,
+                ..utxo(*value)
+            })
+            .collect()
+    }
+
+    fn paid(funding: Funding) -> (Vec<Utxo>, u64, u64) {
+        match funding {
+            Funding::Paid {
+                chosen,
+                fee,
+                change,
+            } => (chosen, fee, change),
+            Funding::Short { needed, available } => {
+                panic!("short: need {needed}, have {available}")
+            }
+        }
+    }
+
+    #[test]
+    fn funding_adds_coins_only_until_the_committed_outputs_and_fee_are_paid() {
+        let rate = FeeRate::from_satoshis_per_kb(1_000);
+        let token = token_output(1_000, &TokenData::fungible([3; 32], 50));
+        let outputs = [token.clone()];
+        let change = Output::new(0, p2pkh_script(9));
+        let committed = Committed {
+            inputs: 1,
+            value: 1_000,
+            outputs: &outputs,
+        };
+
+        // The token coin's own 1000 sats cannot pay for its output and a fee.
+        let (chosen, fee, change_sats) =
+            paid(select_funding(&coins(&[700, 50_000, 3_000]), committed, &change, rate).unwrap());
+        assert_eq!(chosen.len(), 1, "largest first, and only one");
+        assert_eq!(chosen[0].value, 50_000);
+        let size = estimate_size_for(2, &[token.clone(), change.clone()]).unwrap() as u64;
+        assert_eq!(fee, size);
+        assert_eq!(1_000 + 50_000, 1_000 + fee + change_sats);
+
+        // Committed coins that already pay take nothing more.
+        let rich = Committed {
+            value: 100_000,
+            ..committed
+        };
+        let (chosen, fee, change_sats) =
+            paid(select_funding(&coins(&[50_000]), rich, &change, rate).unwrap());
+        assert!(chosen.is_empty());
+        assert_eq!(100_000, 1_000 + fee + change_sats);
+
+        // A remainder below the change output's dust goes to the fee.
+        let base_fee = estimate_size_for(1, &outputs).unwrap() as u64;
+        let tight = Committed {
+            value: 1_000 + base_fee + 300,
+            ..committed
+        };
+        let (chosen, fee, change_sats) = paid(select_funding(&[], tight, &change, rate).unwrap());
+        assert!(chosen.is_empty());
+        assert_eq!(change_sats, 0);
+        assert_eq!(fee, base_fee + 300);
+
+        // Short reports what everything together would have needed.
+        match select_funding(&coins(&[200]), committed, &change, rate).unwrap() {
+            Funding::Short { needed, available } => {
+                assert_eq!(available, 1_200);
+                assert_eq!(
+                    needed,
+                    1_000 + estimate_size_for(2, &outputs).unwrap() as u64
+                );
+            }
+            Funding::Paid { .. } => panic!("200 sats cannot pay for a token output"),
+        }
+        let twice = [utxo(5_000), utxo(5_000)];
+        assert!(select_funding(&twice, committed, &change, rate).is_err());
+    }
+
+    #[test]
+    fn token_inputs_are_signed_over_the_prefix_of_the_coin_they_spend() {
+        let key = SigningKey::from_slice(&[0x22u8; 32]).unwrap();
+        let token = TokenData::fungible([4; 32], 1_234);
+        let transaction = Transaction::new(
+            vec![
+                utxo(1_000),
+                Utxo {
+                    vout: 1,
+                    ..utxo(9_000)
+                },
+            ],
+            vec![
+                token_output(1_000, &token),
+                Output::new(8_000, p2pkh_script(6)),
+            ],
+        );
+        let spent = [Some(token.clone()), None];
+        let prefixes = [token.encode_prefix().unwrap(), Vec::new()];
+        let (_, script_sigs) = transaction
+            .sign_with_spent_prefixes(&[key.clone(), key.clone()], &prefixes)
+            .unwrap();
+        let raw = transaction
+            .sign_spending_tokens(&[key.clone(), key.clone()], &spent)
+            .unwrap();
+        assert_eq!(raw, transaction.serialize(&script_sigs));
+
+        let pubkey = key.verifying_key().to_encoded_point(true);
+        let signature = |script_sig: &[u8]| script_sig[1..1 + usize::from(script_sig[0])].to_vec();
+        let digest = |index: usize, prefix: &[u8]| {
+            double_sha256(
+                &transaction
+                    .sighash_preimage_with_token(index, &[u32::MAX; 2], prefix)
+                    .unwrap(),
+            )
+        };
+        for (index, prefix) in prefixes.iter().enumerate() {
+            assert!(verified_p2pkh_script_sig(
+                pubkey.as_bytes(),
+                &signature(&script_sigs[index]),
+                &digest(index, prefix)
+            )
+            .is_ok());
+        }
+        // Signed as if it carried no tokens, the token input's signature
+        // commits to a different preimage and fails.
+        let (_, blind) = transaction.sign_detailed(&[key.clone(), key]).unwrap();
+        assert!(verified_p2pkh_script_sig(
+            pubkey.as_bytes(),
+            &signature(&blind[0]),
+            &digest(0, &prefixes[0])
+        )
+        .is_err());
+        assert_eq!(
+            blind[1], script_sigs[1],
+            "a plain input signs the same either way"
+        );
+        assert!(transaction.sign_spending_tokens(&[], &spent).is_err());
+        assert!(transaction
+            .sign_spending_tokens(&[SigningKey::from_slice(&[1; 32]).unwrap()], &spent[..1])
+            .is_err());
     }
 
     #[test]
