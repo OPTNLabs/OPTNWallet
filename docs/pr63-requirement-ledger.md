@@ -2316,3 +2316,37 @@ is the hello a round already fetched, now also callable on its own.
 Test: for 1 to 6 keys at 5,000 to 400,000 sats each, whenever "never" is
 claimed, forty different draws all fail to fund a tier; one 60,000 coin is
 never affordable and two at two addresses are not.
+
+### 2026-10-10: one Rust Nostr layer for P2P CashFusion and chat
+
+#83. P2P CashFusion and chat reach Nostr only from the desktop renderer,
+through nostr-tools, so the CLI and the docker runner cannot take part in a
+P2P round, and every relay decision lives in TypeScript. `crates/optn-nostr`
+is the Rust side both will use:
+
+- `Relays` reaches a set of relays through `RelayRoute::Tor(socks)` (remote
+  relays through the holder's verified Tor proxy, relays on this machine
+  directly) or `RelayRoute::LocalOnly`, which refuses a remote relay rather
+  than reach it without Tor. Publishing succeeds when at least one relay
+  accepts and reports the rest; subscriptions stream each event once.
+- `nip17::wrap` / `nip17::unwrap`: NIP-17 private messages (kind-14 rumor,
+  sealed and gift-wrapped per NIP-59). Opening verifies the outer event and
+  the seal, accepts only a kind-14 rumor, and refuses a rumor whose author is
+  not the key that sealed it.
+
+Built on rust-nostr's maintained 0.45 line (`nostr` 0.45.5, `nostr-sdk`
+0.45.4). The research behind the choice: the "unmaintained" notice on
+`nostr-relay-pool` (RUSTSEC-2026-0243) means it moved into `nostr-sdk` 0.45;
+0.44.0-0.44.4 are yanked over 2026 advisories (signature cache, NIP-44 and
+NIP-04 parsing, credentials in debug output) that 0.44.5+ and 0.45 fix. MDK
+(Marmot's Rust MLS kit) stopped publishing a library after `mdk-core` 0.8.0
+and pins git forks of openmls and rust-nostr, which `deny.toml` refuses, so
+the chat port will use `mdk-core` 0.8.0 from crates.io and bridge events to
+0.45 as JSON.
+
+Tests: a local relay carries a published event to a subscriber; remote
+relays are refused without Tor; an unreachable relay is reported; NIP-17
+wraps open only for their receiver and refuse tampering and non-message
+rumors. Interop: `test-vectors/nostr-nip17-interop.json` holds one wrap made
+by nostr-tools and one by rust-nostr; Rust opens both, and a vitest beside
+the TypeScript transport opens both with nostr-tools. cargo-deny passes.
