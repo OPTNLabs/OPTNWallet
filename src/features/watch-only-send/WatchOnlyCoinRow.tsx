@@ -3,8 +3,9 @@
 // Presentation only. What the coin carries and whether a BCH send may take it
 // arrive from Rust as a CoinControlLabel; this renders that and decides
 // nothing. A token coin is shown by what it carries -- ticker or name, amount,
-// category -- and is kept out of the selection, because a BCH send has no
-// token output for it and would destroy its tokens.
+// category -- and is kept out of a BCH send's selection, because a BCH send
+// has no token output for it and would destroy its tokens. A token send may
+// take it: Rust then gives every token it carries an output.
 import type { ReactNode } from 'react';
 
 import { useI18n } from '../../i18n/useI18n';
@@ -22,6 +23,11 @@ export type WatchOnlyCoinRowProps = {
   testId: string;
   /** Extra detail under the row, such as an NFT card. */
   children?: ReactNode;
+  /**
+   * The send moves tokens, so a token coin may be picked: its tokens go to
+   * the recipient or back to the wallet, as the Rust plan says.
+   */
+  tokenSend?: boolean;
 };
 
 export function WatchOnlyCoinRow({
@@ -32,12 +38,13 @@ export function WatchOnlyCoinRow({
   onToggle,
   testId,
   children,
+  tokenSend = false,
 }: WatchOnlyCoinRowProps) {
   const { t } = useI18n();
   const tokens = label && label.kind !== 'bch' ? label : null;
   const refusal = label?.bch_send_refusal ?? null;
   // A coin selected before (a restored proposal) can still be deselected.
-  const locked = refusal !== null && !checked;
+  const locked = !tokenSend && refusal !== null && !checked;
   const badge =
     tokens?.kind === 'fungible'
       ? t('utxo.ft')

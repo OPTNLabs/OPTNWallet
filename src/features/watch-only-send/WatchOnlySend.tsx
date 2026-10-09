@@ -78,6 +78,23 @@ import {
   type CoinControlLabel,
 } from '../../services/psbt/coinControlLabels';
 import { WatchOnlyCoinRow } from './WatchOnlyCoinRow';
+import { TokenSendPanel } from './TokenSendPanel';
+import {
+  assetKey,
+  formatTokenUnits,
+  tokenPaymentFor,
+  type TokenAsset,
+} from './tokenAssets';
+import {
+  buildTokenSend,
+  finalizeTokenSend,
+  planParentTxids,
+  planTokenSend,
+  type TokenPayment,
+  type TokenSendCoin,
+  type TokenSpendPlan,
+  type TokenSpendReview,
+} from '../../services/psbt/tokenSend';
 import { getBchAccountPath } from '../../services/HdWalletService';
 import {
   inspectImportedPsbt,
@@ -440,6 +457,16 @@ type ProposalState = {
   feeSats: bigint;
   changeSats: bigint;
   inputSumSats: bigint;
+  /**
+   * A token send: Rust planned it and built its PSBT, and Rust verifies the
+   * signed return against those exact bytes (token-aware signatures).
+   */
+  tokenSend?: {
+    plan: TokenSpendPlan;
+    review: TokenSpendReview;
+    /** What the recipient gets, for the review and the activity record. */
+    summary: string;
+  };
 };
 
 export const WatchOnlySend: FC<WatchOnlySendProps> = ({
@@ -490,6 +517,10 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   const [amountSats, setAmountSats] = useState<bigint | null>(null);
   const [amountText, setAmountText] = useState('');
   const [changeAddress, setChangeAddress] = useState('');
+  /** Which token the send pays (null: BCH), and how much of it. */
+  const [tokenAssetKey, setTokenAssetKey] = useState<string | null>(null);
+  const [tokenAmountText, setTokenAmountText] = useState('');
+  const [tokenSendAll, setTokenSendAll] = useState(false);
   const [changeAddressIndex, setChangeAddressIndex] = useState(0);
   const [inputs, setInputs] = useState<SpendableInput[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -548,6 +579,32 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const verdict = useMemo<ReturnType<typeof inspectImportedPsbt> | null>(() => {
     if (!mergedPsbt || !proposalState) return null;
+    if (proposalState.tokenSend) {
+      // Token inputs sign over their token prefixes; Rust checks every
+      // signature against the approved bytes and assembles the transaction.
+      const total = proposalState.proposal.inputs.length;
+      try {
+        return {
+          state: 'complete' as const,
+          signedInputCount: total,
+          totalInputCount: total,
+          rawTxHex: finalizeTokenSend(
+            proposalState.psbtBytes,
+            mergedPsbt,
+            currentNetwork
+          ),
+        };
+      } catch (cause) {
+        return {
+          state: 'rejected' as const,
+          reason: `The signed return was not accepted: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+          signedInputCount: 0,
+          totalInputCount: total,
+        };
+      }
+    }
     const inspected = inspectImportedPsbt(mergedPsbt, proposalState.proposal);
     if (inspected.state !== 'complete') return inspected;
     try {
@@ -568,7 +625,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
             : 'Signatures are present, but final transaction assembly failed.',
       };
     }
-  }, [mergedPsbt, proposalState]);
+  }, [mergedPsbt, proposalState, currentNetwork]);
   const [broadcastTxid, setBroadcastTxid] = useState('');
   const [broadcastState, setBroadcastState] =
     useState<BroadcastState>('broadcasted');
@@ -691,6 +748,71 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
       ).map((card) => [card.outpoint, card])
     );
   }, [inputs, tokenMetadata, currentNetwork]);
+
+  // The tokens this wallet can send: each fungible category with its total,
+  // and each NFT. Token PSBTs are single-signer P2PKH, so a multisig wallet
+  // offers none.
+  const tokenAssets = useMemo<TokenAsset[]>(() => {
+    if (multisigPolicy) return [];
+    const totals = new Map<string, bigint>();
+    const nfts: TokenAsset[] = [];
+    for (const input of inputs) {
+      const token = input.utxo.token;
+      if (!token?.category) continue;
+      const key = `${input.txid}:${input.vout}`;
+      const label = coinLabels.get(key);
+      const units = BigInt(token.amount ?? 0);
+      if (units > 0n) {
+        totals.set(token.category, (totals.get(token.category) ?? 0n) + units);
+      }
+      if (token.nft) {
+        nfts.push({
+          kind: 'nft',
+          outpoint: key,
+          category: token.category,
+          title:
+            nftCardsByOutpoint.get(key)?.primaryLabel ??
+            label?.name ??
+            label?.title ??
+            token.category.slice(0, 8),
+          categoryShort: label?.category_short ?? token.category.slice(0, 8),
+          capability: String(token.nft.capability ?? 'none'),
+          commitment: token.nft.commitment ?? '',
+        });
+      }
+    }
+    const fungible: TokenAsset[] = [...totals].map(([category, total]) => {
+      const metadata = tokenMetadata[category.trim().toLowerCase()];
+      const sample = inputs.find(
+        (input) => input.utxo.token?.category === category
+      );
+      const label = sample
+        ? coinLabels.get(`${sample.txid}:${sample.vout}`)
+        : undefined;
+      return {
+        kind: 'fungible',
+        category,
+        title:
+          metadata?.symbol ||
+          metadata?.name ||
+          label?.name ||
+          label?.category_short ||
+          category.slice(0, 8),
+        categoryShort: label?.category_short ?? category.slice(0, 8),
+        decimals: metadata?.decimals ?? 0,
+        total,
+      };
+    });
+    return [...fungible, ...nfts];
+  }, [inputs, coinLabels, nftCardsByOutpoint, tokenMetadata, multisigPolicy]);
+  const selectedTokenAsset = tokenAssets.find(
+    (asset) => assetKey(asset) === tokenAssetKey
+  );
+  const tokenPayment = tokenPaymentFor(
+    selectedTokenAsset,
+    tokenAmountText,
+    tokenSendAll
+  );
 
   /**
    * Per-input cosigner signature status, read entirely from the accumulated
@@ -1156,6 +1278,10 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     setBroadcastTxid('');
     setBroadcastState('broadcasted');
     setBroadcastArmed(false);
+    if (tokenPayment) {
+      await handleTokenBuild(tokenPayment);
+      return;
+    }
     if (selectedInputs.length === 0) {
       setError('Select at least one coin (coin control).');
       return;
@@ -1259,6 +1385,120 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   };
 
   /**
+   * Build a token send. Rust picks the coins (or takes exactly the ones the
+   * holder ticked), places every token, sets the fee and refuses anything that
+   * would burn a token; it then builds the PSBT from complete parents and
+   * reviews those bytes. This only gathers the wallet's coins and parents.
+   */
+  const handleTokenBuild = async (payment: TokenPayment) => {
+    if (!recipient.trim()) {
+      setError('Enter the destination address.');
+      return;
+    }
+    {
+      const { recipientNetworkError } = await import('../../utils/bip21');
+      const netErr = recipientNetworkError(recipient.trim(), currentNetwork);
+      if (netErr) {
+        setError(netErr);
+        return;
+      }
+    }
+    if (payment.kind === 'fungible' && !payment.amount.trim()) {
+      setError('Enter the token amount, or choose Send all.');
+      return;
+    }
+    if (!changeAddress) {
+      setError(
+        'No change address available. Add more change addresses to the wallet.'
+      );
+      return;
+    }
+    const coins: TokenSendCoin[] = inputs.map((input) => ({
+      outpoint: `${input.txid}:${input.vout}`,
+      utxo: input.utxo,
+      satoshis: input.satoshis,
+      publicKeyHex: input.publicKeyHex,
+      branchIndex: input.branchIndex,
+      addressIndex: input.addressIndex,
+    }));
+    const request = {
+      network: currentNetwork,
+      coins,
+      payment,
+      chosen:
+        selectedInputs.length > 0
+          ? selectedInputs.map((input) => `${input.txid}:${input.vout}`)
+          : undefined,
+      destination: recipient.trim(),
+      change: changeAddress,
+      feeSatsPerKb: BigInt(Math.ceil((feeRateSatPerByte ?? 1) * 1000)),
+    };
+    try {
+      setBusy(true);
+      const planned = planTokenSend(request);
+      // The signer needs the whole parent of every input it signs.
+      const parents = await fetchParentTransactions(planParentTxids(planned));
+      const built = buildTokenSend(
+        request,
+        accountPath,
+        fingerprint || null,
+        parents
+      );
+      const planInputs = built.plan.inputs.map((plannedInput) => {
+        const input = inputs.find(
+          (candidate) =>
+            `${candidate.txid}:${candidate.vout}` === plannedInput.outpoint
+        );
+        if (!input) {
+          throw new Error(
+            `The plan spends an unknown coin ${plannedInput.outpoint}.`
+          );
+        }
+        return { ...input, previousTransactionHex: parents.get(input.txid) };
+      });
+      const recipientOutput = built.plan.outputs.find(
+        (output) => output.role === 'recipient'
+      );
+      const asset = selectedTokenAsset;
+      const summary =
+        payment.kind === 'nft'
+          ? `NFT ${asset?.title ?? ''}`.trim()
+          : `${formatTokenUnits(
+              BigInt(recipientOutput?.token?.amount ?? '0'),
+              asset?.kind === 'fungible' ? asset.decimals : 0
+            )} ${asset?.title ?? 'tokens'}`;
+      setProposalState({
+        psbtBytes: built.psbtBytes,
+        proposal: {
+          rawUnsignedHex: binToHex(
+            decodePsbt(built.psbtBytes).unsignedTransaction
+          ),
+          inputs: planInputs,
+          outputs: [],
+          sighashType: SIGHASH_ALL_FORKID,
+        },
+        feeRateSatPerByte,
+        feeSats: BigInt(built.plan.fee_sats),
+        changeSats: built.plan.outputs
+          .filter((output) => output.role === 'change')
+          .reduce((sum, output) => sum + BigInt(output.sats), 0n),
+        inputSumSats: planInputs.reduce(
+          (sum, input) => sum + input.satoshis,
+          0n
+        ),
+        tokenSend: { plan: built.plan, review: built.review, summary },
+      });
+      startQrFrames(built.psbtBytes, urFragmentLength);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Could not build the token send.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
    * Merge one returned PSBT into the accumulated one. The merge binds the
    * return to the approved unsigned transaction, verifies every signature it
    * carries, and imports only what is valid — so repeated trips (2-of-3
@@ -1272,6 +1512,13 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     setBroadcastArmed(false);
     if (!proposalState) {
       setError('Build the unsigned transaction first.');
+      return;
+    }
+    if (proposalState.tokenSend) {
+      // One signer: Rust verifies this return against the approved bytes.
+      setMergedPsbt(psbt);
+      setImportText('');
+      setImportErrors([]);
       return;
     }
     setBusy(true);
@@ -1557,7 +1804,8 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
             ? 'Mobile multisig send'
             : 'Watch-only send (air-gapped)',
           recipientSummary: recipient.trim(),
-          amountSummary: satsToBch(amountSats ?? 0n),
+          amountSummary:
+            proposalState.tokenSend?.summary ?? satsToBch(amountSats ?? 0n),
         }
       );
       if (res.errorMessage) {
@@ -1782,15 +2030,40 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 space-y-1">
                       <p className="text-sm font-semibold wallet-text-strong">
-                        Sending {amountText || '0'} BCH
+                        Sending{' '}
+                        {proposalState.tokenSend?.summary ??
+                          `${amountText || '0'} BCH`}
                       </p>
                       <p className="break-all text-[11px] wallet-muted">
                         to {recipient}
                       </p>
+                      {proposalState.tokenSend && (
+                        <ul
+                          className="space-y-0.5 text-[11px] wallet-muted"
+                          data-testid="watch-only-token-review"
+                        >
+                          {/* Rust's review of the exact PSBT bytes: every
+                              category in equals what comes out. */}
+                          {proposalState.tokenSend.review.categories.map(
+                            (category) => (
+                              <li key={category.category}>
+                                {category.category.slice(0, 8)}…: in{' '}
+                                {category.input_fungible}, out{' '}
+                                {category.output_fungible}
+                                {category.burned_fungible === '0'
+                                  ? ', nothing burned'
+                                  : `, BURNS ${category.burned_fungible}`}
+                              </li>
+                            )
+                          )}
+                        </ul>
+                      )}
                       <p className="text-[11px] wallet-muted">
-                        {selectedInputs.length} coin
-                        {selectedInputs.length === 1 ? '' : 's'} · fee{' '}
-                        {satsToBch(proposalState.feeSats)} BCH · change{' '}
+                        {proposalState.proposal.inputs.length} coin
+                        {proposalState.proposal.inputs.length === 1
+                          ? ''
+                          : 's'}{' '}
+                        · fee {satsToBch(proposalState.feeSats)} BCH · change{' '}
                         {satsToBch(proposalState.changeSats)} BCH
                         {multisigPolicy ? ` · ${feePolicyLabel}` : ''}
                       </p>
@@ -1852,6 +2125,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                           label={coinLabels.get(key) ?? null}
                           checked={checked}
                           onToggle={() => toggleInput(key)}
+                          tokenSend={tokenPayment !== null}
                           detail={
                             <>
                               {satsToBch(input.satoshis)} BCH ·{' '}
@@ -1920,17 +2194,37 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                     className="wallet-input w-full rounded-md px-3 py-2 font-mono text-xs"
                   />
                 </label>
-                <label className="block space-y-1 text-sm wallet-text-strong">
-                  Amount (BCH)
-                  <input
-                    value={amountText}
-                    onChange={(event) => handleAmountChange(event.target.value)}
-                    placeholder="0.001"
-                    inputMode="decimal"
-                    autoComplete="off"
-                    className="wallet-input w-full rounded-md px-3 py-2"
+                {tokenAssets.length > 0 && (
+                  <TokenSendPanel
+                    assets={tokenAssets}
+                    selectedKey={tokenAssetKey}
+                    onSelect={(key) => {
+                      setTokenAssetKey(key);
+                      setTokenAmountText('');
+                      setTokenSendAll(false);
+                    }}
+                    amountText={tokenAmountText}
+                    onAmountChange={setTokenAmountText}
+                    sendAll={tokenSendAll}
+                    onSendAllChange={setTokenSendAll}
+                    disabled={busy}
                   />
-                </label>
+                )}
+                {tokenPayment === null && (
+                  <label className="block space-y-1 text-sm wallet-text-strong">
+                    Amount (BCH)
+                    <input
+                      value={amountText}
+                      onChange={(event) =>
+                        handleAmountChange(event.target.value)
+                      }
+                      placeholder="0.001"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      className="wallet-input w-full rounded-md px-3 py-2"
+                    />
+                  </label>
+                )}
                 {/*
                   Fee is a first-class control, not an advanced one. An
                   air-gapped send is expensive in effort -- build, show, scan,

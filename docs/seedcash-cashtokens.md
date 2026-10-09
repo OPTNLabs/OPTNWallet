@@ -94,9 +94,18 @@ account `m/44'/145'/0'`. This account is explicit despite the Chipnet test scope
   disagrees with the plan about a coin's value, script or tokens refuses the
   PSBT; the PSBT is then reviewed with `psbt::review_p2pkh`, and must say exactly
   what the plan says. WASM: `planTokenSpend`, `tokenSpendPsbt`.
-- Not yet: the SeedCash send screen's token mode on top of these, and the CLI's
-  `token-send` / `send-nft` moved onto the same planner. The hot wallet's
-  Simple Send moves onto it with the PR #63 Rust migration.
+- The watch-only (SeedCash) send screen has a "What to send" choice: BCH, a
+  fungible category (an amount typed with the token's decimals, or every unit),
+  or one NFT. Rust plans the send (`planTokenSpend`), builds the PSBT from the
+  complete parents (`tokenSpendPsbt`) and the screen shows Rust's review of
+  those bytes per category (in, out, nothing burned). Ticked coins are coin
+  control; token coins may be ticked for a token send. SeedCash's signed return
+  is verified and assembled by `psbtFinalizeCashTokensP2pkh` against the
+  approved bytes, not by the BCH-only TypeScript path. Single-signer P2PKH
+  wallets only; multisig wallets keep BCH sends.
+- Not yet: the CLI's `token-send` / `send-nft` on the same planner (the hot
+  wallet's Simple Send moves onto it with the PR #63 Rust migration), and
+  evidence of what a physical SeedCash shows for a token PSBT.
 
 These APIs do not prove parent chain inclusion/unspentness or authorize a spend.
 The GUI token selection/approval flow is not enabled by this patch. A caller must
