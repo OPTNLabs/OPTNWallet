@@ -1795,3 +1795,20 @@ desktop's status probe.
 caller can leave it out, and the round sends it. The desktop passes the
 runtime network's genesis to the round and to the status probe. The mock
 server in both full-round tests now refuses a ClientHello without the chain.
+
+### 2026-10-09: a busy Tor is still the trusted Tor
+
+Found in the live ten-wallet fleet run: Auto halted on some wallets with
+"a verified Tor proxy is required for every remote endpoint" or "Tor is not
+reachable", and a P2P coordinator stayed at "verification pending" for a
+transaction already on chain. Tor was up and trusted (port 9050); its SOCKS
+greeting answered in 1.4 s under the load of ten wallets, and both probes
+(`optn-fusion` and `optn-chain-native`) gave up at 1.5 s, demoting the
+trusted Tor to "unverified".
+
+The probe's timeout and SOCKS5 greeting now live once in `optn_core::tor`
+(`SOCKS_PROBE_TIMEOUT` = 5 s, `SOCKS5_NO_AUTH_GREETING`,
+`SOCKS5_NO_AUTH_ACCEPTED`) and both probes use them. A port with nothing
+listening still refuses at once. Test: a trusted SOCKS port that answers
+after 2 s is verified. The fleet run's rounds are recorded in this PR's
+description.

@@ -242,7 +242,6 @@ const REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE: &str =
 const REMOTE_FULL_NODE_LOCAL_ONLY: &str =
     "remote full-node RPC and ZMQ are unavailable; only a node on this machine is used";
 const DEFAULT_TOR_HOST: &str = "127.0.0.1";
-const TOR_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
 fn selected_source_ids(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> BTreeSet<SourceId> {
     let selection = build_selection_plan(catalog, policy);
@@ -464,13 +463,16 @@ pub fn requires_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) ->
 async fn socks_answers(host: &str, port: u16) -> bool {
     let probe = async {
         let mut stream = TcpStream::connect((host, port)).await.ok()?;
-        stream.write_all(&[0x05, 0x01, 0x00]).await.ok()?;
+        stream
+            .write_all(&optn_core::tor::SOCKS5_NO_AUTH_GREETING)
+            .await
+            .ok()?;
         let mut response = [0u8; 2];
         stream.read_exact(&mut response).await.ok()?;
-        Some(response == [0x05, 0x00])
+        Some(response == optn_core::tor::SOCKS5_NO_AUTH_ACCEPTED)
     };
     matches!(
-        tokio::time::timeout(TOR_PROBE_TIMEOUT, probe).await,
+        tokio::time::timeout(optn_core::tor::SOCKS_PROBE_TIMEOUT, probe).await,
         Ok(Some(true))
     )
 }
@@ -1857,6 +1859,35 @@ mod tests {
             optn_chain_bip37::genesis_hash("chipnet")
         );
         assert_eq!(local.request_timeout, FUSION_LOOKUP_TIMEOUT);
+    }
+
+    /// A busy Tor answers its SOCKS greeting late. A trusted port that takes
+    /// two seconds is still verified, not demoted to "unverified".
+    #[tokio::test]
+    async fn a_slow_trusted_tor_is_still_verified() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut greeting = [0u8; 3];
+                    if stream.read_exact(&mut greeting).await.is_ok()
+                        && greeting == optn_core::tor::SOCKS5_NO_AUTH_GREETING
+                    {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        let _ = stream
+                            .write_all(&optn_core::tor::SOCKS5_NO_AUTH_ACCEPTED)
+                            .await;
+                    }
+                });
+            }
+        });
+        let status = tor_status_from_trust(TorProxyTrust {
+            managed: &[],
+            trusted: &[port],
+        })
+        .await;
+        assert_eq!(status, TorStatus::Verified { socks_port: port });
     }
 
     #[tokio::test]
