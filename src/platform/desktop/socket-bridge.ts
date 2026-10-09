@@ -7,7 +7,7 @@
 // switch: through verified Tor when Tor is on, or not at all; directly when it
 // is off. P2P CashFusion still arms its own Tor-only socket on top of this.
 //
-// Plain `ws://` to loopback (a local dev server) keeps the webview's socket.
+// A plain `ws` URL to loopback (a local dev server) keeps the webview's socket.
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';

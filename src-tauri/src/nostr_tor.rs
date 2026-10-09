@@ -83,7 +83,7 @@ fn event_key(chosen: Option<String>, id: u32) -> Result<String, String> {
 
 /// A relay URL, parsed properly: `(host, port, tls, normalized URL)`.
 ///
-/// `wss://` reaches any host; plain `ws://` only loopback. The host comes
+/// A `wss` URL reaches any host; a plain `ws` one only loopback. The host comes
 /// without brackets and without anything after it, so a URL whose query
 /// follows the host directly (`wss://relay.example?auth=...`, which is how
 /// WalletConnect builds its relay URL) still names the right host. The
@@ -93,7 +93,7 @@ fn parse_ws(url: &str) -> Result<(String, u16, bool, String), String> {
     let tls = match parsed.scheme() {
         "wss" => true,
         "ws" => false,
-        _ => return Err(format!("only ws:// and wss:// URLs are supported: {url}")),
+        _ => return Err(format!("only WebSocket URLs (ws or wss) are supported: {url}")),
     };
     if !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some() {
         return Err(format!(
@@ -111,7 +111,7 @@ fn parse_ws(url: &str) -> Result<(String, u16, bool, String), String> {
         .ok_or_else(|| format!("relay URL has no port: {url}"))?;
     if !tls && !optn_core::endpoint::is_loopback_host(&host) {
         return Err(format!(
-            "plaintext ws:// is allowed only on this machine: {url}"
+            "a plaintext WebSocket (ws) is allowed only on this machine: {url}"
         ));
     }
     Ok((host, port, tls, parsed.to_string()))
@@ -176,7 +176,7 @@ pub async fn nostr_tor_open(
 /// same `nostr_tor_send` / `nostr_tor_close` as the Fusion relay socket, whose
 /// own command stays Tor-only.
 ///
-/// `wss://` reaches any host; plain `ws://` only loopback. A relay named by a
+/// A `wss` URL reaches any host; a plain `ws` one only loopback. A relay named by a
 /// dApp or a peer must not aim a direct connection at the holder's network.
 ///
 /// `network` is the requesting window's (see `egress::networks_for`), and
@@ -709,6 +709,7 @@ mod tests {
         let (host, port, tls, _) = parse_ws("ws://127.0.0.1:8080?x=1").unwrap();
         assert_eq!((host.as_str(), port, tls), ("127.0.0.1", 8080, false));
         for refused in [
+            // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- a JavaScript rule on Rust; this test asserts remote ws:// is refused
             "ws://relay.example.org/",
             "wss://user@relay.example.org/",
             "wss://relay.example.org/#frag",
