@@ -24,9 +24,9 @@ use std::sync::{
 };
 
 #[derive(Clone, Default)]
-struct Checkpoints {
+pub(crate) struct Checkpoints {
     store: TestCheckpoints,
-    fail: Arc<AtomicBool>,
+    pub(crate) fail: Arc<AtomicBool>,
 }
 impl WalletCheckpointStorage for Checkpoints {
     fn load(
@@ -59,7 +59,7 @@ fn start(storage: Storage, checkpoints: Checkpoints) -> AppRuntime {
 fn secret(s: &str) -> optn_app::SecretText {
     optn_app::SecretText::new(s.into())
 }
-async fn fixture() -> (AppRuntime, Storage, Checkpoints, String) {
+pub(crate) async fn fixture() -> (AppRuntime, Storage, Checkpoints, String) {
     let storage = Storage::default();
     let checkpoints = Checkpoints::default();
     let runtime = start(storage.clone(), checkpoints.clone());
@@ -92,7 +92,10 @@ fn intent(id: &str) -> PaymentIntent {
         max_fee_sats: 1_000,
     }
 }
-async fn prepare(runtime: &AppRuntime, id: &str) -> Result<PaymentRecord, TransportError> {
+pub(crate) async fn prepare(
+    runtime: &AppRuntime,
+    id: &str,
+) -> Result<PaymentRecord, TransportError> {
     runtime
         .external_payment(PaymentOperation::Prepare {
             intent: intent(id),
@@ -122,7 +125,7 @@ fn fixture_parent(state: &AppState) -> Vec<u8> {
         .unwrap()
 }
 
-async fn sync_fixture(runtime: &AppRuntime) {
+pub(crate) async fn sync_fixture(runtime: &AppRuntime) {
     let state = runtime.state();
     let xpub = state.wallet.as_ref().unwrap().account_xpub.clone().unwrap();
     let (reply, received) = oneshot::channel();

@@ -30,6 +30,7 @@ pub mod events;
 /// Explorer routing is deliberately separate from wallet consensus/state.
 pub mod explorer;
 pub mod external_payment;
+pub mod fusion_contribution;
 /// Public-key HD account discovery over the shared chain service.
 pub mod hd_sync;
 pub mod header_recovery;
@@ -218,6 +219,11 @@ enum RuntimeRequest {
         external_payment::PaymentOperation,
         Box<WalletOperationGuard>,
         oneshot::Sender<Result<optn_core::payment::PaymentRecord, TransportError>>,
+    ),
+    FusionContribution(
+        fusion_contribution::FusionContributionRequest,
+        Box<WalletOperationGuard>,
+        oneshot::Sender<Result<fusion_contribution::FusionContribution, TransportError>>,
     ),
     Airgap(
         optn_transport::AirgapRequest,
@@ -595,6 +601,9 @@ impl AppRuntimeDriver {
             match request {
                 RuntimeRequest::ExternalPayment(operation, generation, reply) => {
                     self.handle_external_payment(operation, generation, reply);
+                }
+                RuntimeRequest::FusionContribution(request, generation, reply) => {
+                    self.handle_fusion_contribution(request, generation, reply);
                 }
                 RuntimeRequest::Airgap(request, generation, reply) => {
                     self.handle_airgap(request, generation, reply);

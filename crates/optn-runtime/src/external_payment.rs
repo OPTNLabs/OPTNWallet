@@ -393,4 +393,4 @@ fn import_native(
 
 #[cfg(test)]
 #[path = "external_payment_tests.rs"]
-mod tests;
+pub(crate) mod tests;

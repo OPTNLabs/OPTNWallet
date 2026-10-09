@@ -1951,3 +1951,26 @@ Tests: 11 Rust tests port the TypeScript ones and add the stored-form,
 merge and import cases. The desktop tests now run the real book through
 WASM, including an upgrade read of the old stored forms and a cold
 export/import round trip.
+
+### 2026-10-09: the runtime prepares a fusion round's contribution
+
+A round needs each offered coin's signing key and fresh output scripts. On
+the desktop both came from the renderer's key database; the CLI and the
+docker runner had no source for either that respected the wallet's guards.
+
+`AppRuntime::prepare_fusion_contribution` is that source, beside
+`external_payment` and under the same guards: a durable session, fresh
+coins, the synchronized HD account, no legacy reservations, and Background
+authorization (Auto Fusion never prompts; a prompt mid-round would kill the
+round). Each requested coin must be an ordinary HD coin of this wallet,
+unheld, offered once. The outputs are change addresses, as Electron Cash's
+`reserve_change_addresses` does, reserved through the durable HD allocation
+and saved before any script leaves the runtime, so a round that fails after
+disclosing them never reuses them. A failed save reserves nothing and, as
+with a payment, asks for the wallet to be reopened. Private keys are
+zeroized on drop and never printed.
+
+Tests: keys match the coin's own derivation; three outputs advance the
+change counter by three and nothing else; a second round gets different
+outputs; foreign, duplicate, held and out-of-range requests are refused; a
+failed save reserves nothing, and the same request succeeds after a reopen.
