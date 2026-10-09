@@ -96,6 +96,10 @@ pub struct FusionRunParams<'a> {
     pub inputs: Vec<FusionInputKey>,
     /// Persisted fresh P2PKH scripts sized for the largest feasible tier plan.
     pub output_scripts: Vec<Vec<u8>>,
+    /// The round's chain: its genesis hash in internal byte order, declared in
+    /// ClientHello as Electron Cash does (`comms.get_current_genesis_hash`), so
+    /// a server on another chain refuses the round at once.
+    pub genesis_hash: [u8; 32],
     /// Route for the user-selected main Fusion server.
     pub main_transport: Transport<'a>,
     /// Positively verified Tor route for any remote server-provided endpoint.
@@ -666,6 +670,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         tier_plans,
         inputs,
         output_scripts: all_output_scripts,
+        genesis_hash,
         main_transport,
         remote_transport,
         lookups,
@@ -690,7 +695,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let hello = pb::ClientMessage {
         msg: Some(pb::client_message::Msg::Clienthello(pb::ClientHello {
             version: VERSION.to_vec(),
-            genesis_hash: None,
+            genesis_hash: Some(genesis_hash.to_vec()),
         })),
     };
     cancellable(&cancel, send_frame(&mut main, &hello.encode_to_vec())).await?;
@@ -1457,6 +1462,12 @@ mod tests {
         ));
     }
 
+    /// The chain the mock server runs: chipnet's genesis, internal order.
+    const TEST_GENESIS: [u8; 32] = [
+        0x7b, 0x9f, 0xfd, 0x44, 0xdd, 0x73, 0xc0, 0x5f, 0x2a, 0x15, 0xd3, 0x74, 0x74, 0x79, 0xcc,
+        0x18, 0x17, 0x75, 0x26, 0xce, 0x68, 0x86, 0x78, 0x9a, 0xc4, 0x10, 0xd4, 0x1d, 0, 0, 0, 0,
+    ];
+
     fn test_input_key(
         prev_txid: u8,
         prev_index: u32,
@@ -1797,8 +1808,14 @@ mod tests {
 
         let (mut main, _) = main_listener.accept().await.map_err(|e| e.to_string())?;
 
-        // ClientHello -> ServerHello
-        let _ = recv_frame(&mut main).await?;
+        // ClientHello -> ServerHello. The round declares its chain.
+        let hello = pb::ClientMessage::decode(recv_frame(&mut main).await?.as_slice())
+            .map_err(|error| format!("decode ClientHello: {error}"))?;
+        match hello.msg {
+            Some(pb::client_message::Msg::Clienthello(hello))
+                if hello.genesis_hash.as_deref() == Some(&TEST_GENESIS[..]) => {}
+            other => return Err(format!("ClientHello did not declare the chain: {other:?}")),
+        }
         let hello = pb::ServerMessage {
             msg: Some(pb::server_message::Msg::Serverhello(pb::ServerHello {
                 tiers: vec![tier],
@@ -2082,6 +2099,7 @@ mod tests {
                     privkey,
                 }],
                 output_scripts,
+                genesis_hash: TEST_GENESIS,
                 main_transport: Transport::Direct,
                 remote_transport: None,
                 lookups: std::sync::Arc::new(AlwaysUnspent(200_000)),
@@ -2206,6 +2224,7 @@ mod tests {
                         privkey,
                     }],
                     output_scripts,
+                    genesis_hash: TEST_GENESIS,
                     main_transport: Transport::Direct,
                     remote_transport: None,
                     lookups: std::sync::Arc::new(AlwaysUnspent(200_000)),

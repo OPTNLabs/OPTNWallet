@@ -284,6 +284,7 @@ async fn fetch_fusion_server_status(
     port: u16,
     use_ssl: bool,
     verified_proxy: Option<u16>,
+    network: optn_core::network::Network,
 ) -> Result<fusion::FusionServerStatus, String> {
     log::info!(
         "[FusionTrace] status start host={} port={} ssl={}",
@@ -292,7 +293,10 @@ async fn fetch_fusion_server_status(
         use_ssl
     );
     let transport = fusion_transport_for_host(host, verified_proxy)?;
-    let result = fusion::server_status(host, port, use_ssl, transport, None).await;
+    // Declare the chain, as Electron Cash does: a server on another chain
+    // refuses here instead of showing tiers for a pool this wallet cannot use.
+    let genesis = spv::genesis_hash(&network.to_string()).to_vec();
+    let result = fusion::server_status(host, port, use_ssl, transport, Some(genesis)).await;
     match &result {
         Ok(status) => log::info!(
             "[FusionTrace] status ok tiers={} components={}",
@@ -349,7 +353,7 @@ async fn fusion_server_status(
     // wallet windows from opening four identical Tor handshakes at once. The
     // short failure TTL still lets a manual retry observe a repaired server.
     shared_fusion_server_status(key, || {
-        fetch_fusion_server_status(&host, port, use_ssl, verified_proxy)
+        fetch_fusion_server_status(&host, port, use_ssl, verified_proxy, network)
     })
     .await
 }
@@ -622,6 +626,7 @@ async fn fusion_run(
         tier_plans,
         inputs: keyed_inputs,
         output_scripts: scripts,
+        genesis_hash: spv::genesis_hash(&runtime.state().network.to_string()),
         main_transport: transport,
         remote_transport,
         // Every selected Electrum server, primary first, not just one. A

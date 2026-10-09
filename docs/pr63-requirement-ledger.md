@@ -1781,3 +1781,17 @@ at 4 s and died.
 
 Follow-up worth doing: a Windows desktop launch in CI (start the app, render
 the landing page, stay responsive for 30 s) would have caught this.
+
+### 2026-10-09: a fusion round declares its chain
+
+Found in the live fleet run: the local Electron Cash server logged "No
+genesis hash declared by client, we'll let them slide" for every OPTN
+client. Electron Cash always sends its chain's genesis hash in ClientHello
+(`comms.get_current_genesis_hash`, `fusion.py`), and a server on another chain
+refuses at once; OPTN sent `None` both in the round (`run.rs`) and in the
+desktop's status probe.
+
+`FusionRunParams` now requires `genesis_hash` (internal byte order), so no
+caller can leave it out, and the round sends it. The desktop passes the
+runtime network's genesis to the round and to the status probe. The mock
+server in both full-round tests now refuses a ClientHello without the chain.
