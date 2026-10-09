@@ -69,6 +69,15 @@ account `m/44'/145'/0'`. This account is explicit despite the Chipnet test scope
   `--signed SIGNED.hex`. Offline, no wallet opening, approval, or broadcast.
 - WASM: `psbtReviewP2pkh` and `psbtFinalizeCashTokensP2pkh` call the same Rust.
   FT amounts cross the review JSON boundary as decimal strings.
+- `coin_control` labels each coin as BCH, FT, NFT or FT + NFT, named by the
+  wallet's verified or last-known BCMR identity (ticker, name, scaled amount)
+  and always with its category, since tickers are not unique. Token coins carry
+  a BCH-send refusal. WASM: `coinControlLabel`, and `spentOutputLabel`, which
+  reads the coin from its complete parent transaction.
+- The watch-only send screen shows token coins by these labels and does not let
+  them be selected for a BCH send. `buildWatchOnlyPsbt` refuses any input whose
+  parent output carries tokens not declared for it: before this, a token coin
+  selected there was built into a PSBT whose outputs dropped its tokens.
 
 These APIs do not prove parent chain inclusion/unspentness or authorize a spend.
 The GUI token selection/approval flow is not enabled by this patch. A caller must

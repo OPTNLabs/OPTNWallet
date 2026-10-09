@@ -73,6 +73,11 @@ import {
   type WatchOnlyInputSpec,
   type WatchOnlyProposal,
 } from '../../services/psbt/watchOnlySend';
+import {
+  labelCoins,
+  type CoinControlLabel,
+} from '../../services/psbt/coinControlLabels';
+import { WatchOnlyCoinRow } from './WatchOnlyCoinRow';
 import { getBchAccountPath } from '../../services/HdWalletService';
 import {
   inspectImportedPsbt,
@@ -624,16 +629,37 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     return session;
   };
 
-  const nftCategories = useMemo(() => {
+  // Every token coin's category, fungible and NFT alike: each coin is labelled
+  // by what it carries, not only the NFTs that also get a card.
+  const tokenCategories = useMemo(() => {
     const categories = new Set<string>();
     for (const input of inputs) {
       const category = input.utxo.token?.category;
-      if (input.utxo.token?.nft && category) categories.add(category);
+      if (category) categories.add(category);
     }
     return Array.from(categories);
   }, [inputs]);
 
-  const tokenMetadata = useSharedTokenMetadata(nftCategories);
+  const tokenMetadata = useSharedTokenMetadata(tokenCategories);
+
+  // Rust decides what each coin carries and whether a BCH send may take it.
+  // Without labels (the core failed to load) rows show no token detail, and
+  // the token checks below and in the builder still apply.
+  const coinLabels = useMemo(() => {
+    const byOutpoint = new Map<string, CoinControlLabel>();
+    try {
+      const labels = labelCoins(
+        inputs.map((input) => input.utxo),
+        tokenMetadata
+      );
+      inputs.forEach((input, index) => {
+        byOutpoint.set(`${input.txid}:${input.vout}`, labels[index]);
+      });
+    } catch (labelError) {
+      console.error('[watch-only] coin labels unavailable:', labelError);
+    }
+    return byOutpoint;
+  }, [inputs, tokenMetadata]);
 
   const nftCardsByOutpoint = useMemo(() => {
     const instances = summarizeNftInstances(inputs.map((input) => input.utxo));
@@ -1014,8 +1040,14 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   );
 
   const bchOnlyInputs = useMemo(
-    () => inputs.filter((input) => !input.token && !input.utxo.token),
-    [inputs]
+    () =>
+      inputs.filter(
+        (input) =>
+          !input.token &&
+          !input.utxo.token &&
+          !coinLabels.get(`${input.txid}:${input.vout}`)?.bch_send_refusal
+      ),
+    [inputs, coinLabels]
   );
   const tokenInputCount = inputs.length - bchOnlyInputs.length;
   const maxSendable = useMemo(() => {
@@ -1813,21 +1845,15 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                       const key = `${input.txid}:${input.vout}`;
                       const checked = selected.has(key);
                       return (
-                        <label
+                        <WatchOnlyCoinRow
                           key={key}
-                          className="flex cursor-pointer items-center gap-2 rounded-md border border-[var(--wallet-border)] px-2.5 py-2 text-xs"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleInput(key)}
-                            className="accent-[var(--wallet-accent)]"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-mono wallet-text-strong">
-                              {shortTxid(input.txid)}:{input.vout}
-                            </span>
-                            <span className="block wallet-muted">
+                          testId={`watch-only-coin-${key}`}
+                          outpoint={`${shortTxid(input.txid)}:${input.vout}`}
+                          label={coinLabels.get(key) ?? null}
+                          checked={checked}
+                          onToggle={() => toggleInput(key)}
+                          detail={
+                            <>
                               {satsToBch(input.satoshis)} BCH ·{' '}
                               {input.branchIndex === 1 ? 'change' : 'receive'}#
                               {input.addressIndex}
@@ -1844,34 +1870,35 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                                     className="ml-1.5"
                                   />
                                 )}
-                            </span>
-                            {(() => {
-                              const card = nftCardsByOutpoint.get(key);
-                              if (!card) return null;
-                              return (
-                                <span className="mt-1 block rounded border border-[var(--wallet-border)] bg-black/20 px-1.5 py-1">
-                                  <span className="block truncate text-[11px] font-semibold wallet-text-strong">
-                                    {card.primaryLabel}
-                                  </span>
-                                  {card.fields.length > 0 ? (
-                                    <span className="block truncate text-[10px] wallet-muted">
-                                      {card.fields
-                                        .slice(0, 3)
-                                        .map(
-                                          (field) =>
-                                            `${field.name ?? field.fieldId ?? 'field'}: ${
-                                              field.parsedValue?.formatted ??
-                                              field.value
-                                            }`
-                                        )
-                                        .join(' · ')}
-                                    </span>
-                                  ) : null}
+                            </>
+                          }
+                        >
+                          {(() => {
+                            const card = nftCardsByOutpoint.get(key);
+                            if (!card) return null;
+                            return (
+                              <span className="mt-1 block rounded border border-[var(--wallet-border)] bg-black/20 px-1.5 py-1">
+                                <span className="block truncate text-[11px] font-semibold wallet-text-strong">
+                                  {card.primaryLabel}
                                 </span>
-                              );
-                            })()}
-                          </span>
-                        </label>
+                                {card.fields.length > 0 ? (
+                                  <span className="block truncate text-[10px] wallet-muted">
+                                    {card.fields
+                                      .slice(0, 3)
+                                      .map(
+                                        (field) =>
+                                          `${field.name ?? field.fieldId ?? 'field'}: ${
+                                            field.parsedValue?.formatted ??
+                                            field.value
+                                          }`
+                                      )
+                                      .join(' · ')}
+                                  </span>
+                                ) : null}
+                              </span>
+                            );
+                          })()}
+                        </WatchOnlyCoinRow>
                       );
                     })}
                   </div>
