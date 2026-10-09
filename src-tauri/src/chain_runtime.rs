@@ -926,7 +926,47 @@ impl NativeChainRuntime {
         }
     }
 
+    /// With no wallet route left in the installed stack, dial the next servers
+    /// it held back, a few at a time, until one connects or none are left.
+    /// Servers the build did not need are thus contacted only when the ones
+    /// it chose stop answering.
+    async fn top_up_wallet_routes(&self) {
+        let held = {
+            let guard = self.stack.read().await;
+            guard.as_ref().map(|installed| {
+                (
+                    installed.stack.service.clone(),
+                    installed.stack.held_back.clone(),
+                )
+            })
+        };
+        let Some((service, held_back)) = held else {
+            return;
+        };
+        loop {
+            let has_route = match service.try_lock() {
+                Ok(service) => !service
+                    .routes_for_operation(
+                        optn_runtime::chain_service::ChainOperation::WalletRefresh,
+                    )
+                    .is_empty(),
+                // A refresh holds it, with routes of its own to try.
+                Err(_) => return,
+            };
+            let remaining = held_back.remaining().await;
+            if has_route || remaining == 0 {
+                return;
+            }
+            held_back.connect_next().await;
+            // A retired stack dials nothing and drains nothing.
+            if held_back.remaining().await == remaining {
+                return;
+            }
+        }
+    }
+
     async fn sync_wallet_from(&self, floor: Option<u32>) -> Result<RefreshOutcome, String> {
+        self.top_up_wallet_routes().await;
         let service = self
             .with_service(Arc::clone)
             .await
@@ -1611,6 +1651,10 @@ mod tests {
             credential_revision: native.credential_revision.load(Ordering::SeqCst),
             stack: NativeChainStack {
                 tor_status: Some(optn_core::tor::TorStatus::Absent),
+                held_back: optn_chain_native::HeldBackServers::none(
+                    service.clone(),
+                    revocation.clone(),
+                ),
                 revocation,
                 service: service.clone(),
                 event_sources: Vec::new(),

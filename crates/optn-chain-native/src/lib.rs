@@ -32,10 +32,10 @@ use optn_runtime::chain::{
     build_selection_plan, ChainEventSource, ChainSource, ConnectionPolicy, Endpoint, EndpointKind,
     ProtocolFamily, SourceCatalog, SourceId, SourceScope, TransportPolicy,
 };
-use optn_runtime::chain_service::ChainService;
+use optn_runtime::chain_service::{ChainBackend, ChainOperation, ChainService};
 use optn_runtime::events::ChainEventStream;
 use rand_core::{OsRng, RngCore};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -168,18 +168,23 @@ pub struct NativeChainStack {
     /// not already hold (#75 §21.3). Hints for the host to keep, never routes
     /// of this stack.
     pub discovered_peers: Vec<optn_runtime::bootstrap::DiscoveredPeer>,
+    /// Selected Electrum servers held back for failover.
+    pub held_back: HeldBackServers,
 }
 
 impl NativeChainStack {
     pub fn unavailable(error: impl Into<String>) -> Self {
         let service = ChainService::new(SourceCatalog::default(), ConnectionPolicy::auto());
+        let revocation = service.revocation();
+        let service = Arc::new(Mutex::new(service));
         Self {
             tor_status: None,
             // Empty rather than seeded: no provider is registered in this
             // state, so nothing should be able to read a header from it.
             headers: Arc::new(optn_runtime::header_store::SharedHeaders::default()),
-            revocation: service.revocation(),
-            service: Arc::new(Mutex::new(service)),
+            revocation: revocation.clone(),
+            held_back: HeldBackServers::none(service.clone(), revocation),
+            service,
             event_sources: Vec::new(),
             failures: Vec::new(),
             configuration_error: Some(error.into()),
@@ -673,23 +678,30 @@ async fn build_native_chain_stack_with_tor_status(
     // is chain identity rather than anything a peer supplied, so `getheaders`
     // has a locator to start from on a fresh install.
     let headers = supplied_headers.unwrap_or_else(|| new_accepted_header_store(network));
-    let selected = selected_source_ids(&catalog, &policy);
+    let plan = build_selection_plan(&catalog, &policy);
+    let enabled = |ids: &[SourceId]| -> Vec<ChainSource> {
+        ids.iter()
+            .filter_map(|id| catalog.get(id))
+            .filter(|source| source.is_enabled())
+            .cloned()
+            .collect()
+    };
+    let (primary, fallback) = (enabled(&plan.primary), enabled(&plan.fallback));
     // Discovered servers are failover (#75 §21.6): after every other source,
     // in their own order, and dialled only while no Electrum route connected.
-    let mut sources = catalog.iter().cloned().collect::<Vec<_>>();
-    sources.sort_by_key(|source| {
-        let discovered = optn_runtime::bootstrap::is_discovered(source);
-        (discovered, if discovered { source.priority } else { 0 })
-    });
-    let known_endpoints: Vec<Endpoint> = sources
+    let mut discovered: Vec<ChainSource> = primary
+        .iter()
+        .chain(fallback.iter())
+        .filter(|source| optn_runtime::bootstrap::is_discovered(source))
+        .cloned()
+        .collect();
+    discovered.sort_by_key(|source| source.priority);
+    let known_endpoints: Vec<Endpoint> = catalog
         .iter()
         .filter(|source| !optn_runtime::bootstrap::is_discovered(source))
         .flat_map(|source| source.endpoints.iter().cloned())
         .collect();
     let allow_onion = policy.transport.tor_for(false) && tor_status.usable_port().is_some();
-    let mut discovered_peers = Vec::new();
-    let mut electrum_routes = 0usize;
-    let mut failover_attempts = 0usize;
     let mut service = ChainService::new(catalog, policy.clone());
     {
         // Each metadata origin is reached as the transport says for its owner.
@@ -712,181 +724,459 @@ async fn build_native_chain_stack_with_tor_status(
             service.set_registry_fetcher(Arc::new(fetcher));
         }
     }
-    let mut event_sources: Vec<Arc<dyn NativeChainEventSource>> = Vec::new();
-    let mut failures = Vec::new();
+    let mut build = StackBuild {
+        service,
+        event_sources: Vec::new(),
+        failures: Vec::new(),
+        discovered_peers: Vec::new(),
+        known_endpoints,
+        allow_onion,
+        wallet_routes: 0,
+        electrum_routes: 0,
+    };
+    let mut held_back = VecDeque::new();
 
-    for source in sources {
-        if !source.is_enabled() || !selected.contains(&source.id) {
-            continue;
+    // Primary sources first, in plan order; fallback sources only when no
+    // primary source gave a wallet route, so a public fallback never sees a
+    // handshake while the holder's own node is serving (#75 §21).
+    let tiers = [
+        (primary, Some(&policy.primary_scope)),
+        (fallback, policy.fallback_scope.as_ref()),
+    ];
+    for (tier, (sources, scope)) in tiers.into_iter().enumerate() {
+        if tier > 0 && build.wallet_routes > 0 {
+            break;
         }
-        if optn_runtime::bootstrap::is_discovered(&source) {
-            if electrum_routes > 0 || failover_attempts >= MAX_FAILOVER_ATTEMPTS {
-                continue;
-            }
-            failover_attempts += 1;
+        let mut jobs = Vec::new();
+        for source in sources
+            .iter()
+            .filter(|source| !optn_runtime::bootstrap::is_discovered(source))
+        {
+            jobs.extend(plan_connect_jobs(
+                source,
+                &policy,
+                secrets,
+                network,
+                tor_status,
+                &mut build.failures,
+            ));
         }
-        for endpoint in &source.endpoints {
-            // Full-node RPC and ZMQ are used on this machine only, whatever
-            // the transport: their adapters cannot use a proxy, and RPC
-            // credentials are kept for loopback endpoints alone
-            // (`optn_runtime::rpc_credentials`). The reason names what the
-            // holder can change.
-            if !is_loopback_host(&endpoint.host)
-                && matches!(endpoint.kind, EndpointKind::BchnRpc | EndpointKind::BchnZmq)
-            {
-                let reason = if policy
-                    .transport
-                    .requires_tor(source.is_user_infrastructure(), &endpoint.host)
-                {
-                    REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE
-                } else {
-                    REMOTE_FULL_NODE_LOCAL_ONLY
-                };
-                record_remote_route_failure(&mut failures, &source, endpoint, &policy, reason);
-                continue;
-            }
+        let (electrum, others): (Vec<_>, Vec<_>) = jobs
+            .into_iter()
+            .partition(|job| matches!(job.kind, ConnectKind::Electrum(_)));
+        let mut electrum = VecDeque::from(electrum);
+        // Where the app chooses among public servers, a few are dialled and
+        // the rest held back for failover. Servers the holder named are all
+        // dialled.
+        let bounded = scope.is_some_and(|scope| {
+            matches!(scope, SourceScope::AllEnabled | SourceScope::PublicEnabled)
+        });
+        let first = if bounded {
+            electrum.len().min(ELECTRUM_BATCH)
+        } else {
+            electrum.len()
+        };
+        let mut batch: Vec<ConnectJob> = others;
+        batch.extend(electrum.drain(..first));
+        build.absorb(connect_jobs(batch, network, &headers).await);
+        while build.electrum_routes == 0 && !electrum.is_empty() {
+            let next = electrum.len().min(ELECTRUM_BATCH);
+            build.absorb(connect_jobs(electrum.drain(..next).collect(), network, &headers).await);
+        }
+        held_back.extend(electrum);
+    }
 
-            let route = native_chain_route(&source, endpoint, policy.transport, tor_status);
-            if route.is_refused() {
-                record_remote_route_failure(
-                    &mut failures,
-                    &source,
-                    endpoint,
-                    &policy,
-                    REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE,
-                );
-                continue;
-            }
+    // One discovered server at a time, so a working one stops the search.
+    for source in discovered.iter().take(MAX_FAILOVER_ATTEMPTS) {
+        if build.electrum_routes > 0 {
+            break;
+        }
+        let jobs = plan_connect_jobs(
+            source,
+            &policy,
+            secrets,
+            network,
+            tor_status,
+            &mut build.failures,
+        );
+        build.absorb(connect_jobs(jobs, network, &headers).await);
+    }
 
-            match endpoint.kind {
-                EndpointKind::ElectrumTls | EndpointKind::ElectrumTcp
-                    if policy.protocols.contains(ProtocolFamily::Electrum) =>
-                {
-                    let Some(transport) = electrum_transport(endpoint, route) else {
-                        record_remote_route_failure(
-                            &mut failures,
-                            &source,
-                            endpoint,
-                            &policy,
-                            REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE,
-                        );
-                        continue;
-                    };
-                    match ElectrumBackend::connect(ElectrumConfig::new(
-                        source.id.clone(),
-                        endpoint.clone(),
-                        transport,
-                        optn_chain_bip37::genesis_hash(network),
-                    ))
-                    .await
-                    {
-                        Ok(provider) => {
-                            note_advertised_peers(
-                                &provider,
-                                &source,
-                                allow_onion,
-                                &known_endpoints,
-                                &mut discovered_peers,
-                            );
-                            electrum_routes += 1;
-                            service.register(Arc::new(provider))
-                        }
-                        Err(error) => failures.push(failure(
-                            &source,
-                            ProtocolFamily::Electrum,
-                            endpoint,
-                            format!("{error:?}"),
-                        )),
-                    }
-                }
-                EndpointKind::BchP2p => {
-                    if policy.protocols.contains(ProtocolFamily::Bip37) {
-                        let mut config =
-                            Bip37Config::new(source.id.clone(), endpoint.clone(), network);
-                        if let TorRoute::Through { socks_port } = route {
-                            config.transport = Bip37Transport::Tor {
-                                proxy_host: DEFAULT_TOR_HOST.to_owned(),
-                                proxy_port: socks_port,
-                            };
-                        }
-                        match Bip37Backend::connect(config, headers.clone()).await {
-                            Ok(provider) => service.register(Arc::new(provider)),
-                            Err(error) => failures.push(failure(
-                                &source,
-                                ProtocolFamily::Bip37,
-                                endpoint,
-                                format!("{error:?}"),
-                            )),
-                        }
-                    }
-                    if policy.protocols.contains(ProtocolFamily::Neutrino) {
-                        let mut config =
-                            NeutrinoConfig::new(source.id.clone(), endpoint.clone(), network);
-                        if let TorRoute::Through { socks_port } = route {
-                            config.transport = NeutrinoTransport::Tor {
-                                proxy_host: DEFAULT_TOR_HOST.to_owned(),
-                                proxy_port: socks_port,
-                            };
-                        }
-                        match NeutrinoBackend::connect(config, headers.clone()).await {
-                            Ok(provider) => service.register(Arc::new(provider)),
-                            Err(error) => failures.push(failure(
-                                &source,
-                                ProtocolFamily::Neutrino,
-                                endpoint,
-                                format!("{error:?}"),
-                            )),
-                        }
-                    }
-                }
-                EndpointKind::BchnRpc if policy.protocols.contains(ProtocolFamily::BchnRpc) => {
-                    let mut config = BchnRpcConfig::new(
-                        source.id.clone(),
-                        endpoint.clone(),
-                        secrets.rpc_auth(&source.id, endpoint),
+    let revocation = build.service.revocation();
+    let service = Arc::new(Mutex::new(build.service));
+    NativeChainStack {
+        tor_status: Some(tor_status),
+        headers: headers.clone(),
+        revocation: revocation.clone(),
+        held_back: HeldBackServers::new(held_back, service.clone(), revocation, network, headers),
+        service,
+        event_sources: build.event_sources,
+        failures: build.failures,
+        configuration_error: None,
+        discovered_peers: build.discovered_peers,
+    }
+}
+
+/// Connects in flight at once while a stack is built.
+const MAX_CONCURRENT_CONNECTS: usize = 6;
+/// Electrum servers dialled at a time where the app chooses among public ones.
+const ELECTRUM_BATCH: usize = MAX_FAILOVER_ATTEMPTS;
+
+/// One provider to connect, decided without I/O.
+#[derive(Clone)]
+struct ConnectJob {
+    source: ChainSource,
+    endpoint: Endpoint,
+    kind: ConnectKind,
+}
+
+#[derive(Clone)]
+enum ConnectKind {
+    Electrum(ElectrumTransport),
+    Bip37(Box<Bip37Config>),
+    Neutrino(Box<NeutrinoConfig>),
+    Rpc(Box<BchnRpcConfig>),
+    Zmq(Box<BchnZmqConfig>),
+}
+
+impl ConnectKind {
+    const fn protocol(&self) -> ProtocolFamily {
+        match self {
+            Self::Electrum(_) => ProtocolFamily::Electrum,
+            Self::Bip37(_) => ProtocolFamily::Bip37,
+            Self::Neutrino(_) => ProtocolFamily::Neutrino,
+            Self::Rpc(_) => ProtocolFamily::BchnRpc,
+            Self::Zmq(_) => ProtocolFamily::BchnZmq,
+        }
+    }
+}
+
+enum Connected {
+    Electrum(Box<ElectrumBackend>),
+    Chain(Arc<dyn ChainBackend>),
+    Events(Arc<dyn NativeChainEventSource>),
+}
+
+/// What a stack has gathered while it is being built.
+struct StackBuild {
+    service: ChainService,
+    event_sources: Vec<Arc<dyn NativeChainEventSource>>,
+    failures: Vec<NativeChainProbeFailure>,
+    discovered_peers: Vec<optn_runtime::bootstrap::DiscoveredPeer>,
+    known_endpoints: Vec<Endpoint>,
+    allow_onion: bool,
+    wallet_routes: usize,
+    electrum_routes: usize,
+}
+
+impl StackBuild {
+    /// Register what connected and record what did not, in plan order.
+    fn absorb(&mut self, results: Vec<(ConnectJob, Result<Connected, String>)>) {
+        for (job, result) in results {
+            match result {
+                Ok(Connected::Electrum(provider)) => {
+                    note_advertised_peers(
+                        &provider,
+                        &job.source,
+                        self.allow_onion,
+                        &self.known_endpoints,
+                        &mut self.discovered_peers,
                     );
-                    config.txindex = secrets.rpc_txindex.contains(source.id.as_str());
-                    config.https = secrets.rpc_https.contains(source.id.as_str());
-                    match BchnRpcBackend::connect(config).await {
-                        Ok(provider) => service.register(Arc::new(provider)),
-                        Err(error) => failures.push(failure(
-                            &source,
-                            ProtocolFamily::BchnRpc,
-                            endpoint,
-                            format!("{error:?}"),
-                        )),
+                    self.electrum_routes += 1;
+                    if provider.supports(ChainOperation::WalletRefresh) {
+                        self.wallet_routes += 1;
                     }
+                    self.service
+                        .register(Arc::<ElectrumBackend>::from(provider));
                 }
-                EndpointKind::BchnZmq if policy.protocols.contains(ProtocolFamily::BchnZmq) => {
-                    match BchnZmqEventSource::connect(BchnZmqConfig {
-                        source_id: source.id.clone(),
-                        endpoint: endpoint.clone(),
-                    })
-                    .await
-                    {
-                        Ok(provider) => event_sources.push(Arc::new(provider)),
-                        Err(error) => failures.push(failure(
-                            &source,
-                            ProtocolFamily::BchnZmq,
-                            endpoint,
-                            format!("{error:?}"),
-                        )),
+                Ok(Connected::Chain(provider)) => {
+                    if provider.supports(ChainOperation::WalletRefresh) {
+                        self.wallet_routes += 1;
                     }
+                    self.service.register(provider);
                 }
-                _ => {}
+                Ok(Connected::Events(source)) => self.event_sources.push(source),
+                Err(error) => self.failures.push(failure(
+                    &job.source,
+                    job.kind.protocol(),
+                    &job.endpoint,
+                    error,
+                )),
             }
         }
     }
+}
 
-    NativeChainStack {
-        tor_status: Some(tor_status),
-        headers,
-        revocation: service.revocation(),
-        service: Arc::new(Mutex::new(service)),
-        event_sources,
-        failures,
-        configuration_error: None,
-        discovered_peers,
+/// The providers `source` asks for under this policy. Endpoints that cannot
+/// be used here are recorded as failures, with a reason the holder can act on.
+fn plan_connect_jobs(
+    source: &ChainSource,
+    policy: &ConnectionPolicy,
+    secrets: &NativeChainSecrets,
+    network: &str,
+    tor_status: TorStatus,
+    failures: &mut Vec<NativeChainProbeFailure>,
+) -> Vec<ConnectJob> {
+    let mut jobs = Vec::new();
+    for endpoint in &source.endpoints {
+        // Full-node RPC and ZMQ are used on this machine only, whatever the
+        // transport: their adapters cannot use a proxy, and RPC credentials
+        // are kept for loopback endpoints alone (`optn_runtime::rpc_credentials`).
+        // The reason names what the holder can change.
+        if !is_loopback_host(&endpoint.host)
+            && matches!(endpoint.kind, EndpointKind::BchnRpc | EndpointKind::BchnZmq)
+        {
+            let reason = if policy
+                .transport
+                .requires_tor(source.is_user_infrastructure(), &endpoint.host)
+            {
+                REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE
+            } else {
+                REMOTE_FULL_NODE_LOCAL_ONLY
+            };
+            record_remote_route_failure(failures, source, endpoint, policy, reason);
+            continue;
+        }
+
+        let route = native_chain_route(source, endpoint, policy.transport, tor_status);
+        if route.is_refused() {
+            record_remote_route_failure(
+                failures,
+                source,
+                endpoint,
+                policy,
+                REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE,
+            );
+            continue;
+        }
+        let job = |kind| ConnectJob {
+            source: source.clone(),
+            endpoint: endpoint.clone(),
+            kind,
+        };
+
+        match endpoint.kind {
+            EndpointKind::ElectrumTls | EndpointKind::ElectrumTcp
+                if policy.protocols.contains(ProtocolFamily::Electrum) =>
+            {
+                match electrum_transport(endpoint, route) {
+                    Some(transport) => jobs.push(job(ConnectKind::Electrum(transport))),
+                    None => record_remote_route_failure(
+                        failures,
+                        source,
+                        endpoint,
+                        policy,
+                        REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE,
+                    ),
+                }
+            }
+            EndpointKind::BchP2p => {
+                if policy.protocols.contains(ProtocolFamily::Bip37) {
+                    let mut config = Bip37Config::new(source.id.clone(), endpoint.clone(), network);
+                    if let TorRoute::Through { socks_port } = route {
+                        config.transport = Bip37Transport::Tor {
+                            proxy_host: DEFAULT_TOR_HOST.to_owned(),
+                            proxy_port: socks_port,
+                        };
+                    }
+                    jobs.push(job(ConnectKind::Bip37(Box::new(config))));
+                }
+                if policy.protocols.contains(ProtocolFamily::Neutrino) {
+                    let mut config =
+                        NeutrinoConfig::new(source.id.clone(), endpoint.clone(), network);
+                    if let TorRoute::Through { socks_port } = route {
+                        config.transport = NeutrinoTransport::Tor {
+                            proxy_host: DEFAULT_TOR_HOST.to_owned(),
+                            proxy_port: socks_port,
+                        };
+                    }
+                    jobs.push(job(ConnectKind::Neutrino(Box::new(config))));
+                }
+            }
+            EndpointKind::BchnRpc if policy.protocols.contains(ProtocolFamily::BchnRpc) => {
+                let mut config = BchnRpcConfig::new(
+                    source.id.clone(),
+                    endpoint.clone(),
+                    secrets.rpc_auth(&source.id, endpoint),
+                );
+                config.txindex = secrets.rpc_txindex.contains(source.id.as_str());
+                config.https = secrets.rpc_https.contains(source.id.as_str());
+                jobs.push(job(ConnectKind::Rpc(Box::new(config))));
+            }
+            EndpointKind::BchnZmq if policy.protocols.contains(ProtocolFamily::BchnZmq) => {
+                jobs.push(job(ConnectKind::Zmq(Box::new(BchnZmqConfig {
+                    source_id: source.id.clone(),
+                    endpoint: endpoint.clone(),
+                }))));
+            }
+            _ => {}
+        }
+    }
+    jobs
+}
+
+/// Connect `jobs`, several at once, and return each with its result in the
+/// order given. A hung peer delays only its own slot, not every source
+/// behind it.
+async fn connect_jobs(
+    jobs: Vec<ConnectJob>,
+    network: &str,
+    headers: &Arc<optn_runtime::header_store::SharedHeaders>,
+) -> Vec<(ConnectJob, Result<Connected, String>)> {
+    let mut running = tokio::task::JoinSet::new();
+    let mut waiting = jobs.into_iter().enumerate();
+    let mut finished = Vec::new();
+    loop {
+        while running.len() < MAX_CONCURRENT_CONNECTS {
+            let Some((index, job)) = waiting.next() else {
+                break;
+            };
+            let network = network.to_owned();
+            let headers = headers.clone();
+            running.spawn(async move {
+                let result = connect_job(job.clone(), &network, headers).await;
+                (index, job, result)
+            });
+        }
+        match running.join_next().await {
+            Some(Ok(done)) => finished.push(done),
+            // A provider that panicked while connecting fails the build, as it
+            // did when connects ran one after another.
+            Some(Err(error)) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Some(Err(_)) => {}
+            None => break,
+        }
+    }
+    finished.sort_by_key(|(index, ..)| *index);
+    finished
+        .into_iter()
+        .map(|(_, job, result)| (job, result))
+        .collect()
+}
+
+async fn connect_job(
+    job: ConnectJob,
+    network: &str,
+    headers: Arc<optn_runtime::header_store::SharedHeaders>,
+) -> Result<Connected, String> {
+    match job.kind {
+        ConnectKind::Electrum(transport) => ElectrumBackend::connect(ElectrumConfig::new(
+            job.source.id.clone(),
+            job.endpoint.clone(),
+            transport,
+            optn_chain_bip37::genesis_hash(network),
+        ))
+        .await
+        .map(|provider| Connected::Electrum(Box::new(provider)))
+        .map_err(|error| format!("{error:?}")),
+        ConnectKind::Bip37(config) => Bip37Backend::connect(*config, headers)
+            .await
+            .map(|provider| Connected::Chain(Arc::new(provider)))
+            .map_err(|error| format!("{error:?}")),
+        ConnectKind::Neutrino(config) => NeutrinoBackend::connect(*config, headers)
+            .await
+            .map(|provider| Connected::Chain(Arc::new(provider)))
+            .map_err(|error| format!("{error:?}")),
+        ConnectKind::Rpc(config) => BchnRpcBackend::connect(*config)
+            .await
+            .map(|provider| Connected::Chain(Arc::new(provider)))
+            .map_err(|error| format!("{error:?}")),
+        ConnectKind::Zmq(config) => BchnZmqEventSource::connect(*config)
+            .await
+            .map(|provider| Connected::Events(Arc::new(provider)))
+            .map_err(|error| format!("{error:?}")),
+    }
+}
+
+/// Selected Electrum servers a build did not dial because enough others
+/// connected (#75 §21). When the stack has no wallet route left, the next few
+/// are dialled into the same service, so the wallet fails over without a
+/// rebuild and without every public server seeing a handshake up front.
+#[derive(Clone)]
+pub struct HeldBackServers {
+    inner: Arc<HeldBackInner>,
+}
+
+struct HeldBackInner {
+    jobs: Mutex<VecDeque<ConnectJob>>,
+    service: Arc<Mutex<ChainService>>,
+    revocation: optn_runtime::chain_service::ChainRevocation,
+    network: String,
+    headers: Arc<optn_runtime::header_store::SharedHeaders>,
+}
+
+impl HeldBackServers {
+    fn new(
+        jobs: VecDeque<ConnectJob>,
+        service: Arc<Mutex<ChainService>>,
+        revocation: optn_runtime::chain_service::ChainRevocation,
+        network: &str,
+        headers: Arc<optn_runtime::header_store::SharedHeaders>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(HeldBackInner {
+                jobs: Mutex::new(jobs),
+                service,
+                revocation,
+                network: network.to_owned(),
+                headers,
+            }),
+        }
+    }
+
+    /// Nothing held back: for a stack that dials everything it selects.
+    pub fn none(
+        service: Arc<Mutex<ChainService>>,
+        revocation: optn_runtime::chain_service::ChainRevocation,
+    ) -> Self {
+        Self::new(
+            VecDeque::new(),
+            service,
+            revocation,
+            "",
+            Arc::new(optn_runtime::header_store::SharedHeaders::default()),
+        )
+    }
+
+    /// How many servers are still held back.
+    pub async fn remaining(&self) -> usize {
+        self.inner.jobs.lock().await.len()
+    }
+
+    /// Dial the next few held-back servers into the service, unless the stack
+    /// was retired, and say how many connected.
+    pub async fn connect_next(&self) -> usize {
+        if self.inner.revocation.is_revoked() {
+            return 0;
+        }
+        let batch: Vec<ConnectJob> = {
+            let mut jobs = self.inner.jobs.lock().await;
+            let next = jobs.len().min(ELECTRUM_BATCH);
+            jobs.drain(..next).collect()
+        };
+        if batch.is_empty() {
+            return 0;
+        }
+        let results = connect_jobs(batch, &self.inner.network, &self.inner.headers).await;
+        if self.inner.revocation.is_revoked() {
+            return 0;
+        }
+        let mut service = self.inner.service.lock().await;
+        let mut connected = 0;
+        for (_, result) in results {
+            match result {
+                Ok(Connected::Electrum(provider)) => {
+                    service.register(Arc::<ElectrumBackend>::from(provider));
+                    connected += 1;
+                }
+                Ok(Connected::Chain(provider)) => {
+                    service.register(provider);
+                    connected += 1;
+                }
+                Ok(Connected::Events(_)) | Err(_) => {}
+            }
+        }
+        connected
     }
 }
 
@@ -1625,14 +1915,29 @@ mod tests {
     /// An Electrum server on loopback that answers the handshake for chipnet
     /// and advertises `peers`.
     async fn fake_electrum(peers: serde_json::Value) -> (u16, tokio::task::JoinHandle<()>) {
+        let (port, handle, _) = counting_electrum(peers).await;
+        (port, handle)
+    }
+
+    /// As [`fake_electrum`], counting the connections it accepts.
+    async fn counting_electrum(
+        peers: serde_json::Value,
+    ) -> (
+        u16,
+        tokio::task::JoinHandle<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
         use tokio::io::AsyncBufReadExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let mut genesis = optn_chain_bip37::genesis_hash("chipnet");
         genesis.reverse();
         let genesis = hex::encode(genesis);
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = accepted.clone();
         let handle = tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let genesis = genesis.clone();
                 let peers = peers.clone();
                 tokio::spawn(async move {
@@ -1665,7 +1970,179 @@ mod tests {
                 });
             }
         });
-        (port, handle)
+        (port, handle, accepted)
+    }
+
+    /// A public (or the holder's own) Electrum source on loopback TCP.
+    fn tcp_source(id: &str, port: u16, own: bool) -> ChainSource {
+        ChainSource {
+            id: SourceId::new(id),
+            origin: if own {
+                optn_runtime::chain::SourceOrigin::UserInfrastructure {
+                    group: "home".into(),
+                }
+            } else {
+                optn_runtime::chain::SourceOrigin::UserAdded
+            },
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "127.0.0.1".into(),
+                port: Some(port),
+            }],
+            ..pasted_source()
+        }
+    }
+
+    fn dialled(counters: &[Arc<std::sync::atomic::AtomicUsize>]) -> usize {
+        counters
+            .iter()
+            .filter(|counter| counter.load(std::sync::atomic::Ordering::SeqCst) > 0)
+            .count()
+    }
+
+    /// Where the app chooses among public servers, a build dials a few and
+    /// holds the rest back, rather than handshaking with every one (#75).
+    #[tokio::test]
+    async fn a_build_dials_a_few_public_servers_and_holds_the_rest_back() {
+        let mut catalog = SourceCatalog::default();
+        let (mut servers, mut counters) = (Vec::new(), Vec::new());
+        for index in 0..21 {
+            let (port, handle, counter) = counting_electrum(serde_json::json!([])).await;
+            servers.push(handle);
+            counters.push(counter);
+            catalog
+                .insert(tcp_source(&format!("s{index:02}"), port, false))
+                .unwrap();
+        }
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            ConnectionPolicy::auto(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        assert!(stack.failures.is_empty(), "{:?}", stack.failures);
+        assert_eq!(dialled(&counters), ELECTRUM_BATCH);
+        // The first ones in the plan's order.
+        assert!(counters[..ELECTRUM_BATCH]
+            .iter()
+            .all(|counter| counter.load(std::sync::atomic::Ordering::SeqCst) > 0));
+        assert_eq!(stack.held_back.remaining().await, 21 - ELECTRUM_BATCH);
+        assert!(!stack
+            .service
+            .lock()
+            .await
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .is_empty());
+
+        // Held back, then dialled into the same service when asked.
+        assert_eq!(stack.held_back.connect_next().await, ELECTRUM_BATCH);
+        assert_eq!(dialled(&counters), 2 * ELECTRUM_BATCH);
+        assert_eq!(stack.held_back.remaining().await, 21 - 2 * ELECTRUM_BATCH);
+        // A retired stack dials nothing more.
+        stack.revocation.revoke();
+        assert_eq!(stack.held_back.connect_next().await, 0);
+        assert_eq!(dialled(&counters), 2 * ELECTRUM_BATCH);
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// When the first few hang up, the build carries on to the next few in
+    /// order until one connects.
+    #[tokio::test]
+    async fn a_build_fails_over_past_servers_that_hang_up() {
+        let mut catalog = SourceCatalog::default();
+        let (mut servers, mut counters) = (Vec::new(), Vec::new());
+        for index in 0..ELECTRUM_BATCH {
+            let (port, handle) = hang_up().await;
+            servers.push(handle);
+            catalog
+                .insert(tcp_source(&format!("s{index:02}"), port, false))
+                .unwrap();
+        }
+        for index in ELECTRUM_BATCH..10 {
+            let (port, handle, counter) = counting_electrum(serde_json::json!([])).await;
+            servers.push(handle);
+            counters.push(counter);
+            catalog
+                .insert(tcp_source(&format!("s{index:02}"), port, false))
+                .unwrap();
+        }
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            ConnectionPolicy::auto(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        let failed: Vec<_> = stack
+            .failures
+            .iter()
+            .map(|failure| failure.source.as_str().to_owned())
+            .collect();
+        assert_eq!(failed, ["s00", "s01", "s02"]);
+        assert_eq!(dialled(&counters), ELECTRUM_BATCH);
+        assert_eq!(stack.held_back.remaining().await, 10 - 2 * ELECTRUM_BATCH);
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// A public fallback sees no handshake while the holder's own node serves,
+    /// and is used when it does not.
+    #[tokio::test]
+    async fn a_public_fallback_is_dialled_only_when_the_own_node_is_down() {
+        let policy = ConnectionPolicy {
+            fallback_scope: Some(SourceScope::PublicEnabled),
+            ..ConnectionPolicy::own_infrastructure()
+        };
+        let secrets = NativeChainSecrets::default();
+        let build = |catalog| {
+            build_native_chain_stack_with_tor_status(
+                catalog,
+                policy.clone(),
+                "chipnet",
+                &secrets,
+                TorStatus::Absent,
+                None,
+            )
+        };
+        let (public_port, public_server, public) = counting_electrum(serde_json::json!([])).await;
+
+        let (own_port, own_server, own) = counting_electrum(serde_json::json!([])).await;
+        let mut catalog = SourceCatalog::default();
+        catalog.insert(tcp_source("own", own_port, true)).unwrap();
+        catalog
+            .insert(tcp_source("public", public_port, false))
+            .unwrap();
+        let stack = build(catalog).await;
+        assert!(stack.failures.is_empty(), "{:?}", stack.failures);
+        assert!(own.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        assert_eq!(public.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let (down_port, down_server) = hang_up().await;
+        let mut catalog = SourceCatalog::default();
+        catalog.insert(tcp_source("own", down_port, true)).unwrap();
+        catalog
+            .insert(tcp_source("public", public_port, false))
+            .unwrap();
+        let stack = build(catalog).await;
+        assert_eq!(stack.failures.len(), 1, "{:?}", stack.failures);
+        assert!(public.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        assert!(!stack
+            .service
+            .lock()
+            .await
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .is_empty());
+        for server in [public_server, own_server, down_server] {
+            server.abort();
+        }
     }
 
     /// A loopback port that accepts and hangs up, so a dial fails at once.

@@ -1434,3 +1434,39 @@ after the refresh returns.
 Tests record the order of requests: Electrum asks for the wallet first and
 loads with misnumbered headers; BIP37 asks for headers first and sends no
 wallet query when they fail.
+
+### 2026-10-09: a stack dials a few servers, in plan order, and fallback last
+
+#75 (items 75-14, 75-34 and 75-105). `build_native_chain_stack_with_tor_status`
+dialled every selected source one after another. The order was the catalog's,
+with only discovered servers moved last, so:
+
+- under Auto on mainnet, every rebuild did about 22 TLS handshakes;
+- a slow peer delayed every source behind it;
+- fallback sources could be dialled before primary ones, so a public fallback
+  saw a handshake while the holder's own node was serving.
+
+The builder now works in tiers, in the selection plan's order:
+
+- **Primary sources** first. Connects run concurrently, six at most at once,
+  so a hung peer holds only its own slot. Results are recorded in plan order.
+- **Electrum, where the app chooses** among public servers (`AllEnabled`,
+  `PublicEnabled`): three are dialled. If none connects, the next three are,
+  and so on. The rest are held back. Servers the holder named, their own
+  infrastructure or an explicit list, are all dialled.
+- **Fallback sources** only when no primary source gave a wallet route.
+- **Discovered servers** last, one at a time and three at most, as before.
+
+Held-back servers are not failures and are not listed as such. Before a
+wallet sync, the desktop runtime checks the installed stack. When it has no
+wallet route left, the next held-back servers are dialled into the same
+service, so the wallet fails over without a rebuild. A retired stack dials
+nothing.
+
+Counting fake servers show the behaviour:
+
+- of 21 public servers, three are dialled and 18 held back;
+- the next three are dialled on request;
+- three that hang up lead to the next three;
+- a public fallback gets no connection while the own node serves, and does
+  when the own node is down.
