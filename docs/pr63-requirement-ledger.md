@@ -1601,3 +1601,63 @@ Not covered yet: a store that must first be replayed from a peer after a
 restart, if that peer has already reorged. The replay stops at the
 divergence and the pass fails. The next pass, with the store intact,
 recovers.
+
+### 2026-10-09: a weaker source can move the wallet forward, labelled
+
+#75 (item 75-67; rank 14, first half). A snapshot never gave way to one with
+weaker evidence, at any tip. That protects a proven snapshot from a faster
+server, but it also left a holder stale forever once their stronger source
+was gone. For example, after moving from BIP37 (header-proven) to Electrum
+(server-asserted), every refresh came back `PreservedWeakerEvidence` and the
+wallet stayed at the last BIP37 tip.
+
+Wallet refreshes now go through `ReconciliationState::reconcile_refresh`. A
+weaker candidate replaces a stronger snapshot only when both of these hold:
+
+- its tip is newer than the retained one, and
+- the verified header view holds that tip, as its own tip or in its reorg
+  ring (`VerifiedHeaderView::holds`).
+
+A server claiming a height is not enough, so a fast or lying server still
+cannot displace a proven snapshot. At the same or an older tip, at an
+unheld tip, or with no tip, the stronger snapshot stays.
+
+An accepted downgrade is shown to the holder in two places: the
+verification state follows the new evidence, and the degraded reason says
+"evidence lowered from header-proven to server-reported at a newer verified
+tip".
+
+The rule applies at both points where a refresh is reconciled:
+
+- **Sync worker.** For Electrum, headers are primed after the wallet
+  answer. A weaker answer refused because its tip was ahead of the headers
+  gets one more check once they are primed.
+- **Wallet sync finish.** This reconciles against the runtime's published
+  state. It rebuilds the view from the round's captured header progress,
+  and only when a weaker, newer candidate raises the question.
+
+Finish used to clear the worker's degraded reason, so "headers did not
+advance" never reached the published status. It now carries the reason
+over. `note_degraded` keeps an earlier reason beside a new one, once each.
+
+Tests:
+
+- the rule itself: newer and held is accepted and labelled; the same tip,
+  an older tip, an unheld newer tip and no tip are all refused; equal or
+  stronger evidence follows the ordinary rule;
+- a worker switching from a BIP37 snapshot to an Electrum route ahead of
+  its headers: accepted once the primed headers hold the tip, refused when
+  they fail;
+- finish on regtest: accepted with the captured header progress, carrying
+  the worker's note; refused without the progress.
+
+`weaker_assertion_cannot_replace_stronger_evidence_at_any_tip` and
+`shared_worker_restores_evidence_and_cannot_shrink_discovery_scope` still
+pass unchanged: neither has a header view that holds a newer tip.
+
+A wallet with no header view at all, such as Electrum without a shipped
+checkpoint for its network, still cannot be downgraded. That stays on
+purpose: without headers nothing vouches for the newer tip.
+
+Next, the second half (75-56): `snapshot_age`, `providers` and
+`header_checkpoint` on the sync status, over the wire and in the UI.

@@ -697,18 +697,57 @@ impl ProgressiveSyncWorker {
                         transactions,
                         tip,
                     };
-                    let decision = self.reconciliation.reconcile_candidate(
+                    let primes_after = !headers_first && self.header_view.is_some();
+                    // A weaker snapshot at a tip the headers do not hold yet may
+                    // be vouched for once this route's headers are primed below:
+                    // keep a copy for that one retry.
+                    let retry = (primes_after
+                        && self
+                            .reconciliation
+                            .authoritative
+                            .as_ref()
+                            .is_some_and(|current| {
+                                evidence_strength(&evidence) < evidence_strength(&current.evidence)
+                            }))
+                    .then(|| {
+                        (
+                            snapshot.clone(),
+                            observation.source.clone(),
+                            evidence.clone(),
+                        )
+                    });
+                    let mut decision = self.reconciliation.reconcile_refresh(
                         snapshot,
                         observation.source,
                         evidence,
                         observation.chain_tip,
-                        true,
+                        |tip| {
+                            self.header_view
+                                .as_ref()
+                                .is_some_and(|view| view.holds(tip))
+                        },
                     );
-                    if !headers_first && self.header_view.is_some() {
-                        if let Err(error) = self
+                    if primes_after {
+                        let primed = self
                             .prime_headers_for_scope(service, &route, from_height)
-                            .await
+                            .await;
+                        if let (ReconciliationDecision::PreservedWeakerEvidence, Some(retry)) =
+                            (&decision, retry)
                         {
+                            let (snapshot, source, evidence) = retry;
+                            decision = self.reconciliation.reconcile_refresh(
+                                snapshot,
+                                source,
+                                evidence,
+                                observation.chain_tip,
+                                |tip| {
+                                    self.header_view
+                                        .as_ref()
+                                        .is_some_and(|view| view.holds(tip))
+                                },
+                            );
+                        }
+                        if let Err(error) = primed {
                             if decision == ReconciliationDecision::Accepted {
                                 self.reconciliation
                                     .note_degraded(format!("headers did not advance: {error:?}"));
@@ -1352,6 +1391,8 @@ pub(crate) mod tests {
         reject_published_during_replay: bool,
         /// Every header and wallet request, in the order they arrived.
         sequence: Vec<&'static str>,
+        /// The tip the wallet answer reports, when not the default.
+        wallet_tip: Option<(u32, Hash32)>,
     }
 
     type HeaderProbeHandle = (Arc<SharedHeaders>, Arc<std::sync::Mutex<HeaderProbe>>);
@@ -1446,16 +1487,18 @@ pub(crate) mod tests {
                         probe.lock().expect("header probe").sequence.push("wallet");
                     }
                 }
+                let (height, hash) = self
+                    .probe
+                    .as_ref()
+                    .and_then(|(_, probe)| probe.lock().expect("header probe").wallet_tip)
+                    .unwrap_or((7, [7; 32]));
                 Ok(BackendObservation {
                     payload: ChainPayload::WalletRefresh {
                         transactions: vec![],
-                        tip: Some(ChainTip {
-                            height: 7,
-                            hash: [7; 32],
-                        }),
+                        tip: Some(ChainTip { height, hash }),
                     },
                     evidence: self.wallet_evidence.clone(),
-                    chain_tip: Some((7, [7; 32])),
+                    chain_tip: Some((height, hash)),
                 })
             })
         }
@@ -1890,6 +1933,65 @@ pub(crate) mod tests {
         let sequence = probe.lock().unwrap().sequence.clone();
         assert_eq!(sequence.first(), Some(&"wallet"));
         assert!(sequence.contains(&"headers"));
+    }
+
+    /// A holder's stronger (BIP37) snapshot is retained when they move to
+    /// Electrum. The server's weaker snapshot is taken once the headers
+    /// primed on its route hold its newer tip, labelled as lowered; until
+    /// they do, the stronger snapshot stays.
+    #[tokio::test]
+    async fn a_weaker_source_advances_the_wallet_only_to_a_verified_tip() {
+        for headers_fail in [false, true] {
+            let (mut worker, mut service, probe, view) =
+                header_order_fixture(ProtocolFamily::Electrum, headers_fail);
+            let (_, headers, _) = shipped_regtest_view_to(4);
+            let newer = (4, optn_core::header_hash::sha256d(&headers[3]));
+            probe.lock().unwrap().wallet_tip = Some(newer);
+            let (height, hash) = view.tip().unwrap();
+            worker.reconciliation_mut().reconcile_candidate(
+                WalletNetworkSnapshot {
+                    hd: None,
+                    interests: vec![],
+                    transactions: vec![],
+                    tip: Some(ChainTip { height, hash }),
+                },
+                SourceId::new("peer"),
+                Evidence::HeaderMmrProven {
+                    block_hash: hash,
+                    height,
+                },
+                Some((height, hash)),
+                true,
+            );
+            assert!(
+                !view.holds(newer),
+                "the wallet answer is ahead of the headers"
+            );
+
+            let outcome = worker.refresh(&mut service, vec![], None).await.unwrap();
+            let reconciliation = worker.reconciliation();
+            let snapshot = reconciliation.authoritative.as_ref().unwrap();
+            if headers_fail {
+                assert_eq!(
+                    outcome.decision,
+                    ReconciliationDecision::PreservedWeakerEvidence
+                );
+                assert_eq!(snapshot.chain_tip, Some((height, hash)));
+                assert!(matches!(
+                    snapshot.evidence,
+                    Evidence::HeaderMmrProven { .. }
+                ));
+            } else {
+                assert_eq!(outcome.decision, ReconciliationDecision::Accepted);
+                assert!(worker.header_view().unwrap().holds(newer));
+                assert_eq!(snapshot.chain_tip, Some(newer));
+                assert_eq!(snapshot.evidence, Evidence::ServerAssertion);
+                assert_eq!(
+                    reconciliation.sync.degraded_reason.as_deref(),
+                    Some("evidence lowered from header-proven to server-reported at a newer verified tip")
+                );
+            }
+        }
     }
 
     /// A BIP37 snapshot must match the verified tip, so its headers still
@@ -2465,7 +2567,7 @@ pub(crate) mod tests {
 
     /// Regtest headers for heights 1..=`end` from the shipped genesis. Above
     /// `fork`, another branch: other merkle roots, so other blocks.
-    fn regtest_headers(end: u32, fork: Option<u32>) -> Vec<[u8; 80]> {
+    pub(crate) fn regtest_headers(end: u32, fork: Option<u32>) -> Vec<[u8; 80]> {
         let max_bits = optn_core::asert::AsertParams::for_network(Network::Regtest).max_bits;
         regtest_headers_with(end, fork, |_| max_bits)
     }

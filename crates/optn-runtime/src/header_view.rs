@@ -340,6 +340,12 @@ impl VerifiedHeaderView {
         self.snapshots.front().map(|snapshot| snapshot.height)
     }
 
+    /// Whether `block` is this view's tip or a block its reorg ring holds:
+    /// a height and hash these verified headers vouch for.
+    pub fn holds(&self, block: (u32, Hash32)) -> bool {
+        self.tip() == Some(block) || self.ring_hash_at(block.0) == Some(block.1)
+    }
+
     /// The hash of this view's block at `height`, while the ring holds it.
     pub fn ring_hash_at(&self, height: u32) -> Option<Hash32> {
         self.snapshots

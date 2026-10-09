@@ -1205,6 +1205,9 @@ impl WalletSyncSession {
             return Ok(ReconciliationDecision::PreservedFailure);
         }
         let candidate = result.authoritative.expect("checked above");
+        // Why the worker's accepted snapshot is labelled down or its headers
+        // lag, which the holder still needs once it is published here.
+        let worker_note = result.sync.degraded_reason;
         if candidate.value.hd.is_none()
             && self
                 .state
@@ -1239,14 +1242,33 @@ impl WalletSyncSession {
             return Err(WalletSyncError::InvalidSnapshot(reason));
         }
         let mut next = self.state.clone();
-        let decision = next.reconcile_candidate(
+        // A weaker snapshot replaces a stronger one only at a newer tip the
+        // headers this round verified hold. The view is rebuilt from the
+        // lease only when that question comes up.
+        let decision = next.reconcile_refresh(
             candidate.value,
             candidate.source,
             candidate.evidence,
             candidate.chain_tip,
-            true,
+            |tip| {
+                lease
+                    .header_progress
+                    .as_ref()
+                    .and_then(|progress| {
+                        crate::header_view::VerifiedHeaderView::restore(
+                            &progress.view,
+                            lease.network,
+                            &progress.trusted,
+                        )
+                        .ok()
+                    })
+                    .is_some_and(|view| view.holds(tip))
+            },
         );
         if decision == ReconciliationDecision::Accepted {
+            if let Some(note) = worker_note {
+                next.note_degraded(note);
+            }
             let mut next_restore_state = self.restore_state.clone();
             if let Some((height, _)) = candidate.chain_tip {
                 // A complete accepted rescan can end below the previous tip
@@ -2011,6 +2033,90 @@ mod tests {
             runtime.finish_wallet_sync(current, result).await.unwrap(),
             ReconciliationDecision::Accepted
         );
+    }
+
+    /// A weaker snapshot replaces a stronger published one only at a newer
+    /// tip that this round's verified headers hold. The status says the
+    /// evidence was lowered, beside what the worker noted.
+    #[tokio::test]
+    async fn finish_lowers_evidence_only_at_a_newer_tip_the_headers_hold() {
+        use crate::header_verifier::shipped_header_verifier;
+        use crate::header_view::VerifiedHeaderView;
+
+        // Regtest, where the fixture can mine the blocks the view verifies.
+        let address = Address::from_hash("bchreg", AddressKind::P2pkh, [1; 20]).encode();
+        let mut app = observation_app();
+        app.network = Network::Regtest;
+        app.wallet.as_mut().unwrap().receive_address = address.clone();
+        let mut view = VerifiedHeaderView::new(
+            Network::Regtest,
+            shipped_header_verifier(Network::Regtest).expect("regtest genesis"),
+        );
+        view.extend(
+            &crate::sync_worker::tests::regtest_headers(2, None)
+                .into_iter()
+                .map(crate::chain::BlockHeaderBytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let (height, hash) = view.tip().expect("regtest tip");
+        let at = |mut result: WalletReconciliation, (height, hash): (u32, [u8; 32])| {
+            let snapshot = result.authoritative.as_mut().unwrap();
+            snapshot.value.tip = Some(ChainTip { height, hash });
+            snapshot.chain_tip = Some((height, hash));
+            result
+        };
+        for with_headers in [true, false] {
+            let runtime = AppRuntime::spawn(app.clone());
+            let lease = runtime
+                .begin_wallet_sync(vec![address.clone()])
+                .await
+                .unwrap();
+            let stronger = at(
+                candidate(Evidence::FullNodeValidated {
+                    source: SourceId::new("node"),
+                }),
+                (height - 1, [1; 32]),
+            );
+            assert_eq!(
+                runtime.finish_wallet_sync(lease, stronger).await.unwrap(),
+                ReconciliationDecision::Accepted
+            );
+
+            let mut lease = runtime
+                .begin_wallet_sync(vec![address.clone()])
+                .await
+                .unwrap();
+            if with_headers {
+                lease.capture_header_progress(Some(&view)).unwrap();
+            }
+            let mut weaker = at(candidate(Evidence::ServerAssertion), (height, hash));
+            weaker.note_degraded("headers did not advance: Exhausted");
+            let decision = runtime.finish_wallet_sync(lease, weaker).await.unwrap();
+            let status = runtime.subscribe_wallet_sync();
+            let status = status.borrow();
+            let published = status.authoritative.as_ref().unwrap();
+            if with_headers {
+                assert_eq!(decision, ReconciliationDecision::Accepted);
+                assert_eq!(published.evidence, Evidence::ServerAssertion);
+                assert_eq!(status.sync.chain_tip, Some((height, hash)));
+                assert!(status.sync.utxos_fresh);
+                assert_eq!(
+                    status.sync.degraded_reason.as_deref(),
+                    Some(
+                        "evidence lowered from node-validated to server-reported at a newer \
+                         verified tip; headers did not advance: Exhausted"
+                    )
+                );
+            } else {
+                assert_eq!(decision, ReconciliationDecision::PreservedWeakerEvidence);
+                assert!(matches!(
+                    published.evidence,
+                    Evidence::FullNodeValidated { .. }
+                ));
+                assert_eq!(published.chain_tip, Some((height - 1, [1; 32])));
+            }
+        }
     }
 
     #[tokio::test]

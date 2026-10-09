@@ -84,11 +84,53 @@ impl<T: Clone> ReconciliationState<T> {
         ReconciliationDecision::Accepted
     }
 
+    /// [`Self::reconcile_candidate`] for a wallet refresh.
+    ///
+    /// The evidence rule protects a snapshot from a weaker one about the same
+    /// chain. It must not keep the wallet at an old tip forever once its
+    /// stronger source is gone, as when a holder moves from BIP37 to
+    /// Electrum. So a weaker candidate is accepted when its tip is newer than
+    /// the retained one and `verified` vouches for that tip: a server
+    /// asserting a height is not enough. The downgrade is labelled in the
+    /// verification state and the degraded reason. At the same or an older
+    /// tip, or at an unverified one, the stronger snapshot stays.
+    pub fn reconcile_refresh(
+        &mut self,
+        candidate: T,
+        source: SourceId,
+        evidence: Evidence,
+        chain_tip: Option<(u32, Hash32)>,
+        verified: impl Fn((u32, Hash32)) -> bool,
+    ) -> ReconciliationDecision {
+        let replaced = self.authoritative.as_ref().and_then(|current| {
+            let tip = chain_tip?;
+            let weaker = evidence_strength(&evidence) < evidence_strength(&current.evidence);
+            let newer = current.chain_tip.is_some_and(|(height, _)| tip.0 > height);
+            (weaker && newer && verified(tip)).then(|| current.evidence.clone())
+        });
+        let Some(replaced) = replaced else {
+            return self.reconcile_candidate(candidate, source, evidence, chain_tip, true);
+        };
+        let lowered = evidence_label(&evidence);
+        self.authoritative = None;
+        let decision = self.reconcile_candidate(candidate, source, evidence, chain_tip, true);
+        self.sync.degraded_reason = Some(format!(
+            "evidence lowered from {} to {lowered} at a newer verified tip",
+            evidence_label(&replaced)
+        ));
+        decision
+    }
+
     /// Say why something beside the snapshot is behind (headers that did not
     /// advance) without touching the snapshot, its freshness or what it is
-    /// verified by.
+    /// verified by. A reason already given is kept beside it.
     pub fn note_degraded(&mut self, reason: impl Into<String>) {
-        self.sync.degraded_reason = Some(reason.into());
+        let reason = reason.into();
+        self.sync.degraded_reason = Some(match self.sync.degraded_reason.take() {
+            Some(earlier) if earlier.contains(&reason) => earlier,
+            Some(earlier) if !reason.contains(&earlier) => format!("{earlier}; {reason}"),
+            _ => reason,
+        });
     }
 
     /// Record a provider/runtime failure without mutating the last valid wallet
@@ -99,6 +141,19 @@ impl<T: Clone> ReconciliationState<T> {
         self.sync.verification = VerificationState::Degraded;
         self.sync.degraded_reason = Some(reason.into());
         ReconciliationDecision::PreservedFailure
+    }
+}
+
+/// A short name for an evidence level, for the holder.
+pub const fn evidence_label(evidence: &Evidence) -> &'static str {
+    match evidence {
+        Evidence::ServerAssertion => "server-reported",
+        Evidence::MempoolObservation => "seen in a mempool",
+        Evidence::HeaderLinked { .. } => "header-linked",
+        Evidence::HeaderPowVerified { .. } => "proof-of-work verified",
+        Evidence::HeaderMmrProven { .. } => "header-proven",
+        Evidence::MerkleTransactionIncluded { .. } => "merkle-proven",
+        Evidence::FullNodeValidated { .. } => "node-validated",
     }
 }
 
@@ -174,6 +229,104 @@ mod tests {
         assert_eq!(state.sync.verification, VerificationState::Degraded);
         assert!(!state.sync.history_fresh);
         assert!(!state.sync.utxos_fresh);
+    }
+
+    /// A weaker refresh replaces a stronger snapshot only at a newer tip the
+    /// verified headers vouch for, and says it did.
+    #[test]
+    fn a_weaker_refresh_advances_only_to_a_newer_verified_tip() {
+        let proven = |height| Evidence::HeaderMmrProven {
+            block_hash: [2; 32],
+            height,
+        };
+        let fresh = || {
+            let mut state = ReconciliationState::default();
+            state.reconcile_candidate(
+                "bip37",
+                SourceId::new("peer"),
+                proven(7),
+                Some((7, [2; 32])),
+                true,
+            );
+            state
+        };
+        let verified = |tip: (u32, Hash32)| tip == (9, [9; 32]);
+
+        // Newer and verified: accepted, labelled as a downgrade.
+        let mut state = fresh();
+        assert_eq!(
+            state.reconcile_refresh(
+                "electrum",
+                SourceId::new("server"),
+                Evidence::ServerAssertion,
+                Some((9, [9; 32])),
+                verified,
+            ),
+            ReconciliationDecision::Accepted
+        );
+        assert_eq!(state.authoritative.as_ref().unwrap().value, "electrum");
+        assert_eq!(state.sync.chain_tip, Some((9, [9; 32])));
+        assert_eq!(state.sync.verification, VerificationState::Discovered);
+        assert!(state.sync.history_fresh && state.sync.utxos_fresh);
+        assert_eq!(
+            state.sync.degraded_reason.as_deref(),
+            Some("evidence lowered from header-proven to server-reported at a newer verified tip")
+        );
+
+        // Same tip, an older one, an unverified newer one, or no tip: kept.
+        for tip in [
+            Some((7, [2; 32])),
+            Some((6, [6; 32])),
+            Some((9, [8; 32])),
+            None,
+        ] {
+            let mut state = fresh();
+            let retained = state.authoritative.clone();
+            assert_eq!(
+                state.reconcile_refresh(
+                    "electrum",
+                    SourceId::new("server"),
+                    Evidence::ServerAssertion,
+                    tip,
+                    verified,
+                ),
+                ReconciliationDecision::PreservedWeakerEvidence,
+                "{tip:?}"
+            );
+            assert_eq!(state.authoritative, retained);
+        }
+
+        // Equal or stronger evidence follows the ordinary rule.
+        let mut state = fresh();
+        assert_eq!(
+            state.reconcile_refresh(
+                "peer",
+                SourceId::new("peer"),
+                proven(8),
+                Some((8, [8; 32])),
+                |_| false
+            ),
+            ReconciliationDecision::Accepted
+        );
+        assert!(state.sync.degraded_reason.is_none());
+    }
+
+    #[test]
+    fn notes_are_kept_beside_each_other_once() {
+        let mut state = ReconciliationState::<()>::default();
+        state.note_degraded("evidence lowered");
+        state.note_degraded("headers did not advance");
+        state.note_degraded("headers did not advance");
+        state.note_degraded("evidence lowered");
+        assert_eq!(
+            state.sync.degraded_reason.as_deref(),
+            Some("evidence lowered; headers did not advance")
+        );
+        state.note_degraded("evidence lowered; headers did not advance; more");
+        assert_eq!(
+            state.sync.degraded_reason.as_deref(),
+            Some("evidence lowered; headers did not advance; more")
+        );
     }
 
     #[test]
