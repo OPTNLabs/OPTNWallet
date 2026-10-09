@@ -43,6 +43,11 @@ pub enum ShvMmrError {
     StoredCheckpointTooLarge,
     StoredCheckpointNetworkMismatch,
     StoredCheckpointTrustMismatch,
+    /// This verifier holds nothing to step back from: no tip header, or a
+    /// tip with no parent.
+    ParentUnavailable,
+    /// Headers offered as this verifier's own past do not reproduce it.
+    ParentMismatch,
 }
 
 impl From<HeaderPowError> for ShvMmrError {
@@ -184,6 +189,59 @@ impl ShvMmrHeaderVerifier {
     /// a proof fetched alongside an untrusted root does not establish trust.
     pub fn tip_checkpoint_proof(&self) -> Option<(&BlockHeaderBytes, &[Hash32])> {
         Some((self.last_header.as_ref()?, &self.last_leaf_proof))
+    }
+
+    /// How many headers directly below the tip's parent [`Self::parent`]
+    /// needs: the parent's own proof runs through the subtrees it was merged
+    /// with, 2^m - 1 blocks for m trailing one bits of its height.
+    pub fn headers_below_parent(&self) -> Option<u32> {
+        let parent_height = self.accumulator.leaf_count().checked_sub(2)?;
+        u32::try_from((1u64 << parent_height.trailing_ones()) - 1).ok()
+    }
+
+    /// This verifier as it was one block earlier, at the tip's parent.
+    ///
+    /// The accumulator keeps only peaks, but the tip's own proof lists the
+    /// peaks the tip was appended to, so the state one block back needs no
+    /// replay from genesis. `parent` is believed because its hash is the tip's
+    /// previous-block hash, and `below` (the [`Self::headers_below_parent`]
+    /// headers directly under it, oldest first) because together they
+    /// reproduce that state. Nothing a peer supplies is believed on its own.
+    pub fn parent(
+        &self,
+        parent: &BlockHeaderBytes,
+        below: &[BlockHeaderBytes],
+    ) -> Result<Self, ShvMmrError> {
+        let (tip, tip_hash) = self
+            .last_header
+            .as_ref()
+            .zip(self.last_hash)
+            .ok_or(ShvMmrError::ParentUnavailable)?;
+        let at_parent = self
+            .accumulator
+            .before_last_leaf(tip_hash, &self.last_leaf_proof)
+            .filter(|accumulator| !accumulator.is_empty())
+            .ok_or(ShvMmrError::ParentUnavailable)?;
+        let parsed = verify_declared_pow(&parent.0)?;
+        if tip.0[4..36] != parsed.hash[..] {
+            return Err(ShvMmrError::ParentMismatch);
+        }
+        let below = below
+            .iter()
+            .map(|header| verify_declared_pow(&header.0).map(|parsed| parsed.hash))
+            .collect::<Result<Vec<_>, _>>()?;
+        let before_parent = at_parent
+            .before_append(parsed.hash, &below)
+            .ok_or(ShvMmrError::ParentMismatch)?;
+        Ok(Self {
+            last_leaf_proof: before_parent.proof_for_next_leaf(parsed.hash),
+            accumulator: at_parent,
+            provenance: self.provenance.clone(),
+            last_hash: Some(parsed.hash),
+            last_time: Some(parsed.time),
+            last_header: Some(parent.clone()),
+            difficulty: self.difficulty,
+        })
     }
 
     /// Encode public resume material. The host separately persists the trusted
@@ -661,6 +719,87 @@ mod tests {
         crate::sync_worker::ProgressiveSyncWorker::new(Default::default())
             .with_header_verifier(Network::Chipnet, verifier)
             .expect("genesis plus ASERT is enough to enable verified P2P sync");
+    }
+
+    /// The shipped regtest genesis and `count` mined headers after it;
+    /// `chain[h]` is the header at height `h`.
+    fn regtest_chain(count: u32) -> (ShvMmrHeaderVerifier, Vec<BlockHeaderBytes>) {
+        let genesis = shipped_header_verifier(Network::Regtest).expect("regtest genesis");
+        let mut chain = vec![genesis.tip_checkpoint_proof().unwrap().0.clone()];
+        let mut previous = genesis.last_hash().unwrap();
+        let start = genesis.last_time().unwrap();
+        let bits = AsertParams::for_network(Network::Regtest).max_bits;
+        for height in 1..=count {
+            let mut raw = [0u8; 80];
+            raw[0..4].copy_from_slice(&1u32.to_le_bytes());
+            raw[4..36].copy_from_slice(&previous);
+            raw[36..68].copy_from_slice(&height.to_le_bytes().repeat(8));
+            raw[68..72].copy_from_slice(&(start + height * 600).to_le_bytes());
+            raw[72..76].copy_from_slice(&bits.to_le_bytes());
+            previous = (0u32..)
+                .find_map(|attempt| {
+                    raw[76..80].copy_from_slice(&attempt.to_le_bytes());
+                    verify_declared_pow(&raw).ok().map(|parsed| parsed.hash)
+                })
+                .unwrap();
+            chain.push(BlockHeaderBytes(raw));
+        }
+        (genesis, chain)
+    }
+
+    /// A view that lost its reorg ring can still step back one block: the
+    /// tip's proof gives the state, a few headers below give the parent's own
+    /// proof, and the result is exactly the verifier that block had.
+    #[test]
+    fn parent_is_the_verifier_one_block_back() {
+        let (genesis, chain) = regtest_chain(70);
+        let at = |height: usize| {
+            let mut verifier = genesis.clone();
+            verifier.extend(&chain[1..=height]).unwrap();
+            verifier
+        };
+        assert_eq!(genesis.headers_below_parent(), None);
+        assert_eq!(
+            genesis.parent(&chain[0], &[]).err(),
+            Some(ShvMmrError::ParentUnavailable)
+        );
+        for tip in 1..=70usize {
+            let verifier = at(tip);
+            let expected = at(tip - 1);
+            let below = verifier.headers_below_parent().unwrap() as usize;
+            let parent_height = tip - 1;
+            let under = &chain[parent_height - below..parent_height];
+            let parent = verifier.parent(&chain[parent_height], under).unwrap();
+
+            assert_eq!(parent.state(), expected.state());
+            assert_eq!(parent.last_hash(), expected.last_hash());
+            assert_eq!(parent.last_time(), expected.last_time());
+            assert_eq!(parent.tip_checkpoint_proof(), expected.tip_checkpoint_proof());
+            let json = parent.encode_checkpoint_json(Network::Regtest).unwrap();
+            ShvMmrHeaderVerifier::from_checkpoint_json(&json, Network::Regtest, &parent.checkpoint())
+                .expect("the stepped-back state persists like any other");
+            let mut again = parent.clone();
+            again.extend(&chain[tip..=tip]).unwrap();
+            assert_eq!(again.state(), verifier.state());
+
+            // Only the tip's real parent, with exactly the blocks under it.
+            assert_eq!(
+                verifier.parent(&chain[tip], under).err(),
+                Some(ShvMmrError::ParentMismatch)
+            );
+            if below > 0 {
+                assert_eq!(
+                    verifier
+                        .parent(&chain[parent_height], &chain[parent_height - below + 1..=parent_height])
+                        .err(),
+                    Some(ShvMmrError::ParentMismatch)
+                );
+                assert_eq!(
+                    verifier.parent(&chain[parent_height], &under[1..]).err(),
+                    Some(ShvMmrError::ParentMismatch)
+                );
+            }
+        }
     }
 
     #[test]

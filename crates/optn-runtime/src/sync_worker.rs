@@ -865,6 +865,13 @@ impl ProgressiveSyncWorker {
                     // The source's next block does not build on this chain's
                     // tip: its chain left this one. Find where, roll back to a
                     // state this view really had there, and continue from it.
+                    Self::seed_missing_ring(
+                        service,
+                        &header_route,
+                        &mut view,
+                        self.config.header_batch_size.max(1),
+                    )
+                    .await?;
                     let fork = Self::find_fork(service, &header_route, &view).await?;
                     reorg = Some((fork, view.ring_headers_above(fork)));
                     view.rollback_to(fork)
@@ -901,6 +908,69 @@ impl ProgressiveSyncWorker {
             }
         }
         Err(ProgressiveSyncError::HeaderSafetyLimit)
+    }
+
+    /// One block of reorg ring for a view that has none.
+    ///
+    /// A view restored from a record written before rings were kept, and not
+    /// extended since, cannot step back even one block, so an orphaned tip
+    /// would hold it behind the chain for good: found live on chipnet, where a
+    /// one-block orphan at 325,540 stopped every wallet's headers there. The
+    /// state one block back comes from the tip's own proof and the few headers
+    /// under its parent, and the view authenticates those itself
+    /// ([`ShvMmrHeaderVerifier::parent`]); the source is trusted for nothing.
+    /// A parent needing more than `max_headers` blocks under it is left to
+    /// the refusal [`Self::find_fork`] gives.
+    async fn seed_missing_ring(
+        service: &mut ChainService,
+        route: &CapabilityRoute,
+        view: &mut VerifiedHeaderView,
+        max_headers: u32,
+    ) -> Result<(), ProgressiveSyncError> {
+        let Some((tip, _)) = view.tip() else {
+            return Ok(());
+        };
+        if view.rollback_floor().is_some_and(|floor| floor < tip) {
+            return Ok(());
+        }
+        let Some(count) = view
+            .verifier()
+            .headers_below_parent()
+            .and_then(|below| below.checked_add(1))
+            .filter(|count| *count <= max_headers)
+        else {
+            return Ok(());
+        };
+        let start = tip - count;
+        let observation = service
+            .execute_on_route(
+                route,
+                &ChainRequest::HeaderSync {
+                    start_height: start,
+                    count,
+                },
+            )
+            .await
+            .map_err(ProgressiveSyncError::Chain)?;
+        let ChainPayload::Headers {
+            start_height,
+            headers,
+        } = observation.value
+        else {
+            return Err(ProgressiveSyncError::UnexpectedPayload);
+        };
+        if start_height != start || headers.len() != count as usize {
+            return Err(ProgressiveSyncError::InvalidHeaderRange);
+        }
+        let headers: Vec<BlockHeaderBytes> = headers.into_iter().map(BlockHeaderBytes).collect();
+        let (parent, below) = headers.split_last().expect("at least the parent was requested");
+        let parent = view
+            .verifier()
+            .parent(parent, below)
+            .map_err(ProgressiveSyncError::HeaderVerification)?;
+        view.seed_ring(parent)
+            .map_err(ProgressiveSyncError::HeaderView)?;
+        Ok(())
     }
 
     /// Where `route`'s chain leaves this view's: the highest block both
@@ -2748,6 +2818,55 @@ pub(crate) mod tests {
             Err(ProgressiveSyncError::ReorgBeyondWindow {
                 floor: 20 - crate::header_view::REORG_WINDOW
             })
+        );
+        assert_eq!(worker.header_view().unwrap().checkpoint(), before);
+    }
+
+    /// A view sealed before reorg rings were kept, whose tip was then
+    /// orphaned, follows the chain again. Found live on chipnet: a one-block
+    /// orphan at 325,540 held every wallet's headers there, because the
+    /// restored view could not step back even one block. One block of ring is
+    /// rebuilt from the tip's own proof; a deeper fork is still refused.
+    #[tokio::test]
+    async fn a_view_sealed_without_a_ring_follows_a_one_block_orphan() {
+        let old = regtest_headers(10, None);
+        let ringless = || {
+            let view = straight_view(&old);
+            let trusted = view.checkpoint();
+            let mut record: serde_json::Value =
+                serde_json::from_str(&view.encode().unwrap()).unwrap();
+            record["ring"] = serde_json::Value::Null;
+            let restored =
+                VerifiedHeaderView::restore(&record.to_string(), Network::Regtest, &trusted)
+                    .unwrap();
+            assert_eq!(restored.rollback_floor(), None, "no ring came back");
+            ProgressiveSyncWorker::new(ProgressiveSyncConfig::default())
+                .with_header_view(restored)
+                .unwrap()
+        };
+
+        for protocol in [ProtocolFamily::Electrum, ProtocolFamily::Bip37] {
+            let new = regtest_headers(14, Some(9));
+            let mut worker = ringless();
+            header_pass(&mut worker, protocol, new.clone())
+                .await
+                .unwrap_or_else(|error| panic!("{protocol:?}: {error:?}"));
+            let view = worker.header_view().unwrap();
+            assert_eq!(view.checkpoint(), straight_view(&new).checkpoint(), "{protocol:?}");
+            // What it seals now carries a ring, so a later orphan is followed
+            // the ordinary way.
+            let restored =
+                VerifiedHeaderView::restore(&view.encode().unwrap(), Network::Regtest, &view.checkpoint())
+                    .unwrap();
+            assert!(restored.rollback_floor().is_some_and(|floor| floor < 14));
+        }
+
+        // Two orphaned blocks: the tip vouches only for its own parent.
+        let mut worker = ringless();
+        let before = worker.header_view().unwrap().checkpoint();
+        assert_eq!(
+            header_pass(&mut worker, ProtocolFamily::Electrum, regtest_headers(14, Some(8))).await,
+            Err(ProgressiveSyncError::HeaderVerification(ShvMmrError::ParentMismatch))
         );
         assert_eq!(worker.header_view().unwrap().checkpoint(), before);
     }

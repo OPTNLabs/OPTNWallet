@@ -340,6 +340,51 @@ impl VerifiedHeaderView {
         self.snapshots.front().map(|snapshot| snapshot.height)
     }
 
+    /// Give a view with no reorg ring one block of it.
+    ///
+    /// A view restored from a record written before rings were kept has none,
+    /// and gets none until it extends, so an orphaned tip leaves it unable to
+    /// follow the chain at all. `parent` is this view's verifier one block back
+    /// ([`ShvMmrHeaderVerifier::parent`]), kept only if extending it with the
+    /// tip reproduces this view exactly. Returns whether a ring was seeded; a
+    /// view that already has one is left as it is.
+    pub fn seed_ring(&mut self, parent: ShvMmrHeaderVerifier) -> Result<bool, HeaderViewError> {
+        let Some((tip, _)) = self.tip() else {
+            return Ok(false);
+        };
+        if self.rollback_floor().is_some_and(|floor| floor < tip) {
+            return Ok(false);
+        }
+        let tip_header = self
+            .verifier
+            .tip_checkpoint_proof()
+            .map(|(header, _)| header.clone())
+            .ok_or(ShvMmrError::ParentUnavailable)?;
+        let mut replayed = parent.clone();
+        replayed.extend(std::slice::from_ref(&tip_header))?;
+        if parent.state()?.height.checked_add(1) != Some(tip)
+            || replayed.state()? != self.verifier.state()?
+        {
+            return Err(ShvMmrError::ParentMismatch.into());
+        }
+        let mut window = self.window.clone();
+        window.pop_back();
+        self.snapshots = VecDeque::from([
+            ViewSnapshot {
+                height: tip - 1,
+                verifier: parent,
+                window,
+            },
+            ViewSnapshot {
+                height: tip,
+                verifier: self.verifier.clone(),
+                window: self.window.clone(),
+            },
+        ]);
+        self.ring_headers = VecDeque::from([tip_header]);
+        Ok(true)
+    }
+
     /// Whether `block` is this view's tip or a block its reorg ring holds:
     /// a height and hash these verified headers vouch for.
     pub fn holds(&self, block: (u32, Hash32)) -> bool {
