@@ -103,9 +103,14 @@ account `m/44'/145'/0'`. This account is explicit despite the Chipnet test scope
   is verified and assembled by `psbtFinalizeCashTokensP2pkh` against the
   approved bytes, not by the BCH-only TypeScript path. Single-signer P2PKH
   wallets only; multisig wallets keep BCH sends.
-- Not yet: the CLI's `token-send` / `send-nft` on the same planner (the hot
-  wallet's Simple Send moves onto it with the PR #63 Rust migration), and
-  evidence of what a physical SeedCash shows for a token PSBT.
+- The CLI's `token-send` and `send-nft` plan through the same shared planner
+  and sign with `Transaction::sign_spending_tokens`. Before, they selected
+  coins inline and signed token inputs as if they carried no tokens, which
+  nodes reject, and `token-send` dropped an NFT riding on a fungible coin it
+  spent. `send-nft` now returns fungible units on the NFT's coin to the wallet
+  instead of sending them along.
+- Not yet: the hot wallet's Simple Send on this planner (with the PR #63 Rust
+  migration), and evidence of what a physical SeedCash shows for a token PSBT.
 
 These APIs do not prove parent chain inclusion/unspentness or authorize a spend.
 The GUI token selection/approval flow is not enabled by this patch. A caller must
