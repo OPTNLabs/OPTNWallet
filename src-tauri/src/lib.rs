@@ -506,6 +506,37 @@ fn fusion_p2p_encode_component(
     fusion::p2p_component::encode_component_for_p2p(request)
 }
 
+/// One coin a server fusion contributes, as planning sees it: the key that will
+/// sign it and its value. No private key crosses for planning.
+#[derive(serde::Deserialize)]
+struct FusionAllocationInputReq {
+    pubkey: String,
+    value: u64,
+}
+
+/// Plan the outputs for every tier `inputs` can fund on a server advertising
+/// `expected_hello` (Electron Cash `allocate_outputs`), with randomness from the
+/// operating system. The renderer then fetches as many fresh output scripts as
+/// the largest plan needs and hands the plans to `fusion_run`, which checks
+/// them again against the live ServerHello.
+#[tauri::command]
+fn fusion_allocate_tiers(
+    expected_hello: fusion::server_plan::ExpectedHello,
+    inputs: Vec<FusionAllocationInputReq>,
+    only_tiers: Option<Vec<u64>>,
+) -> Result<Vec<fusion::server_plan::FusionTierPlan>, String> {
+    let mut contribution = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        contribution.push((decode_hex(&input.pubkey)?, input.value));
+    }
+    fusion::allocate::plan_contribution(
+        &expected_hello,
+        &contribution,
+        only_tiers.as_deref(),
+        &mut fusion::allocate::os_uniform(),
+    )
+}
+
 /// Run a full CashFusion round (Phase 1.7): contribute `inputs` (each with the
 /// key to sign it) and fresh `outputs`, join `tier`, and fuse. Returns the
 /// assembled transaction on success. Same Tor requirement as the other fusion
@@ -1467,6 +1498,7 @@ pub fn run() {
             fusion_prepare_round,
             fusion_p2p_sign,
             fusion_p2p_encode_component,
+            fusion_allocate_tiers,
             fusion_run,
             fusion_cancel_round,
             fusion_relay_broadcast_and_observe,
@@ -1647,6 +1679,44 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The renderer plans through this command: public keys and values in,
+    /// round-ready plans out, malformed keys refused.
+    #[test]
+    fn tier_planning_takes_public_keys_and_values() {
+        let hello = fusion::server_plan::ExpectedHello {
+            tiers: vec![10_000, 100_000, 1_000_000],
+            num_components: 23,
+            component_feerate: 1_000,
+            min_excess_fee: 10,
+            max_excess_fee: 10_000,
+        };
+        let inputs = |pubkey: &dyn Fn(u8) -> String| {
+            (0..10u8)
+                .map(|b| FusionAllocationInputReq {
+                    pubkey: pubkey(b),
+                    value: 500_000,
+                })
+                .collect::<Vec<_>>()
+        };
+        let plans = fusion_allocate_tiers(
+            hello.clone(),
+            inputs(&|b| format!("02{}", hex::encode([b + 1; 32]))),
+            None,
+        )
+        .unwrap();
+        assert!(!plans.is_empty());
+        for plan in &plans {
+            assert!(hello.tiers.contains(&plan.tier));
+            assert!(plan.output_values.len() + 10 <= hello.num_components as usize);
+        }
+        assert!(fusion_allocate_tiers(
+            hello,
+            inputs(&|b| format!("zz{}", hex::encode([b + 1; 32]))),
+            None
+        )
+        .is_err());
+    }
 
     #[tokio::test]
     async fn native_hex_boundaries_reject_malformed_input() {

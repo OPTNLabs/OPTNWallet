@@ -1,8 +1,9 @@
-// Shared server fusion runner — used by both manual settings and future auto
-// mode. Accepts a ServerHello snapshot from the handshake probe and validates
-// it against Electron Cash limits BEFORE spending any keys. Registers every
-// feasible tier (EC allocate_outputs), randomizes the excess fee per tier, and
-// uses random_outputs_for_tier semantics with exponential distribution.
+// Shared server fusion runner — used by both manual settings and auto mode.
+// Takes a ServerHello snapshot from the native handshake, which refuses a
+// server outside Electron Cash's limits before any key is derived. Tier
+// planning (EC allocate_outputs and random_outputs_for_tier: every feasible
+// tier, a random excess fee per tier, exponential output amounts) runs
+// natively in optn-fusion, the same code for every surface.
 //
 // The runner never claims a result is "fused" until the Rust engine returns an
 // exact txid + tx_hex, the attempt is persisted, and the network is shown to
@@ -38,25 +39,6 @@ import {
 import { isLocalFusionDestination } from './FusionTorResolver';
 import { networkProfile } from '../../utils/networkProfile';
 
-// ── EC protocol constants (protocol.py / util.py / server.py) ─────────────
-// Strict Electron Cash client limits — keep in lockstep with EC sources.
-const MAX_COMPONENT_FEERATE = 5000; // server.py / util validation
-const MAX_EXCESS_FEE = 10_000;
-const MAX_COMPONENTS = 40;
-const MAX_FEE = 45_000;
-const MIN_TX_COMPONENTS = 11;
-const MIN_OUTPUT = 10_000; // protocol.py MIN_OUTPUT
-// Electron Cash's reference server advertises 6 decades x 12 E12 values = 72
-// tiers. Keep a bounded margin above that rather than rejecting the reference
-// implementation itself.
-const MAX_SERVER_TIERS = 128;
-
-// ── Fee formulas (util.py) ────────────────────────────────────────────────
-const componentFee = (size: number, feerate: number) =>
-  Math.ceil((size * feerate) / 1000); // ponytail: matches (size*feerate+999)//1000
-const sizeOfInput = (pubkeyLen: number) => 108 + pubkeyLen;
-const feePerOutput = (feerate: number) => componentFee(34, feerate); // P2PKH output
-
 // ── ServerHello snapshot ──────────────────────────────────────────────────
 export interface ServerHelloSnapshot {
   tiers: number[];
@@ -65,6 +47,13 @@ export interface ServerHelloSnapshot {
   minExcessFee: number;
   maxExcessFee: number;
   donationAddress?: string | null;
+}
+
+/** One tier's plan, as native planning returns it and `fusion_run` takes it. */
+interface FusionTierPlan {
+  tier: number;
+  outputValues: number[];
+  excessFee: number;
 }
 
 interface FusionExecutionStatus {
@@ -222,235 +211,6 @@ export function defaultRelayEndpoints(network: Network): FusionRelayEndpoints {
   };
 }
 
-const isSafeNonNegativeInteger = (value: number) =>
-  Number.isSafeInteger(value) && value >= 0;
-
-/**
- * Validate a ServerHello against the EC safety limits.
- * Throws on any violation — the round must not proceed.
- */
-export function validateServerHello(hello: ServerHelloSnapshot): void {
-  if (
-    !Array.isArray(hello.tiers) ||
-    hello.tiers.length === 0 ||
-    hello.tiers.length > MAX_SERVER_TIERS ||
-    hello.tiers.some(
-      (tier) => !Number.isSafeInteger(tier) || tier < MIN_OUTPUT
-    ) ||
-    new Set(hello.tiers).size !== hello.tiers.length
-  ) {
-    throw new Error('bad config on server: tiers');
-  }
-  if (
-    !isSafeNonNegativeInteger(hello.componentFeerate) ||
-    !isSafeNonNegativeInteger(hello.minExcessFee) ||
-    !isSafeNonNegativeInteger(hello.maxExcessFee)
-  ) {
-    throw new Error('bad config on server: numeric values');
-  }
-  if (hello.componentFeerate > MAX_COMPONENT_FEERATE) {
-    throw new Error('excessive component feerate from server');
-  }
-  if (hello.minExcessFee > 400) {
-    throw new Error('excessive min excess fee from server');
-  }
-  if (hello.minExcessFee > hello.maxExcessFee) {
-    throw new Error('bad config on server: fees');
-  }
-  if (
-    !Number.isSafeInteger(hello.numComponents) ||
-    hello.numComponents < Math.ceil(MIN_TX_COMPONENTS * 1.5) ||
-    hello.numComponents > MAX_COMPONENTS
-  ) {
-    throw new Error('bad config on server: num_components');
-  }
-}
-
-// ── random_outputs_for_tier (EC fusion.py) ────────────────────────────────
-/**
- * EC-compatible exponential output allocation. Returns `null` on expected
- * failures (input too small/large for the distribution). On success, the
- * returned values sum exactly to `inputAmount`.
- *
- * `rng` returns a uniform [0, 1) random number.
- */
-export function randomOutputsForTier(
-  rng: () => number,
-  inputAmount: number,
-  scale: number,
-  offset: number,
-  maxCount: number
-): number[] | null {
-  if (
-    !Number.isSafeInteger(inputAmount) ||
-    !Number.isSafeInteger(scale) ||
-    !Number.isSafeInteger(offset) ||
-    !Number.isSafeInteger(maxCount) ||
-    inputAmount < offset ||
-    scale <= 0 ||
-    offset <= 0 ||
-    maxCount < 1
-  ) {
-    return null;
-  }
-
-  // Exponential variate: -scale * ln(1 - U)
-  const expovariate = () => {
-    const sample = rng();
-    if (!Number.isFinite(sample) || sample < 0 || sample >= 1) {
-      throw new Error('fusion random source returned an invalid sample');
-    }
-    return -scale * Math.log(1 - sample);
-  };
-
-  let remaining = inputAmount;
-  const values: number[] = [];
-  for (let i = 0; i < maxCount + 1; i++) {
-    const val = expovariate();
-    remaining -= Math.ceil(val) + offset;
-    if (remaining < 0) break;
-    values.push(val);
-  }
-  // If we exhausted maxCount+1 iterations without breaking, too many outputs
-  if (values.length > maxCount) return null;
-  if (values.length === 0) return null;
-
-  const desiredRandomSum = inputAmount - values.length * offset;
-  if (desiredRandomSum < 0) return null;
-
-  // Rescale + round in cumulative space (EC method)
-  const cumsum: number[] = [];
-  let acc = 0;
-  for (const v of values) {
-    acc += v;
-    cumsum.push(acc);
-  }
-  const rescale = desiredRandomSum / cumsum[cumsum.length - 1];
-  const normedCumsum = cumsum.map((v) => Math.round(rescale * v));
-
-  const result: number[] = [];
-  let prev = 0;
-  for (const cs of normedCumsum) {
-    result.push(offset + (cs - prev));
-    prev = cs;
-  }
-
-  return result;
-}
-
-// ── Per-tier allocation plan ──────────────────────────────────────────────
-export interface TierPlan {
-  values: number[]; // output values (tier-sized via random_outputs_for_tier)
-  excessFee: number;
-  inputFees: number;
-}
-
-/**
- * Register every feasible tier (EC allocate_outputs). Returns a map from
- * tier → allocation plan. The caller picks one after FusionBegin tells
- * which tier was selected.
- */
-/**
- * Restrict planning to specific tiers.
- *
- * A wallet registers for every tier its coins can fund, and which tiers those
- * are depends on `sumIn` and the input count — plus a random fuzz fee, so the
- * set is not even stable for identical coins. Two wallets therefore land in
- * different pools and wait forever without ever being told why: observed live
- * as `registered_tiers=6` and `registered_tiers=4` with `max_players=1`.
- *
- * That is correct behaviour on a busy server, where a large pool absorbs the
- * variance. It makes a two-party test a coin flip. Pinning a tier turns "run it
- * repeatedly and hope" into a decision.
- */
-export function allocateAllFeasibleTiers(
-  hello: ServerHelloSnapshot,
-  sumIn: number,
-  inputPubkeys: Uint8Array[],
-  rng: () => number,
-  onlyTiers?: readonly number[]
-): Map<number, TierPlan> {
-  const numInputs = inputPubkeys.length;
-  if (
-    !Number.isSafeInteger(sumIn) ||
-    sumIn <= 0 ||
-    numInputs === 0 ||
-    inputPubkeys.some(
-      (key) =>
-        key.length !== 33 || (key[0] !== 0x02 && key[0] !== 0x03)
-    )
-  ) {
-    return new Map();
-  }
-  const maxComponents = hello.numComponents;
-  const maxOutputs = maxComponents - numInputs;
-  if (maxOutputs < 1) return new Map();
-
-  const numDistinct = new Set(
-    inputPubkeys.map((pk) => Array.from(pk).join(','))
-  ).size;
-  const minOutputs = Math.max(MIN_TX_COMPONENTS - numDistinct, 1);
-  if (maxOutputs < minOutputs) return new Map();
-
-  const inputFees = inputPubkeys.reduce(
-    (sum, pk) => sum + componentFee(sizeOfInput(pk.length), hello.componentFeerate),
-    0
-  );
-  const availForOutputs = sumIn - inputFees - hello.minExcessFee;
-  const outputFee = feePerOutput(hello.componentFeerate);
-  const offsetPerOutput = MIN_OUTPUT + outputFee;
-
-  if (availForOutputs < offsetPerOutput) return new Map();
-
-  const result = new Map<number, TierPlan>();
-
-  // Intersected with what the server advertises, so a pinned tier the server
-  // does not offer yields an empty plan set and a clear refusal upstream —
-  // rather than silently registering for everything and reintroducing the
-  // problem this exists to solve.
-  const wanted =
-    onlyTiers && onlyTiers.length > 0 ? new Set(onlyTiers) : null;
-
-  for (const scale of hello.tiers) {
-    if (wanted && !wanted.has(scale)) continue;
-    // Fuzz fee: tier / 1_000_000 (EC: scale // 1000000)
-    const fuzzFeeMax = Math.floor(scale / 1_000_000);
-    const fuzzFeeMaxReduced = Math.min(
-      fuzzFeeMax,
-      MAX_EXCESS_FEE - hello.minExcessFee,
-      hello.maxExcessFee - hello.minExcessFee
-    );
-    if (fuzzFeeMaxReduced < 0) continue;
-
-    // Uniform random fuzz fee: 0..fuzzFeeMaxReduced inclusive
-    const fuzzFee = Math.floor(rng() * (fuzzFeeMaxReduced + 1));
-    const reducedAvail = availForOutputs - fuzzFee;
-    if (reducedAvail < offsetPerOutput) continue;
-
-    const outputs = randomOutputsForTier(
-      rng,
-      reducedAvail,
-      scale,
-      offsetPerOutput,
-      maxOutputs
-    );
-    if (!outputs || outputs.length < minOutputs) continue;
-
-    // Subtract per-output fees (EC: outputs = tuple(o - fee_per_output for o in outputs))
-    const finalValues = outputs.map((o) => o - outputFee);
-    if (finalValues.some((value) => value < MIN_OUTPUT)) continue;
-    if (numInputs + finalValues.length > MAX_COMPONENTS) continue;
-
-    const excessFee = sumIn - inputFees - reducedAvail;
-    const totalFee =
-      inputFees + finalValues.length * outputFee + excessFee;
-    if (!Number.isSafeInteger(totalFee) || totalFee > MAX_FEE) continue;
-    result.set(scale, { values: finalValues, excessFee, inputFees });
-  }
-
-  return result;
-}
-
 // ── Shared runner ─────────────────────────────────────────────────────────
 export interface ServerRunnerConfig {
   walletId: number;
@@ -477,8 +237,6 @@ export interface ServerRunnerConfig {
    * meet deliberately rather than by luck.
    */
   onlyTiers?: readonly number[];
-  /** Injected for deterministic tests; defaults to crypto.getRandomValues. */
-  _testRng?: () => number;
 }
 
 async function requireNativeExecutionReady(): Promise<void> {
@@ -507,8 +265,8 @@ export type ServerRunnerProgress = {
  * signature: `(coins, signal?, progress?) => Promise<{txid, warning?}>`.
  *
  * Both manual and auto callers use the same builder. The runner:
- *  - validates the snapshot against EC limits
- *  - allocates all feasible tiers and pre-generates the max output script pool
+ *  - plans every feasible tier natively and pre-generates the max output
+ *    script pool
  *  - passes the snapshot to fusion_run for live match before JoinPools
  *  - persists the assembled transaction before any relay attempt
  *  - relays and independently observes the exact transaction over Tor
@@ -521,9 +279,6 @@ export function buildServerRunner(
   signal?: AbortSignal,
   progress?: ServerRunnerProgress
 ) => Promise<{ txid: string; warning?: string }> {
-  // Validate up front — no keys are derived if the hello is bad
-  if (config.expectedHello) validateServerHello(config.expectedHello);
-
   return async (coins, signal, progress) => {
     if (signal?.aborted) throw new Error('fusion round cancelled');
 
@@ -547,7 +302,6 @@ export function buildServerRunner(
         config.useSsl,
         config.tor ?? undefined
       ));
-    validateServerHello(expectedHello);
     config.onServerHello?.(expectedHello);
     status(
       `Server ready — ${expectedHello.tiers.length} tier(s), preparing inputs…`,
@@ -585,42 +339,19 @@ export function buildServerRunner(
       const inputs = await gatherInputs(config.walletId, coins);
       if (signal?.aborted) throw new Error('fusion round cancelled');
 
-      const sumIn = inputs.reduce((sum, input) => sum + input.value, 0);
-      const inputPubkeys = inputs.map((input) => {
-        if (!/^(02|03)[0-9a-f]{64}$/i.test(input.pubkey)) {
-          throw new Error('Fusion input has an invalid compressed public key.');
-        }
-        return Uint8Array.from(
-          input.pubkey.match(/../g)!.map((byte) => parseInt(byte, 16))
-        );
-      });
-
-      const rng =
-        config._testRng ??
-        (() =>
-          crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000);
-      const plans = allocateAllFeasibleTiers(
+      // Planned natively from public keys and values only. It refuses a
+      // snapshot outside Electron Cash's limits and a contribution that funds
+      // no tier, naming pinned tiers when they are the reason.
+      const tierPlans = await invoke<FusionTierPlan[]>('fusion_allocate_tiers', {
         expectedHello,
-        sumIn,
-        inputPubkeys,
-        rng,
-        config.onlyTiers
+        inputs: inputs.map(({ pubkey, value }) => ({ pubkey, value })),
+        onlyTiers: config.onlyTiers ?? null,
+      });
+      if (signal?.aborted) throw new Error('fusion round cancelled');
+      const maxOutputCount = tierPlans.reduce(
+        (most, plan) => Math.max(most, plan.outputValues.length),
+        0
       );
-      if (plans.size === 0) {
-        // Distinguish the two causes. "Cannot afford any tier" sends someone
-        // looking for more coins; if they pinned a tier the wallet cannot fund,
-        // the answer is a different tier, and saying so saves the hunt.
-        throw new Error(
-          config.onlyTiers && config.onlyTiers.length > 0
-            ? `Selected inputs cannot fund the requested tier(s): ${config.onlyTiers.join(', ')} sats.`
-            : 'Selected inputs cannot afford any fusion tier.'
-        );
-      }
-
-      let maxOutputCount = 0;
-      for (const [, plan] of plans) {
-        maxOutputCount = Math.max(maxOutputCount, plan.values.length);
-      }
 
       const allScripts = await createFreshFusionOutputScripts(
         config.walletId,
@@ -629,11 +360,6 @@ export function buildServerRunner(
       );
       if (signal?.aborted) throw new Error('fusion round cancelled');
 
-      const tierPlans = [...plans.entries()].map(([tier, plan]) => ({
-        tier,
-        outputValues: plan.values,
-        excessFee: plan.excessFee,
-      }));
       // From this point an interrupted native invocation may already have
       // disclosed signatures. Keep the temporary lock unless a definitive
       // failure is returned or the durable outbound tracker takes over.

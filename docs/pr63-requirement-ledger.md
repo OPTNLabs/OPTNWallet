@@ -1836,3 +1836,44 @@ order, all encrypted; the existing refusals hold. Not yet run live (needs
 the trusted Tor). Follow-up in the Rust-first direction: move `send` and
 `tx` onto the shared native stack like `balance`, then retire the
 single-server client.
+
+### 2026-10-09: fusion tier planning runs in Rust, once for every surface
+
+Server CashFusion's tier planning (Electron Cash `allocate_outputs` and
+`random_outputs_for_tier`: every tier the coins can fund, a random excess
+fee per tier, exponential output amounts) lived in the desktop renderer
+(`ServerFusionRunner.ts`), with the ServerHello limits checked there too.
+The CLI and the headless docker runner could not plan a round without a
+second copy.
+
+`optn_fusion::allocate` is the one implementation. `plan_contribution`
+takes a hello snapshot, each input's compressed public key and value, and
+optional pinned tiers, and returns plans in the form `fusion_run` takes. It
+refuses a snapshot outside Electron Cash's limits, a key that is not a
+compressed public key, and a contribution that funds no tier, naming pinned
+tiers when they are the reason. Randomness comes from the operating system
+(`os_uniform`). An empty pin list restricts nothing, as before.
+
+The desktop asks through `fusion_allocate_tiers`; only public keys and
+values cross for planning, never private keys. The renderer's allocation
+code, its constants and its limit checks are removed. The limits are now
+checked natively where the ServerHello is read (the status handshake
+refuses a server outside them, so no caller shows or plans against one),
+again when planning, and again on the live hello in the round. One
+addition: a tier or `max_excess_fee` above all money (21M BCH) is refused,
+which also keeps every advertised value exact as a JavaScript number, the
+renderer's old safe-integer check.
+
+`test-vectors/fusion-allocation.json` was generated from the TypeScript
+before it was removed, with a fixed uniform sequence, over a small hello
+and Electron Cash's 72-tier reference; the Rust port reproduces every draw
+and plan exactly. Rust tests also cover balance and limits over 50
+sequences, pinning, the hello limits on the wire and on snapshots, and
+refusals before any random draw. The renderer tests now check that the
+runner plans from public keys and values only, requests fresh scripts for
+the largest plan, passes the plans to the round unchanged, and stops before
+any address or round on a planning refusal.
+
+Next in the same direction: the Auto Fusion driver (coin choice, rounds,
+fresh outputs) in `optn-runtime`, so `optn fusion` on the CLI and the
+docker runner fuse with the same code as the desktop.

@@ -63,7 +63,6 @@ import {
   defaultInputLookupEndpoint,
   parseFusionServerTarget,
   serverFusionPrivacyDestination,
-  validateServerHello,
 } from './ServerFusionRunner';
 import { selectPreparedFusionServer } from './serverFusionFailover';
 import {
@@ -259,7 +258,6 @@ export function useAutoFusion(policyReady = true): void {
                   target.useSsl,
                   tor ?? undefined
                 );
-                validateServerHello(hello);
                 return buildServerRunner({
                   walletId,
                   network,
