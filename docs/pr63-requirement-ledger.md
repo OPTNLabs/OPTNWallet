@@ -2350,3 +2350,68 @@ wraps open only for their receiver and refuse tampering and non-message
 rumors. Interop: `test-vectors/nostr-nip17-interop.json` holds one wrap made
 by nostr-tools and one by rust-nostr; Rust opens both, and a vitest beside
 the TypeScript transport opens both with nostr-tools. cargo-deny passes.
+
+### 2026-10-10: Marmot chat through MDK, beside ts-mls
+
+#83, continuing the Rust Nostr layer. The holder asked to port the chat to
+MDK, keeping the ts-mls engine as the fallback so nothing is lost, and to use
+MDK as published. `crates/optn-chat` drives `mdk-core` 0.8.0 unmodified over
+`optn-nostr`. The desktop runs it behind the `mdk-chat` build feature
+(`src-tauri/src/chat_mdk.rs`), and the chat screen reaches both engines through
+`mlsEngine.ts`. With "Marmot groups through MDK" on in the Nostr settings, new
+open groups go to MDK. Every other group, private groups and Paytaca stay on
+ts-mls, and both engines read the same inbox. `docs/chat-mdk.md` lists what
+MDK does and does not do; each gap was checked against MDK's source.
+
+- Store: MDK's SQLCipher store, keyed with HKDF-SHA256 of the chat identity's
+  secret. MDK's in-memory store cannot be exported (its snapshot type has
+  private fields), so it serves the tests only. On Windows, SQLCipher's
+  OpenSSL is built from source and needs Strawberry Perl as `OPENSSL_SRC_PERL`;
+  Git's Perl lacks `Locale::Maketext::Simple`, `IPC::Cmd` and others.
+- Relays: `optn-nostr` gained `nip59` (gift wraps for any rumor; Marmot
+  welcomes are kind 444), targeted publish, fetch and subscribe for a group's
+  own relays, and `RelayRoute::Dialer`. Through the dialer the desktop's
+  egress opens every relay stream (Tor switch, own hosts, public addresses
+  only, `ws://` only on this machine), and rust-nostr runs the WebSocket over
+  it.
+- Three faults found while testing, fixed in the engine:
+  1. MDK returns a welcome it has already handled, and accepting it again
+     rebuilt the group from the welcome's epoch. Only a pending welcome is
+     accepted now.
+  2. A member's post-join self-update could share a second with the commit
+     that added them. Relays order by `created_at` only, and MDK never retries
+     an event it failed to read, so a reader taking them in the wrong order
+     fell an epoch behind for good. Nothing is now published in the second of
+     the newest commit the engine made or read (or the welcome it joined by),
+     waiting up to 3 s.
+  3. A commit made from a stale epoch forked the group and lost under MIP-03.
+     Each commit is now preceded by reading the group's latest events.
+- The chat screen showed no group texts from others: MLS group messages are
+  kind 9 (ts-mls's own `innerKind9` too), and the thread and inbox counted
+  only kinds 14 and 15. Kind 9 counts now.
+- Dependency policy: MDK's OpenMLS crypto brings `hpke-rs` 0.6.1, and with it
+  `libcrux-sha3` 0.0.8 and `libcrux-secrets` 0.0.5. No hpke-rs 0.6 release
+  takes the fixed libcrux, and their advisories (RUSTSEC-2026-0207, -0208,
+  -0212) sit on paths ciphersuite 0x0001 never reaches (SHAKE only for X-Wing
+  and ML-KEM keys, and only one-shot). `deny.toml` and
+  `src-tauri/.cargo/audit.toml` hold each one with its reason and its removal
+  condition. The audit file also holds the five advisories of hpke-rs's
+  libcrux backend, which nothing enables and which appears only in
+  `Cargo.lock`. `lru` 0.16.4 (RUSTSEC-2026-0253) comes with MDK's memory
+  store, now a test-only dependency.
+
+Tests:
+- Three engines on a local relay take a group from invitation to leaving,
+  in 10 runs out of 10: a member without a key package is refused before
+  anything is made; then welcome, messages both ways (each read once however
+  often caught up), a file with its type and name, rename, live listening,
+  adding, removing (the removed member's group goes inactive), and a leave
+  committed by the admin.
+- With `sqlite`, a reopened store keeps its group, history and epoch and reads
+  on. The file has no SQLite header and no plaintext, and another identity's
+  key does not open it.
+- `optn-nostr`: 12 tests. Frontend: the facade sends each call to its
+  engine, and MDK events become chat messages and groups; the inbox counts
+  kind 9. 224 chat, nostr, state and i18n tests pass.
+- The desktop passes clippy with and without `mdk-chat`. cargo-deny passes
+  for the root and the desktop, and cargo audit passes for the desktop.
