@@ -24,24 +24,7 @@
 //! one place the word "start" appears, and it is a safety gate rather than a
 //! manual-mode switch: once armed, the driver runs by itself.
 
-/// The two transports for one feature. Mutually exclusive: only the selected
-/// one may start a round.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FusionMode {
-    /// Peer-to-peer, coordinated over Nostr. Requires Tor.
-    P2p,
-    /// A CashFusion server, coordinated by the server's pools.
-    Server,
-}
-
-impl FusionMode {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::P2p => "P2P",
-            Self::Server => "Server",
-        }
-    }
-}
+pub use optn_core::fusion::FusionMode;
 
 /// The durable Auto Fusion preference.
 ///

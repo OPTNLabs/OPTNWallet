@@ -425,6 +425,11 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
       startFusionRound({ ...base(), mode: 'server', trigger: 'manual' })
     ).resolves.toMatchObject({ status: 'fused' });
     expect(consolidateCrowded).toHaveBeenCalledTimes(1);
+    // The crowded address the shared policy named, with every one of its coins.
+    expect(consolidateCrowded.mock.calls[0][0].bucket).toEqual({
+      address: 'bchtest:q',
+      coins: [coin('aa'), coin('bb'), coin('cc'), coin('dd')],
+    });
     expect(runServer.mock.calls[0][0]).toHaveLength(1);
     expect(runServer.mock.calls[0][0][0].tx_hash).toBe('ee');
   });

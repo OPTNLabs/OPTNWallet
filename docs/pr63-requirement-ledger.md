@@ -82,7 +82,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 
 | # | Requirement | Status | Entry point / evidence | Gap |
 | --- | --- | --- | --- | --- |
-| 1 | Auto is the default and operation-aware | **PARTIAL** | `optn-runtime/src/bootstrap.rs::shipped_bootstrap_catalog`, wired in `src-tauri/src/chain_runtime.rs::catalog_and_policy_from_app_state`; `a_fresh_install_starts_from_the_shipped_catalog` | Both halves that are implementation are done: the catalog is non-empty on a fresh install, and operation-aware selection is in `build_selection_plan`. What is left is breadth -- one reviewed endpoint per network rather than §21.3's upstream feeds -- and that is listed below as a deliberate non-blocker. It is a product decision about whose servers every fresh install should contact, not a coding task; inventing hostnames to close the row would point installs at hosts nobody reviewed |
+| 1 | Auto is the default and operation-aware | **PROVEN** | `optn-runtime/src/bootstrap.rs::shipped_bootstrap_catalog`, wired in `src-tauri/src/chain_runtime.rs::catalog_and_policy_from_app_state`; `a_fresh_install_starts_from_the_shipped_catalog`. The catalog carries every §21.3 feed: Electron Cash's and General Protocols' server lists, servers found through `server.peers.subscribe`, and the DNS seeds of BCHN, Flowee the Hub, bchd and Knuth (2026-10-10 entry), each pinned and reviewed, with provenance merged | Operation-aware selection is `build_selection_plan`. Wallet operations go to a server first; P2P nodes found through the seeds are failover |
 | 2 | Users can pin policies/providers | **PROVEN** (Rust adapters; bounded GUI live selection) | Shared source catalog and `WireConnectionPolicy`; Leptos advanced selection/failover/add/remove controls, CLI `network configure`, and portable configuration import/export. Windows GUI Electrum selection and custom Tor persistence exercised on 2026-09-19 | Full selection matrix on every packaged platform and legacy React migration remain separate |
 | 3 | Privacy / own-infrastructure fail closed | **PROVEN** | `ConnectionPolicy`, `optn-chain-native::build_native_chain_stack`; `remote_full_node_adapters_remain_fail_closed_even_with_tor`, and live against real hosts in `optn-chain-native`'s `live_route_eligibility_follows_ownership_not_address_shape`: a declared own-infrastructure node on a private mesh routes with no Tor running, while a public endpoint under the same policy is refused | — |
 | 4 | Tor modelled as transport policy, not a provider | **PROVEN** | `TorProxyTrust` in `optn-chain-native`, `UserNetworkOverlay::trusted_socks_ports`, `optn_chain_trust_socks_proxy`, `optn_tor_readiness`, the CLI's `Client::trusting_socks_ports`, and `AppTransport::{tor_status, start_tor, trust_socks_port}` consumed by `optn-ui`'s `TorSection`; `a_socks_greeting_alone_does_not_make_a_proxy_trusted`, `provenance_is_what_makes_a_proxy_usable`, `a_trusted_port_that_stops_answering_is_not_still_trusted`, `an_unconfirmed_socks_proxy_is_reported_but_not_used` | A SOCKS5 greeting no longer grants trust -- it proves SOCKS5, which every no-auth proxy answers identically. Trust is provenance: a proxy this application started and owns, or one the holder confirmed once, persisted in the overlay the desktop and CLI share. Anything merely found on a conventional port is `Unverified` and refused. Both renderers now ask the runtime the same question instead of deciding for themselves -- the Leptos surface had no Tor awareness at all, so a holder there saw every public source refused with nothing saying why |
@@ -95,7 +95,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | 11 | No 2-of-3 provider voting | **PROVEN** | `reconciliation.rs` ranks evidence; no vote count exists | — |
 | 12 | SHV/MMR passes reference vectors | **PROVEN** | `optn-core/src/header_mmr.rs::reference_vectors` against bitcoincashautist's published vectors, byte-identical to BCHN's | — |
 | 13 | Pruning preserves historical verification and reorg recovery | **PROVEN** | `header_store.rs::prune_below`/`rewind_to`; driven against a node that actually reorganised by `optn-chain-neutrino/tests/regtest_live.rs::a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment` — pruning leaves the commitment unmoved, a forked branch is refused rather than extended onto, and the rebuild reaches the node's longer branch with a different commitment | Recovery is a rebuild from the anchor, not an in-place rewind: the accumulator is append-only and the test pins that rewinding the index alone does not let it extend. A pruned range still needs an SHV peer to re-prove, which BCHD does not serve |
-| 14 | CashFusion uses the shared chain observation layer | **PARTIAL** | Protocol in `crates/optn-fusion` (8,782 lines) with `optn-core/src/fusion/` for the primitives; 138 Rust tests. Driven from `src/platform/desktop/Fusion*.ts` (3,454 lines) | The protocol is Rust -- an earlier revision of this row said otherwise and was wrong. What remains is one module: `crates/optn-fusion/src/electrum_input.rs` (666 lines) speaks Electrum JSON-RPC over its own stream to check a peer's inputs, instead of routing through `chain_service`. Moving it is not mechanical: it decides blame during a live round, it takes a `Transport` whose Tor route the caller already chose, and the feature is released and reported working on chipnet and mainnet. It needs a live fusion round to verify, which this branch has no way to drive, so it is deferred rather than attempted blind |
+| 14 | CashFusion uses the shared chain observation layer | **PROVEN** (component) | A round checks its own and its peers' inputs through `optn_fusion::lookup::InputLookups`, implemented once by `optn_fusion_native::lookups::ChainInputLookups` over `optn-chain-electrum` (`ElectrumBackend::script_unspent_values`), on connections of the round's own and only through the verified Tor proxy for remote servers. The desktop and the CLI both use it; `electrum_input.rs` is deleted. Live on chipnet: six server rounds on the native host from the CLI and the docker runner, one with the desktop as a third player ("a live mixed fleet fuses") | Rounds are driven natively for the CLI and the docker runner (`optn-fusion-native::server_round`). The desktop still drives its rounds from `Fusion*.ts` for wallets whose keys live in the TypeScript key database, and P2P rounds (Nostr) have no Rust driver yet |
 | 15 | Explorer routing independent of consensus | **PROVEN** | `optn-core/src/explorer.rs` owns the presets, the templates and the refusal; `optn-runtime/src/explorer.rs::route_for_overlay` turns a saved `UserNetworkOverlay` into a link or a refusal; the renderer calls through via `explorerPresetUrl`/`explorerCustomUrl` and `src/utils/servers/useExplorerLink.ts`. `a_saved_own_infrastructure_policy_refuses_a_public_explorer`, `the_same_policy_opens_the_holders_own_explorer`, `own_infrastructure_refuses_every_public_preset`, and the renderer-side `explorers.test.ts`; `cargo run -p xtask -- architecture` fails any surface that names a public explorer host | Explorer links were the one path around the policy: the renderer held its own preset table and built URLs itself, so a wallet set to own-infrastructure-only still handed txids to a public site. The decision now has one home, and the refusal is rendered with its reason rather than as a missing button |
 | 16 | No renderer/shell owns networking or chain truth | **PARTIAL** | `cargo run -p xtask -- architecture` proves declared dependency boundaries | Legacy desktop Home/subscriptions still call TypeScript `ElectrumService` through `UTXOService`. Dependency checks do not prove every packaged interface uses the shared Rust runtime. |
 
@@ -116,7 +116,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | Sequential receive → spend lifecycle | **PROVEN** | `a_spend_is_found_through_an_outpoint_the_receive_scan_discovered`; spend invisible to a script-only scan | CashTokens/NFT/OP_RETURN/reorg/restart cases not covered |
 | Manual rescan, encrypted restart, GUI/CLI routing | **PROVEN** (runtime/CLI; bounded Windows GUI refresh/reopen) | `request_wallet_rescan`, encrypted checkpoints, Settings `rescan_wallet_from`, CLI `rescan --from-height`; CLI live floor checks and Windows GUI offline restart/online resume on 2026-09-19 | GUI custom-height interaction and current Android/macOS packages still need separate verification; normal HD refresh rechecks the configured floor, not only a suffix |
 | Wallet birthday | **PARTIAL** (durable imported hints connected) | Shared `SetBirthday`/`ClearRescan`, sealed checkpoint, atomic `BeginHd` floor resolution; CLI process restart and Windows GUI height/date reopen and manual-override clearing verified on 2026-09-19. Unknown imports explicitly scan from genesis; missing authenticated date evidence fails closed; legacy manual floors migrate | Automatic same-route header acquisition is connected and tested; requests retain their runtime generation across header I/O. Host-generated creation-anchor capture, restored historical-date evidence and live date acquisition remain to verify. Imported mnemonic input is never treated as proof of fresh wallet creation |
-| Local BCMR / authchain | **PARTIAL** | HD sync now invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Connected synthetic sync checks accepted identity, unknown spentness, output mismatch, wrong registry hash, absent fetch transport and stale-state downgrade | Needs real-node/token workflow; desktop RPC credential controls and CLI private-input controls are connected (see evidence below). Unknown successors outside wallet history need a selected spender-discovery capability; legacy TypeScript migration remains. Authenticated token-identity caching and stale restart semantics are connected and tested (see 2026-09-19 evidence below) |
+| Local BCMR / authchain | **PARTIAL** | HD sync invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Electrum routes resolve at a labelled server-reported assurance; burned heads and quiet heads follow the 2026-10-08 entry; Moria USD and Furu resolve live on mainnet through public Fulcrum | Packaged GUI rendering of a live token is not yet observed. The web/Android React app still resolves through its legacy TypeScript path |
 | Token capability execution | **INTEGRATION** | `optn-runtime/src/token_capability.rs`; refuses global totals from partial data | Planner and executor exist; no provider adapter routes through them |
 | Broadcast lifecycle | **PARTIAL** | `optn-runtime/src/tx_broadcast.rs`; retained desktop `TransactionManager` now submits signed bytes through the authenticated native command | Desktop single-account Send/CashTokens has guarded submission and preserves ambiguous outbox records. Durable shared outbox, uncovered contract/RPA/multisig inputs, and the other submission paths still need integration; see 2026-09-27 evidence below |
 
@@ -144,8 +144,8 @@ still integration work; model/transport tests do not prove paid rounds run.
 | PSBT / SeedCash / UR | **INTEGRATION** | `optn-core/src/airgap_spend.rs`, `psbt.rs`; `optn-runtime/src/airgap.rs` reserve HD change durably before export and bind signed imports to the current request. Captured SeedCash Schnorr return and ECDSA finalization pass; runtime actor tests cover reservation, storage failure, cancellation and restart | Fresh GUI/CLI signing and packaged-platform verification are still pending. Single-input Chipnet P2PKH `0x41` path; multisig, advanced sighash and broadcast integration remain separate |
 | RPA / Cash Code | **INTEGRATION** | `optn-core/src/rpa.rs` | Matrix `unit` |
 | Hardware | **PARTIAL** | `optn-ui/src/hardware.rs`, `HardwareVendor` | Vendor-by-surface audit not done; no device evidence |
-| CashFusion | **PARTIAL** | Rust protocol in `src-tauri/src/fusion/` + `optn-core/src/fusion/`; driven from `src/platform/desktop/Fusion*.ts` | Implemented and released; reported working on chipnet and mainnet. The remaining gap is the renderer/driver layer, not the protocol |
-| 44px targets, safe areas, contrast | **PARTIAL** | `optn-ui/style.css`, measured by `optn-ui/src/stylesheet.rs`: `interactive_controls_declare_a_44px_minimum_tap_target` requires an explicit `min-height: 44px` on `.primary`, `.secondary`, `.chip`, `.tab-item` and `.settings-row`, and `the_shell_respects_the_devices_safe_areas` requires both safe-area insets | Targets and safe areas are now measured rather than assumed -- declared as `min-height` because padding plus a line box lands near 42px and "nearly" never gets revisited. Contrast is still unmeasured. The same module found 17 classes the renderer uses that the stylesheet never defines -- `.error` and `.warn` among them, so a failure message renders as ordinary body text. They are baselined in `UNSTYLED_TODAY` rather than invented, and `no_new_class_is_left_unstyled` stops the list growing |
+| CashFusion | **PARTIAL** | Protocol in `crates/optn-fusion`; coin selection, tier planning and the depth record in Rust (`optn_core::fusion::{coin_selection, depth}`, `optn_fusion::allocate`), reached by the desktop through the WASM core and Tauri commands; native server-round host `crates/optn-fusion-native`, used by `optn fusion` and the docker runner | Released; reported working on chipnet and mainnet. Remaining: a Rust P2P (Nostr) round driver, moving the desktop's renderer driver onto the native host once its wallets are runtime-managed, and a Leptos fusion screen |
+| 44px targets, safe areas, contrast | **PROVEN** (measured in the stylesheet) | `optn-ui/style.css`, measured by `optn-ui/src/stylesheet.rs`: `interactive_controls_declare_a_44px_minimum_tap_target` requires an explicit `min-height: 44px` on `.primary`, `.secondary`, `.chip`, `.tab-item` and `.settings-row`; `the_shell_respects_the_devices_safe_areas` requires both safe-area insets; `text_meets_wcag_contrast_in_every_mode` (2026-10-10) checks text, muted, danger and warning at WCAG 4.5:1 against the page and the surface in all four modes and the default | Failure and caution text (`.error`, `.field-error`, `.warn`, `.warning`) now use the use-named `--danger` and `--warning` tokens, where before a failure read as body text. 13 layout classes remain in `UNSTYLED_TODAY`, and `no_new_class_is_left_unstyled` stops the list growing |
 | Capacitor/React retained until Leptos is proven | **PROVEN** | Both trees present | — |
 
 ---
@@ -206,9 +206,6 @@ These are future work and must not be read as release blockers.
 - **Removing TokenIndex or another specialized provider.** The point of the
   capability model is that this becomes an adapter deletion. It is not a
   precondition for the owned-asset work.
-- **Ingesting the full §21.3 bootstrap feeds.** The shipped catalog is the
-  product's own reviewed defaults today; broadening it is an ingest into the
-  same structure, which already preserves per-project provenance.
 
 ## Source settings integration evidence (2026-09-19)
 
@@ -1035,3 +1032,1519 @@ regressions and four new store publication tests. The connected real-node
 runtime/CLI test passes after the review fixes; strict runtime and CLI Clippy,
 Rust formatting and the architecture boundary check pass. Remote platform
 packages and security scans remain independent checks on the pushed revision.
+
+### 2026-10-08: #63 follow-up scope, checked against `62f8d85a`
+
+This follow-up keeps the shipped React/Tauri interface. The #71 Leptos/Slint
+overhaul is out of scope. Each row below was checked against the source at
+`62f8d85a` rather than copied from an earlier row. Rows close as the follow-up
+lands evidence for them.
+
+| Gap | Current code at `62f8d85a` | Closure |
+| --- | --- | --- |
+| Electrum-only wallets never resolve a token identity | `token_metadata::resolve_selected_identities_inner` accepts only `FullNodeValidated` transaction and terminal evidence, and `identity_from_step` discards any other authhead. Only `optn-chain-bchn` produces that evidence. The shipped sources are Electrum servers, so every owned token reads *Unverified* unless the holder runs BCHN | Accept Electrum observations at an explicit server-reported assurance that reaches every surface. Node-validated stays distinct |
+| Electrum cannot answer `OutpointSpentness` | `optn-chain-electrum` returns `Unsupported` | `blockchain.utxo.get_info` where the server has it, `listunspent` otherwise, bound to the tip it was evaluated at |
+| rnbrady's walk-back, race and forward-entry heuristics | Spender discovery tries UTXO creators, then height-filtered history, one after the other. No ancestor walk-back, no race | Bounded walk-back (three ancestor hops, 30 fetches) racing the history scan. Every candidate still passes the authchain rule |
+| Burned identities lose their publication | An `OP_RETURN` identity output maps to *Unpublished*. That includes the common case where genesis output 0 *is* the BCMR publication | Read the publication from the burned authhead, whose outputs carry the claim, and mark it final |
+| `authchain` registry extension unused | Registry extensions are parsed and never consulted | Use it as an untrusted candidate chain, checked like a restart hint |
+| Desktop token icons are always placeholders | `projectEngineTokenMetadata` sets `iconUri: null`. There is no policy-aware image port | Fetch image bytes in Rust under the wallet's transport policy, bounded by size and type |
+| Renderer requests bypass the Tor/proxy policy | `http-bridge.ts` routes only the price host natively. Every other webview request goes direct | Policy gate for renderer HTTP and image loads on desktop. **Closed 2026-10-09** (the webview cannot reach the network, below) |
+| §21.3 feeds partly ingested | P2P DNS-seed and Fulcrum peer-discovery feeds are declared but not ingested. Peers returned by `server.peers.subscribe` are dropped | Ingest them with provenance, unverified until probed. **Fulcrum peers closed 2026-10-09**, **P2P DNS seeds closed 2026-10-10** (below) |
+| Versioned network-configuration migrations | The schema is fixed at 1 and any other version is refused | Migration step with atomic write and rollback tests. **Closed 2026-10-09** (schema 2, below) |
+| Fusion input checks bypass the chain layer | `optn-fusion/src/electrum_input.rs` speaks Electrum JSON-RPC directly | Route through `chain_service`. Needs a live round to verify. **Closed 2026-10-09** (CashFusion checks inputs through the shared chain adapter, below) |
+| Stale open items | `open-items.md` #4 and #5 are already fixed in code. `src-tauri/src/fusion/component_vectors.rs` is no longer compiled | Document updated, orphan deleted |
+
+The ancestor-publication rule below was first left out of this scope; live
+mainnet data reversed that (see the next entry).
+
+Still blocked or out of scope here: hardware-device signing evidence,
+store-signed and iOS packages, the React-to-Leptos cut-over (#71), the #82
+marketplace, and maintainer approval of #83's diagrams.
+
+### 2026-10-08: token identities over Electrum, rnbrady's search, live mainnet tokens
+
+Token identities now resolve on the default Electrum sources. The resolver
+accepts a route's own node or that route's server, and the result says which:
+`IdentityBasis { assurance: NodeValidated | ServerReported, burned }` travels
+through `optn-app`, the encrypted checkpoint (records written before it read as
+unattested), the transport and the desktop bridge. React labels a server-backed
+name "Verified via server" and a burned identity "· final"; the text and Leptos
+renderers add "as reported by server". A walk rests on its weakest step, and a
+node-selected walk still refetches every hop from the node, so a discovery
+server can neither lower nor raise it. Registry bytes still have to match the
+committed hash; a timeout, partial history or exhausted budget is still never an
+authhead.
+
+Electrum answers `OutpointSpentness` with `blockchain.utxo.get_info` (protocol
+1.4.4 and later), or with the address's unspent list on older servers or when the
+method is refused. The tip, the transaction and the lookup share one pipelined
+round trip, and the answer is bound to that output's script and value.
+`TransactionLookup` also returns the block height from `get_merkle`, which bounds
+later history searches. A backend keeps one negotiated connection for 30 seconds,
+so a walk no longer pays a TLS or Tor handshake per question; a broadcast never
+reuses one and is never retried. Identity lookups run through
+`ChainService::execute_optional_on_route`: the same policy and response-binding
+checks, without route-health bookkeeping. Now that identity resolution runs on
+every Electrum wallet, a metadata lookup a server cannot answer must not take
+that server out of wallet sync, and it no longer can.
+
+Spender discovery follows rnbrady's Electron Cash work. It tries the address's
+unspent outputs first, walking back three hops through any input and through
+output-0 links until a 30-fetch cap, then the history after `from_height`, oldest
+first. The transactions the walk passed through come back as untrusted hints; the
+resolver accepts them only as the authchain rule allows and uses their bytes in
+place of a lookup only when they came from the route's own source. Not adopted:
+racing the two phases. Pipelining already sends up to 64 fetches per round trip,
+and a race would request the history even when the unspent outputs answer.
+
+Two readings changed on live data. An `OP_RETURN` identity output is a burned
+head whose outputs carry its registry, often the burning output itself, and it
+is resolved without asking anyone whether it is unspent. A head without a
+publication leaves the newest earlier publication in effect: Moria USD's head is
+four identity moves past its registry, and the strict reading showed that token
+as unpublished on desktop while Electron Cash and OPTN's own legacy TypeScript
+resolver showed its name. Withdrawal is still a newer publication or a burn.
+
+The shipped catalog had one IPFS gateway, and it rate-limited during the live run
+(HTTP 429). Four path gateways that served the exact committed bytes now ship on
+every network but regtest: OPTN's own, ipfs.io, Filebase and Pinata.
+
+A verified registry's `authchain` extension now serves as a restart point for
+the identities it lists: from registries cached by earlier refreshes and from
+those verified during the current one. It gets the same link checks as a
+restart hint. Its last transaction is still looked up live, and its
+unspent state is asked for live. A tampered or out-of-order chain is ignored, and
+the walk starts cold.
+
+Desktop token icons come through `optn_token_image`. The renderer names a
+category and one image URI from that category's authenticated presentation; the
+host fetches through the wallet's metadata transport, recognises a bounded image
+by its content and returns a `data:` URL. A runtime identity never shows a remote
+URI the webview would fetch itself.
+
+Live evidence, from the opt-in `optn-chain-native/tests/bcmr_live.rs` against
+public Fulcrum `bch.imaginary.cash` over direct TLS:
+
+| Token | Result | Chain | Time |
+| --- | --- | --- | --- |
+| Moria USD `b38a33f7…` | Verified via server: "Moria USD", MUSD, 2 decimals | 8 hops, registry at hop 4 | 8.7 s |
+| Furu `d9ab24ed…` | Verified via server: "Furu Tokens", FURU, 0 decimals | 6 hops, found by the walk back | 7.4 s |
+
+The desktop shell's unit tests did not compile on this base: a test still called
+a function #105 had moved. One Tor lifecycle test also raced its siblings over
+process-wide state. Both are fixed, and Desktop E2E now runs the shell's tests
+after its build; nothing ran them before.
+
+### 2026-10-09: one Tor switch for chain, metadata, Cash Code and CashFusion
+
+#75 §4.1 asks for one transport policy that every feature consumes, and says
+ownership must not be encoded as transport. Before this, the Rust stack made
+every remote, non-own route need verified Tor and dialled declared own
+infrastructure directly. Nothing the holder set changed that. The old UI's Tor
+switch had not been rendered since the #63 refactor. The renderer's
+`torEnabled` flag reached only the TypeScript Fusion and Cash Code paths.
+
+The connection policy now carries the rule, `TransportPolicy::{Tor, Direct}`,
+shown as one switch under *Settings → Servers → Privacy & Transport* and as
+`optn network tor on|off`.
+
+- **Tor on** (the default) is what every route already did. Public sources go
+  through Tor; a node the holder declared as their own is reached directly.
+- **Tor off** proxies nothing.
+
+Ownership is now an input to the rule rather than a rule of its own. A third
+"Tor even for my own node" state was built and then removed: it served only
+onion-service setups and otherwise broke the holder's own node.
+
+The switch reaches:
+
+- native chain routes;
+- the Tor-need probe, which also decides whether the app starts its Tor;
+- BCMR and IPFS retrieval;
+- Cash Code scans and the legacy SPV commands;
+- CashFusion.
+
+Direct registry fetches from origins the holder did not declare resolve only to
+public addresses, so a URI published on chain cannot aim the wallet at its own
+network. Remote full-node RPC and ZMQ stay local-only either way. The refusal
+now says why. An idle install, with nothing selected, still does not wait on
+Tor detection; the first version made it probe, and a desktop test caught it.
+
+CashFusion stays Tor-mandatory. Every remote leg needs Tor with provenance:
+server, pool, peer-input and Electrum lookups, covert endpoints and the P2P
+Nostr relays. With Tor off, Fusion is refused before any proxy is consulted,
+rather than run in the clear. P2P relay connections used to accept a SOCKS port
+from the renderer; they now take Tor from provenance like every other leg.
+
+The network overlay is schema 2:
+
+- Schema-1 files read as `tor` with every other field intact. The file changes
+  only on a successful save; a failed read writes nothing.
+- Schemas outside 1..=2 are refused, never reset. A schema-2 file must name a
+  transport this build knows.
+- Portable backups carry the switch and never proxy trust.
+- Presets, pinning a source, editing the selection and saving the old
+  one-server fields all keep the switch. No setting of it makes those fields
+  unreadable or widens "only my server".
+
+The last guarantee needed `ConnectionPolicy::selects_like`. Three legacy
+comparisons against `ConnectionPolicy::auto()` would otherwise have refused the
+old server screen, or widened it, as soon as the switch was off.
+
+Fulcrum peer lists are now ingested (#75 §21.3), and the 2026-10-08 row for
+them closes. Every connected Electrum server's `server.peers.subscribe` answer
+is filtered:
+
+- TLS hostnames are kept, and onions only while Tor is on.
+- IP literals and local or single-label names are dropped.
+- Servers the catalog already has are dropped.
+
+What is left goes to a bounded per-network cache file beside the settings, not
+in them. The desktop runtime polls the selection and rebuilds every route,
+cancelling sync, when the catalog changes. Discovered servers therefore join
+only the catalog routes are built and listed from, never the selection that
+decides when to rebuild.
+
+They rank after every other source. A build dials them only when no other
+Electrum route connected, three at most, so they are failover. They are
+bootstrap entries: they can be disabled or banned, the ban lives in the overlay
+keyed by stable ID, and they cannot be removed. They are eligible only under
+public scopes, never under own-infrastructure-only, an explicit list or the old
+fields' "only my server", and never on an idle install. The desktop app and
+the CLI share the cache.
+
+Still open from the 2026-10-08 table: renderer HTTP and image loads, which
+still go direct from the webview, and Fusion input checks through
+`chain_service`. The first is closed in the next entry.
+
+### 2026-10-09: the webview cannot reach the network
+
+Everything above governed Rust. The webview still made its own requests, so
+none of it applied there:
+
+- `fetch` went direct to every host the CSP listed, and only the price host
+  went through Rust. The Cauldron activity scan sends up to 300 of the
+  wallet's PKHs to `indexer.riften.net` on every wallet open.
+- Every relay socket went direct, because the CSP allowed any `wss:`/`ws:`:
+  WalletConnect, CashConnect, WizardConnect (whose pairing URI names the
+  relay, plaintext included) and Nostr chat.
+- The P2P Fusion relays went direct as well. `FusionP2pService` set the
+  Tor socket through `nostr-tools/pool`, but its `SimplePool` comes from
+  `nostr-tools`, a separate module with its own default, so the Tor socket was
+  never used. A relay could link a peer's inputs to its outputs.
+- Images from any `https:` host loaded straight from the webview.
+- The legacy Electrum client's native TCP socket, the price fetch and the
+  update check all ignored the switch.
+- Links opened in the system browser with no warning, through `cmd /C start`,
+  where a `&` in a query string is a second command.
+
+Now the CSP allows only the app, IPC and loopback, in release and in the Vite
+dev server. Remote `fetch`, sockets, images and the Electrum socket all go
+through Rust (`src-tauri/src/egress.rs`), and one rule decides each route. The
+rules are in `docs/network-transport-policy.md`:
+
+- the stricter of the runtime's and the window's network;
+- own nodes direct only when declared own on both;
+- with Tor off, public names resolve to public addresses only, and the
+  connection goes to the address that was checked;
+- sockets close with their page and on every change of the switch;
+- a link outside Tor asks first.
+
+HTTP is still limited to the hosts the old CSP allowed. Images take `https`
+names only.
+
+Fusion's relay pools are now given the Tor-only socket directly, and a test
+checks every pool, the per-output ones included.
+
+A review of the first version found 31 issues, all fixed here. Among them:
+
+- WalletConnect never connected: its relay URL has a query and no path, and
+  a hand-written parser read the query as part of the host. URLs are now
+  parsed by `reqwest::Url`.
+- Two windows on different networks followed the wrong switch.
+- A socket outlived its page, and ignored a later switch change.
+- Frames that arrived before the page listened were lost.
+- Failed images were cached for the session.
+
+Checking the release bundle found that the bridges themselves loaded too
+late. The desktop prelude was imported first in `main.tsx`, but the bundler
+runs every chunk an entry imports before the entry's own code. The chunk
+holding nostr-tools and the redux store ran first.
+
+- nostr-tools had already captured the webview's `WebSocket`. Under the new
+  CSP its relays would have failed closed.
+- The store had already opened the shared `optn-wallet` database before
+  `storagePartition` could rename it. Every release window shared one persist
+  database: the bug the partition exists to prevent. This one predates this
+  work, and development builds never showed it.
+
+The prelude is now a chunk of its own, imported before any other.
+`scripts/__tests__/desktopPrelude.test.mts` checks the chunking, the import
+order and the dev-server CSP.
+
+
+### 2026-10-09: headers before the ASERT anchor are bounded by the network's limit
+
+#75 §20 (item 75-62). `verify_header_extension` checked a header's link and
+its own declared proof-of-work everywhere, and the expected ASERT difficulty
+only from the anchor on. Below the anchor nothing bounded the declared
+target. A mainnet header below 661,647 that declared `0x207fffff` (regtest's
+limit) and met it passed. Nor was the anchor tied to a chain: a chain that
+crossed the anchor height on different blocks was judged by the anchor's
+bits and time all the same.
+
+Two checks now run wherever an `AsertCheck` is attached. The shipped
+verifiers, header recovery, the desktop SPV walk and the CLI all attach one:
+
+- **The proof-of-work limit, at every height.** The declared target may not
+  be easier than the network's `powLimit`. Mainnet, chipnet, testnet3 and
+  testnet4 use `0x1d00ffff`, and regtest `0x207fffff`. These are the compact
+  forms of the `powLimit` values in BCHN's `chainparams.cpp`, and they were
+  already `AsertParams::max_bits`.
+- **The anchor's chain.** BCHN keeps the ASERT anchor by height, bits and
+  previous time, and requires "the block after this height" to be
+  checkpointed. `AsertAnchor::successor_hash` is that checkpoint, copied
+  from `chainparams.cpp`:
+  - mainnet 661,648;
+  - testnet3 1,421,482;
+  - testnet4 and chipnet 16,845.
+
+  The header at that height must have that hash. Regtest pins none.
+
+Tests use real mainnet headers fetched from a public Fulcrum server. None of
+them is taken on trust:
+
+- genesis and block 661,648 match BCHN's hardcoded hashes;
+- block 661,646's timestamp is the anchor's `prev_time`;
+- the rest link to those.
+
+They show that block 1 (exactly at the limit) is accepted, and that a forged
+easy-target header after it is refused even though it meets its own target.
+Crossing the anchor on BCHN's chain is accepted; the same header against a
+different pinned successor is refused.
+
+Two `header_view` fixtures had ground regtest-difficulty chains and verified
+them under chipnet's rules. They now say regtest, which is what they are.
+The legacy DAA/EDA rules before the anchor remain unchecked. Shipped
+checkpoints are option (2) of the item.
+
+### 2026-10-09: the renderer's Electrum servers come from the source selection
+
+#75 §20 and §21 (items 75-16 to 75-21, 75-26, 75-96 and 75-98). The native
+stack chose Electrum servers from the holder's source selection. The
+renderer's Electrum client kept its own list (shipped defaults, its own user
+servers, desktop-only extras), and `electrum_tcp_connect` dialled whatever it
+was given. A server the holder disabled or banned in *Settings → Servers* was
+still dialled, and so was every server under Privacy, own infrastructure
+only, BIP37 only or Neutrino only. CashFusion's peer-input lookups took
+servers from the renderer too.
+
+`src-tauri/src/electrum_selection.rs` is now the one rule:
+
+- `listed_selection` resolves a network's catalog and policy. The Servers
+  screen lists from it as well, so the two cannot disagree.
+- `pool_from` turns it into Electrum servers, in plan order. Electrum must be
+  among the policy's protocols, since under Privacy a source is selected for
+  its P2P endpoint. Onion servers are left out with Tor off.
+- `optn_chain_electrum_pool` gives the renderer that list. The desktop
+  router uses it in place of its own, and fails at once with the policy's
+  reason when it allows no Electrum. The desktop Home screen then says so
+  instead of showing an empty wallet.
+- `electrum_tcp_connect` refuses any other server before dialling, with
+  `electrum-not-selected`. Loopback and Cauldron's Rostrum indexer are
+  exempt: neither is a chain source.
+- Every settings save now notifies, whatever screen made it. Renderers fetch
+  the pool again, and sockets to servers the new selection excludes close.
+- Fusion lookups use the servers the renderer offered that the selection
+  includes, then the rest of the selection, eight at most. A round with none
+  is refused.
+
+With nothing saved, the selection is the shipped catalog under Auto, as the
+Servers screen already listed it. A fresh install therefore still connects
+during onboarding.
+
+The renderer used to dial some servers that are not in the shipped catalog.
+None of them are dialled now:
+
+- chipnet `electrum-chipnet.optnlabs.com`, which answers neither raw TLS
+  (50002) nor TCP (50001) as of today, so the desktop could not use it;
+- testnet3 and testnet4 servers on their WSS ports (60004, 62004), which the
+  desktop dialled as raw TLS;
+- mainnet `electron.jochen-hoenicke.de` on 50002, where the catalog has 51002.
+
+Legacy servers in the renderer's local storage are not imported, and are
+refused like any server outside the selection.
+
+Not covered yet:
+
+- cashscript's `ElectrumNetworkProvider` names its own hosts. They are in the
+  shipped catalog, so they pass under Auto and are refused under narrower
+  policies.
+- Plain-TCP Electrum servers cannot be written in the renderer's server
+  format and are left out of its list.
+
+### 2026-10-09: a transaction the node already has is not a rejection
+
+#75 (item 75-69). A broadcast that met a node already holding the
+transaction was reported as rejected, or as uncertain. The desktop then told
+the holder their sources had refused a transaction that was in the mempool.
+
+- **BCHN RPC.** BCHN answers a JSON-RPC error with HTTP 500 and the error in
+  the body (`JSONErrorReply`, httprpc.cpp). The adapter read only the status,
+  so every refusal arrived as "BCHN RPC HTTP status 500". It now reads the
+  node's code and message.
+- **Electrum servers** pass the node's message on after Fulcrum's preamble.
+- **BIP37 peers** send a `reject` (BIP61) naming the transaction.
+
+All three now read the node's own words through one classifier
+(`optn_runtime::tx_broadcast::classify_node_message` and `classify_reject`).
+The strings come from BCHN's source:
+
+- `transaction already in block chain` (RPC -27);
+- `txn-already-in-mempool` and `txn-already-known`, reject code 18,
+  formatted as `<reason> (code 18)` by `FormatStateMessage`.
+
+Any of these means the node has the transaction, so the broadcast counts as
+observed and the coordinator reports it as submitted.
+
+`txn-mempool-conflict` shares code 18 but means another transaction spends
+the same coins, so it is a rejection. Only exact wording counts: the same
+words under another RPC code, or with anything added, are handled as before.
+
+### 2026-10-09: an Electrum wallet loads even when its headers do not
+
+#75 (item 75-61). The sync worker advanced the verified header view before
+every wallet refresh. For any route, a failed header batch skipped that route
+with "header prerequisite failed". So a header fault or a reorg on an
+Electrum server kept the wallet from loading at all, though an Electrum
+snapshot is server-asserted and never tied to the header view.
+
+Now only BIP37 and Neutrino, whose snapshots must match the verified tip,
+take headers first; a header failure still refuses those routes. Electrum
+and other server-asserted routes refresh and reconcile first, then advance
+the headers best-effort. A failure there leaves the accepted snapshot fresh
+and says why in its degraded reason ("headers did not advance: ...").
+Nothing reads the header view between the refresh and the reconcile: token
+identities use the snapshot's tip, and wallet sync captures the view only
+after the refresh returns.
+
+Tests record the order of requests: Electrum asks for the wallet first and
+loads with misnumbered headers; BIP37 asks for headers first and sends no
+wallet query when they fail.
+
+### 2026-10-09: a stack dials a few servers, in plan order, and fallback last
+
+#75 (items 75-14, 75-34 and 75-105). `build_native_chain_stack_with_tor_status`
+dialled every selected source one after another. The order was the catalog's,
+with only discovered servers moved last, so:
+
+- under Auto on mainnet, every rebuild did about 22 TLS handshakes;
+- a slow peer delayed every source behind it;
+- fallback sources could be dialled before primary ones, so a public fallback
+  saw a handshake while the holder's own node was serving.
+
+The builder now works in tiers, in the selection plan's order:
+
+- **Primary sources** first. Connects run concurrently, six at most at once,
+  so a hung peer holds only its own slot. Results are recorded in plan order.
+- **Electrum, where the app chooses** among public servers (`AllEnabled`,
+  `PublicEnabled`): three are dialled. If none connects, the next three are,
+  and so on. The rest are held back. Servers the holder named, their own
+  infrastructure or an explicit list, are all dialled.
+- **Fallback sources** only when no primary source gave a wallet route.
+- **Discovered servers** last, one at a time and three at most, as before.
+
+Held-back servers are not failures and are not listed as such. Before a
+wallet sync, the desktop runtime checks the installed stack. When it has no
+wallet route left, the next held-back servers are dialled into the same
+service, so the wallet fails over without a rebuild. A retired stack dials
+nothing.
+
+Counting fake servers show the behaviour:
+
+- of 21 public servers, three are dialled and 18 held back;
+- the next three are dialled on request;
+- three that hang up lead to the next three;
+- a public fallback gets no connection while the own node serves, and does
+  when the own node is down.
+
+### 2026-10-09: token identities ask fewer servers
+
+#75 (items 75-132 and 75-153). The identity resolver walked a category's
+authchain on the outpoint-spentness routes in plan order, so a public
+Electrum server ranked ahead of the holder's full node was asked first even
+though the node could answer with node-validated evidence. On each hop
+without a known successor it asked every spender-lookup route, so every
+selected server learned which token chains the wallet follows.
+
+- A full node's routes now come first for both the walk and spender
+  discovery; a walk the node completes is never asked of a server.
+- Spender discovery stops once two sources have answered. Two is enough to
+  catch two sources naming different spenders, which still leaves the
+  identity unresolved.
+
+Tests show a node resolving with node-validated assurance while a server
+ranked ahead of it only cross-checks spenders. Of three servers behind the
+node, one is asked per hop and two never are. A rival spender from a second
+source still leaves the identity unresolved. The fan-out test fails without
+the cap.
+
+### 2026-10-09: the runtime draws a new wallet's phrase (#71)
+
+#71 (part (1) of item 71-1). The Leptos renderer generated new wallets'
+recovery phrases itself: Web Crypto `getRandomValues`, then
+`mnemonic_from_entropy`, held in a signal. `Create` then carried those words
+back to the runtime. So the phrase existed in the renderer before the
+runtime had seen it, and the runtime stored whatever words it was sent.
+
+- **`seed_draft(word_count)`**, a new transport call (Tauri command
+  `optn_wallet_seed_draft`), draws the phrase in the runtime from the
+  platform's entropy (`WalletStorage::entropy`, `getrandom` on native). The
+  runtime keeps it under a draft id and returns the id and the words to
+  display. The words are a `SecretText`: never `Debug`, zeroized when dropped,
+  and never in the shared state.
+- **`Create { draft: Some(id) }`** creates the wallet from the runtime's own
+  copy. A drafted create carrying words of its own is refused, and so is a
+  stale or unknown draft id. The draft is used once.
+- **`DiscardSeedDraft`** forgets the draft when the screen closes. A lock or
+  unlock, which changes the security epoch, forgets it too.
+- **Import** still sends the typed phrase. The web preview, which has no
+  runtime holding keys, reports that a new phrase is unavailable, as wallet
+  security already did there.
+- **`xtask architecture`** now fails if any renderer crate draws entropy
+  itself (`get_random_values`, `getRandomValues`, `mnemonic_from_entropy`,
+  `OsRng`, `getrandom`). It fails on the old UI source and passes on the new.
+
+A runtime test checks the whole path through the real actor:
+
+- 12- and 24-word phrases are valid BIP39;
+- no drafted word reaches the serialized shared state;
+- a stale, discarded or reused draft is refused, as is a draft whose epoch
+  was ended by a lock;
+- a wallet created from a draft holds that phrase's account key.
+
+Part (2) of 71-1, the React renderer's authoritative slices and its
+TypeScript Electrum and UTXO services, belongs to the #75/#83 migration and
+is not this change.
+
+### 2026-10-09: a reorg rolls the header view back to a state it really had
+
+#75 (item 75-reorg ring, rank 15). The verified header accumulator is
+append-only. `rewind_to` could drop time anchors above a height, but the
+accumulator itself could not go back. A reorg below the verified tip
+therefore meant rebuilding from a checkpoint.
+
+- `VerifiedHeaderView` now keeps a ring of snapshots: the full verifier
+  state and median-time window after each of the last `REORG_WINDOW` (10)
+  blocks, plus the one before them. That is about 700 bytes each. BCHN
+  finalizes a block ten deep.
+- `rollback_to(height)` returns to one of those states rather than editing
+  peaks, and drops the time anchors above it. Extending from there gives
+  exactly what a straight extension gives, and another branch is accepted
+  from the same block.
+- The persisted view is schema 3. The ring is stored as its oldest state and
+  the headers after it, never as the intermediate states. On restore the
+  oldest state is loaded at the commitment it claims and extended with the
+  stored headers, which are checked like any others: linkage, proof-of-work,
+  difficulty. The ring is kept only if that replay reaches the trusted tip.
+  A ring longer than the window, an altered header, or one that stops short
+  is refused with the rest of the record.
+- Schema 2 is schema 3 without the ring, so it still reads, with an empty
+  ring. A later, unknown schema is refused.
+
+Automatic recovery, which detects a reorg and calls `rollback_to`, is the
+next item (rank 16). It needs this ring and the Electrum ordering change
+above.
+
+### 2026-10-09: a reorg within the window is followed automatically
+
+#75 (items 75-60, 75-65 and 75-77; rank 16). With the snapshot ring in
+place, a header pass now handles a source on another branch rather than
+failing on it.
+
+- **Detection.** The pass's first batch does not build on the verified tip.
+- **Fork.** The worker asks the same route once for the blocks the ring
+  covers. The fork is the highest block both chains share.
+- **Rollback.** The view rolls back to the fork with `rollback_to`, a state
+  it really had, and the pass continues from there.
+- **The new branch wins only with more work.** Its blocks must declare more
+  total work than the ones they replace (`optn_core::header_pow::more_work`,
+  BCHN's `GetBlockProof`). A longer branch of easier blocks is refused
+  (`ReorgWithLessWork`), and nothing is written. After a rollback the pass
+  runs until the source has no more, so the branch is weighed whole and
+  never cut short by the per-pass limit.
+- **Store.** The accepted store drops the orphaned blocks and takes the new
+  ones. That happens on a copy, published only if the join holds. The
+  store's generation moves, so caches stamped with the old one (token
+  identities, scan progress) see the reorg.
+- **Deeper than ten blocks.** A source whose chain leaves this one below the
+  window is refused (`ReorgBeyondWindow`). BCHN finalizes a block ten deep
+  and will not reorg past it, so neither does the wallet. A source cannot
+  force a rebuild by claiming such a fork.
+- **Restart.** The sealed view after a reorg carries the new tip and its
+  ring, so a restart does not bring the orphaned tip back.
+
+Tests run against regtest-difficulty chains through the worker and a shared
+header store:
+
+- 1- and 3-block reorgs on Electrum and BIP37: the result equals a straight
+  build of the new chain, the store keeps the fork block, takes the new ones,
+  and changes generation;
+- a longer but lighter branch is refused with nothing written;
+- a fork below the window is refused;
+- a restored view keeps the new tip.
+
+Not covered yet: a store that must first be replayed from a peer after a
+restart, if that peer has already reorged. The replay stops at the
+divergence and the pass fails. The next pass, with the store intact,
+recovers.
+
+### 2026-10-09: a weaker source can move the wallet forward, labelled
+
+#75 (item 75-67; rank 14, first half). A snapshot never gave way to one with
+weaker evidence, at any tip. That protects a proven snapshot from a faster
+server, but it also left a holder stale forever once their stronger source
+was gone. For example, after moving from BIP37 (header-proven) to Electrum
+(server-asserted), every refresh came back `PreservedWeakerEvidence` and the
+wallet stayed at the last BIP37 tip.
+
+Wallet refreshes now go through `ReconciliationState::reconcile_refresh`. A
+weaker candidate replaces a stronger snapshot only when both of these hold:
+
+- its tip is newer than the retained one, and
+- the verified header view holds that tip, as its own tip or in its reorg
+  ring (`VerifiedHeaderView::holds`).
+
+A server claiming a height is not enough, so a fast or lying server still
+cannot displace a proven snapshot. At the same or an older tip, at an
+unheld tip, or with no tip, the stronger snapshot stays.
+
+An accepted downgrade is shown to the holder in two places: the
+verification state follows the new evidence, and the degraded reason says
+"evidence lowered from header-proven to server-reported at a newer verified
+tip".
+
+The rule applies at both points where a refresh is reconciled:
+
+- **Sync worker.** For Electrum, headers are primed after the wallet
+  answer. A weaker answer refused because its tip was ahead of the headers
+  gets one more check once they are primed.
+- **Wallet sync finish.** This reconciles against the runtime's published
+  state. It rebuilds the view from the round's captured header progress,
+  and only when a weaker, newer candidate raises the question.
+
+Finish used to clear the worker's degraded reason, so "headers did not
+advance" never reached the published status. It now carries the reason
+over. `note_degraded` keeps an earlier reason beside a new one, once each.
+
+Tests:
+
+- the rule itself: newer and held is accepted and labelled; the same tip,
+  an older tip, an unheld newer tip and no tip are all refused; equal or
+  stronger evidence follows the ordinary rule;
+- a worker switching from a BIP37 snapshot to an Electrum route ahead of
+  its headers: accepted once the primed headers hold the tip, refused when
+  they fail;
+- finish on regtest: accepted with the captured header progress, carrying
+  the worker's note; refused without the progress.
+
+`weaker_assertion_cannot_replace_stronger_evidence_at_any_tip` and
+`shared_worker_restores_evidence_and_cannot_shrink_discovery_scope` still
+pass unchanged: neither has a header view that holds a newer tip.
+
+A wallet with no header view at all, such as Electrum without a shipped
+checkpoint for its network, still cannot be downgraded. That stays on
+purpose: without headers nothing vouches for the newer tip.
+
+### 2026-10-09: the sync status says how old, through whom, and to where
+
+#75 (item 75-56; rank 14, second half). The status could say "stale" but
+not how stale, which providers were down, or how far the verified headers
+went. `WalletSyncState` now carries three more fields, and so do
+`WalletSyncView` and its wire form:
+
+- **`snapshot_at_unix_ms`.** Stamped by wallet-sync finish when a snapshot
+  is accepted, and kept while a later refresh is refused. It is a time, not
+  an age: the view is not republished as it ages, so each surface takes its
+  own clock minus this. The checkpoint seals it, so a reopened wallet still
+  says how old its snapshot is; older checkpoints read as not known.
+- **`providers`.** `ChainService::provider_statuses` lists each registered
+  provider once per source and protocol. A route this stack marked degraded
+  or offline wins over the backend's own report. The refresh paths capture
+  it into the lease, and finish publishes it whatever becomes of the
+  snapshot. Finishes that ran no refresh here, such as air-gapped imports,
+  leave the last list as it was.
+- **`header_checkpoint`.** The verified view's checkpoint from the round's
+  header progress: the height it reached, and who vouches for where it
+  began. A restore brings it back from the sealed header progress.
+
+The wire stays version 1: `WireWalletSyncView` is `serde(default)`, so a
+payload without these fields reads as "not known". A test removes them from
+a payload and checks that.
+
+Three pure helpers give the wording: `snapshot_age_label`,
+`provider_health_summary` and `header_checkpoint_label` in optn-app, and
+their mirror in `src/platform/desktop/engineSyncStatus.ts`. The two sets
+are tested against the same table. The Leptos wallet panel and the React
+Sync page show the age after the tip, then the header line, then any
+providers that are not usable.
+
+Tests: provider health with an override, a backend going offline, and a
+revoked stack; the checkpoint keeps the time across a reopen and a reseal;
+finish publishes the header checkpoint and the time, and providers still
+appear after a refused refresh; wire round trip and an older payload; the
+wording on both sides.
+
+### 2026-10-09: CashFusion checks inputs through the shared chain adapter
+
+#75 (items 75-75, 75-80 and 75-94) and #83 (items 83-3 and 83-31). optn-fusion
+spoke Electrum itself: its own JSON-RPC client, its own connection handling,
+and no check that the server was on the round's chain. It now asks through an
+`InputLookups` trait (`optn_fusion::lookup`) and holds only the verdict:
+
+- a claimed input matches only when the source's unspent list for the
+  pubkey's P2PKH script holds that exact outpoint at the exact value;
+- a lookup that could not be made is an error, and an error never becomes
+  blame, as before.
+
+The desktop shell implements the trait (`src-tauri/src/fusion_lookups.rs`)
+over the holder's selected Electrum servers, through the shared adapter:
+
+- `ElectrumBackend::script_unspent_values` asks all of a round's questions
+  on one connection. A list that is malformed anywhere (a non-canonical
+  hash, a missing field, an output listed twice, more than 1,024 entries) is
+  an error for that question, never "not unspent". Extra fields are ignored:
+  the old parser refused `token_data`, so a peer whose address also held a
+  token output made the round abort unverified.
+- `optn_chain_native::connect_fusion_lookup` gives each server a connection
+  of the round's own: loopback directly, anything else only through the
+  verified Tor proxy, with isolation credentials no wallet connection shares.
+  The server's genesis is checked, which the old client never did.
+- A definite answer from any server settles a question; only unanswered
+  questions move to the next server. `fusion_transaction_is_known` asks the
+  same way and accepts only the exact bytes.
+
+The chain layer's `OutpointSpentness` was not used for this: it fetches the
+previous transaction first, so a peer claiming a transaction that does not
+exist would make the check fail as unavailable instead of "not unspent", and
+that peer would escape blame.
+
+Token coins stay out of fusion, as in Electron Cash. Coin selection already
+excluded them on every path; `gatherInputs`, the last step before signing,
+now refuses them too.
+
+Tests: the verdict rules and reference P2PKH script; questions batched and
+kept in order; run.rs's revalidation (exact match, spent between
+boundaries, no source, cancellation) and two full mock rounds on a fake
+source; the adapter's batching on one connection and every malformed list;
+the Tor-only and isolation rule; server ordering, partial answers, exact
+transaction bytes; the token refusal.
+
+Not proven yet: a live chipnet round with the desktop app.
+
+### 2026-10-09: the fetch bridge never bridges Tauri's own IPC
+
+A regression from "the webview cannot reach the network" above, on Windows
+only, found by a live run: the desktop renderer grew to 7.5 GB within
+seconds of launch and crashed ("Out of Memory"), before any wallet opened.
+
+On Windows, WebView2 carries every Tauri `invoke` as a `fetch` to
+`http://ipc.localhost/<command>`. The fetch bridge sent every non-loopback
+http(s) request to Rust, and `isLoopbackHost` (which mirrors Rust's
+`is_loopback_host`) does not count `ipc.localhost`. So each IPC call was
+bridged, the bridge's own `optn_http_fetch` invoke was bridged again, and each
+level base64-wrapped the request before it. A CPU trace put nearly all time in
+the bridge's body encoder, called from the bridge, called from Tauri's
+`sendIpcMessage`. None of it reached Rust. Linux was unaffected, because
+WebKitGTK's IPC is an `ipc://` URL, which the bridge ignores; the desktop E2E
+job runs only on Linux, and no job launched the Windows build.
+
+The routing decision is now one pure function, `bridgedToRust`
+(`src/platform/desktop/rendererNetwork.ts`), used by the bridge:
+
+- the page's own origin, loopback (exactly Rust's rule, unchanged), and any
+  `*.localhost` app host (`ipc.localhost`, `asset.localhost`; RFC 6761 keeps
+  `.localhost` on the machine) stay on the webview;
+- only other http(s) hosts go to Rust.
+
+`localImageSrc` passes the app's asset protocol through for the same reason.
+
+Tests pin the rule: IPC and asset URLs in both schemes, the page, loopback and
+non-http schemes stay local; remote hosts, including look-alikes such as
+`ipc.localhost.example.com`, are bridged. On the real app with the holder's
+largest chipnet wallet (2,821 addresses): heap 39-69 MB over a minute idle,
+wallet open in 15 s with the heap at 42-61 MB, where before the page froze
+at 4 s and died.
+
+Follow-up worth doing: a Windows desktop launch in CI (start the app, render
+the landing page, stay responsive for 30 s) would have caught this.
+
+### 2026-10-09: a fusion round declares its chain
+
+Found in the live fleet run: the local Electron Cash server logged "No
+genesis hash declared by client, we'll let them slide" for every OPTN
+client. Electron Cash always sends its chain's genesis hash in ClientHello
+(`comms.get_current_genesis_hash`, `fusion.py`), and a server on another chain
+refuses at once; OPTN sent `None` both in the round (`run.rs`) and in the
+desktop's status probe.
+
+`FusionRunParams` now requires `genesis_hash` (internal byte order), so no
+caller can leave it out, and the round sends it. The desktop passes the
+runtime network's genesis to the round and to the status probe. The mock
+server in both full-round tests now refuses a ClientHello without the chain.
+
+### 2026-10-09: a busy Tor is still the trusted Tor
+
+Found in the live ten-wallet fleet run: Auto halted on some wallets with
+"a verified Tor proxy is required for every remote endpoint" or "Tor is not
+reachable", and a P2P coordinator stayed at "verification pending" for a
+transaction already on chain. Tor was up and trusted (port 9050); its SOCKS
+greeting answered in 1.4 s under the load of ten wallets, and both probes
+(`optn-fusion` and `optn-chain-native`) gave up at 1.5 s, demoting the
+trusted Tor to "unverified".
+
+The probe's timeout and SOCKS5 greeting now live once in `optn_core::tor`
+(`SOCKS_PROBE_TIMEOUT` = 5 s, `SOCKS5_NO_AUTH_GREETING`,
+`SOCKS5_NO_AUTH_ACCEPTED`) and both probes use them. A port with nothing
+listening still refuses at once. Test: a trusted SOCKS port that answers
+after 2 s is verified. The fleet run's rounds are recorded in this PR's
+description.
+
+### 2026-10-09: the CLI's Electrum-only commands follow the shared selection
+
+Found while funding the fleet: under the desktop's default Auto selection,
+`send` refused with "shared network settings contain no Electrum route",
+while `rescan` on the same settings used the selected chipnet servers.
+`balance`, `utxos` and `broadcast` already go through the shared native
+stack; `send`, `tx` and the header fallback still use a single-server
+Electrum client, which read only the desktop's older one-server fields.
+
+`shared_electrum_servers` now gives that client the selection's own
+encrypted Electrum servers, in plan order (primary, then fallback): the
+named server when the older fields name one, otherwise every server the
+selection plan picks. `client_for` uses the first that answers
+`server.version`, so a down server (one refused connections in the fleet
+run) is skipped, never replaced by one outside the selection. A direct
+P2P-only selection, plaintext Electrum, or a selection with no Electrum is
+still refused.
+
+Test: under Auto the offered servers are the plan's Electrum endpoints in
+order, all encrypted; the existing refusals hold. Not yet run live (needs
+the trusted Tor). Follow-up in the Rust-first direction: move `send` and
+`tx` onto the shared native stack like `balance`, then retire the
+single-server client.
+
+### 2026-10-09: fusion tier planning runs in Rust, once for every surface
+
+Server CashFusion's tier planning (Electron Cash `allocate_outputs` and
+`random_outputs_for_tier`: every tier the coins can fund, a random excess
+fee per tier, exponential output amounts) lived in the desktop renderer
+(`ServerFusionRunner.ts`), with the ServerHello limits checked there too.
+The CLI and the headless docker runner could not plan a round without a
+second copy.
+
+`optn_fusion::allocate` is the one implementation. `plan_contribution`
+takes a hello snapshot, each input's compressed public key and value, and
+optional pinned tiers, and returns plans in the form `fusion_run` takes. It
+refuses a snapshot outside Electron Cash's limits, a key that is not a
+compressed public key, and a contribution that funds no tier, naming pinned
+tiers when they are the reason. Randomness comes from the operating system
+(`os_uniform`). An empty pin list restricts nothing, as before.
+
+The desktop asks through `fusion_allocate_tiers`; only public keys and
+values cross for planning, never private keys. The renderer's allocation
+code, its constants and its limit checks are removed. The limits are now
+checked natively where the ServerHello is read (the status handshake
+refuses a server outside them, so no caller shows or plans against one),
+again when planning, and again on the live hello in the round. One
+addition: a tier or `max_excess_fee` above all money (21M BCH) is refused,
+which also keeps every advertised value exact as a JavaScript number, the
+renderer's old safe-integer check.
+
+`test-vectors/fusion-allocation.json` was generated from the TypeScript
+before it was removed, with a fixed uniform sequence, over a small hello
+and Electron Cash's 72-tier reference; the Rust port reproduces every draw
+and plan exactly. Rust tests also cover balance and limits over 50
+sequences, pinning, the hello limits on the wire and on snapshots, and
+refusals before any random draw. The renderer tests now check that the
+runner plans from public keys and values only, requests fresh scripts for
+the largest plan, passes the plans to the round unchanged, and stops before
+any address or round on a planning refusal.
+
+Next in the same direction: the Auto Fusion driver (coin choice, rounds,
+fresh outputs) in `optn-runtime`, so `optn fusion` on the CLI and the
+docker runner fuse with the same code as the desktop.
+
+### 2026-10-09: fusion coin selection runs in Rust, through the shared WASM core
+
+Which coins a round offers was decided in TypeScript
+(`serverFusionCoinPolicy.ts`, plus a P2P branch and a 20-coin limit inside
+`FusionRunnerService.ts`). The CLI and the docker runner had no way to make
+the same choice.
+
+`optn_core::fusion::coin_selection` is the one policy: Electron Cash's
+`select_coins` / `select_random_coins` / `FUSE_DEPTH_THRESHOLD` for server
+rounds (address buckets offered whole and at random, three largest coins
+from a crowded address, Auto stopping at 99.9% of eligible value fused deep
+enough), and the P2P selection (plain coins below the rounds-per-coin depth,
+largest twenty). It is pure; randomness is a parameter. `FusionMode` moved
+into the same module and `optn-app` re-exports it, so there is one
+definition.
+
+The desktop reaches it through the shared WASM core (`fusionSelectCoins`),
+synchronously and without IPC, with draws from the host's
+`crypto.getRandomValues`. `fusionCoinSelection.ts` only describes the
+wallet's UTXO records (legacy freeze-flag names, token fields, recorded
+depth) and maps the answer back to them. `serverFusionCoinPolicy.ts`, its
+test, the runner's own P2P filter and limit, and the dead timing constants
+are removed. Pre-consolidation now sweeps the crowded address the policy
+names rather than recomputing it.
+
+One tightening: a P2P round no longer offers a frozen coin. The TypeScript
+P2P branch checked only tokens; `optn_core::coins` already says a frozen
+coin (a pledge, an authhead, another round) is never fused.
+
+Tests: 12 Rust tests port and extend the TypeScript ones. The runner's
+vitest suite now runs the real Rust policy through WASM instead of a
+TypeScript copy, and a new glue test checks the record mapping.
+
+The committed WASM was also stale before this change: the Tor probe change
+(`7b70e937`) touched `optn-core` without a rebuild, which the "Shared Rust
+connectors" check would have refused once this PR targets `dev`. The
+regenerated artifact passes `build-optn-core-wasm.mts --check`, and the
+connector tests that run against it pass.
+
+### 2026-10-09: fusion depth is one Rust record
+
+Auto's stopping condition, each coin's fusion depth (Electron Cash's
+`fuse_depth`), was a 907-line TypeScript module mixing its rules with its
+storage. The CLI and the docker runner could not read or keep it.
+
+`optn_core::fusion::depth::FusionDepthBook` holds the rules: a coin's depth
+from its own entry, else its parent fusion's depth, else 1 when the parent
+is a recorded fusion; a round's outputs one deeper than the shallowest coin
+it spent (Electron Cash's `is_fuz_coin` ancestry rule, so the claim can
+understate privacy and never overstate it); eviction only on evidence (a
+round's spent inputs, or a snapshot that no longer holds the coin, never an
+empty one); cold-import merging by the deeper record; cross-window merging
+that an empty copy cannot wipe; and Auto's eligibility and its two status
+lines.
+
+The desktop holds one book per wallet as a WASM object and keeps the same
+three localStorage keys and the SQL label table every earlier build wrote,
+so an upgrade reads existing depth unchanged (a test seeds the old stored
+forms and reads them back). `fusionCoinDepth.ts` is now storage, the
+BroadcastChannel, the change event and the history stub rows. The
+renderer's `formatAutoDepthMetMessage`, `formatAutoDepthGateLog`,
+`coinsBelowDepth` and the unused `pruneSpentDepth` are gone; their callers
+read the book's eligibility. The process-global `__optnFusionTxidSql`
+cache is gone too: the book is the cache.
+
+The freshness test now accepts exported classes and their members. The
+shared WASM grew from 782 KB to 924 KB; Android already loads it
+asynchronously, so no load path changes.
+
+Tests: 11 Rust tests port the TypeScript ones and add the stored-form,
+merge and import cases. The desktop tests now run the real book through
+WASM, including an upgrade read of the old stored forms and a cold
+export/import round trip.
+
+### 2026-10-09: the runtime prepares a fusion round's contribution
+
+A round needs each offered coin's signing key and fresh output scripts. On
+the desktop both came from the renderer's key database; the CLI and the
+docker runner had no source for either that respected the wallet's guards.
+
+`AppRuntime::fusion_input_keys` and `AppRuntime::reserve_fusion_outputs`
+are that source, beside `external_payment` and under the same guards: a
+durable session, fresh coins, the synchronized HD account, no legacy
+reservations, and Background authorization (Auto Fusion never prompts; a
+prompt mid-round would kill the round). They are two requests because the
+second depends on the first: the output count comes from the tier plans,
+which are made from the offered coins' public keys. Each requested coin must
+be an ordinary HD coin of this wallet, unheld, offered once; asking for keys
+reserves nothing. The outputs are change addresses, as Electron Cash's
+`reserve_change_addresses` does, reserved through the durable HD allocation
+and saved before any script leaves the runtime, so a round that fails after
+disclosing them never reuses them. A failed save reserves nothing and, as
+with a payment, asks for the wallet to be reopened. Private keys are
+zeroized on drop and never printed.
+
+Tests: keys match the coin's own derivation and reserve nothing; three
+outputs advance the change counter by three and nothing else; a second round gets different
+outputs; foreign, duplicate, held and out-of-range requests are refused; a
+failed save reserves nothing, and the same request succeeds after a reopen.
+
+### 2026-10-09: one native fusion host for every surface
+
+The pieces around the protocol engine that a native surface needs to fuse a
+wallet lived in `src-tauri`, where only the desktop could reach them.
+
+`crates/optn-fusion-native` is that host, for the CLI, the docker runner and
+the desktop:
+- `lookups`: the round's chain evidence through the holder's selected
+  Electrum servers, on connections of the round's own (moved from
+  `src-tauri/src/fusion_lookups.rs` with its tests; the desktop now calls
+  it);
+- `depth_file`: the fusion depth record on disk, in the same three stored
+  forms the desktop keeps, written by temporary file and rename. A document
+  that is not JSON is refused rather than read as empty, because an empty
+  record reads every coin as depth 0 and Auto would pay to redo mixing;
+- `server_round`: one server round. It runs the handshake (declaring the
+  chain and refusing a server outside the limits), gets the coins' keys from
+  the runtime, plans tiers, reserves the largest plan's outputs, runs the
+  round with peers' inputs checked through the holder's servers, then waits
+  up to a minute for a selected server to hold the transaction (Electron
+  Cash waits the same). Every remote leg needs the verified Tor proxy.
+  Server addresses parse as the desktop's do. The chain's genesis is the
+  hash of the runtime's own anchored genesis header, not a fourth copy of
+  the table.
+
+Tests: the moved lookup tests; server address parsing, the per-leg Tor
+rule, genesis for chipnet and mainnet against their known hashes, finding
+the wallet's outputs by script, and the depth file's round trip and
+refusals. The full round is exercised live with the fleet (next).
+`cargo run -p xtask -- architecture` passes.
+
+### 2026-10-09: `optn fusion` runs server rounds from the CLI
+
+The CLI could not fuse at all, so a fleet could only be desktop windows and
+the docker runner had nothing to run.
+
+`optn fusion --server HOST[:PORT][:s|:t] --yes` runs CashFusion server
+rounds for a saved wallet (`--wallet`) through `optn-fusion-native`, the
+same host the desktop's round code now lives in. Each round refreshes the
+wallet through the shared HD runtime, chooses coins with
+`optn_core::fusion::coin_selection` against the depth record, and runs
+`server_round`. Without `--auto` it runs one round (or `--rounds N`). With
+`--auto` it behaves like the desktop's Auto Fusion, with the same timing
+constants from `optn_app::fusion` (20 s after a paid round, 10 s after a
+failure, 30 min idle once every coin reaches `--fuse-depth`) and Electron
+Cash's 600 s pool inactivity rule. `--tier` pins tiers so wallets meet.
+Progress goes to stderr as JSON lines; the result is one JSON document on
+stdout. Ctrl-C cancels a round through the engine's cancellation registry,
+which still finishes what it must after components are disclosed.
+
+Tor follows the desktop's rule: no fusion while the holder's transport is
+Direct, and every remote leg through a proxy verified from the shared
+trusted ports. The lookup servers are the holder's selected Electrum
+servers (up to 8, as on the desktop). Depth moves only for a transaction a
+selected server holds.
+
+Known limits, stated rather than hidden:
+- server rounds only; P2P fusion is coordinated over Nostr and has no Rust
+  driver yet;
+- the depth record is a plaintext file beside the wallet, the same exposure
+  as the desktop's localStorage. Moving it into the encrypted checkpoint
+  waits on the checkpoint forward-compatibility fix;
+- the desktop still runs its rounds from the renderer for legacy wallets,
+  whose keys live in the TypeScript key database; the runtime refuses those
+  wallets' coins until they are runtime-managed;
+- not yet run live: that needs Tor and a local Electron Cash server for the
+  fleet. (Run live since: "a live mixed fleet fuses", below.)
+
+Each CLI process holds its wallet directory's session, so a CLI fleet uses
+one `--wallet-directory` per member. The skill manifest lists `fusion` as a
+spending command that requires confirmation.
+
+### 2026-10-09: the docker fusion lab runs Auto Fusion headless
+
+The fusion-lab profile held Tor and waited for an `OPTN_HEADLESS_CMD` that
+did not exist ("separate product milestone"). Two things also stood in the
+way of any native runner: Tor ran in another container at `tor:9050`, while
+fusion trusts a proxy only by its local port; and only the desktop could
+declare a trusted port.
+
+- `optn network tor-trust PORT [--remove]` declares the holder's Tor the
+  way the desktop's Privacy & Transport does, in the same shared overlay.
+- `packages/docker-dev/scripts/fusion-lab-headless.sh` is the runner: it
+  builds the CLI from the mounted repository (or uses `OPTN_CLI_BIN`),
+  turns Tor on, trusts the container's own Tor port, and runs
+  `optn fusion --auto` for `OPTN_WALLET` against `OPTN_FUSION_SERVER`. It
+  refuses `p2p` with a clear message, since P2P has no Rust driver yet.
+- The `fusion-lab` service shares the `tor` service's network namespace
+  (`network_mode: service:tor`), so Tor is on its loopback; both compose
+  files validate with `docker compose config`.
+- The image creates `/optn-data` owned by uid 1000. Without it a new named
+  volume is root's and the lab could not write its health file, wallets or
+  build cache. `docker buildx build --check` passes.
+- VPS.md, README.md, SCOPE.md and PRODUCTION.md describe the runner and its
+  settings instead of "future CLI".
+
+Not yet run live in a container: that needs a CashFusion server and Tor,
+the same as the fleet run. (Run live since: "a live mixed fleet fuses",
+below.)
+
+### 2026-10-09: a newer build's checkpoint is refused by name
+
+Found in the fleet run: a CLI built before `snapshot_at_unix_ms` existed met
+a checkpoint the newer desktop had saved and refused it as "invalid wallet
+checkpoint data", which reads as damage.
+
+The refusal itself is right and stays. A build cannot see a field a newer
+build added, and some such fields hold coins (the payment outbox was one);
+reading the rest and saving again would drop it and release them. What
+changed is the message: a field the build does not know, or a newer
+`optn-hd-restart-vN` format, is now reported as "written by a newer OPTN
+build (it records `field`) ... Update this build to open it; the saved
+state was left unchanged." A failed open never stores, so the newer record
+stays intact. Damage and foreign formats keep their old messages.
+
+Test: an unknown field and a v9 format are refused by name; a foreign
+format and damaged JSON are reported as before.
+
+### 2026-10-09: `send` from a saved wallet runs on the shared native stack
+
+Found while funding the fleet: `optn send --wallet ...` could never spend.
+The wallet runtime releases signing keys only after a refresh in the same
+session, and `send` never refreshed, so every saved-wallet send was refused
+with "Refresh the wallet before preparing or authorizing a spend".
+
+For a saved wallet, `send` now refreshes through the shared HD runtime
+(`--max-addresses` bounds the scan, as for `rescan`), spends the runtime's
+own ordinary HD coins with `optn_runtime::wallet_spend::prepare_spend`
+(tokens never, every hold honoured), sends change to a change address the
+runtime reserved durably, and broadcasts through the selected chain stack.
+`--dry-run` plans and signs against the next change index without
+reserving it. A phrase or keychain wallet keeps the old path.
+
+The change reservation is the same runtime operation fusion rounds use,
+renamed `reserve_change_outputs`. Its guard refuses a wallet migrated from
+the desktop's TypeScript key database, because the desktop may hold its
+coins in records the runtime cannot see. That refusal is correct and
+showed up live: the desktop's wallets fund other wallets from the desktop.
+
+Live: a dry run from a desktop-migrated chipnet wallet (3,000-address scan)
+planned one input, a 226-sat fee and change to a fresh address; the real
+send was refused by that guard, as designed.
+
+### 2026-10-09: a live mixed fleet fuses: CLI, docker and desktop
+
+Server CashFusion on chipnet across all three surfaces at once, on the
+native host, `optn fusion` and the docker runner above. The test-only
+pieces stay outside the repository:
+
+- an Electron Cash fusion server on `127.0.0.1:8787` with
+  `FUSION_MIN_CLIENTS=2` (the harness pins covert ports to 8790-8799 so a
+  container can reach them) and Tor on 9050;
+- two CLI wallets, each in its own `--wallet-directory`, running
+  `optn fusion --server 127.0.0.1:8787 --auto --rounds 2 --yes`;
+- the docker `fusion-lab` profile running `fusion-lab-headless.sh`
+  unchanged; a test-only compose override adds loopback forwarders to the
+  host's server through `host.docker.internal`;
+- the desktop debug build, with Server Fusion and Auto on for one wallet.
+
+Funding: 60,000 sats to two addresses of each new wallet from the shared
+chipnet test wallet (txids in its handoff log), then 300,000 sats from the
+desktop wallet to CLI w1 (`cbee36e0bdd45be90584a481c1b16f82509977077df1955863ec7a32c9b0b375`)
+and to the docker wallet (`c92d5302d55318f4b19e799bacd6834fd2b1ac71b0e21e89bd9a983837c7bf02`).
+The send meant for CLI w2 never happened, so w2 kept 2 x 60,000.
+
+Eight rounds, each broadcast and on chain:
+
+| Round | Tier | Players | Who |
+| --- | --- | --- | --- |
+| `6ddebc1638b000fd746e670f2becd3089e06c6542b885a63dffd6dda58866e25` | 10,000 | 2 | CLI w1, docker |
+| `8e16870ba4485218b8fc3378ddba37977b9ab06e2c518afcf23e5327f6a35e0c` | 22,000 | 3 | CLI w1, docker, desktop |
+| `b2cdcf955cbcea550a2507f5e0e9dc8f4e30fdaed44dd8e976d4b62de36c2b34` | 18,000 | 2 | docker, desktop |
+| `a992a0963e39dab66d7ba285e3121b1fc8a1aae05e3dff69a7fccaf6a80ba73c` | 12,000 | 2 | docker, desktop |
+| `87f43d10a4bb0833e1fbe146f274d18530bfec0cdc2040563aca8bfc811f0b25` | 12,000 | 2 | docker, desktop |
+| `6945d0ad3fbe82c9045865fac2224dea077de44bc55ebba90cad91f9f1334b48` | 18,000 | 2 | docker, desktop |
+| `4709406db83e3ad3e1618d7ab1a4a76bf5ab4b9ef649651ae4970da8156e976d` | 15,000 | 2 | docker, desktop |
+| `970dc0a660686dd5f0715ab887062fb773134e81547e0e4e4f724e8e85a12233` | 15,000 | 2 | docker, desktop |
+
+Player counts are the server's ("Starting fusion with N players"). Who
+took part comes from each member's own record: CLI w1's result lists the
+first two rounds, the docker runner's log the first seven, the desktop's
+log the last six. Depth reached 2 on every surface (CLI w1's second round
+spent only the first round's outputs), each step recorded only after the
+selected servers held the round. The docker lab was stopped while round 8
+was being broadcast, so its record ends at round 7.
+
+What the run found:
+
+- **CLI w2 could not fuse, correctly.** Electron Cash wants 11 components
+  counted by distinct keys, so two coins at two addresses need nine
+  outputs, each at least 10,000 sats plus its fee and a random spread:
+  roughly 180,000 sats at the smallest tier. With 120,000 every attempt
+  ended in "Selected inputs cannot afford any fusion tier". `--auto`
+  retried every 10 s with a new random bucket choice (47 attempts). Open:
+  wait for the wallet to change when no choice of its eligible coins can
+  fund a tier, as Auto already waits once every coin is deep enough.
+- **Simple Send pays all change to one address.** Both desktop sends above
+  paid change to `bchtest:qpxc7u3y3d9fkhneddjy39flv34ywv5qtcfq5j2wu5`. The
+  retained UI sends BCH change to the wallet's first address
+  (`TransactionService.fetchWalletAddresses` returns `addresses[0]`;
+  `preferInternalChangeForBch` is `false`), and here both spent coins were
+  fusion outputs, so the shared change address links what the fusion had
+  separated. The runtime's spend path (`optn send --wallet`) reserves a new
+  change address for every spend. Open: Simple Send's change through the
+  runtime's reservation; it is refused for wallets whose keys are still in
+  the TypeScript key database, which these were.
+- **The desktop's depth record does not survive a hard stop.** The desktop
+  logged round 8's depth as recorded ("depths 2-3, 22 coins") two minutes
+  before the app was killed; after a restart its record ended at round 7.
+  The record lives in renderer storage (localStorage and the sql.js
+  database), whose writes reach disk later. Open: the depth record in the
+  runtime's encrypted checkpoint, written with the wallet state.
+- **Desktop engine sessions, rechecked.** Each finding was reproduced
+  before anything was changed:
+  - "A secondary window never opens its wallet in the engine" was the test
+    harness: it named its windows `send-...`, which the `desktop`
+    capability (`main`, `wallet-*`) does not cover. With the app's own
+    `wallet-*` label a second window's unlock opens its wallet in the
+    engine. The engine holds one wallet per process, so that moves the
+    session from the first window, whose sends are then refused with
+    "Wallet session is unavailable or changed. Reopen this wallet before
+    sending."
+  - The failed first refresh was the chain stack still being built: for
+    about half a minute after launch or an unlock every refresh failed with
+    "Chain source is still connecting", shown as "Wallet refresh
+    unavailable". Fixed below ("the first refresh waits for the chain
+    stack").
+  - `ReorgBeyondWindow { floor: 325540 }` was a one-block chipnet orphan
+    sealed in a view with no reorg ring. Fixed below ("a view sealed
+    without a reorg ring steps back one block").
+  - The wallet whose receive branch reaches index 1,368 refreshed completely
+    through the CLI (2,951 addresses, 87 s), and after that the desktop
+    refused it every time: "retained wallet scripts are outside this HD
+    account or scan cap". Fixed below ("a refresh covers what the last scan
+    kept").
+  - "Wallet changed or needs a refresh" after reopening the engine by hand
+    is the unlock-epoch check doing its job.
+
+### 2026-10-10: a view sealed without a reorg ring steps back one block
+
+#75 (header verification). Found in the fleet run and traced to the block:
+chipnet's 325,540 has two blocks, `00000000de317af8...` (06:47) and
+`00000000179eff3b...` (06:44), and 325,541 builds on the second. Wallets
+here had sealed the first, in a view written before reorg rings were kept.
+Such a view restores with no ring and cannot step back even one block, so
+every header pass since 2026-09-29 ended in `ReorgBeyondWindow` at its tip:
+no header-proven evidence above 325,540, and no verified chain for BIP37
+or Neutrino.
+
+A ring is no longer needed for one block. The accumulator keeps only peaks,
+but the tip's own proof lists every peak the tip was appended to:
+
+- `MmrAccumulator::before_last_leaf` reads the previous peaks out of the
+  last leaf's proof, and `before_append` rebuilds them from the leaves that
+  append merged with. Each is accepted only if appending the leaf again
+  reproduces the accumulator.
+- `ShvMmrHeaderVerifier::parent` is the verifier one block back. The parent
+  header is believed because its hash is the tip's previous-block hash, the
+  2^m - 1 headers under it because together they reproduce the state the
+  view already holds. For 325,539 that is three headers.
+- `VerifiedHeaderView::seed_ring` gives a ring-less view that one block of
+  ring. A header pass that meets a fork seeds it first, so the existing
+  reorg path (more-work check, store rewind) runs unchanged. A fork deeper
+  than the tip still refuses, as before.
+
+Tests:
+- every MMR shape from 0 to 300 leaves steps back both ways, and corrupt
+  or wrong material is refused;
+- the parent verifier equals the real one at every height 1 to 70 and
+  persists like any other;
+- a regtest view sealed without a ring follows a one-block orphan over
+  Electrum and BIP37 and seals a ring afterwards, while a two-block orphan
+  is refused.
+
+Live: the stuck chipnet wallet followed the chain to 327,171 in one CLI
+refresh, header-proven, and its sealed view now carries a ring.
+
+### 2026-10-10: the first refresh waits for the chain stack
+
+#75 / #71. The host rebuilds its chain stack on launch and when the
+selection changes, and a refresh that ran meanwhile failed at once with
+"Chain source is still connecting". Reproduced right after an unlock: the
+manual refresh failed for 24 s, and the worker showed "Wallet refresh
+unavailable; retained history remains stale" and backed off 5, 10, 20 s.
+
+`sync_wallet_from` now waits up to two minutes for the build in progress.
+Every rebuild wakes waiters however it ends (a drop guard, so cancellation
+counts too), and the wait re-checks the installed service each time, so a
+stale stack is never used. A build that never lands still fails as before.
+Test: a refresh started with no stack waits, then proceeds the moment a
+build installs one; with nothing building the wait gives up at its bound.
+
+Live, desktop rebuilt with this: one wallet unlocked right after launch
+waited for the stack, refreshed from +19 s and was fresh at +31 s, headers
+at the tip.
+
+### 2026-10-10: a refresh covers what the last scan kept
+
+#75. Found in the fleet run: once `optn rescan --max-addresses 3000` had
+reached used addresses past index 1,368, every desktop refresh of that
+wallet refused "retained wallet scripts are outside this HD account or scan
+cap", shown as "Wallet refresh unavailable". A refresh must cover the scope
+the last accepted scan kept, and the desktop's discovery budget (200 per
+branch, or the issued inventory plus a gap) was smaller than that scope.
+
+The budget now also grows to the longest branch the last scan kept, plus
+one gap so that branch can still grow, the same way it grows for issued
+addresses. A provider can move it by at most one gap per accepted scan,
+never past the 10,000 hard cap; a scan that needs more still fails as
+incomplete. Tests: a scan on a larger budget that reaches index 9, then a
+refresh on a six-address budget, is accepted with index 9 still in scope;
+the cap-failure test pushes past the grown budget.
+
+Live, desktop rebuilt with all three fixes: that wallet (its own sealed
+view also at the orphaned 325,540) waited for the stack, refreshed from
++30 s and was fresh at +88 s with headers at the tip, 327,174.
+
+### 2026-10-10: `optn fusion --auto` waits when no choice of coins can fund a tier
+
+Found in the fleet run: a CLI wallet holding 2 x 60,000 sats asked the
+server for a round every 10 s for as long as it ran (47 times), each ending
+"Selected inputs cannot afford any fusion tier".
+
+Whether a contribution funds a tier is partly chance (Electron Cash draws
+the output count), so the CLI now tells two cases apart.
+`optn_fusion::allocate::never_affordable` checks the floor every tier
+shares: at least `11 - distinct keys` outputs of `MIN_OUTPUT` plus fee, out
+of the inputs' value after their own fees and the server's minimum excess
+fee. Taken over every eligible coin, it is a bound no subset can beat, so
+when it fails the CLI says why and idles until the wallet changes,
+re-asking the server each idle period. Above the floor, a miss is the draw,
+and retries back off from 20 s, doubling to the 30 min idle wait. A round
+that fuses, or a wallet that changes, resets both. `server_round::server_hello`
+is the hello a round already fetched, now also callable on its own.
+
+Test: for 1 to 6 keys at 5,000 to 400,000 sats each, whenever "never" is
+claimed, forty different draws all fail to fund a tier; one 60,000 coin is
+never affordable and two at two addresses are not.
+
+### 2026-10-10: one Rust Nostr layer for P2P CashFusion and chat
+
+#83. P2P CashFusion and chat reach Nostr only from the desktop renderer,
+through nostr-tools, so the CLI and the docker runner cannot take part in a
+P2P round, and every relay decision lives in TypeScript. `crates/optn-nostr`
+is the Rust side both will use:
+
+- `Relays` reaches a set of relays through `RelayRoute::Tor(socks)` (remote
+  relays through the holder's verified Tor proxy, relays on this machine
+  directly) or `RelayRoute::LocalOnly`, which refuses a remote relay rather
+  than reach it without Tor. Publishing succeeds when at least one relay
+  accepts and reports the rest; subscriptions stream each event once.
+- `nip17::wrap` / `nip17::unwrap`: NIP-17 private messages (kind-14 rumor,
+  sealed and gift-wrapped per NIP-59). Opening verifies the outer event and
+  the seal, accepts only a kind-14 rumor, and refuses a rumor whose author is
+  not the key that sealed it.
+
+Built on rust-nostr's maintained 0.45 line (`nostr` 0.45.5, `nostr-sdk`
+0.45.4). The research behind the choice: the "unmaintained" notice on
+`nostr-relay-pool` (RUSTSEC-2026-0243) means it moved into `nostr-sdk` 0.45;
+0.44.0-0.44.4 are yanked over 2026 advisories (signature cache, NIP-44 and
+NIP-04 parsing, credentials in debug output) that 0.44.5+ and 0.45 fix. MDK
+(Marmot's Rust MLS kit) stopped publishing a library after `mdk-core` 0.8.0
+and pins git forks of openmls and rust-nostr, which `deny.toml` refuses, so
+the chat port will use `mdk-core` 0.8.0 from crates.io and bridge events to
+0.45 as JSON.
+
+Tests: a local relay carries a published event to a subscriber; remote
+relays are refused without Tor; an unreachable relay is reported; NIP-17
+wraps open only for their receiver and refuse tampering and non-message
+rumors. Interop: `test-vectors/nostr-nip17-interop.json` holds one wrap made
+by nostr-tools and one by rust-nostr; Rust opens both, and a vitest beside
+the TypeScript transport opens both with nostr-tools. cargo-deny passes.
+
+### 2026-10-10: Marmot chat through MDK, beside ts-mls
+
+#83, continuing the Rust Nostr layer. The holder asked to port the chat to
+MDK, keeping the ts-mls engine as the fallback so nothing is lost, and to use
+MDK as published. `crates/optn-chat` drives `mdk-core` 0.8.0 unmodified over
+`optn-nostr`. The desktop runs it behind the `mdk-chat` build feature
+(`src-tauri/src/chat_mdk.rs`), and the chat screen reaches both engines through
+`mlsEngine.ts`. With "Marmot groups through MDK" on in the Nostr settings, new
+open groups go to MDK. Every other group, private groups and Paytaca stay on
+ts-mls, and both engines read the same inbox. `docs/chat-mdk.md` lists what
+MDK does and does not do; each gap was checked against MDK's source.
+
+- Store: MDK's SQLCipher store, keyed with HKDF-SHA256 of the chat identity's
+  secret. MDK's in-memory store cannot be exported (its snapshot type has
+  private fields), so it serves the tests only. On Windows, SQLCipher's
+  OpenSSL is built from source and needs Strawberry Perl as `OPENSSL_SRC_PERL`;
+  Git's Perl lacks `Locale::Maketext::Simple`, `IPC::Cmd` and others.
+- Relays: `optn-nostr` gained `nip59` (gift wraps for any rumor; Marmot
+  welcomes are kind 444), targeted publish, fetch and subscribe for a group's
+  own relays, and `RelayRoute::Dialer`. Through the dialer the desktop's
+  egress opens every relay stream (Tor switch, own hosts, public addresses
+  only, plain `ws` only on this machine), and rust-nostr runs the WebSocket over
+  it.
+- Three faults found while testing, fixed in the engine:
+  1. MDK returns a welcome it has already handled, and accepting it again
+     rebuilt the group from the welcome's epoch. Only a pending welcome is
+     accepted now.
+  2. A member's post-join self-update could share a second with the commit
+     that added them. Relays order by `created_at` only, and MDK never retries
+     an event it failed to read, so a reader taking them in the wrong order
+     fell an epoch behind for good. Nothing is now published in the second of
+     the newest commit the engine made or read (or the welcome it joined by),
+     waiting up to 3 s.
+  3. A commit made from a stale epoch forked the group and lost under MIP-03.
+     Each commit is now preceded by reading the group's latest events.
+- The chat screen showed no group texts from others: MLS group messages are
+  kind 9 (ts-mls's own `innerKind9` too), and the thread and inbox counted
+  only kinds 14 and 15. Kind 9 counts now.
+- Dependency policy: MDK's OpenMLS crypto brings `hpke-rs` 0.6.1, and with it
+  `libcrux-sha3` 0.0.8 and `libcrux-secrets` 0.0.5. No hpke-rs 0.6 release
+  takes the fixed libcrux, and their advisories (RUSTSEC-2026-0207, -0208,
+  -0212) sit on paths ciphersuite 0x0001 never reaches (SHAKE only for X-Wing
+  and ML-KEM keys, and only one-shot). `deny.toml` and
+  `src-tauri/.cargo/audit.toml` hold each one with its reason and its removal
+  condition. The audit file also holds the five advisories of hpke-rs's
+  libcrux backend, which nothing enables and which appears only in
+  `Cargo.lock`. `lru` 0.16.4 (RUSTSEC-2026-0253) comes with MDK's memory
+  store, now a test-only dependency.
+
+Tests:
+- Three engines on a local relay take a group from invitation to leaving,
+  in 10 runs out of 10: a member without a key package is refused before
+  anything is made; then welcome, messages both ways (each read once however
+  often caught up), a file with its type and name, rename, live listening,
+  adding, removing (the removed member's group goes inactive), and a leave
+  committed by the admin.
+- With `sqlite`, a reopened store keeps its group, history and epoch and reads
+  on. The file has no SQLite header and no plaintext, and another identity's
+  key does not open it.
+- `optn-nostr`: 12 tests. Frontend: the facade sends each call to its
+  engine, and MDK events become chat messages and groups; the inbox counts
+  kind 9. 224 chat, nostr, state and i18n tests pass.
+- The desktop passes clippy with and without `mdk-chat`. cargo-deny passes
+  for the root and the desktop, and cargo audit passes for the desktop.
+- Live, opt-in (`tests/live_relays.rs`): two throwaway identities on
+  relay.damus.io, nos.lol and relay.primal.net, through a local Tor. All
+  three relays took the key package, the invitee joined 1.5 s after the group
+  was made, and messages crossed both ways in about 1 s each.
+
+### 2026-10-10: the fusion depth record is sealed with the wallet
+
+#83, from the fleet runs: the CLI kept each wallet's CashFusion depth record
+(`optn_core::fusion::depth`) in a plaintext file beside the wallet. The
+desktop renderer kept it in localStorage, which WebView2 writes back lazily,
+and a hard stop lost a recorded round.
+
+- Runtime: the record is part of the wallet's state (`AppState::fusion_depth`).
+  It is sealed in the encrypted checkpoint as one more field, written only
+  once a round has been recorded. A wallet that never fused stays readable by
+  earlier builds, and a build that does not know the field refuses a
+  checkpoint that has it, as with every field added before. Restored on open,
+  never taken from the wire.
+  - `AppRuntime::record_fusion_round` saves a round with the checkpoint before
+    it returns.
+  - `AppRuntime::import_fusion_depth` merges a record kept elsewhere; the
+    deeper entry wins.
+  - Both ask only that the same wallet session is still open. A wallet
+    operation's guard also refuses whenever coins are not fresh, and a
+    finished round's result must be kept whatever a refresh does meanwhile.
+- CLI: `optn fusion` reads and records through the runtime. The plaintext file
+  an earlier build left is merged in once and removed (`depth_imported`
+  event).
+- Desktop renderer wallets (keys in the renderer's key database) have no
+  runtime checkpoint. After each change their record is sealed with the
+  wallet's password-derived key (the desktop's SecretCryptoService) and
+  handed to the host (`fusion_depth_store.rs`), which writes it whole, flushed
+  and renamed into place before answering. The host stores only `enc:v1:`
+  ciphertext. On wallet open (`hydrateFusionLabels`) the sealed copy is merged
+  back in, the deeper entry winning, and a book from before this build gets
+  its first sealed copy. A record is sealed only while its own wallet's key is
+  the unlocked one. Seals are chained per wallet, so the last write is the
+  newest book.
+
+Tests:
+- A recorded round, and a second one on its output, survive a fresh runtime
+  over the same storage (sealed bytes, opened again).
+- A round whose save fails is not recorded. An import keeps deeper entries
+  and adds txids, and a shallower copy lowers nothing.
+- The checkpoint carries no `fusion_depth` until there is a record.
+- CLI: an earlier build's file is sealed and removed, and reads back from a
+  new runtime.
+- Host: only ciphertext is stored, kept whole, with no partial file left.
+- Renderer: a round a hard stop took from localStorage comes back from the
+  sealed copy; nothing is sealed under another wallet's key; an old book gets
+  its first sealed copy.
+- Suites: optn-app 176, optn-runtime 419, optn-transport 26, the CLI's fusion
+  tests, and the renderer's depth and fusion suites (68) pass. Clippy is
+  strict for the workspace, the CLI and the desktop.
+
+### 2026-10-10: BCH P2P nodes from the node implementations' DNS seeds
+
+#75 §21.3 asks for BCH P2P discovery from BCHN, Flowee the Hub, bchd and
+Knuth, with provenance kept where their lists overlap. The 2026-10-08 row for
+the P2P side closes, and with it the last gap of row 1.
+
+- Catalog: each project's DNS seeds, read from its source at a pinned commit
+  (`bootstrap/p2p_seeds.json`; the bootstrap README records the commits and
+  the review). A seed several projects list is one candidate credited to
+  each: `seed.bchd.cash` to all four, `dnsseed.electroncash.de` to Knuth
+  alone. Seeds rank after the Electrum servers, so under Auto wallet
+  operations still go to a server first.
+- A seed is an endpoint kind of its own (`p2p-seed`), not a peer. A seed name
+  resolves to a different node on each lookup. The BIP37 adapter opens a
+  connection per request, and under Tor each one takes a new circuit. A seed
+  dialled as a peer would be a different node each time, and the capabilities
+  probed on one would be claimed for the next. So the nodes a seed names are
+  the peers, and the seed is how they are found:
+  - Tor off: a DNS lookup, as a full node does.
+  - Tor on: the name goes to Tor and is never looked up here (#75 §4.1). The
+    node it leads to is asked for addresses (`getaddr`), then the connection
+    is closed. This is Bitcoin Core's addrfetch, which BCHN's seed list
+    relies on too.
+- Only public addresses on the port the seed was asked for are dialled. A seed,
+  or the node it led to, cannot point the wallet at this machine, its LAN or
+  another service. Chipnet and testnet4 share a P2P magic; their ports keep
+  their nodes apart.
+- Nodes found become discovered sources (`bootstrap:p2p:<ip>:<port>`), by IP
+  address only. They are listed, disabled or banned like discovered servers,
+  and never selected under own-infrastructure-only. They are cached beside the
+  servers, bounded apart from them; earlier builds skip them.
+- Builder (`build_native_chain_stack_with_tor_status`): P2P nodes are the last
+  resort of a public scope (#75 §5.2). They are dialled only while nothing
+  else gave a wallet route, two at a time and eight at most; the rest are held
+  back for failover. Known nodes come first. Seeds are asked only when none of
+  those answers: three at once, with each answer used as it arrives, since
+  through Tor a node may hold its `getaddr` reply for most of a minute. Under
+  Auto with a working server, no seed is asked.
+- A seed may name a node the holder banned. The cache now keeps every peer
+  the holder set a disposition for, however long since anything named it. The
+  ban is therefore in the catalog when the seed answers, and the node is not
+  admitted.
+- The BIP37, Neutrino and Electrum adapters now pass the SOCKS target as host
+  and port. Formatted as one string, an IPv6 literal had no brackets, and the
+  proxy was sent it as a name to resolve.
+- A stack that may need to ask a seed through Tor now looks for Tor. Before
+  this, Privacy, BIP37-only and Neutrino-only had nothing to connect to on a
+  fresh install.
+
+Tests:
+- Runtime:
+  - every list is the one its upstream file has (a script, recorded in the README);
+  - provenance is merged across projects;
+  - a seed is never a route, and ranks after the servers;
+  - a node is listed by address only, and bounded apart from servers.
+- BIP37: `addr` decoding; an addrfetch waits past a self-announcement; the deadline.
+- Builder:
+  - a P2P-only wallet with no node known asks a seed and connects;
+  - a working server leaves seeds unasked and holds nodes back, and those
+    nodes are dialled on failover;
+  - a node the holder banned stays banned when a seed names it;
+  - with Tor on and no Tor, a public seed is reported, not asked;
+  - end to end through a SOCKS proxy, the seed is asked by name and its nodes
+    by address, IPv6 included.
+- Cache: nodes beside servers, earlier builds skip them, and peers with a
+  disposition are kept.
+- Live, opt-in (`optn-chain-bip37/tests/seed_live.rs`):
+  - seed.flowee.cash, btccash-seeder.bitcoinunlimited.info,
+    seed.bch.loping.net and seed.bchd.cash each named 25 to 51 nodes;
+  - a node they named answered `getaddr` with 64 full nodes in 1.1 s. On an
+    earlier attempt it sent its own address and held the rest past 20 s.
+- Suites:
+  - the root workspace passes (optn-runtime 422), as do the desktop (144) and
+    the CLI; clippy is strict for all three;
+  - `managed_spend_refuses_without_shared_runtime_coin_freshness` was failing
+    on every OS, not only on Windows as first read. `b43c43e3` made `send`
+    sync before spending, so with no route the refusal is "HD rescan
+    incomplete", not the runtime's freshness message; the test now asserts
+    that, against a server that hangs up at once (a refused loopback connect
+    takes 2 s on Windows, past the test's 1 s timeout). cli-preview does not
+    run on this PR, which is why CI did not show it.

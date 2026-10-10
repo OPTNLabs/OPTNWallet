@@ -7,9 +7,11 @@ import { MdAdd, MdKey, MdRefresh, MdRouter } from 'react-icons/md';
 import { normalizeRelayDraft } from './nostrRelayDraft';
 import type { RootState } from '../../state/store';
 import {
+  selectMdkChatEnabled,
   selectNostrRelays,
   addNostrRelay,
   removeNostrRelay,
+  setMdkChatEnabled,
 } from '../../state/slices/experimentalSlice';
 import {
   fetchProfile,
@@ -23,6 +25,7 @@ import {
   loadMlsDeviceIndex,
   publishMlsKeyPackage,
 } from '../../platform/desktop/nostr/mls';
+import { mdkAvailable } from '../../platform/desktop/nostr/mdkChat';
 import { useWalletConfirm } from '../../components/WalletConfirmDialog';
 // Import from source of truth (not re-export) so Remove never desyncs from list.
 import { isDefaultNostrRelay } from '../../platform/desktop/nostr/defaultRelays';
@@ -35,6 +38,11 @@ export const NostrSettings: React.FC = () => {
   const confirm = useWalletConfirm();
   const relays = useSelector(selectNostrRelays);
   const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
+  const mdkChatEnabled = useSelector(selectMdkChatEnabled);
+  const [mdkBuilt, setMdkBuilt] = useState(false);
+  useEffect(() => {
+    void mdkAvailable().then(setMdkBuilt);
+  }, []);
 
   const [npub, setNpub] = useState<string | null>(null);
   const [pubkey, setPubkey] = useState<string | null>(null);
@@ -340,6 +348,33 @@ export const NostrSettings: React.FC = () => {
             ) : null}
           </div>
         </section>
+
+        {mdkBuilt ? (
+          <section className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
+            <label className="flex items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                checked={mdkChatEnabled}
+                data-testid="mdk-chat"
+                onChange={(event) =>
+                  dispatch(setMdkChatEnabled(event.target.checked))
+                }
+              />
+              <span>
+                <span className="block font-semibold wallet-text-strong">
+                  Marmot groups through MDK
+                </span>
+                <span className="text-[11px] leading-relaxed wallet-muted">
+                  New open groups use MDK, the Rust Marmot engine White Noise
+                  also speaks. The earlier engine stays, so its users and
+                  groups are still reached; private groups and Paytaca use it.
+                  Off, new groups use the earlier engine and MDK groups are
+                  hidden.
+                </span>
+              </span>
+            </label>
+          </section>
+        ) : null}
 
         <section className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3 py-2.5">
           <p className="text-[10px] leading-relaxed text-yellow-400/90">

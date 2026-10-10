@@ -26,13 +26,14 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
+pub mod allocate;
 pub mod blame;
 #[cfg(test)]
 mod component_vectors;
 pub mod components;
 pub mod covert;
-pub mod electrum_input;
 pub mod encrypt;
+pub mod lookup;
 pub mod p2p_component;
 pub mod p2p_sign;
 pub mod pedersen;
@@ -203,14 +204,19 @@ where
         .map_err(|e| format!("could not decode server message: {e}"))?;
 
     match reply.msg {
-        Some(pb::server_message::Msg::Serverhello(h)) => Ok(FusionServerStatus {
-            tiers: h.tiers,
-            num_components: h.num_components,
-            component_feerate: h.component_feerate,
-            min_excess_fee: h.min_excess_fee,
-            max_excess_fee: h.max_excess_fee,
-            donation_address: h.donation_address,
-        }),
+        Some(pb::server_message::Msg::Serverhello(h)) => {
+            // Refused here, where it is read, so no caller ever shows or plans
+            // against a server outside Electron Cash's limits.
+            server_plan::validate_server_hello(&h)?;
+            Ok(FusionServerStatus {
+                tiers: h.tiers,
+                num_components: h.num_components,
+                component_feerate: h.component_feerate,
+                min_excess_fee: h.min_excess_fee,
+                max_excess_fee: h.max_excess_fee,
+                donation_address: h.donation_address,
+            })
+        }
         // The server reports version mismatches and the like through this.
         Some(pb::server_message::Msg::Error(e)) => Err(format!(
             "server rejected us: {}",
@@ -457,6 +463,36 @@ mod tests {
             assert_eq!(status.tiers, vec![10_000, 100_000]);
             assert_eq!(status.num_components, 23);
             assert_eq!(status.component_feerate, 1_000);
+        });
+    }
+
+    #[test]
+    fn refuses_a_server_hello_outside_the_limits() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let server_task = tokio::spawn(async move {
+                let _ = recv_frame(&mut server).await.unwrap();
+                let hello = pb::ServerMessage {
+                    msg: Some(pb::server_message::Msg::Serverhello(pb::ServerHello {
+                        tiers: vec![10_000, 100_000],
+                        num_components: 23,
+                        component_feerate: server_plan::MAX_COMPONENT_FEERATE + 1,
+                        min_excess_fee: 10,
+                        max_excess_fee: 10_000,
+                        donation_address: None,
+                    })),
+                };
+                send_frame(&mut server, &hello.encode_to_vec())
+                    .await
+                    .unwrap();
+            });
+            let error = handshake(&mut client, None).await.unwrap_err();
+            server_task.await.unwrap();
+            assert!(error.contains("excessive component feerate"), "{error}");
         });
     }
 

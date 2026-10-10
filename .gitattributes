@@ -1,0 +1,4 @@
+# Shell scripts run inside Linux containers and CI, often from a working copy
+# checked out on Windows and bind-mounted into a container. With CRLF line
+# endings bash stops at the first line, so keep them LF on every checkout.
+*.sh text eol=lf

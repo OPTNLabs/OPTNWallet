@@ -376,6 +376,14 @@ function isDesktop(): boolean {
 }
 
 export function getElectrumServers(network: Network): string[] {
+  // Desktop: the holder's source selection, from Rust (see
+  // src/platform/desktop/electrumPool.ts). Rust dials nothing else.
+  const selected = (
+    globalThis as {
+      __OPTN_ELECTRUM_POOL__?: (network: string) => string[] | null;
+    }
+  ).__OPTN_ELECTRUM_POOL__?.(network);
+  if (selected) return selected;
   const base = getInfraUrlPools(network).electrumServers;
   // User-added servers come first so a self-hosted server is preferred by the
   // auto/failover order.

@@ -5,8 +5,9 @@
 // set; every peer acknowledges before a random-session round_start is issued.
 // No input/output registration starts from an independently frozen local view.
 
-import { SimplePool } from 'nostr-tools';
-import { useWebSocketImplementation as setNostrWebSocketImpl } from 'nostr-tools/pool';
+import type { SimplePool } from 'nostr-tools';
+import { AbstractSimplePool } from 'nostr-tools/abstract-pool';
+import { verifyEvent } from 'nostr-tools/pure';
 import { invoke } from '@tauri-apps/api/core';
 import { encodeTransaction, hash256, sha256 } from '@bitauth/libauth';
 
@@ -100,7 +101,19 @@ const FUSION_CORE_RELAYS: readonly string[] = [
 const MAX_ANNOUNCE_RELAYS = FUSION_CORE_RELAYS.length;
 /** Round hops: same core (gift-wraps must share announce topology). */
 const MAX_ROUND_RELAYS = FUSION_CORE_RELAYS.length;
-let wsInstalled = false;
+/**
+ * A relay pool whose every socket is Tor's, whatever the Tor switch says about
+ * other traffic. The socket is given to the pool itself: `SimplePool` takes
+ * its socket from its own module, which `useWebSocketImplementation` from
+ * 'nostr-tools/pool' does not reach, and would use the app's socket. Same
+ * settings as `SimplePool` otherwise.
+ */
+const newFusionPool = (): SimplePool =>
+  new AbstractSimplePool({
+    verifyEvent,
+    websocketImplementation: TorWebSocket as unknown as typeof WebSocket,
+    maxWaitForConnection: 3_000,
+  });
 
 export const P2P_PHASE_LABELS = [
   'Idle',
@@ -974,13 +987,9 @@ export async function runP2pFusion(
   const announceRelays = validatedRelays(opts.relays, MAX_ANNOUNCE_RELAYS);
   const roundRelays = announceRelays.slice(0, MAX_ROUND_RELAYS);
   const relays = announceRelays;
-  if (!wsInstalled) {
-    setNostrWebSocketImpl(TorWebSocket);
-    wsInstalled = true;
-  }
-  const pool = new SimplePool();
+  const pool = newFusionPool();
   // Output registrations get different relay sockets and Tor isolation streams.
-  const outputPool = new SimplePool();
+  const outputPool = newFusionPool();
   let releaseTorRouting: (() => void) | null = null;
   let stopPool: (() => void) | null = null;
   let round: RoundIdentity | null = null;
@@ -1190,11 +1199,10 @@ export async function runP2pFusion(
       round,
       outputPool,
       opts.signal,
-      // Production only. The Tor WebSocket implementation is installed globally
-      // (setNostrWebSocketImpl), so each new pool opens a new connection and
+      // Production only. Each new pool opens a new Tor connection and
       // therefore a new Tor circuit — the relay cannot group this round's
       // outputs by socket the way it could when they shared outputPool.
-      () => new SimplePool()
+      newFusionPool
     );
     // Brief wire-up so onMessage (Nostr + same-origin BC) is subscribed before
     // the elected coordinator's first proposal (live: silent-coordinator failover

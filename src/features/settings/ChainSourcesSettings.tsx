@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { useDispatch } from 'react-redux';
 import { setChainPolicy as rememberChainPolicy } from '../../state/slices/preferencesSlice';
+import { setTorEnabled } from '../../state/slices/experimentalSlice';
 import SectionCard from '../../components/ui/SectionCard';
 import {
   addChainSource,
@@ -16,7 +17,9 @@ import {
   CHAIN_POLICY_LABELS,
   ENDPOINT_KINDS,
   readChainSources,
+  readChainTransport,
   rebuildChainRoutes,
+  setChainTransport,
   trustSocksProxy,
   removeChainSource,
   SELECTABLE_CHAIN_POLICIES,
@@ -28,6 +31,7 @@ import {
   type ChainSourceScope,
   type ChainSource,
   type ChainSourcesView,
+  type ChainTransport,
 } from '../../platform/desktop/chainSourcesBridge';
 import {
   integratedTorStatus,
@@ -38,6 +42,11 @@ import {
   refreshEngineWallet,
   type EngineWalletSync,
 } from '../../platform/desktop/engineWalletBridge';
+import {
+  headerCheckpointLabel,
+  providerHealthSummary,
+  snapshotAgeLabel,
+} from '../../platform/desktop/engineSyncStatus';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { refusedForWantOfTor } from './chainSourceStatus';
 
@@ -132,6 +141,7 @@ function endpointText(endpoint: ChainSource['endpoints'][number]): string {
 
 function serviceBadgeText(kind: string): string {
   if (kind.includes('electrum')) return 'Electrum';
+  if (kind === 'p2p-seed') return 'DNS seed';
   if (kind === 'p2p') return 'BIP37 / P2P';
   if (kind === 'node-rpc') return 'RPC';
   if (kind === 'node-zmq') return 'ZMQ';
@@ -161,6 +171,8 @@ function sourceBadges(source: ChainSource): string[] {
 }
 
 function originText(source: ChainSource): string {
+  if (source.origin === 'bootstrap' && source.group === 'discovered')
+    return "Discovered from a server's peer list";
   if (source.origin === 'bootstrap') return 'Maintained public catalog';
   if (source.origin === 'own-infrastructure') return 'My infrastructure';
   return 'User-added source';
@@ -285,8 +297,20 @@ export function ChainSourcesSettings({
   const [selection, setSelection] = useState<ChainSelection | null>(null);
   const [selectionDirty, setSelectionDirty] = useState(false);
   const selectionNetwork = useRef<string | null>(null);
+  const [transport, setTransport] = useState<ChainTransport | null>(null);
 
   const dispatch = useDispatch();
+
+  const loadTransport = useCallback(
+    async (network: string) => {
+      const current = await readChainTransport(network);
+      setTransport(current);
+      // CashFusion, Auto Fusion and Cash Code read this flag. It mirrors the
+      // Rust policy, which enforces the same answer either way.
+      dispatch(setTorEnabled(current !== 'direct'));
+    },
+    [dispatch]
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -337,6 +361,26 @@ export function ChainSourcesSettings({
     } finally {
       setBusy(false);
     }
+  };
+
+  const viewNetwork = view?.network;
+  useEffect(() => {
+    if (page !== 'privacy' || !viewNetwork) return;
+    void loadTransport(viewNetwork).catch((failure) =>
+      setError(failure instanceof Error ? failure.message : String(failure))
+    );
+  }, [page, viewNetwork, loadTransport]);
+
+  const chooseTransport = (next: ChainTransport) => {
+    if (!view) return;
+    const network = view.network;
+    void run(async () => {
+      await setChainTransport(next, network);
+      // Routes built under the old rule are already revoked; build the new
+      // ones now rather than on the next unrelated change.
+      await rebuildChainRoutes();
+      await loadTransport(network);
+    });
   };
 
   const navigate = (next: SourcePage) => {
@@ -609,8 +653,8 @@ export function ChainSourcesSettings({
             P2P support is verified separately. RPC may require authentication.
             ZMQ provides notifications, not wallet synchronization. Fulcrum is a
             separate service and is never assumed. IPFS gateways use HTTPS at
-            /ipfs/ through verified Tor; enter the HTTPS port (usually 443).
-            Registry hashes are checked in Rust.
+            /ipfs/, through Tor while Tor is on; enter the HTTPS port (usually
+            443). Registry hashes are checked in Rust.
           </p>
           <button
             type="button"
@@ -852,11 +896,46 @@ export function ChainSourcesSettings({
 
       {page === 'privacy' && (
         <>
-          <p className="text-xs wallet-muted">
-            Public sources use the host&apos;s verified Tor route.
-            Infrastructure explicitly marked as yours may use the direct route
-            allowed by the Rust policy; this screen does not change that policy.
-          </p>
+          <div className="flex flex-col gap-3 rounded-xl border border-[var(--wallet-border)] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold wallet-text-strong">Tor</p>
+                <p className="text-[11px] wallet-muted">
+                  Servers, token metadata and CashFusion go through Tor.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={transport !== null && transport !== 'direct'}
+                aria-label="Tor"
+                data-testid="tor-switch"
+                disabled={busy || transport === null}
+                onClick={() =>
+                  chooseTransport(transport === 'direct' ? 'tor' : 'direct')
+                }
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors disabled:opacity-50 ${
+                  transport !== null && transport !== 'direct'
+                    ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
+                    : 'wallet-surface-strong border-[var(--wallet-border)]'
+                }`}
+              >
+                <span
+                  className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                    transport !== null && transport !== 'direct'
+                      ? 'translate-x-5'
+                      : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
+            {transport === 'direct' && (
+              <p className="rounded-lg border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-3 py-2 text-xs text-[var(--wallet-warning-text)]">
+                Tor is off. Every server you use sees your IP address, and
+                CashFusion does not run.
+              </p>
+            )}
+          </div>
           {view.tor.status === 'unverified' && view.tor.socks_port !== null && (
             <div className="rounded-lg border border-[var(--wallet-warning-border)] bg-[var(--wallet-warning-bg)] px-3 py-2 text-xs text-[var(--wallet-warning-text)]">
               <p>
@@ -1318,7 +1397,20 @@ export function ChainSourcesSettings({
                   }`}
               {engineSync.source ? ` · ${engineSync.source}` : ''}
               {engineSync.tipHeight ? ` · tip ${engineSync.tipHeight}` : ''}
+              {engineSync.snapshotAtUnixMs !== null
+                ? ` · ${snapshotAgeLabel(engineSync.snapshotAtUnixMs, Date.now())}`
+                : ''}
             </p>
+            {engineSync.headerCheckpoint && (
+              <p className="mt-1 text-[11px] wallet-muted">
+                {headerCheckpointLabel(engineSync.headerCheckpoint)}
+              </p>
+            )}
+            {providerHealthSummary(engineSync.providers) && (
+              <p className="mt-1 text-[11px] text-amber-400">
+                {providerHealthSummary(engineSync.providers)}
+              </p>
+            )}
             {engineSync.error && (
               <p className="mt-1 text-[11px] text-amber-400">
                 {engineSync.error}
@@ -1348,9 +1440,10 @@ export function ChainSourcesSettings({
             </p>
             <p className="text-xs wallet-muted">
               Maintained services for {view.network} appear below. You can also
-              add your own indexer. Requires verified Tor. Registry bytes must
-              match the locally verified publication; an indexer cannot
-              establish ownership or replace missing chain evidence.
+              add your own indexer. Reached through Tor while Tor is on, unless
+              it is your own. Registry bytes must match the locally verified
+              publication; an indexer cannot establish ownership or replace
+              missing chain evidence.
             </p>
             {view.sources
               .filter((source) =>
@@ -1385,8 +1478,9 @@ export function ChainSourcesSettings({
               IPFS gateways
             </p>
             <p className="text-xs wallet-muted">
-              Maintained and custom HTTPS gateways. Requires verified Tor;
-              registry bytes are hash-checked by Rust.
+              Maintained and custom HTTPS gateways, reached through Tor while
+              Tor is on unless they are your own; registry bytes are
+              hash-checked by Rust.
             </p>
             {view.sources
               .filter((source) =>
@@ -1493,7 +1587,9 @@ export function ChainSourcesSettings({
                         </p>
                         <p className="truncate text-[11px] wallet-muted">
                           {originText(source)}
-                          {source.group ? ` · ${source.group}` : ''}
+                          {source.group && source.origin !== 'bootstrap'
+                            ? ` · ${source.group}`
+                            : ''}
                         </p>
                         <p className="truncate font-mono text-[11px] wallet-muted">
                           {[
@@ -1553,7 +1649,9 @@ export function ChainSourcesSettings({
               </p>
               <p className="text-xs wallet-muted">
                 {originText(selectedSource)}
-                {selectedSource.group ? ` · ${selectedSource.group}` : ''}
+                {selectedSource.group && selectedSource.origin !== 'bootstrap'
+                  ? ` · ${selectedSource.group}`
+                  : ''}
                 {selectedSource.role ? ` · ${selectedSource.role}` : ''}
               </p>
               <p className={`mt-1 text-xs ${statusLine(selectedSource).tone}`}>

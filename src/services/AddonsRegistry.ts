@@ -12,6 +12,7 @@ import {
   validateAddonPermissions,
 } from './AddonsAllowlist';
 import { validateAddonManifestAgainstSchema } from './addons/AddonManifestSchema';
+import { refuseUntrustedClaims } from './addons/AddonTrust';
 
 /**
  * v1 Registry:
@@ -65,6 +66,9 @@ export default function AddonsRegistry() {
       for (const m of loaded) {
         try {
           if (!m?.id) continue;
+          // An installed add-on never takes a shipped one's identity or
+          // claims a trust only the host grants.
+          refuseUntrustedClaims(m);
           validateManifestShape(m);
           const schemaErrors = validateAddonManifestAgainstSchema(m);
           if (schemaErrors.length) throw new Error(schemaErrors.join('; '));

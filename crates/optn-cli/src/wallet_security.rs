@@ -15,7 +15,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-fn message(error: TransportError) -> String {
+pub(crate) fn message(error: TransportError) -> String {
     match error {
         TransportError::Other(message) | TransportError::InvalidData(message) => message,
         _ => "Wallet security is unavailable on this interface.".into(),
@@ -85,6 +85,9 @@ enum NetworkCommand {
     Policy {
         preset: optn_runtime::network_config::ChainPolicyPreset,
     },
+    Tor {
+        on: bool,
+    },
     Select {
         source: String,
         protocol: crate::ChainProtocol,
@@ -118,6 +121,7 @@ async fn network_reply(
             NetworkCommand::Select { .. } => "network select",
             NetworkCommand::Configure { .. } => "network configure",
             NetworkCommand::Policy { .. }
+            | NetworkCommand::Tor { .. }
             | NetworkCommand::Add { .. }
             | NetworkCommand::Disposition { .. }
             | NetworkCommand::Remove { .. } => "network configure",
@@ -164,6 +168,16 @@ async fn network_reply(
                 cli.network,
                 cli.network_config_dir.as_deref(),
                 preset,
+            )
+            .map_err(CliError::Usage)?,
+            NetworkCommand::Tor { on } => crate::network_settings::set_transport(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                if on {
+                    optn_runtime::chain::TransportPolicy::Tor
+                } else {
+                    optn_runtime::chain::TransportPolicy::Direct
+                },
             )
             .map_err(CliError::Usage)?,
             NetworkCommand::Select { source, protocol } => crate::network_settings::select_source(
@@ -247,6 +261,10 @@ fn network_prompt(argument: &str) -> Result<NetworkCommand> {
         [policy, preset] if policy == "policy" => Ok(NetworkCommand::Policy {
             preset: crate::network_settings::parse_policy_preset(preset).map_err(CliError::Usage)?,
         }),
+        [tor, state] if tor == "tor" => Ok(NetworkCommand::Tor {
+            on: crate::network_settings::parse_tor_switch(state).map_err(CliError::Usage)?
+                == optn_runtime::chain::TransportPolicy::Tor,
+        }),
         [select, source, flag, protocol] if select == "select" && flag == "--protocol" => {
             Ok(NetworkCommand::Select { source: source.clone(), protocol: crate::ChainProtocol::from_str(protocol, false)
                 .map_err(|_| CliError::Usage("Use electrum, bip37, neutrino, node-rpc or node-events.".into()))? })
@@ -255,7 +273,7 @@ fn network_prompt(argument: &str) -> Result<NetworkCommand> {
         [disposition, source, value] if disposition == "disposition" => Ok(NetworkCommand::Disposition {
             source: source.clone(), disposition: value.clone(),
         }),
-        _ => Err(CliError::Usage("Use network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, network add <JSON>, network disposition <id> enabled|disabled|banned, network remove <id>, or network configure <JSON>.".into())),
+        _ => Err(CliError::Usage("Use network status, network credentials set|status|remove <source>, network policy <preset>, network tor on|off, network select <id> --protocol <protocol>, network add <JSON>, network disposition <id> enabled|disabled|banned, network remove <id>, or network configure <JSON>.".into())),
     }
 }
 
@@ -283,7 +301,7 @@ fn birthday_prompt(argument: &str) -> Result<optn_transport::security::WalletBir
     }
 }
 
-const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], inventory <account-path> <public-addresses JSON>, sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, assets, nfts, network status, network credentials set|status|remove <source>, network policy <preset>, network select <id> --protocol <protocol>, network add <JSON>, network disposition <id> enabled|disabled|banned, network remove <id>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
+const WALLET_HELP: &str = "Wallet commands: help, list, open <file>, import, watch, receive [--acknowledge-gap], inventory <account-path> <public-addresses JSON>, sync, rescan <height>|clear, birthday unknown|height <block>|time <Unix seconds>, history, assets, nfts, network status, network credentials set|status|remove <source>, network policy <preset>, network tor on|off, network select <id> --protocol <protocol>, network add <JSON>, network disposition <id> enabled|disabled|banned, network remove <id>, network configure <JSON>, airgap <request JSON>, password, autolock <minutes>, lock, authorize, reveal, quit";
 
 fn inventory_prompt(argument: &str, epoch: u64) -> Result<Request> {
     let (path, addresses) = argument.split_once(' ').ok_or_else(|| {
@@ -730,6 +748,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                                 runtime.state().network,
                             )
                             .path(),
+                            draft: None,
                         })
                     }
                 }

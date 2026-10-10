@@ -8,14 +8,18 @@
 use crate::chain::{
     CapabilitySet, CatalogError, ChainSource, ConnectionPolicy, Endpoint, EndpointKind,
     ProtocolFamily, ProtocolSet, SourceCatalog, SourceDisposition, SourceId, SourceOrigin,
-    SourceScope,
+    SourceScope, TransportPolicy,
 };
 use optn_app::{NetworkServers, ServerKind, ServerOverrides};
 use optn_core::network::Network;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const NETWORK_CONFIG_SCHEMA_VERSION: u32 = 1;
+/// 2 adds the transport policy (#75 §4.1). Version 1 files are still read and
+/// migrate to the transport they always had; see [`migrate_stored`].
+pub const NETWORK_CONFIG_SCHEMA_VERSION: u32 = 2;
+/// The oldest schema this build can read and migrate forward.
+pub const OLDEST_READABLE_SCHEMA_VERSION: u32 = 1;
 pub const LEGACY_SERVER_CATALOG_VERSION: &str = "legacy-server-overrides-v1";
 
 /// The legacy server fields are overrides, not additions to public Auto.
@@ -99,7 +103,9 @@ pub fn merge_bootstrap_with_user_overlay(
     bootstrap_base: &SourceCatalog,
     envelope: &NetworkConfigEnvelope,
 ) -> Result<SourceCatalog, NetworkConfigError> {
-    if envelope.schema_version != NETWORK_CONFIG_SCHEMA_VERSION {
+    if !(OLDEST_READABLE_SCHEMA_VERSION..=NETWORK_CONFIG_SCHEMA_VERSION)
+        .contains(&envelope.schema_version)
+    {
         return Err(NetworkConfigError::UnsupportedSchema {
             found: envelope.schema_version,
             current: NETWORK_CONFIG_SCHEMA_VERSION,
@@ -133,10 +139,18 @@ pub fn resolve_chain_selection(
     // the chosen overrides. Adding bootstrap discovery must not expand that
     // intent. Apply this compatibility rule in the shared GUI/CLI reader;
     // explicitly saved advanced policies retain their original meaning.
+    // The transport is never part of that rule: it says how sources are
+    // reached, and is kept whichever sources the rule selects.
     let policy = if envelope.bootstrap_catalog_version_seen == LEGACY_SERVER_CATALOG_VERSION
-        && envelope.overlay.connection_policy == ConnectionPolicy::auto()
+        && envelope
+            .overlay
+            .connection_policy
+            .selects_like(&ConnectionPolicy::auto())
     {
-        legacy_server_policy(&envelope.overlay.user_sources)
+        ConnectionPolicy {
+            transport: envelope.overlay.connection_policy.transport,
+            ..legacy_server_policy(&envelope.overlay.user_sources)
+        }
     } else {
         envelope.overlay.connection_policy.clone()
     };
@@ -166,9 +180,15 @@ pub fn resolve_shipped_chain_selection(
 pub fn legacy_network_servers_from_overlay(
     overlay: &UserNetworkOverlay,
 ) -> Result<NetworkServers, String> {
+    // The server fields choose servers. How they are reached belongs to the
+    // transport selector, so no transport makes a configuration unshowable.
     if !overlay.bootstrap_overrides.is_empty()
-        || (overlay.connection_policy != ConnectionPolicy::auto()
-            && overlay.connection_policy != legacy_server_policy(&overlay.user_sources))
+        || (!overlay
+            .connection_policy
+            .selects_like(&ConnectionPolicy::auto())
+            && !overlay
+                .connection_policy
+                .selects_like(&legacy_server_policy(&overlay.user_sources)))
     {
         return Err(
             "this network configuration uses source policy features this surface cannot enforce"
@@ -429,6 +449,7 @@ enum StoredEndpointKind {
     ExplorerHttps,
     IpfsGatewayHttps,
     BcmrIndexerHttps,
+    BchDnsSeed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -437,6 +458,35 @@ struct StoredPolicy {
     primary_scope: StoredScope,
     fallback_scope: Option<StoredScope>,
     preferred: Vec<String>,
+    /// Absent in schema 1, where it was always this default. Required from
+    /// schema 2, checked by [`migrate_stored`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transport: Option<StoredTransport>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredTransport {
+    Tor,
+    Direct,
+}
+
+impl From<TransportPolicy> for Option<StoredTransport> {
+    fn from(value: TransportPolicy) -> Self {
+        Some(match value {
+            TransportPolicy::Tor => StoredTransport::Tor,
+            TransportPolicy::Direct => StoredTransport::Direct,
+        })
+    }
+}
+
+impl From<Option<StoredTransport>> for TransportPolicy {
+    fn from(value: Option<StoredTransport>) -> Self {
+        match value {
+            None | Some(StoredTransport::Tor) => Self::Tor,
+            Some(StoredTransport::Direct) => Self::Direct,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -485,8 +535,10 @@ impl From<StoredNetwork> for Network {
 pub fn encode_envelope_json(
     value: &NetworkConfigEnvelope,
 ) -> Result<String, NetworkConfigCodecError> {
+    // Always the current shape, so always the current label: a transport
+    // written under an older number would be reset by the next read.
     let stored = StoredEnvelope {
-        schema_version: value.schema_version,
+        schema_version: NETWORK_CONFIG_SCHEMA_VERSION,
         bootstrap_catalog_version_seen: value.bootstrap_catalog_version_seen.clone(),
         overlay: StoredOverlay::from_overlay(&value.overlay)?,
     };
@@ -494,11 +546,11 @@ pub fn encode_envelope_json(
 }
 
 pub fn decode_envelope_json(value: &str) -> Result<NetworkConfigEnvelope, NetworkConfigCodecError> {
-    let stored: StoredEnvelope =
+    let mut stored: StoredEnvelope =
         serde_json::from_str(value).map_err(|e| NetworkConfigCodecError::Json(e.to_string()))?;
-    ensure_schema(stored.schema_version)?;
+    migrate_stored(stored.schema_version, &mut stored.overlay)?;
     Ok(NetworkConfigEnvelope {
-        schema_version: stored.schema_version,
+        schema_version: NETWORK_CONFIG_SCHEMA_VERSION,
         bootstrap_catalog_version_seen: stored.bootstrap_catalog_version_seen,
         overlay: stored.overlay.into_overlay()?,
     })
@@ -513,7 +565,7 @@ pub fn export_portable_json(
     // put it in a transfer payload.
     overlay.trusted_socks_ports.clear();
     let stored = StoredPortable {
-        schema_version: value.schema_version,
+        schema_version: NETWORK_CONFIG_SCHEMA_VERSION,
         network: value.network.into(),
         overlay,
     };
@@ -530,9 +582,9 @@ pub fn import_portable_json(
     value: &str,
     expected_network: Network,
 ) -> Result<PortableNetworkConfig, NetworkConfigCodecError> {
-    let stored: StoredPortable =
+    let mut stored: StoredPortable =
         serde_json::from_str(value).map_err(|e| NetworkConfigCodecError::Json(e.to_string()))?;
-    ensure_schema(stored.schema_version)?;
+    migrate_stored(stored.schema_version, &mut stored.overlay)?;
     let network = stored.network.into();
     if network != expected_network {
         return Err(NetworkConfigCodecError::NetworkMismatch {
@@ -544,18 +596,33 @@ pub fn import_portable_json(
         return Err(NetworkConfigCodecError::PortableTrustNotTransferable);
     }
     Ok(PortableNetworkConfig {
-        schema_version: stored.schema_version,
+        schema_version: NETWORK_CONFIG_SCHEMA_VERSION,
         network,
         overlay: stored.overlay.into_overlay()?,
     })
 }
 
-fn ensure_schema(found: u32) -> Result<(), NetworkConfigCodecError> {
-    if found != NETWORK_CONFIG_SCHEMA_VERSION {
+/// Bring a stored overlay from `found` up to the current schema, in memory.
+///
+/// Nothing is written here. A migrated value reaches disk only through the
+/// store's atomic write, the next time the holder saves; until then the file
+/// keeps its old schema, which this build reads identically. A version this
+/// build cannot read is refused rather than reset, so preferences written by
+/// a newer build are never overwritten with defaults.
+fn migrate_stored(found: u32, overlay: &mut StoredOverlay) -> Result<(), NetworkConfigCodecError> {
+    if !(OLDEST_READABLE_SCHEMA_VERSION..=NETWORK_CONFIG_SCHEMA_VERSION).contains(&found) {
         return Err(NetworkConfigCodecError::UnsupportedSchema {
             found,
             current: NETWORK_CONFIG_SCHEMA_VERSION,
         });
+    }
+    // 1 -> 2: the transport every schema-1 configuration was reached with.
+    if found < 2 {
+        overlay.connection_policy.transport = TransportPolicy::default().into();
+    } else if overlay.connection_policy.transport.is_none() {
+        return Err(NetworkConfigCodecError::Json(
+            "a schema-2 network configuration must name its transport".into(),
+        ));
     }
     Ok(())
 }
@@ -688,6 +755,7 @@ impl StoredEndpoint {
                 | StoredEndpointKind::BchnZmq
                 | StoredEndpointKind::IpfsGatewayHttps
                 | StoredEndpointKind::BcmrIndexerHttps
+                | StoredEndpointKind::BchDnsSeed
         ) && self.port.is_none()
         {
             return Err(NetworkConfigCodecError::InvalidEndpoint(
@@ -724,6 +792,7 @@ impl StoredPolicy {
                 .iter()
                 .map(|id| id.as_str().to_owned())
                 .collect(),
+            transport: value.transport.into(),
         }
     }
 
@@ -737,6 +806,7 @@ impl StoredPolicy {
             primary_scope: self.primary_scope.into_scope(),
             fallback_scope: self.fallback_scope.map(StoredScope::into_scope),
             preferred: self.preferred.into_iter().map(SourceId::new).collect(),
+            transport: self.transport.into(),
         }
     }
 }
@@ -800,6 +870,7 @@ impl From<EndpointKind> for StoredEndpointKind {
             EndpointKind::ExplorerHttps => Self::ExplorerHttps,
             EndpointKind::IpfsGatewayHttps => Self::IpfsGatewayHttps,
             EndpointKind::BcmrIndexerHttps => Self::BcmrIndexerHttps,
+            EndpointKind::BchDnsSeed => Self::BchDnsSeed,
         }
     }
 }
@@ -816,6 +887,7 @@ impl From<StoredEndpointKind> for EndpointKind {
             StoredEndpointKind::ExplorerHttps => Self::ExplorerHttps,
             StoredEndpointKind::IpfsGatewayHttps => Self::IpfsGatewayHttps,
             StoredEndpointKind::BcmrIndexerHttps => Self::BcmrIndexerHttps,
+            StoredEndpointKind::BchDnsSeed => Self::BchDnsSeed,
         }
     }
 }
@@ -884,6 +956,7 @@ impl ChainPolicyPreset {
                     primary_scope: SourceScope::AllEnabled,
                     fallback_scope: None,
                     preferred: Vec::new(),
+                    transport: TransportPolicy::default(),
                 }
             }
             Self::OwnInfrastructure => ConnectionPolicy::own_infrastructure(),
@@ -904,7 +977,11 @@ impl ChainPolicyPreset {
             Self::Bip37Only,
             Self::NeutrinoOnly,
         ] {
-            if candidate.policy().as_ref() == Some(policy) {
+            // A preset names sources and protocols; transport is separate.
+            if candidate
+                .policy()
+                .is_some_and(|named| named.selects_like(policy))
+            {
                 return candidate;
             }
         }
@@ -918,6 +995,7 @@ fn protocol_only(protocol: ProtocolFamily) -> ConnectionPolicy {
         primary_scope: SourceScope::AllEnabled,
         fallback_scope: None,
         preferred: Vec::new(),
+        transport: TransportPolicy::default(),
     }
 }
 
@@ -934,8 +1012,15 @@ pub fn promote_legacy_policy(envelope: &mut NetworkConfigEnvelope) {
     if envelope.bootstrap_catalog_version_seen != LEGACY_SERVER_CATALOG_VERSION {
         return;
     }
-    if envelope.overlay.connection_policy == ConnectionPolicy::auto() {
-        envelope.overlay.connection_policy = legacy_server_policy(&envelope.overlay.user_sources);
+    if envelope
+        .overlay
+        .connection_policy
+        .selects_like(&ConnectionPolicy::auto())
+    {
+        envelope.overlay.connection_policy = ConnectionPolicy {
+            transport: envelope.overlay.connection_policy.transport,
+            ..legacy_server_policy(&envelope.overlay.user_sources)
+        };
     }
     envelope.bootstrap_catalog_version_seen = SHIPPED_CATALOG_VERSION.to_owned();
 }
@@ -952,9 +1037,11 @@ pub fn set_policy_preset(
     overlay: &mut UserNetworkOverlay,
     preset: ChainPolicyPreset,
 ) -> Result<(), String> {
-    let policy = preset
+    let mut policy = preset
         .policy()
         .ok_or("a custom policy cannot be selected by name")?;
+    // Choosing which sources to use never changes how they are reached.
+    policy.transport = overlay.connection_policy.transport;
     overlay.connection_policy = policy;
     Ok(())
 }
@@ -1593,6 +1680,45 @@ mod tests {
         assert!(catalog.get(&defaults.primary[0]).unwrap().is_public());
     }
 
+    /// The old server fields choose servers; the transport selector says how
+    /// they are reached. Neither may undo the other.
+    #[test]
+    fn legacy_server_fields_hold_their_meaning_under_every_transport() {
+        use crate::chain::build_selection_plan;
+        let mut source = user_source("chosen-server");
+        source.priority = 0;
+        for transport in TransportPolicy::ALL {
+            let mut overlay = UserNetworkOverlay {
+                user_sources: vec![source.clone()],
+                ..Default::default()
+            };
+            // Auto, as the one-server bridge wrote it, over this transport.
+            overlay.connection_policy.transport = transport;
+            assert_eq!(
+                legacy_network_servers_from_overlay(&overlay)
+                    .unwrap()
+                    .electrum
+                    .as_deref(),
+                Some("chosen-server.example:50002"),
+                "{transport:?}"
+            );
+            let mut envelope =
+                NetworkConfigEnvelope::current(LEGACY_SERVER_CATALOG_VERSION, overlay);
+            let (catalog, policy) =
+                resolve_shipped_chain_selection(Network::Chipnet, Some(&envelope)).unwrap();
+            // Still "only this server", never Auto over every shipped one.
+            assert_eq!(
+                build_selection_plan(&catalog, &policy).primary,
+                vec![source.id.clone()],
+                "{transport:?}"
+            );
+            assert_eq!(policy.transport, transport);
+            // Making that explicit before an edit keeps both halves.
+            promote_legacy_policy(&mut envelope);
+            assert_eq!(envelope.overlay.connection_policy, policy, "{transport:?}");
+        }
+    }
+
     #[test]
     fn chain_selection_keeps_the_persisted_policy_and_source_kind() {
         let source = ChainSource {
@@ -1836,5 +1962,201 @@ mod tests {
             decode_envelope_json(json),
             Err(NetworkConfigCodecError::UnsupportedSchema { found: 99, .. })
         ));
+    }
+
+    /// A configuration exercising everything a migration could drop: an own
+    /// infrastructure group, a pasted source, a ban, a pinned order, protocol
+    /// filters, a fallback scope, an explorer and a confirmed proxy.
+    fn rich_overlay() -> UserNetworkOverlay {
+        let mut overlay = UserNetworkOverlay::default();
+        let mut own = user_source("my-node");
+        own.origin = SourceOrigin::UserInfrastructure {
+            group: "home-rack".into(),
+        };
+        own.priority = 4;
+        let mut pasted = user_source("pasted");
+        pasted.disposition = SourceDisposition::Disabled;
+        overlay.user_sources = vec![own.clone(), pasted];
+        overlay
+            .bootstrap_overrides
+            .insert(SourceId::new("bootstrap:bad"), SourceDisposition::Banned);
+        overlay.connection_policy = ConnectionPolicy {
+            protocols: ProtocolSet::only(ProtocolFamily::Electrum),
+            primary_scope: SourceScope::UserInfrastructure,
+            fallback_scope: Some(SourceScope::PublicEnabled),
+            preferred: vec![own.id, SourceId::new("pasted")],
+            transport: TransportPolicy::default(),
+        };
+        overlay.explorer = Some(Endpoint {
+            kind: EndpointKind::ExplorerHttps,
+            host: "explorer.example".into(),
+            port: Some(443),
+        });
+        overlay.trusted_socks_ports = vec![9050];
+        overlay
+    }
+
+    /// What a schema-1 build wrote for the same configuration: that number,
+    /// and no transport. Envelopes and portable files share the layout.
+    fn as_schema_1(json: &str) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(json).unwrap();
+        value["schema_version"] = serde_json::json!(1);
+        let policy = value["overlay"]["connection_policy"]
+            .as_object_mut()
+            .unwrap();
+        assert!(policy.remove("transport").is_some());
+        serde_json::to_string(&value).unwrap()
+    }
+
+    #[test]
+    fn schema_1_reads_as_schema_2_with_the_transport_it_always_had() {
+        let envelope = NetworkConfigEnvelope::current("catalog-9", rich_overlay());
+        let schema_1 = as_schema_1(&encode_envelope_json(&envelope).unwrap());
+        assert!(!schema_1.contains("transport"));
+
+        let migrated = decode_envelope_json(&schema_1).unwrap();
+        // Every field survives, and the transport is the one schema 1 used.
+        assert_eq!(migrated, envelope);
+        assert_eq!(migrated.schema_version, NETWORK_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            migrated.overlay.connection_policy.transport,
+            TransportPolicy::Tor
+        );
+        assert!(merge_bootstrap_with_user_overlay(&SourceCatalog::default(), &migrated).is_ok());
+
+        // Saving it writes schema 2 and names the transport.
+        let saved = encode_envelope_json(&migrated).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(value["schema_version"], NETWORK_CONFIG_SCHEMA_VERSION);
+        assert_eq!(value["overlay"]["connection_policy"]["transport"], "tor");
+        assert_eq!(decode_envelope_json(&saved).unwrap(), envelope);
+
+        // A schema-1 portable backup imports the same way.
+        let portable = PortableNetworkConfig::from_envelope(Network::Chipnet, &envelope);
+        let exported = export_portable_json(&portable).unwrap();
+        let imported = import_portable_json(&as_schema_1(&exported), Network::Chipnet).unwrap();
+        assert_eq!(imported, portable);
+    }
+
+    #[test]
+    fn every_transport_survives_saving_and_portable_transfer() {
+        for transport in TransportPolicy::ALL {
+            let mut overlay = rich_overlay();
+            overlay.connection_policy.transport = transport;
+            let envelope = NetworkConfigEnvelope::current("catalog-9", overlay);
+            let restored = decode_envelope_json(&encode_envelope_json(&envelope).unwrap()).unwrap();
+            assert_eq!(restored, envelope, "{transport:?}");
+
+            // The rule travels with a backup; the machine's proxy trust does not.
+            let portable = PortableNetworkConfig::from_envelope(Network::Chipnet, &envelope);
+            let exported = export_portable_json(&portable).unwrap();
+            assert!(!exported.contains("trusted_socks_ports"));
+            let imported = import_portable_json(&exported, Network::Chipnet).unwrap();
+            assert_eq!(imported.overlay.connection_policy.transport, transport);
+            assert!(imported.overlay.trusted_socks_ports.is_empty());
+        }
+    }
+
+    #[test]
+    fn transport_names_are_the_same_on_disk_and_across_ipc() {
+        for transport in TransportPolicy::ALL {
+            let stored: Option<StoredTransport> = transport.into();
+            assert_eq!(
+                serde_json::to_value(stored).unwrap(),
+                serde_json::json!(transport.as_str())
+            );
+            assert_eq!(transport.as_str().parse(), Ok(transport));
+        }
+        assert!("on".parse::<TransportPolicy>().is_err());
+    }
+
+    #[test]
+    fn schema_2_must_name_a_transport_it_knows() {
+        let envelope = NetworkConfigEnvelope::current("catalog-9", rich_overlay());
+        let json = encode_envelope_json(&envelope).unwrap();
+        for transport in [None, Some(serde_json::json!("carrier_pigeon"))] {
+            let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let policy = value["overlay"]["connection_policy"]
+                .as_object_mut()
+                .unwrap();
+            match &transport {
+                None => {
+                    policy.remove("transport");
+                }
+                Some(unknown) => {
+                    policy.insert("transport".into(), unknown.clone());
+                }
+            }
+            // Refused, never read as the default: a holder's Tor-for-everything
+            // must not quietly become something laxer.
+            assert!(
+                matches!(
+                    decode_envelope_json(&serde_json::to_string(&value).unwrap()),
+                    Err(NetworkConfigCodecError::Json(_))
+                ),
+                "{transport:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn schemas_outside_what_this_build_reads_are_refused_not_reset() {
+        let envelope = NetworkConfigEnvelope::current("catalog-9", rich_overlay());
+        let json = encode_envelope_json(&envelope).unwrap();
+        let portable = export_portable_json(&PortableNetworkConfig::from_envelope(
+            Network::Chipnet,
+            &envelope,
+        ))
+        .unwrap();
+        for found in [0, NETWORK_CONFIG_SCHEMA_VERSION + 1] {
+            let relabel = |json: &str| {
+                let mut value: serde_json::Value = serde_json::from_str(json).unwrap();
+                value["schema_version"] = serde_json::json!(found);
+                serde_json::to_string(&value).unwrap()
+            };
+            assert_eq!(
+                decode_envelope_json(&relabel(&json)),
+                Err(NetworkConfigCodecError::UnsupportedSchema {
+                    found,
+                    current: NETWORK_CONFIG_SCHEMA_VERSION
+                })
+            );
+            assert_eq!(
+                import_portable_json(&relabel(&portable), Network::Chipnet),
+                Err(NetworkConfigCodecError::UnsupportedSchema {
+                    found,
+                    current: NETWORK_CONFIG_SCHEMA_VERSION
+                })
+            );
+            let mut in_memory = envelope.clone();
+            in_memory.schema_version = found;
+            assert!(matches!(
+                merge_bootstrap_with_user_overlay(&SourceCatalog::default(), &in_memory),
+                Err(NetworkConfigError::UnsupportedSchema { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn choosing_sources_never_changes_how_they_are_reached() {
+        let mut overlay = UserNetworkOverlay::default();
+        overlay.connection_policy.transport = TransportPolicy::Direct;
+        for preset in [
+            ChainPolicyPreset::Privacy,
+            ChainPolicyPreset::OwnInfrastructure,
+            ChainPolicyPreset::Auto,
+        ] {
+            set_policy_preset(&mut overlay, preset).unwrap();
+            assert_eq!(
+                overlay.connection_policy.transport,
+                TransportPolicy::Direct,
+                "{preset:?}"
+            );
+            // A preset names sources and protocols; the transport is separate.
+            assert_eq!(
+                ChainPolicyPreset::describe(&overlay.connection_policy),
+                preset
+            );
+        }
     }
 }

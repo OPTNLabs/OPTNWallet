@@ -99,8 +99,11 @@ fn apply_edit(
         }
         ChainSourceEdit::Selection(selection) => {
             let catalog = resolved_catalog(network, overlay)?;
-            overlay.connection_policy =
-                optn_runtime::source_selection::policy(&catalog, &selection)?;
+            overlay.connection_policy = optn_runtime::source_selection::policy(
+                &catalog,
+                &selection,
+                overlay.connection_policy.transport,
+            )?;
             Ok(())
         }
         ChainSourceEdit::Disposition {
@@ -202,6 +205,7 @@ pub const fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::ExplorerHttps => "explorer-https",
         EndpointKind::IpfsGatewayHttps => "ipfs-gateway",
         EndpointKind::BcmrIndexerHttps => "bcmr-indexer",
+        EndpointKind::BchDnsSeed => "p2p-seed",
     }
 }
 
@@ -216,6 +220,7 @@ fn parse_endpoint_kind(value: &str) -> Result<EndpointKind, String> {
         "explorer-http" => EndpointKind::ExplorerHttp,
         "ipfs-gateway" => EndpointKind::IpfsGatewayHttps,
         "bcmr-indexer" => EndpointKind::BcmrIndexerHttps,
+        "p2p-seed" => EndpointKind::BchDnsSeed,
         other => return Err(format!("unknown endpoint kind '{other}'")),
     })
 }
@@ -241,6 +246,14 @@ pub const fn scope_label(scope: &SourceScope) -> &'static str {
 
 fn origin_view(origin: &SourceOrigin) -> (String, Option<String>) {
     match origin {
+        // A server another server advertised, or a node a DNS seed named,
+        // rather than an entry of a shipped list.
+        SourceOrigin::Bootstrap {
+            project:
+                optn_runtime::chain::BootstrapProject::FulcrumPeerNetwork
+                | optn_runtime::chain::BootstrapProject::BchPeerNetwork,
+            ..
+        } => ("bootstrap".into(), Some("discovered".into())),
         SourceOrigin::Bootstrap { .. } => ("bootstrap".into(), None),
         SourceOrigin::UserAdded => ("user".into(), None),
         SourceOrigin::UserInfrastructure { group } => {

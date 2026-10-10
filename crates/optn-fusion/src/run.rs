@@ -27,7 +27,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::blame;
 use crate::components::{build_round_commit, FusionInput, FusionOutput, RoundCommit};
 use crate::covert::{build_covert_signature, CovertPool, CovertSchedule};
-use crate::electrum_input::{self, ElectrumEndpoint, InputLookup};
+use crate::lookup::{self, InputLookup, InputLookups};
 use crate::round_cancel::CancelFlag;
 use crate::schnorr;
 use crate::server_plan::{
@@ -96,20 +96,20 @@ pub struct FusionRunParams<'a> {
     pub inputs: Vec<FusionInputKey>,
     /// Persisted fresh P2PKH scripts sized for the largest feasible tier plan.
     pub output_scripts: Vec<Vec<u8>>,
+    /// The round's chain: its genesis hash in internal byte order, declared in
+    /// ClientHello as Electron Cash does (`comms.get_current_genesis_hash`), so
+    /// a server on another chain refuses the round at once.
+    pub genesis_hash: [u8; 32],
     /// Route for the user-selected main Fusion server.
     pub main_transport: Transport<'a>,
     /// Positively verified Tor route for any remote server-provided endpoint.
     /// A local main server may still announce a remote covert endpoint, so the
     /// main connection's localhost exemption cannot be reused for that route.
     pub remote_transport: Option<Transport<'a>>,
-    /// Wallet-configured Electrum endpoint chain used to revalidate our inputs
-    /// at both EC safety boundaries and to validate peer inputs during blame.
-    /// It is never supplied by the Fusion server.
-    pub lookup_endpoints: Vec<ElectrumEndpoint>,
-    /// Positively verified Tor route for remote lookup endpoints. The selected
-    /// route is resolved for each endpoint, so a loopback primary never makes
-    /// a remote fallback inherit its direct transport.
-    pub lookup_remote_transport: Option<Transport<'a>>,
+    /// The holder's selected chain sources, on connections of this round's
+    /// own, used to revalidate our inputs at both EC safety boundaries and to
+    /// check peer inputs during blame. Never supplied by the Fusion server.
+    pub lookups: std::sync::Arc<dyn InputLookups>,
     /// When to submit components / signatures, relative to StartRound receipt.
     /// Defaults (via `FusionTiming::default`) match protocol.py (+5s / +20s);
     /// the integration test shrinks them so it doesn't wait 20 real seconds.
@@ -490,62 +490,16 @@ fn global_indices_in_local_order(
         .collect()
 }
 
-fn lookup_transport_for<'a>(
-    endpoint: &ElectrumEndpoint,
-    remote_transport: Option<Transport<'a>>,
-) -> Result<Transport<'a>, String> {
-    if is_local_server(&endpoint.host) {
-        return Ok(Transport::Direct);
-    }
-    match remote_transport {
-        Some(Transport::Tor { host, port }) => Ok(Transport::Tor { host, port }),
-        Some(Transport::Direct) | None => {
-            Err("remote Electrum lookup has no verified Tor route".to_string())
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-/// Verify one peer input against the first Electrum server that can answer.
-///
-/// Blame must never rest on unavailable evidence, so a lookup failure aborts
-/// the round instead of accusing the peer. With a single hard-coded server that
-/// makes one unreachable host fatal to every round: observed against chipnet,
-/// where the first configured server timed out over Tor while the other two
-/// answered — pools formed, reached StartRound, and died there every time.
-///
-/// A definitive answer, match or mismatch, is returned as soon as any server
-/// gives one; only infrastructure failures move on to the next.
-async fn verify_input_anywhere(
-    endpoints: &[ElectrumEndpoint],
-    remote_transport: Option<Transport<'_>>,
-    input: &pb::InputComponent,
-) -> Result<InputLookup, String> {
-    let mut last_error = String::from("no Electrum server is configured for input lookup");
-    for endpoint in endpoints {
-        let transport = lookup_transport_for(endpoint, remote_transport)?;
-        match electrum_input::verify_input(endpoint, transport, input).await {
-            Ok(found) => return Ok(found),
-            Err(error) => {
-                last_error = format!("{}:{}: {error}", endpoint.host, endpoint.port);
-            }
-        }
-    }
-    Err(last_error)
-}
-
-/// Revalidate every wallet-owned input against the wallet-configured Electrum
-/// chain.  Uses a **single** Electrum connection per endpoint (batched
-/// `listunspent` queries) instead of opening a fresh Tor circuit per input.
-/// Falls back to per-input lookups if the batch fails.
+/// Revalidate every wallet-owned input against the holder's selected chain
+/// sources, all in one question. Any input that is not an exact unspent
+/// output fails the boundary; any that could not be checked fails it too, but
+/// as unverifiable, never as stale.
 async fn revalidate_own_inputs(
     inputs: &[FusionInputKey],
-    endpoints: &[ElectrumEndpoint],
-    remote_transport: Option<Transport<'_>>,
+    lookups: &dyn InputLookups,
     boundary: &str,
 ) -> Result<(), String> {
-    // Build the protobuf components once.
-    let components: Result<Vec<pb::InputComponent>, String> = inputs
+    let components = inputs
         .iter()
         .map(|input| {
             let prev_txid = display_txid_to_wire(&input.prev_txid)?;
@@ -556,42 +510,15 @@ async fn revalidate_own_inputs(
                 amount: input.value,
             })
         })
-        .collect();
-    let components = components?;
-
-    // Try batched lookups first — one TCP/Tor connection per endpoint.
-    for endpoint in endpoints {
-        let transport = lookup_transport_for(endpoint, remote_transport)?;
-        let refs: Vec<&pb::InputComponent> = components.iter().collect();
-        match electrum_input::batch_verify_inputs(endpoint, transport, &refs).await {
-            Ok(results) => {
-                for (_idx, lookup) in results {
-                    match lookup {
-                        Ok(InputLookup::Match) => {}
-                        Ok(InputLookup::Mismatch(reason)) => {
-                            return Err(format!(
-                                "wallet input is stale or spent before {boundary}: {reason}"
-                            ));
-                        }
-                        Err(error) => {
-                            return Err(format!(
-                                "could not safely revalidate wallet inputs before {boundary}: {error}"
-                            ));
-                        }
-                    }
-                }
-                return Ok(());
-            }
-            Err(_batch_error) => {
-                // Batch failed (connection issue). Fall through to per-input.
-            }
-        }
-    }
-
-    // Fallback: per-input lookups over individual connections.
-    for (idx, component) in components.iter().enumerate() {
-        let _ = inputs[idx]; // keep the index meaningful for error messages.
-        match verify_input_anywhere(endpoints, remote_transport, component).await {
+        .collect::<Result<Vec<_>, String>>()?;
+    let refs: Vec<&pb::InputComponent> = components.iter().collect();
+    let results = lookup::verify_inputs(lookups, &refs)
+        .await
+        .map_err(|error| {
+            format!("could not safely revalidate wallet inputs before {boundary}: {error}")
+        })?;
+    for result in results {
+        match result {
             Ok(InputLookup::Match) => {}
             Ok(InputLookup::Mismatch(reason)) => {
                 return Err(format!(
@@ -619,8 +546,7 @@ async fn run_blame_phase<S>(
     my_component_indices: &[usize],
     bad_components: &[u32],
     component_feerate: u64,
-    lookup_endpoints: &[ElectrumEndpoint],
-    lookup_remote_transport: Option<Transport<'_>>,
+    lookups: &dyn InputLookups,
 ) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -666,9 +592,7 @@ where
     .map_err(|error| format!("could not validate relayed blame proofs: {error}"))?;
 
     for required in &review.inputs_requiring_blockchain_lookup {
-        match verify_input_anywhere(lookup_endpoints, lookup_remote_transport, &required.input)
-            .await
-        {
+        match lookup::verify_input(lookups, &required.input).await {
             Ok(InputLookup::Match) => {}
             Ok(InputLookup::Mismatch(reason)) => {
                 review.blames.blames.push(
@@ -746,10 +670,10 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         tier_plans,
         inputs,
         output_scripts: all_output_scripts,
+        genesis_hash,
         main_transport,
         remote_transport,
-        lookup_endpoints,
-        lookup_remote_transport,
+        lookups,
         timing,
         join_inactive_timeout,
         cancel,
@@ -771,7 +695,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let hello = pb::ClientMessage {
         msg: Some(pb::client_message::Msg::Clienthello(pb::ClientHello {
             version: VERSION.to_vec(),
-            genesis_hash: None,
+            genesis_hash: Some(genesis_hash.to_vec()),
         })),
     };
     cancellable(&cancel, send_frame(&mut main, &hello.encode_to_vec())).await?;
@@ -990,12 +914,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let warmup_revalidate_started = Instant::now();
     cancellable(
         &cancel,
-        revalidate_own_inputs(
-            &inputs,
-            &lookup_endpoints,
-            lookup_remote_transport,
-            "FusionBegin",
-        ),
+        revalidate_own_inputs(&inputs, lookups.as_ref(), "FusionBegin"),
     )
     .await?;
     log::info!(
@@ -1274,8 +1193,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                 &my_component_indices,
                 &[],
                 feerate,
-                &lookup_endpoints,
-                lookup_remote_transport,
+                lookups.as_ref(),
             )
             .await?;
             continue;
@@ -1402,8 +1320,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                 &my_component_indices,
                 &result.bad_components,
                 feerate,
-                &lookup_endpoints,
-                lookup_remote_transport,
+                lookups.as_ref(),
             )
             .await?;
             continue;
@@ -1435,7 +1352,6 @@ mod tests {
     use k256::ProjectivePoint;
     use prost::Message;
     use std::collections::HashSet;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
 
@@ -1546,33 +1462,11 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn remote_lookup_fallback_never_inherits_a_local_primarys_direct_route() {
-        let local = ElectrumEndpoint {
-            host: "127.0.0.1".into(),
-            port: 50001,
-            use_ssl: false,
-        };
-        let remote = ElectrumEndpoint {
-            host: "fallback.example".into(),
-            port: 50002,
-            use_ssl: true,
-        };
-        let proxy = Some(Transport::Tor {
-            host: "127.0.0.1",
-            port: 9050,
-        });
-        assert!(matches!(
-            lookup_transport_for(&local, proxy).unwrap(),
-            Transport::Direct
-        ));
-        assert!(matches!(
-            lookup_transport_for(&remote, proxy).unwrap(),
-            Transport::Tor { .. }
-        ));
-        assert!(lookup_transport_for(&remote, None).is_err());
-        assert!(lookup_transport_for(&remote, Some(Transport::Direct)).is_err());
-    }
+    /// The chain the mock server runs: chipnet's genesis, internal order.
+    const TEST_GENESIS: [u8; 32] = [
+        0x7b, 0x9f, 0xfd, 0x44, 0xdd, 0x73, 0xc0, 0x5f, 0x2a, 0x15, 0xd3, 0x74, 0x74, 0x79, 0xcc,
+        0x18, 0x17, 0x75, 0x26, 0xce, 0x68, 0x86, 0x78, 0x9a, 0xc4, 0x10, 0xd4, 0x1d, 0, 0, 0, 0,
+    ];
 
     fn test_input_key(
         prev_txid: u8,
@@ -1589,69 +1483,45 @@ mod tests {
         }
     }
 
-    async fn electrum_endpoint_once(
-        response: &'static str,
-    ) -> (ElectrumEndpoint, tokio::task::JoinHandle<()>) {
-        electrum_endpoint_n(response, 1).await
+    use crate::lookup::tests::ScriptedLookups;
+    use crate::lookup::OutputAnswer;
+
+    /// A source that reports every input as unspent at `value_sats`.
+    struct AlwaysUnspent(u64);
+
+    impl InputLookups for AlwaysUnspent {
+        fn unspent_outputs<'a>(
+            &'a self,
+            outputs: &'a [lookup::OutputQuestion],
+        ) -> lookup::LookupFuture<'a, Result<lookup::OutputAnswers, String>> {
+            let answers = vec![Ok(OutputAnswer::Unspent { value_sats: self.0 }); outputs.len()];
+            Box::pin(async move { Ok(answers) })
+        }
+
+        fn transaction_is_known<'a>(
+            &'a self,
+            _txid: [u8; 32],
+        ) -> lookup::LookupFuture<'a, Result<bool, String>> {
+            Box::pin(async { Ok(true) })
+        }
     }
 
-    async fn electrum_endpoint_n(
-        response: &'static str,
-        count: usize,
-    ) -> (ElectrumEndpoint, tokio::task::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move {
-            for _ in 0..count {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut request = [0u8; 1024];
-                let _ = stream.read(&mut request).await.unwrap();
-                stream.write_all(response.as_bytes()).await.unwrap();
-                stream.write_all(b"\n").await.unwrap();
-            }
-        });
-        (
-            ElectrumEndpoint {
-                host: "127.0.0.1".into(),
-                port: addr.port(),
-                use_ssl: false,
-            },
-            task,
-        )
-    }
+    /// A source whose question never returns.
+    struct Hanging;
 
-    async fn electrum_endpoint_sequence(
-        responses: Vec<&'static str>,
-    ) -> (ElectrumEndpoint, tokio::task::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move {
-            for response in responses {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut request = [0u8; 1024];
-                let _ = stream.read(&mut request).await.unwrap();
-                stream.write_all(response.as_bytes()).await.unwrap();
-                stream.write_all(b"\n").await.unwrap();
-            }
-        });
-        (
-            ElectrumEndpoint {
-                host: "127.0.0.1".into(),
-                port: addr.port(),
-                use_ssl: false,
-            },
-            task,
-        )
-    }
+    impl InputLookups for Hanging {
+        fn unspent_outputs<'a>(
+            &'a self,
+            _outputs: &'a [lookup::OutputQuestion],
+        ) -> lookup::LookupFuture<'a, Result<lookup::OutputAnswers, String>> {
+            Box::pin(std::future::pending())
+        }
 
-    async fn closed_electrum_endpoint() -> ElectrumEndpoint {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        ElectrumEndpoint {
-            host: "127.0.0.1".into(),
-            port,
-            use_ssl: false,
+        fn transaction_is_known<'a>(
+            &'a self,
+            _txid: [u8; 32],
+        ) -> lookup::LookupFuture<'a, Result<bool, String>> {
+            Box::pin(std::future::pending())
         }
     }
 
@@ -1668,57 +1538,53 @@ mod tests {
 
     #[tokio::test]
     async fn own_input_mismatch_fails_closed_before_named_boundary() {
-        let (endpoint, server) = electrum_endpoint_once(r#"{"id":1,"result":[]}"#).await;
-        let error = revalidate_own_inputs(&[live_test_input()], &[endpoint], None, "PlayerCommit")
+        let lookups = ScriptedLookups::answering(vec![Some(vec![Ok(OutputAnswer::NotUnspent)])]);
+        let error = revalidate_own_inputs(&[live_test_input()], &lookups, "PlayerCommit")
             .await
             .unwrap_err();
-        server.await.unwrap();
         assert!(
             error.contains("stale or spent before PlayerCommit"),
             "{error}"
         );
+        // Asked about the input's own outpoint, under its pubkey's script.
+        let asked = lookups.asked.lock().unwrap().clone();
+        let input = live_test_input();
+        let mut txid = [0xaa; 32];
+        txid.reverse();
+        assert_eq!(
+            asked,
+            vec![vec![(
+                lookup::p2pkh_script(&input.pubkey).unwrap(),
+                txid,
+                3
+            )]]
+        );
     }
 
     #[tokio::test]
-    async fn own_input_revalidation_falls_back_after_primary_infrastructure_failure() {
-        let primary = closed_electrum_endpoint().await;
-        let (fallback, server) = electrum_endpoint_once(
-            r#"{"id":1,"result":[{"tx_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tx_pos":3,"height":1,"value":200000}]}"#,
-        ).await;
-        revalidate_own_inputs(
-            &[live_test_input()],
-            &[primary, fallback],
-            None,
-            "PlayerCommit",
-        )
-        .await
-        .unwrap();
-        server.await.unwrap();
+    async fn own_input_revalidation_accepts_an_exact_unspent_output() {
+        let lookups = ScriptedLookups::answering(vec![Some(vec![Ok(OutputAnswer::Unspent {
+            value_sats: 200_000,
+        })])]);
+        revalidate_own_inputs(&[live_test_input()], &lookups, "PlayerCommit")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn own_input_spent_between_commit_and_signing_fails_second_boundary() {
-        let live = r#"{"id":1,"result":[{"tx_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tx_pos":3,"height":1,"value":200000}]}"#;
-        let spent = r#"{"id":1,"result":[]}"#;
-        let (endpoint, server) = electrum_endpoint_sequence(vec![live, spent]).await;
-        let input = live_test_input();
-        revalidate_own_inputs(
-            &[input],
-            std::slice::from_ref(&endpoint),
-            None,
-            "PlayerCommit",
-        )
-        .await
-        .unwrap();
-        let error = revalidate_own_inputs(
-            &[live_test_input()],
-            &[endpoint],
-            None,
-            "transaction signing",
-        )
-        .await
-        .unwrap_err();
-        server.await.unwrap();
+        let lookups = ScriptedLookups::answering(vec![
+            Some(vec![Ok(OutputAnswer::Unspent {
+                value_sats: 200_000,
+            })]),
+            Some(vec![Ok(OutputAnswer::NotUnspent)]),
+        ]);
+        revalidate_own_inputs(&[live_test_input()], &lookups, "PlayerCommit")
+            .await
+            .unwrap();
+        let error = revalidate_own_inputs(&[live_test_input()], &lookups, "transaction signing")
+            .await
+            .unwrap_err();
         assert!(
             error.contains("stale or spent before transaction signing"),
             "{error}"
@@ -1726,38 +1592,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn own_input_revalidation_aborts_when_all_endpoints_are_ambiguous() {
-        let endpoints = vec![
-            closed_electrum_endpoint().await,
-            closed_electrum_endpoint().await,
-        ];
-        let error = revalidate_own_inputs(
-            &[live_test_input()],
-            &endpoints,
-            None,
-            "transaction signing",
-        )
-        .await
-        .unwrap_err();
-        assert!(error.contains("could not safely revalidate"), "{error}");
-        assert!(
-            !error.contains("stale or spent"),
-            "infrastructure failure must not blame: {error}"
-        );
+    async fn own_input_revalidation_aborts_when_no_source_can_answer() {
+        for lookups in [
+            ScriptedLookups::answering(vec![None]),
+            ScriptedLookups::answering(vec![Some(vec![Err("timed out".into())])]),
+        ] {
+            let error =
+                revalidate_own_inputs(&[live_test_input()], &lookups, "transaction signing")
+                    .await
+                    .unwrap_err();
+            assert!(error.contains("could not safely revalidate"), "{error}");
+            assert!(
+                !error.contains("stale or spent"),
+                "infrastructure failure must not blame: {error}"
+            );
+        }
     }
 
     #[tokio::test]
     async fn own_input_revalidation_is_cancellable_before_commit() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = ElectrumEndpoint {
-            host: "127.0.0.1".into(),
-            port: listener.local_addr().unwrap().port(),
-            use_ssl: false,
-        };
-        let server = tokio::spawn(async move {
-            let (_stream, _) = listener.accept().await.unwrap();
-            tokio::time::sleep(Duration::from_secs(30)).await;
-        });
         let cancel = CancelFlag::new();
         let cancel_now = cancel.clone();
         tokio::spawn(async move {
@@ -1766,11 +1619,10 @@ mod tests {
         });
         let error = cancellable(
             &cancel,
-            revalidate_own_inputs(&[live_test_input()], &[endpoint], None, "PlayerCommit"),
+            revalidate_own_inputs(&[live_test_input()], &Hanging, "PlayerCommit"),
         )
         .await
         .unwrap_err();
-        server.abort();
         assert_eq!(error, "fusion round cancelled");
     }
 
@@ -1956,8 +1808,14 @@ mod tests {
 
         let (mut main, _) = main_listener.accept().await.map_err(|e| e.to_string())?;
 
-        // ClientHello -> ServerHello
-        let _ = recv_frame(&mut main).await?;
+        // ClientHello -> ServerHello. The round declares its chain.
+        let hello = pb::ClientMessage::decode(recv_frame(&mut main).await?.as_slice())
+            .map_err(|error| format!("decode ClientHello: {error}"))?;
+        match hello.msg {
+            Some(pb::client_message::Msg::Clienthello(hello))
+                if hello.genesis_hash.as_deref() == Some(&TEST_GENESIS[..]) => {}
+            other => return Err(format!("ClientHello did not declare the chain: {other:?}")),
+        }
         let hello = pb::ServerMessage {
             msg: Some(pb::server_message::Msg::Serverhello(pb::ServerHello {
                 tiers: vec![tier],
@@ -2211,10 +2069,6 @@ mod tests {
             ];
 
             let cancel = CancelFlag::new();
-            let (lookup_endpoint, lookup_server) = electrum_endpoint_n(
-                r#"{"id":1,"result":[{"tx_hash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","tx_pos":0,"height":1,"value":200000}]}"#,
-                2,
-            ).await;
             let server = tokio::spawn(mock_server(
                 main_l,
                 covert_l,
@@ -2245,10 +2099,10 @@ mod tests {
                     privkey,
                 }],
                 output_scripts,
+                genesis_hash: TEST_GENESIS,
                 main_transport: Transport::Direct,
                 remote_transport: None,
-                lookup_endpoints: vec![lookup_endpoint],
-                lookup_remote_transport: None,
+                lookups: std::sync::Arc::new(AlwaysUnspent(200_000)),
                 // The protocol's real schedule compressed so the test is quick.
                 // Every value below is relative to covert_T0, and `comps_at` is
                 // a rendezvous rather than a deadline: all of the setup --
@@ -2293,7 +2147,6 @@ mod tests {
                 .await
                 .expect("run_fusion should not error");
             server.await.unwrap().expect("mock server ok");
-            lookup_server.abort();
 
             assert!(outcome.ok, "fusion should succeed: {}", outcome.message);
             assert!(
@@ -2346,66 +2199,60 @@ mod tests {
                     script
                 })
                 .collect::<Vec<_>>();
-            // Warmup may use 1 accept (batch) or 2 (batch + fallback).
-            // skip_signatures + empty TheirProofsList does not open another.
-            let (lookup_endpoint, lookup_server) = electrum_endpoint_n(
-                r#"{"id":1,"result":[{"tx_hash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","tx_pos":0,"height":1,"value":200000}]}"#,
-                2,
-            ).await;
 
             let outcome = tokio::time::timeout(
                 Duration::from_secs(30),
                 run_fusion(FusionRunParams {
-                wallet_tag_seed: b"test-wallet".to_vec(),
-                self_fuse_limit: 1,
-                host: "127.0.0.1",
-                port: main_port,
-                use_ssl: false,
-                tier_plans: vec![FusionTierPlan {
-                    tier,
-                    output_values: vec![
-                        19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951,
-                        19_950,
-                    ],
-                    excess_fee: 10,
-                }],
-                inputs: vec![FusionInputKey {
-                    prev_txid: "cd".repeat(32),
-                    prev_index: 0,
-                    pubkey,
-                    value: 200_000,
-                    privkey,
-                }],
-                output_scripts,
-                main_transport: Transport::Direct,
-                remote_transport: None,
-                lookup_endpoints: vec![lookup_endpoint],
-                lookup_remote_transport: None,
-                timing: FusionTiming {
-                    warmup_expected: Duration::ZERO,
-                    warmup_slop: Duration::from_millis(250),
-                    connect_window: Duration::ZERO,
-                    connect_timeout: Duration::from_secs(2),
-                    submit_window: Duration::from_millis(20),
-                    submit_timeout: Duration::from_millis(500),
-                    connect_spares: 2,
-                    // This restart path opens 19 local sockets and produces 17
-                    // debug-build signatures before component disclosure.
-                    comps_at: Duration::from_secs(1),
-                    comps_deadline: Duration::from_secs(2),
-                    sigs_at: Duration::from_millis(2_250),
-                    sigs_deadline: Duration::from_secs(3),
-                    conclusion_at: Duration::from_secs(4),
-                },
-                join_inactive_timeout: None,
-                cancel: CancelFlag::new(),
-                expected_hello: ExpectedHello {
-                    tiers: vec![tier],
-                    num_components: num_components as u32,
-                    component_feerate: feerate,
-                    min_excess_fee: 0,
-                    max_excess_fee: 10_000,
-                },
+                    wallet_tag_seed: b"test-wallet".to_vec(),
+                    self_fuse_limit: 1,
+                    host: "127.0.0.1",
+                    port: main_port,
+                    use_ssl: false,
+                    tier_plans: vec![FusionTierPlan {
+                        tier,
+                        output_values: vec![
+                            19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951,
+                            19_950,
+                        ],
+                        excess_fee: 10,
+                    }],
+                    inputs: vec![FusionInputKey {
+                        prev_txid: "cd".repeat(32),
+                        prev_index: 0,
+                        pubkey,
+                        value: 200_000,
+                        privkey,
+                    }],
+                    output_scripts,
+                    genesis_hash: TEST_GENESIS,
+                    main_transport: Transport::Direct,
+                    remote_transport: None,
+                    lookups: std::sync::Arc::new(AlwaysUnspent(200_000)),
+                    timing: FusionTiming {
+                        warmup_expected: Duration::ZERO,
+                        warmup_slop: Duration::from_millis(250),
+                        connect_window: Duration::ZERO,
+                        connect_timeout: Duration::from_secs(2),
+                        submit_window: Duration::from_millis(20),
+                        submit_timeout: Duration::from_millis(500),
+                        connect_spares: 2,
+                        // This restart path opens 19 local sockets and produces 17
+                        // debug-build signatures before component disclosure.
+                        comps_at: Duration::from_secs(1),
+                        comps_deadline: Duration::from_secs(2),
+                        sigs_at: Duration::from_millis(2_250),
+                        sigs_deadline: Duration::from_secs(3),
+                        conclusion_at: Duration::from_secs(4),
+                    },
+                    join_inactive_timeout: None,
+                    cancel: CancelFlag::new(),
+                    expected_hello: ExpectedHello {
+                        tiers: vec![tier],
+                        num_components: num_components as u32,
+                        component_feerate: feerate,
+                        min_excess_fee: 0,
+                        max_excess_fee: 10_000,
+                    },
                 }),
             )
             .await
@@ -2418,7 +2265,6 @@ mod tests {
                 .expect("mock server transcript");
             // Warmup may use fewer accepts than `count`. Do not join the extra
             // accept() — that is what hung this test for hours.
-            lookup_server.abort();
 
             assert!(
                 outcome.ok,

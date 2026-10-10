@@ -49,13 +49,16 @@ const COIN_OUTPOINT = `${COIN.tx_hash}:${COIN.tx_pos}`;
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
-vi.mock('nostr-tools', () => ({
-  SimplePool: class {
+/** What each relay pool was built with, in order. */
+const poolOptions: unknown[] = [];
+
+vi.mock('nostr-tools/abstract-pool', () => ({
+  AbstractSimplePool: class {
     close = vi.fn();
+    constructor(options?: unknown) {
+      poolOptions.push(options);
+    }
   },
-}));
-vi.mock('nostr-tools/pool', () => ({
-  useWebSocketImplementation: vi.fn(),
 }));
 
 vi.mock('../nostr/torWebSocket', () => ({
@@ -409,6 +412,31 @@ describe('F1 — unresolved P2P broadcast keeps its input reservations', () => {
       false
     );
     expect(releaseOutpointsMock).toHaveBeenCalledWith(1, [COIN_OUTPOINT]);
+  });
+
+  it('gives every relay pool, including per-output ones, the Tor-only socket', async () => {
+    armBroadcast(true, true);
+    poolOptions.length = 0;
+
+    const { error } = await runRound();
+
+    expect(error).toBeNull();
+    const { createNostrRoundTransport } = await import('../nostr/fusionTransport');
+    const createComponentPool = vi
+      .mocked(createNostrRoundTransport)
+      .mock.calls.at(-1)
+      ?.at(-1) as (() => unknown) | undefined;
+    expect(typeof createComponentPool).toBe('function');
+    createComponentPool?.();
+    const { TorWebSocket } = await import('../nostr/torWebSocket');
+    // The announce pool, the output pool and one per-output pool.
+    expect(poolOptions.length).toBeGreaterThanOrEqual(3);
+    for (const options of poolOptions) {
+      expect(
+        (options as { websocketImplementation?: unknown } | undefined)
+          ?.websocketImplementation
+      ).toBe(TorWebSocket);
+    }
   });
 
   it('resolves via relay acceptance without needing a Tor-routed lookup', async () => {

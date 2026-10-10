@@ -49,6 +49,23 @@ pub async fn optn_wallet_security(
         })
 }
 
+/// Draw a recovery phrase for a new wallet. The runtime draws and keeps it;
+/// the renderer only shows it, and `Create` names the draft.
+#[tauri::command]
+pub async fn optn_wallet_seed_draft(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    word_count: usize,
+) -> Result<optn_transport::SeedDraft, String> {
+    runtime
+        .seed_draft(word_count)
+        .await
+        .map_err(|error| match error {
+            optn_transport::TransportError::Other(message)
+            | optn_transport::TransportError::InvalidData(message) => message,
+            _ => "A new recovery phrase is unavailable.".into(),
+        })
+}
+
 /// Forward public PSBT preparation/finalization; the runtime owns validation.
 #[tauri::command]
 pub async fn optn_airgap(

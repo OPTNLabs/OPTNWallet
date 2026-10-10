@@ -26,6 +26,7 @@ import {
   getLocalizedAddonAppDescription,
   getLocalizedAddonAppName,
 } from '../../services/addons/AddonLocale';
+import RemoteImg from '../../components/RemoteImg';
 
 type AppCard = {
   id: string;
@@ -292,7 +293,7 @@ const AppsView = () => {
                             aria-hidden="true"
                           />
                         ) : (
-                          <img
+                          <RemoteImg
                             src={app.icon}
                             alt={app.name}
                             className="h-full w-full object-contain p-1"

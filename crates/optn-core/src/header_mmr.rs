@@ -103,6 +103,77 @@ impl MmrAccumulator {
         proof
     }
 
+    /// The accumulator as it was before its last leaf was appended, read back
+    /// out of that leaf's proof-to-root.
+    ///
+    /// [`Self::proof_for_next_leaf`] lists every peak the leaf was appended to,
+    /// shortest first, with the bagging duplicates between them, so the
+    /// previous peaks are all in it. The result is returned only if appending
+    /// `last_leaf` to it gives exactly this accumulator again.
+    pub fn before_last_leaf(&self, last_leaf: Hash32, proof: &[Hash32]) -> Option<Self> {
+        let before = self.leaf_count.checked_sub(1)?;
+        let mut peaks = Vec::with_capacity(before.count_ones() as usize);
+        let mut current = last_leaf;
+        let mut height = 0u32;
+        let mut remaining = before;
+        let mut used = 0usize;
+        while remaining != 0 {
+            let left_height = remaining.trailing_zeros();
+            while height < left_height {
+                // Bagging pads with the node itself; anything else is not a
+                // proof this accumulator produced.
+                if *proof.get(used)? != current {
+                    return None;
+                }
+                used += 1;
+                current = sha256d_pair(&current, &current);
+                height += 1;
+            }
+            let left = *proof.get(used)?;
+            used += 1;
+            peaks.push(left);
+            current = sha256d_pair(&left, &current);
+            height += 1;
+            remaining &= remaining - 1;
+        }
+        if used != proof.len() {
+            return None;
+        }
+        peaks.reverse();
+        let previous = Self::from_parts(before, peaks).ok()?;
+        let mut replayed = previous.clone();
+        replayed.extend(last_leaf);
+        (replayed == *self).then_some(previous)
+    }
+
+    /// The accumulator before its last leaf, rebuilt from the leaves that leaf
+    /// was merged with.
+    ///
+    /// Appending a leaf when the count is `c` merges it with the `m` shortest
+    /// peaks, `m` being the trailing one bits of `c`: perfect subtrees of
+    /// 2^(m-1), ..., 2, 1 leaves directly before it. `preceding` must be exactly
+    /// those 2^m - 1 leaves, oldest first. The result is returned only if
+    /// appending `last_leaf` to it gives exactly this accumulator again, which
+    /// is what authenticates `preceding`.
+    pub fn before_append(&self, last_leaf: Hash32, preceding: &[Hash32]) -> Option<Self> {
+        let before = self.leaf_count.checked_sub(1)?;
+        let merges = before.trailing_ones();
+        if preceding.len() as u64 != (1u64 << merges) - 1 {
+            return None;
+        }
+        let mut peaks = self.peaks.split_last()?.1.to_vec();
+        let mut start = 0usize;
+        for height in (0..merges).rev() {
+            let size = 1usize << height;
+            peaks.push(perfect_root(&preceding[start..start + size]));
+            start += size;
+        }
+        let previous = Self::from_parts(before, peaks).ok()?;
+        let mut replayed = previous.clone();
+        replayed.extend(last_leaf);
+        (replayed == *self).then_some(previous)
+    }
+
     /// Bitcoin-style Merkle root produced by bagging the MMR peaks from the
     /// shortest/rightmost peak toward the tallest/leftmost peak, duplicating
     /// nodes as necessary to equalize heights.
@@ -329,6 +400,18 @@ fn sha256d_pair(left: &Hash32, right: &Hash32) -> Hash32 {
     second.into()
 }
 
+/// Root of a perfect binary tree over `leaves`, whose length is a power of two.
+fn perfect_root(leaves: &[Hash32]) -> Hash32 {
+    let mut level = leaves.to_vec();
+    while level.len() > 1 {
+        level = level
+            .chunks(2)
+            .map(|pair| sha256d_pair(&pair[0], &pair[1]))
+            .collect();
+    }
+    level[0]
+}
+
 const fn bit_width(value: u64) -> u32 {
     u64::BITS - value.leading_zeros()
 }
@@ -361,6 +444,44 @@ mod tests {
                 let mut corrupt = proof.clone();
                 corrupt[0][0] ^= 1;
                 assert!(!accumulator.verify_proof_to_root(index, leaf, &corrupt));
+            }
+        }
+    }
+
+    #[test]
+    fn every_append_steps_back_from_its_proof_or_from_its_merged_leaves() {
+        let leaf_at = |index: u64| -> Hash32 { Sha256::digest(index.to_le_bytes()).into() };
+        let mut accumulator = MmrAccumulator::new();
+        for index in 0u64..300 {
+            let leaf = leaf_at(index);
+            let before = accumulator.clone();
+            let proof = accumulator.proof_for_next_leaf(leaf);
+            accumulator.extend(leaf);
+
+            assert_eq!(
+                accumulator.before_last_leaf(leaf, &proof),
+                Some(before.clone())
+            );
+            let merges = index.trailing_ones();
+            let preceding: Vec<Hash32> = (index + 1 - (1 << merges)..index).map(leaf_at).collect();
+            assert_eq!(accumulator.before_append(leaf, &preceding), Some(before));
+
+            // Anything that does not reproduce this accumulator is refused.
+            assert_eq!(
+                accumulator.before_last_leaf(leaf_at(index + 1), &proof),
+                None
+            );
+            if !proof.is_empty() {
+                let mut corrupt = proof.clone();
+                corrupt[0][0] ^= 1;
+                assert_eq!(accumulator.before_last_leaf(leaf, &corrupt), None);
+                assert_eq!(accumulator.before_last_leaf(leaf, &proof[1..]), None);
+            }
+            if !preceding.is_empty() {
+                let mut wrong = preceding.clone();
+                wrong[0][0] ^= 1;
+                assert_eq!(accumulator.before_append(leaf, &wrong), None);
+                assert_eq!(accumulator.before_append(leaf, &preceding[1..]), None);
             }
         }
     }

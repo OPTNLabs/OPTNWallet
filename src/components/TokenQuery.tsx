@@ -10,6 +10,7 @@ import { shortenTxHash } from '../utils/shortenHash';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 import { normalizeExternalUrl } from '../utils/externalUrl';
 import TokenIdentityBadge from './ui/TokenIdentityBadge';
+import RemoteImg from './RemoteImg';
 import { resolveTokenPresentation } from '../utils/tokenPresentation';
 import { type BcmrSnapshot } from '../types/bcmr';
 import { useI18n } from '../i18n/useI18n';
@@ -288,7 +289,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
       {snapshot && (
         <div className="bcmr-meta p-4 border rounded-lg wallet-card max-h-64 overflow-y-auto">
           {!runtimeMetadata && (iconDataUri || snapshot.uris?.icon) && (
-            <img
+            <RemoteImg
               src={iconDataUri || snapshot.uris!.icon!}
               alt={`${snapshot.name} icon`}
               className="w-16 h-16 rounded mb-2"

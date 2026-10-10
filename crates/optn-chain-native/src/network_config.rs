@@ -260,4 +260,67 @@ mod tests {
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
+
+    /// Reading a schema-1 file migrates it in memory only; the file changes
+    /// when, and only when, a save succeeds. A file that cannot be read is
+    /// left exactly as it was.
+    #[test]
+    fn a_schema_1_file_is_rewritten_only_by_a_successful_save() {
+        use optn_runtime::chain::TransportPolicy;
+        let schema_1 = |envelope: &NetworkConfigEnvelope| {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&encode_envelope_json(envelope).unwrap()).unwrap();
+            value["schema_version"] = serde_json::json!(1);
+            value["overlay"]["connection_policy"]
+                .as_object_mut()
+                .unwrap()
+                .remove("transport")
+                .unwrap();
+            serde_json::to_vec(&value).unwrap()
+        };
+        let path = test_path("schema-1");
+        let file = NetworkConfigFile::new(path.clone());
+        let expected = sample_envelope();
+        let old = schema_1(&expected);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &old).unwrap();
+
+        assert_eq!(file.load().unwrap(), Some(expected.clone()));
+        assert_eq!(fs::read(&path).unwrap(), old, "a read never writes");
+
+        let saved = file
+            .update(|existing| {
+                let mut envelope = existing.expect("the schema-1 file is read");
+                envelope.overlay.connection_policy.transport = TransportPolicy::Direct;
+                Ok(envelope)
+            })
+            .unwrap();
+        let reloaded = file.load().unwrap().unwrap();
+        assert_eq!(reloaded, saved);
+        assert_eq!(
+            reloaded.overlay.connection_policy.transport,
+            TransportPolicy::Direct
+        );
+        // Bans, ownership, order and this machine's proxy trust came through.
+        let mut unchanged = reloaded.clone();
+        unchanged.overlay.connection_policy.transport = TransportPolicy::default();
+        assert_eq!(unchanged, expected);
+
+        // A schema-1 file this build cannot make sense of stays untouched.
+        let mut broken: serde_json::Value = serde_json::from_slice(&old).unwrap();
+        broken["overlay"]["connection_policy"]["primary_scope"] =
+            serde_json::json!({"kind": "everything"});
+        let broken = serde_json::to_vec(&broken).unwrap();
+        fs::write(&path, &broken).unwrap();
+        assert!(file.load().is_err());
+        assert!(file
+            .update(|_| Ok(NetworkConfigEnvelope::current(
+                SHIPPED_CATALOG_VERSION,
+                Default::default()
+            )))
+            .is_err());
+        assert_eq!(fs::read(&path).unwrap(), broken);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
 }

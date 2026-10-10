@@ -3,6 +3,7 @@ import type { SessionTypes } from '@walletconnect/types';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 import { useI18n } from '../../i18n/useI18n';
 import { walletConnectSessionStatus } from '../../utils/connectionStatus';
+import RemoteImg from '../RemoteImg';
 
 interface Props {
   activeSessions: Record<string, SessionTypes.Struct> | null;
@@ -32,7 +33,7 @@ export function SessionList({
             className="wallet-card p-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <img
+              <RemoteImg
                 src={dappMeta.icons[0]}
                 alt={t('wc.unknownDapp')}
                 className="h-16 w-16 shrink-0 rounded-full object-cover"

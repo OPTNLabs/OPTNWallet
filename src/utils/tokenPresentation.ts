@@ -121,6 +121,8 @@ export function resolveTokenPresentation(
     | 'snapshot'
     | 'isRefreshing'
     | 'identityStatus'
+    | 'identityAssurance'
+    | 'identityFinal'
   > | null,
   fallback?: TokenPresentationFallback | null
 ): TokenPresentation {
@@ -151,8 +153,12 @@ export function resolveTokenPresentation(
   const decimals = hasSnapshot
     ? pickNumber(metadata?.decimals, fallbackDecimals)
     : fallbackDecimals;
+  // A runtime identity shows only an image the host fetched under the wallet's
+  // transport policy; a URI there would make the webview contact its host.
   const iconUri = metadata?.identityStatus
-    ? null
+    ? metadata.iconUri?.startsWith('data:image/')
+      ? metadata.iconUri
+      : null
     : hasSnapshot
       ? pickString(metadata?.iconUri, fallbackIconUri) || null
       : fallbackIconUri || null;

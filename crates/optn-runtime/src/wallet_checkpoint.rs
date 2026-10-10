@@ -11,10 +11,13 @@ use crate::{
     wallet_birthday::{WalletBirthday, WalletRestoreState},
     wallet_sync::WalletReconciliation,
 };
-use optn_app::{AppState, IdentityStatus, TokenIdentity, TokenPresentation};
+use optn_app::{
+    AppState, IdentityAssurance, IdentityBasis, IdentityStatus, TokenIdentity, TokenPresentation,
+};
 use optn_core::{
     cashaddr::Address,
     coins::{CoinSet, FreezeReason, Outpoint},
+    fusion::depth::FusionDepthBook,
     hd::{parse_account_path, AccountPath},
     header_hash::sha256d,
     network::Network,
@@ -72,6 +75,7 @@ pub struct WalletCheckpoint {
     pub(crate) state: WalletReconciliation,
     pub(crate) coins: CoinSet,
     pub(crate) payment_outbox: Vec<optn_core::payment::PaymentRecord>,
+    pub(crate) fusion_depth: FusionDepthBook,
     /// Cached chain-authenticated presentation only. It is deliberately
     /// downgraded before a restored checkpoint reaches application state.
     token_identities: BTreeMap<String, TokenIdentity>,
@@ -112,7 +116,18 @@ struct StoredHeaderView {
     provenance: String,
 }
 
-fn provenance_name(provenance: &CheckpointProvenance) -> &'static str {
+/// A record written by a newer build is refused, never read in part or
+/// rewritten: a field this build cannot see may be one that holds coins (the
+/// payment outbox was such an addition), and dropping it on the next save would
+/// release them. The refusal says what happened and what to do.
+fn newer_build(detail: &str) -> String {
+    format!(
+        "This wallet's saved state was written by a newer OPTN build ({detail}). \
+         Update this build to open it; the saved state was left unchanged."
+    )
+}
+
+pub(crate) fn provenance_name(provenance: &CheckpointProvenance) -> &'static str {
     match provenance {
         CheckpointProvenance::SelfDerived => "self-derived",
         CheckpointProvenance::ShippedReviewed => "shipped-reviewed",
@@ -170,6 +185,52 @@ struct StoredCheckpoint {
     /// version. They confer no freshness and carry no restored proof status.
     #[serde(default)]
     bcmr_cache: BcmrIdentityCache,
+    /// When the retained snapshot was accepted, so a reopened wallet can say
+    /// how old it is. Absent in older checkpoints, which then cannot.
+    #[serde(default)]
+    snapshot_at_unix_ms: Option<u64>,
+    /// The fusion depth record. Written only once a round has been recorded,
+    /// so a wallet that never fused stays readable by builds before this
+    /// field; a build that does not know it refuses a record that has it
+    /// rather than drop the depth on its next save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fusion_depth: Option<StoredFusionDepth>,
+}
+
+/// The depth record's three parts, in the forms every desktop build and the
+/// CLI's old plaintext file have written.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredFusionDepth {
+    coins: serde_json::Value,
+    tx_depth: serde_json::Value,
+    txids: serde_json::Value,
+}
+
+impl StoredFusionDepth {
+    fn of(book: &FusionDepthBook) -> Result<Option<Self>, String> {
+        if *book == FusionDepthBook::new() {
+            return Ok(None);
+        }
+        let part = |stored: String| {
+            serde_json::from_str(&stored).map_err(|_| "cannot encode the fusion depth record")
+        };
+        Ok(Some(Self {
+            coins: part(book.stored_coins())?,
+            tx_depth: part(book.stored_tx_depth())?,
+            txids: part(book.stored_txids())?,
+        }))
+    }
+
+    fn book(stored: Option<Self>) -> FusionDepthBook {
+        stored.map_or_else(FusionDepthBook::new, |stored| {
+            FusionDepthBook::from_stored(
+                Some(&stored.coins.to_string()),
+                Some(&stored.tx_depth.to_string()),
+                Some(&stored.txids.to_string()),
+            )
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -181,6 +242,57 @@ struct StoredTokenIdentity {
     status: StoredIdentityStatus,
     #[serde(default)]
     presentation: TokenPresentation,
+    /// Absent in checkpoints written before identities recorded how their
+    /// authhead was established; absence reads as not recorded.
+    #[serde(default)]
+    basis: StoredIdentityBasis,
+}
+
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredIdentityBasis {
+    #[serde(default)]
+    assurance: StoredIdentityAssurance,
+    #[serde(default)]
+    burned: bool,
+}
+
+/// An assurance written by a newer build reads as not recorded rather than
+/// as a claim this build would make on its own.
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum StoredIdentityAssurance {
+    ServerReported,
+    NodeValidated,
+    #[default]
+    #[serde(other)]
+    Unattested,
+}
+
+impl From<IdentityBasis> for StoredIdentityBasis {
+    fn from(basis: IdentityBasis) -> Self {
+        Self {
+            assurance: match basis.assurance {
+                IdentityAssurance::Unattested => StoredIdentityAssurance::Unattested,
+                IdentityAssurance::ServerReported => StoredIdentityAssurance::ServerReported,
+                IdentityAssurance::NodeValidated => StoredIdentityAssurance::NodeValidated,
+            },
+            burned: basis.burned,
+        }
+    }
+}
+
+impl From<StoredIdentityBasis> for IdentityBasis {
+    fn from(basis: StoredIdentityBasis) -> Self {
+        Self {
+            assurance: match basis.assurance {
+                StoredIdentityAssurance::Unattested => IdentityAssurance::Unattested,
+                StoredIdentityAssurance::ServerReported => IdentityAssurance::ServerReported,
+                StoredIdentityAssurance::NodeValidated => IdentityAssurance::NodeValidated,
+            },
+            burned: basis.burned,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -312,6 +424,7 @@ fn decode_token_identities(
                 decimals: identity.decimals,
                 status: identity.status.into(),
                 presentation: identity.presentation.clone(),
+                basis: identity.basis.into(),
             };
             decoded.presentation = decoded.authenticated_presentation();
             Ok((category.clone(), decoded))
@@ -416,6 +529,7 @@ impl WalletCheckpoint {
             state: state.clone(),
             coins: app.coins.clone(),
             payment_outbox: app.payment_outbox.clone(),
+            fusion_depth: app.fusion_depth.clone().unwrap_or_default(),
             token_identities: cacheable_token_identities(&app.token_identities),
             bcmr_cache: BcmrIdentityCache::default(),
             // The view lives on the sync worker, which the host owns; it is
@@ -624,6 +738,7 @@ impl WalletCheckpoint {
             source: snapshot.map(|snapshot| snapshot.source.clone()),
             evidence: snapshot.map(|snapshot| snapshot.evidence.clone()),
             tip: snapshot.and_then(|snapshot| snapshot.chain_tip),
+            snapshot_at_unix_ms: snapshot.and(self.state.sync.snapshot_at_unix_ms),
             transactions: snapshot
                 .into_iter()
                 .flat_map(|snapshot| &snapshot.value.transactions)
@@ -633,6 +748,7 @@ impl WalletCheckpoint {
                 })
                 .collect(),
             payment_outbox: self.payment_outbox.clone(),
+            fusion_depth: StoredFusionDepth::of(&self.fusion_depth)?,
             annotations: self
                 .coins
                 .iter()
@@ -667,6 +783,7 @@ impl WalletCheckpoint {
                             decimals: identity.decimals,
                             status: identity.status.into(),
                             presentation: identity.authenticated_presentation(),
+                            basis: identity.basis.into(),
                         },
                     )
                 })
@@ -689,10 +806,32 @@ impl WalletCheckpoint {
         let nonce: &[u8; NONCE_LEN] = bytes[..NONCE_LEN].try_into().expect("checked length");
         let plaintext = wallet_pack::open(key, nonce, &bytes[NONCE_LEN..])
             .map_err(|error| error.to_string())?;
-        let stored: StoredCheckpoint =
-            serde_json::from_slice(&plaintext).map_err(|_| "invalid wallet checkpoint data")?;
+        let stored: StoredCheckpoint = serde_json::from_slice(&plaintext).map_err(|error| {
+            // serde names a field this build does not know: a newer build
+            // wrote it. Anything else is damage.
+            let message = error.to_string();
+            match message
+                .strip_prefix("unknown field `")
+                .and_then(|rest| rest.split('`').next())
+            {
+                Some(field) => newer_build(&format!(
+                    "it records `{field}`, which this build does not know"
+                )),
+                None => "invalid wallet checkpoint data".to_string(),
+            }
+        })?;
         if ![FORMAT, ALLOCATION_FORMAT, LEGACY_FORMAT].contains(&stored.format.as_str()) {
-            return Err("unsupported wallet checkpoint format or source".into());
+            let version = |format: &str| {
+                format
+                    .strip_prefix("optn-hd-restart-v")
+                    .and_then(|version| version.parse::<u32>().ok())
+            };
+            return Err(match (version(&stored.format), version(FORMAT)) {
+                (Some(found), Some(current)) if found > current => {
+                    newer_build(&format!("checkpoint format v{found}"))
+                }
+                _ => "unsupported wallet checkpoint format or source".into(),
+            });
         }
         if stored.format != FORMAT
             && (stored.scan_coverage.is_some() || stored.rescan_requested.is_some())
@@ -744,6 +883,7 @@ impl WalletCheckpoint {
         validate_restore_state(&restore_state, stored.tip)?;
         let token_identities = decode_token_identities(&stored.token_identities)?;
         optn_core::payment::validate_outbox(&stored.payment_outbox)?;
+        let fusion_depth = StoredFusionDepth::book(stored.fusion_depth);
         let branch_lengths: [u32; 4] =
             match (stored.format.as_str(), stored.branch_lengths.as_slice()) {
                 (LEGACY_FORMAT, [receive, change, old_defi]) if stored.allocation.is_none() => {
@@ -794,9 +934,18 @@ impl WalletCheckpoint {
                     scan_coverage: None,
                     rescan_requested: stored.rescan_requested,
                     restore_state,
-                    state: WalletReconciliation::default(),
+                    state: WalletReconciliation {
+                        sync: crate::chain::WalletSyncState {
+                            header_checkpoint: header_progress
+                                .as_ref()
+                                .map(|progress| progress.trusted.clone()),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
                     coins: CoinSet::new(),
                     payment_outbox: stored.payment_outbox,
+                    fusion_depth,
                     token_identities: BTreeMap::new(),
                     bcmr_cache: stored.bcmr_cache,
                     header_progress,
@@ -866,6 +1015,11 @@ impl WalletCheckpoint {
         // Authenticated old observations are still old. No fresh/spend flag is
         // accepted from disk, and a restored file is not a trusted header anchor.
         state.record_failure("restored wallet state requires a live refresh");
+        // Its age and where its headers stood are still true after a restart.
+        state.sync.snapshot_at_unix_ms = stored.snapshot_at_unix_ms;
+        state.sync.header_checkpoint = header_progress
+            .as_ref()
+            .map(|progress| progress.trusted.clone());
         Ok(Self {
             network,
             account,
@@ -877,6 +1031,7 @@ impl WalletCheckpoint {
             state,
             coins,
             payment_outbox: stored.payment_outbox,
+            fusion_depth,
             token_identities,
             bcmr_cache: stored.bcmr_cache,
             header_progress,
@@ -924,8 +1079,42 @@ mod tests {
                 allocation: Some(HdAddressAllocation::default()),
                 token_identities: BTreeMap::new(),
                 bcmr_cache: BcmrIdentityCache::default(),
+                snapshot_at_unix_ms: None,
+                fusion_depth: None,
             },
         )
+    }
+
+    /// A wallet that never fused writes no depth record, so builds from
+    /// before it still read the checkpoint; once there is one it is sealed
+    /// and read back whole.
+    #[test]
+    fn the_depth_record_is_sealed_once_there_is_one() {
+        let (key, stored) = fixture();
+        let checkpoint = WalletCheckpoint::open(&key, &encoded(&key, &stored, 1)).unwrap();
+        assert_eq!(checkpoint.fusion_depth, FusionDepthBook::new());
+        let plaintext = |sealed: &[u8]| {
+            let nonce: &[u8; NONCE_LEN] = sealed[..NONCE_LEN].try_into().unwrap();
+            String::from_utf8(wallet_pack::open(&key, nonce, &sealed[NONCE_LEN..]).unwrap())
+                .unwrap()
+        };
+        let sealed = checkpoint.seal(&key, &fixture_nonce(2)).unwrap();
+        assert!(!plaintext(&sealed).contains("fusion_depth"));
+
+        let mut fused = checkpoint.clone();
+        fused
+            .fusion_depth
+            .record_round(&[], &[format!("{}:3", "ab".repeat(32))], 7);
+        let sealed = fused.seal(&key, &fixture_nonce(3)).unwrap();
+        assert!(plaintext(&sealed).contains("fusion_depth"));
+        let reopened = WalletCheckpoint::open(&key, &sealed).unwrap();
+        assert_eq!(reopened.fusion_depth, fused.fusion_depth);
+        assert_eq!(
+            reopened
+                .fusion_depth
+                .depth_of(&format!("{}:3", "AB".repeat(32))),
+            1
+        );
     }
 
     // Authenticated codec fixtures, never a production key or encryption entry point.
@@ -938,6 +1127,70 @@ mod tests {
         let mut bytes = nonce.to_vec();
         bytes.extend(wallet_pack::seal(key, &nonce, &serde_json::to_vec(value).unwrap()).unwrap());
         bytes
+    }
+
+    /// Found when an older CLI met a checkpoint the newer desktop had saved:
+    /// it refused, correctly, but called the record invalid. A newer build's
+    /// record is refused by name; damage is still called damage.
+    #[test]
+    fn a_newer_builds_record_is_refused_by_name() {
+        let (key, stored) = fixture();
+        let mut value = serde_json::to_value(&stored).unwrap();
+        value["field_from_a_newer_build"] = serde_json::json!(1);
+        let error = WalletCheckpoint::open(&key, &encoded_value(&key, &value, 250))
+            .err()
+            .unwrap();
+        assert!(error.contains("newer OPTN build"), "{error}");
+        assert!(error.contains("field_from_a_newer_build"), "{error}");
+        assert!(error.contains("left unchanged"), "{error}");
+
+        let mut newer = serde_json::to_value(&stored).unwrap();
+        newer["format"] = serde_json::json!("optn-hd-restart-v9");
+        let error = WalletCheckpoint::open(&key, &encoded_value(&key, &newer, 251))
+            .err()
+            .unwrap();
+        assert!(error.contains("format v9"), "{error}");
+
+        let mut foreign = serde_json::to_value(&stored).unwrap();
+        foreign["format"] = serde_json::json!("something-else");
+        assert_eq!(
+            WalletCheckpoint::open(&key, &encoded_value(&key, &foreign, 252))
+                .err()
+                .unwrap(),
+            "unsupported wallet checkpoint format or source"
+        );
+        let damaged = serde_json::json!({"format": 5});
+        assert_eq!(
+            WalletCheckpoint::open(&key, &encoded_value(&key, &damaged, 253))
+                .err()
+                .unwrap(),
+            "invalid wallet checkpoint data"
+        );
+    }
+
+    /// A reopened wallet still knows when its snapshot was accepted, and
+    /// says nothing of an age it never recorded.
+    #[test]
+    fn snapshot_time_survives_a_reopen() {
+        let (key, mut stored) = fixture();
+        stored.source = Some("node".into());
+        stored.evidence = Some(Evidence::ServerAssertion);
+        stored.tip = Some((100, [7; 32]));
+        stored.branch_lengths = vec![1; 4];
+        for (sequence, at) in [(220, Some(1_760_000_000_000u64)), (222, None)] {
+            stored.snapshot_at_unix_ms = at;
+            let opened = WalletCheckpoint::open(&key, &encoded(&key, &stored, sequence)).unwrap();
+            assert_eq!(opened.state.sync.snapshot_at_unix_ms, at);
+            let resealed = opened
+                .seal(&key, &fixture_nonce(u64::from(sequence) + 1))
+                .unwrap();
+            let twice = WalletCheckpoint::open(&key, &resealed).unwrap();
+            assert_eq!(twice.state.sync.snapshot_at_unix_ms, at);
+            assert!(
+                !twice.state.sync.utxos_fresh,
+                "an old snapshot is not fresh"
+            );
+        }
     }
 
     #[tokio::test]
@@ -959,6 +1212,7 @@ mod tests {
                 decimals: 2,
                 status: StoredIdentityStatus::Verified,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         );
         let checkpoint = WalletCheckpoint::open(&key, &encoded(&key, &stored, 210))
@@ -1148,6 +1402,7 @@ mod tests {
                     decimals: 2,
                     status: StoredIdentityStatus::Verified,
                     presentation: Default::default(),
+                    basis: Default::default(),
                 },
             );
             assert!(WalletCheckpoint::open(&key, &encoded(&key, &stored, 91)).is_err());
@@ -1234,6 +1489,7 @@ mod tests {
                     decimals: identity.decimals,
                     status: identity.status.into(),
                     presentation: identity.presentation.clone(),
+                    basis: Default::default(),
                 },
             );
             let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 92)).unwrap();
@@ -1274,6 +1530,7 @@ mod tests {
                 decimals: 0,
                 status: StoredIdentityStatus::Verified,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         );
         let mut legacy = serde_json::to_value(&stored).unwrap();
@@ -1316,6 +1573,55 @@ mod tests {
                 TokenPresentation::default()
             );
         }
+    }
+
+    #[test]
+    fn identity_basis_survives_reopening_and_unknown_or_missing_reads_as_unattested() {
+        let (key, mut stored) = fixture();
+        let category = "aa".repeat(32);
+        stored.source = Some(SourceId::new("basis-fixture"));
+        stored.evidence = Some(Evidence::ServerAssertion);
+        stored.tip = Some((100, [3; 32]));
+        stored.branch_lengths = vec![1; 4];
+        let basis = IdentityBasis {
+            assurance: IdentityAssurance::ServerReported,
+            burned: true,
+        };
+        stored.token_identities.insert(
+            category.clone(),
+            StoredTokenIdentity {
+                name: "Frozen".into(),
+                ticker: None,
+                decimals: 0,
+                status: StoredIdentityStatus::Verified,
+                presentation: Default::default(),
+                basis: basis.into(),
+            },
+        );
+        let reopened = WalletCheckpoint::open(&key, &encoded(&key, &stored, 96)).unwrap();
+        let restored = &reopened.restored_token_identities()[&category];
+        // A restored name is last-known, and still says how it was established.
+        assert_eq!(restored.status, IdentityStatus::Stale);
+        assert_eq!(restored.basis, basis);
+
+        let mut value = serde_json::to_value(&stored).unwrap();
+        value["token_identities"][&category]["basis"]["assurance"] = "notarised".into();
+        let reopened = WalletCheckpoint::open(&key, &encoded_value(&key, &value, 97)).unwrap();
+        assert_eq!(
+            reopened.restored_token_identities()[&category]
+                .basis
+                .assurance,
+            IdentityAssurance::Unattested
+        );
+        value["token_identities"][&category]
+            .as_object_mut()
+            .unwrap()
+            .remove("basis");
+        let reopened = WalletCheckpoint::open(&key, &encoded_value(&key, &value, 98)).unwrap();
+        assert_eq!(
+            reopened.restored_token_identities()[&category].basis,
+            IdentityBasis::default()
+        );
     }
 
     #[test]

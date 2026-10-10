@@ -42,8 +42,11 @@ RUN apt-get update \
     libssl-dev \
     libgmp-dev \
   && rm -rf /var/lib/apt/lists/* \
-  && mkdir -p /optn \
-  && chown -R node:node /optn
+  # /optn-data is the fusion-lab volume's mount point. A new named volume takes
+  # this directory's owner; without it the volume is root's, and the lab (uid
+  # 1000) cannot write its health file, wallets or build cache.
+  && mkdir -p /optn /optn-data \
+  && chown -R node:node /optn /optn-data
 
 # Rust, pinned to the same toolchain `rust-toolchain.toml` and CI name.
 #

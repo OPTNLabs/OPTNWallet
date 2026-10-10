@@ -31,6 +31,7 @@ import { AddonI18nProvider } from '../../i18n/AddonI18nProvider';
 import { getLocalizedAddonAppName } from '../../services/addons/AddonLocale';
 import type { AddonModuleId } from '../../i18n/addonModuleCatalog';
 import type { TranslationKey } from '../../i18n/resources';
+import { isBuiltinAddon } from '../../services/addons/AddonTrust';
 
 type ResolvedApp = {
   manifest: AddonManifest;
@@ -63,8 +64,9 @@ const SENSITIVE_RUNTIME_CAPABILITIES = new Set<AddonCapability>([
   'signing:signature_template',
 ]);
 
+/** The host's trust, never the manifest's claim; see `hostTrustTier`. */
 function isTrustedAddon(manifest: AddonManifest): boolean {
-  return manifest.trustTier === 'internal';
+  return isBuiltinAddon(manifest);
 }
 
 function readPersistedConsent(): PersistedConsent {

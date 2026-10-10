@@ -6,6 +6,7 @@
 
 pub mod bloom;
 pub mod merkleblock;
+pub mod seed;
 pub mod shv;
 pub mod tx;
 
@@ -1114,12 +1115,14 @@ async fn connect_peer(
         } => {
             let token = format!("optn-node-{}", nonce());
             let proxy = format!("{proxy_host}:{proxy_port}");
-            let target = format!("{host}:{port}");
+            // As a pair, so an IP literal goes to the proxy as an address. An
+            // IPv6 one formatted "host:port" has no brackets and would be sent
+            // as a name for the proxy to resolve.
             let socks = tokio::time::timeout(
                 TOR_CONNECT_TIMEOUT,
                 tokio_socks::tcp::Socks5Stream::connect_with_password(
                     proxy.as_str(),
-                    target.as_str(),
+                    (host, port),
                     &token,
                     &token,
                 ),
@@ -1425,7 +1428,28 @@ fn relay_observation(
     }
 }
 
-fn matching_tx_rejection(payload: &[u8], expected: &[u8; 32]) -> Result<Option<String>, String> {
+/// What a `reject` for this transaction means: nothing (it was about another
+/// message or transaction), that the peer already has it, or a rejection.
+fn matching_tx_rejection(
+    payload: &[u8],
+    expected: &[u8; 32],
+) -> Result<Option<TxRelayOutcome>, String> {
+    let Some((code, reason)) = matching_tx_reject(payload, expected)? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        match optn_runtime::tx_broadcast::classify_reject(code, &reason) {
+            // The peer has this exact transaction: as good as processed.
+            optn_runtime::tx_broadcast::NodeBroadcastReply::AlreadyHas => TxRelayOutcome::Processed,
+            _ => TxRelayOutcome::Rejected(format!(
+                "peer rejected transaction (code {code}): {reason}"
+            )),
+        },
+    ))
+}
+
+/// The code and printable reason of a `reject` naming this transaction.
+fn matching_tx_reject(payload: &[u8], expected: &[u8; 32]) -> Result<Option<(u8, String)>, String> {
     let mut pos = 0;
     let command_len = read_varint(payload, &mut pos)?;
     if command_len > 12 {
@@ -1454,9 +1478,7 @@ fn matching_tx_rejection(payload: &[u8], expected: &[u8; 32]) -> Result<Option<S
             }
         })
         .collect();
-    Ok(Some(format!(
-        "peer rejected transaction (code {code}): {reason}"
-    )))
+    Ok(Some((code, reason)))
 }
 
 /// Announce once, transfer only on matching getdata, then keep the stream alive
@@ -1497,8 +1519,8 @@ pub async fn relay_tx_on_stream<S: AsyncReadExt + AsyncWriteExt + Unpin>(
                     return Ok(TxRelayOutcome::Processed)
                 }
                 "reject" => {
-                    if let Some(reason) = matching_tx_rejection(&payload, &txid)? {
-                        return Ok(TxRelayOutcome::Rejected(reason));
+                    if let Some(outcome) = matching_tx_rejection(&payload, &txid)? {
+                        return Ok(outcome);
                     }
                 }
                 "ping" => {
@@ -1555,6 +1577,38 @@ mod tests {
                 Err(ChainBackendError::Timeout)
             ));
         }
+    }
+
+    #[test]
+    fn a_peer_that_already_has_the_transaction_did_not_reject_it() {
+        let txid = double_sha256(&[1, 2, 3]);
+        let reject = |code: u8, reason: &str, about: &[u8; 32]| {
+            let mut payload = vec![2, b't', b'x', code, reason.len() as u8];
+            payload.extend_from_slice(reason.as_bytes());
+            payload.extend_from_slice(about);
+            payload
+        };
+        for reason in ["txn-already-in-mempool", "txn-already-known"] {
+            assert_eq!(
+                matching_tx_rejection(&reject(0x12, reason, &txid), &txid).unwrap(),
+                Some(TxRelayOutcome::Processed),
+                "{reason}"
+            );
+            // About another transaction: says nothing about this one.
+            assert_eq!(
+                matching_tx_rejection(&reject(0x12, reason, &[9; 32]), &txid).unwrap(),
+                None
+            );
+        }
+        // Same code, different meaning: another spend of the same coins.
+        assert!(matches!(
+            matching_tx_rejection(&reject(0x12, "txn-mempool-conflict", &txid), &txid).unwrap(),
+            Some(TxRelayOutcome::Rejected(reason)) if reason.contains("txn-mempool-conflict")
+        ));
+        assert!(matches!(
+            matching_tx_rejection(&reject(0x10, "txn-already-in-mempool", &txid), &txid).unwrap(),
+            Some(TxRelayOutcome::Rejected(_))
+        ));
     }
 
     #[tokio::test(start_paused = true)]

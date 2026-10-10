@@ -41,7 +41,7 @@ export type AutoFusionDecision =
  * (plugin re-queues as soon as a fusion thread exits).
  *
  * This is NOT a block-confirmation wait. Unconfirmed fusion outputs are eligible
- * immediately (ACCEPT_UNCONFIRMED_FUSION_INPUTS / EC-maintainer-endorsed 0-conf).
+ * immediately (optn-core fusion::coin_selection; EC-maintainer-endorsed 0-conf).
  * The delay only covers Electrum listunspent catching the new outpoints before
  * the next JoinPools. Never multi-minute, never “wait for 1 conf”.
  */

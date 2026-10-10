@@ -16,7 +16,7 @@ use crate::chain_runtime::NativeChainRuntime;
 use crate::network_config::NetworkSettingsStore;
 use optn_core::network::Network;
 use optn_runtime::chain::{
-    ConnectionPolicy, ProtocolFamily, SourceCatalog, SourceDisposition, SourceId,
+    ConnectionPolicy, ProtocolFamily, SourceDisposition, SourceId, TransportPolicy,
 };
 use optn_runtime::chain_service::ChainOperation;
 use optn_runtime::network_config::{
@@ -53,34 +53,23 @@ pub async fn optn_chain_sources(
         Some(value) => parse_network(&value)?,
         None => runtime.state().network,
     };
+    // The same resolution the renderer's Electrum gate uses: listing is not
+    // dialling, so with nothing saved the shipped servers are shown even
+    // before a wallet is open.
     let settings = (*network_settings).clone();
-    let persisted = tokio::task::spawn_blocking(move || settings.chain_selection(network))
-        .await
-        .map_err(|_| "network settings reader stopped".to_string())??;
-    let (catalog, policy) = match persisted {
-        Some(selection) => selection,
-        None => {
-            // The runtime's own fallback withholds the shipped catalog until a
-            // wallet is open, because an idle install must not dial anyone.
-            // Listing is not dialling: with nothing to show, this screen would
-            // claim the wallet has no servers at all, which is false and leaves
-            // no way to disable one before opening a wallet. `wallet_routes`
-            // still reports what is actually connected.
-            let state = runtime.state();
-            let (catalog, policy) = if state.network == network {
-                crate::chain_runtime::catalog_and_policy_from_app_state(&state)
-            } else {
-                (SourceCatalog::default(), ConnectionPolicy::auto())
-            };
-            if catalog.iter().next().is_none() {
-                (
-                    optn_runtime::bootstrap::shipped_source_catalog(network),
-                    policy,
-                )
-            } else {
-                (catalog, policy)
-            }
-        }
+    let state = runtime.state();
+    let (catalog, policy) = tokio::task::spawn_blocking(move || {
+        crate::electrum_selection::listed_selection(&settings, &state, network)
+    })
+    .await
+    .map_err(|_| "network settings reader stopped".to_string())??;
+    // Listed as routes are built, discovered servers included, so the holder
+    // can disable or ban one.
+    let catalog = {
+        let settings = (*network_settings).clone();
+        tokio::task::spawn_blocking(move || settings.with_discovered(network, catalog))
+            .await
+            .map_err(|_| "network settings reader stopped".to_string())?
     };
 
     let settings = (*network_settings).clone();
@@ -271,6 +260,46 @@ pub async fn optn_chain_set_policy(
     .await
 }
 
+/// Whether Tor is on for the network (#75 §4.1): `tor` or `direct`.
+#[tauri::command]
+pub async fn optn_chain_transport(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, NetworkSettingsStore>,
+    network: Option<String>,
+) -> Result<String, String> {
+    let network = network_or_current(&runtime, network)?;
+    let settings = (*network_settings).clone();
+    tokio::task::spawn_blocking(move || settings.transport(network))
+        .await
+        .map_err(|_| "network settings reader stopped".to_string())?
+        .map(|transport| transport.as_str().to_owned())
+}
+
+/// Choose how the network's sources are reached. Like any selection edit, the
+/// old routes are revoked first and rebuilt from the saved policy.
+#[tauri::command]
+pub async fn optn_chain_set_transport(
+    app: tauri::AppHandle,
+    native: tauri::State<'_, Arc<NativeChainRuntime>>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, NetworkSettingsStore>,
+    network: Option<String>,
+    transport: String,
+) -> Result<(), String> {
+    let network = network_or_current(&runtime, network)?;
+    let transport: TransportPolicy = transport.parse()?;
+    edit_overlay(&native, &network_settings, network, move |overlay| {
+        overlay.connection_policy.transport = transport;
+        Ok(())
+    })
+    .await?;
+    // Sockets opened under the old rule must not outlive it. Their pages see
+    // them close and reconnect, through the new route.
+    crate::nostr_tor::close_renderer_sockets(&app).await;
+    crate::electrum_tcp::close_all(&app).await;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn optn_chain_set_selection(
     native: tauri::State<'_, Arc<NativeChainRuntime>>,
@@ -288,7 +317,11 @@ pub async fn optn_chain_set_selection(
         let (catalog, _) =
             optn_runtime::network_config::resolve_shipped_chain_selection(network, Some(&envelope))
                 .map_err(|error| format!("Invalid source catalog: {error:?}"))?;
-        overlay.connection_policy = optn_runtime::source_selection::policy(&catalog, &selection)?;
+        overlay.connection_policy = optn_runtime::source_selection::policy(
+            &catalog,
+            &selection,
+            overlay.connection_policy.transport,
+        )?;
         Ok(())
     })
     .await
@@ -499,7 +532,7 @@ pub async fn optn_chain_rpc_credentials(
 mod tests {
     use super::*;
     use optn_runtime::{
-        chain::{ChainSource, Endpoint, EndpointKind, SourceOrigin},
+        chain::{ChainSource, Endpoint, EndpointKind, SourceCatalog, SourceOrigin},
         chain_service::RegisteredCapabilityObservation,
     };
     use optn_transport_native::disposition_label;

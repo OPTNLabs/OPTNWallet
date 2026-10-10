@@ -19,6 +19,7 @@ import {
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { validateAddonManifestAgainstSchema } from '../../services/addons/AddonManifestSchema';
 import type { AddonManifest } from '../../types/addons';
+import { refuseUntrustedClaims } from '../../services/addons/AddonTrust';
 
 export const ADDONS_DIR = 'addons';
 
@@ -122,6 +123,7 @@ export async function installAddonFromDirectory(): Promise<AddonManifest | null>
   if (schemaErrors.length) {
     throw new Error(`Invalid addon manifest: ${schemaErrors.join('; ')}`);
   }
+  refuseUntrustedClaims(manifest);
 
   const iframeApps = (manifest.apps ?? []).filter((a) => a.kind === 'iframe-bundle');
   if (iframeApps.length === 0) {

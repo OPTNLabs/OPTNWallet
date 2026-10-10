@@ -17,11 +17,11 @@ git tag / GitHub Release  →  native installers (primary ship)
 ### C — Dev polish ✅
 ### D — fusion-lab (Tor **mandatory** for fusion) ✅
 - Tor service always started with profile `fusion-lab`
-- `OPTN_TOR_REQUIRED=1`, `OPTN_TOR_SOCKS=tor:9050`, chipnet default
+- `OPTN_TOR_REQUIRED=1`, `OPTN_TOR_SOCKS=127.0.0.1:9050` (shares the `tor` network), chipnet default
 - Data volume for ops state
 - Supervisor: mode/network validation, Tor fail-closed, health file, Docker healthcheck
 - Default `OPTN_FUSION_MODE=p2p` (desktop match); `server` opt-in
-- `OPTN_HEADLESS_CMD` hook for full Auto rounds (wallet stack = separate product milestone)
+- `OPTN_HEADLESS_CMD` hook; `scripts/fusion-lab-headless.sh` runs server-mode Auto Fusion through the Rust CLI (P2P headless driver not yet)
 - Release compose also has `fusion-lab` profile
 ### E — Non-goals documented ✅
 ### F — Production-grade lab hardening ✅

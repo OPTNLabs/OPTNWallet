@@ -8,7 +8,13 @@ members = [
   "crates/optn-chain-native",
   "crates/optn-chain-neutrino",
   "crates/optn-chain-zmq",
+  # Marmot chat through MDK. A member, so the workspace's tests and clippy
+  # cover it, but not a default member: MDK brings OpenMLS and its media
+  # stack, which builds of the wallet crates need not wait for.
+  "crates/optn-chat",
   "crates/optn-fusion",
+  "crates/optn-fusion-native",
+  "crates/optn-nostr",
   # #65's deterministic multisig core. A member rather than an exclusion:
   # it has no lock file of its own and three pure dependencies, so there is
   # nothing to keep it out for -- and being a member is what puts it under
@@ -44,6 +50,8 @@ default-members = [
   "crates/optn-chain-neutrino",
   "crates/optn-chain-zmq",
   "crates/optn-fusion",
+  "crates/optn-fusion-native",
+  "crates/optn-nostr",
   "crates/optn-platform",
   "crates/optn-platform-native",
   "crates/optn-platform-apple",

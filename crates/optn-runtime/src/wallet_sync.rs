@@ -78,6 +78,8 @@ pub(super) struct WalletSyncLease {
     cancelled: watch::Receiver<()>,
     source_lifetime: Option<crate::chain_service::ChainRevocation>,
     header_progress: Option<crate::wallet_checkpoint::StoredHeaderProgress>,
+    /// The chain service's providers once the refresh ran, when it ran here.
+    providers: Option<Vec<crate::chain::ProviderStatus>>,
     bcmr_cache: BcmrIdentityCache,
     identities: Option<SelectedIdentityResolution>,
     // Closing this sender also covers caller timeouts and aborted tasks. The
@@ -385,6 +387,7 @@ impl AppRuntime {
                         worker.reconciliation_mut().record_failure(reason.clone());
                     }
                     lease.capture_header_progress(worker.header_view())?;
+                    lease.providers = Some(service.provider_statuses());
                     let decision = self
                         .finish_wallet_sync(lease, worker.reconciliation().clone())
                         .await?;
@@ -452,6 +455,7 @@ impl AppRuntime {
             result = worker.refresh(service, lease.interests.clone(), from_height) => result,
         };
         lease.capture_header_progress(worker.header_view())?;
+        lease.providers = Some(service.provider_statuses());
         let decision = self
             .finish_wallet_sync(lease, worker.reconciliation().clone())
             .await?;
@@ -690,6 +694,39 @@ impl WalletSyncSession {
             .authoritative
             .as_ref()
             .and_then(|snapshot| snapshot.chain_tip.map(|tip| tip.0));
+        view.snapshot_at_unix_ms = self
+            .state
+            .authoritative
+            .as_ref()
+            .and(self.state.sync.snapshot_at_unix_ms);
+        view.providers = self
+            .state
+            .sync
+            .providers
+            .iter()
+            .map(|status| optn_app::ProviderStatusView {
+                source: status.source.as_str().to_owned(),
+                protocol: status.protocol.label().to_owned(),
+                health: match status.health {
+                    crate::chain::ProviderHealth::Unknown => optn_app::ProviderHealthView::Unknown,
+                    crate::chain::ProviderHealth::Healthy => optn_app::ProviderHealthView::Healthy,
+                    crate::chain::ProviderHealth::Degraded => {
+                        optn_app::ProviderHealthView::Degraded
+                    }
+                    crate::chain::ProviderHealth::Offline => optn_app::ProviderHealthView::Offline,
+                },
+            })
+            .collect();
+        view.header_checkpoint = self
+            .state
+            .sync
+            .header_checkpoint
+            .as_ref()
+            .map(|checkpoint| optn_app::HeaderCheckpointView {
+                height: checkpoint.height,
+                provenance: crate::wallet_checkpoint::provenance_name(&checkpoint.provenance)
+                    .to_owned(),
+            });
         if !view.utxos_fresh || !view.history_fresh {
             for identity in app.token_identities.values_mut() {
                 identity.status = match identity.status {
@@ -751,6 +788,7 @@ impl WalletSyncSession {
         app.wallet_sync.rescan_requested = checkpoint.rescan_requested;
         app.coins = checkpoint.coins;
         app.payment_outbox = checkpoint.payment_outbox;
+        app.fusion_depth = Some(checkpoint.fusion_depth);
         // The cache is useful presentation, never live authchain evidence.
         // `WalletCheckpoint` downgrades it before this actor publishes it.
         app.token_identities = token_identities;
@@ -1015,6 +1053,7 @@ impl WalletSyncSession {
             cancelled,
             source_lifetime: None,
             header_progress: None,
+            providers: None,
             bcmr_cache: self.bcmr_cache.clone(),
             identities: None,
             _completion: completion,
@@ -1097,6 +1136,22 @@ impl WalletSyncSession {
             );
         }
         if let Some(previous) = &self.state.authoritative {
+            // What the last scan accepted stays covered, even when it was a
+            // larger scan than this one (`rescan --max-addresses`): the budget
+            // grows to the longest branch it kept, plus one gap so that branch
+            // can still grow, as it does for issued addresses. A provider can
+            // move that by one gap per accepted scan, never past the hard cap.
+            // Found in the fleet run: a wallet with used addresses past index
+            // 1,368 could never refresh on the default budget.
+            if let Some(book) = &previous.value.hd {
+                let longest = book.branches.iter().map(Vec::len).max().unwrap_or(0);
+                let longest = u32::try_from(longest).unwrap_or(u32::MAX);
+                limits.addresses_per_branch = limits.addresses_per_branch.max(
+                    longest
+                        .saturating_add(limits.gap_limit)
+                        .min(optn_core::watch_only::MAX_HD_ADDRESSES_PER_BRANCH),
+                );
+            }
             for interest in &previous.value.interests {
                 let WalletInterest::Script(script) = interest else {
                     return Err(WalletSyncError::InvalidScope(
@@ -1193,6 +1248,14 @@ impl WalletSyncSession {
         self.active = None;
         self.cancellation_tx = None;
         self.abandoned = None;
+        // What the round saw of its providers and headers stands whatever
+        // becomes of its snapshot.
+        if let Some(providers) = &lease.providers {
+            self.state.sync.providers.clone_from(providers);
+        }
+        if let Some(progress) = &lease.header_progress {
+            self.state.sync.header_checkpoint = Some(progress.trusted.clone());
+        }
         if !result.sync.history_fresh || !result.sync.utxos_fresh || result.authoritative.is_none()
         {
             self.state.record_failure(
@@ -1205,6 +1268,9 @@ impl WalletSyncSession {
             return Ok(ReconciliationDecision::PreservedFailure);
         }
         let candidate = result.authoritative.expect("checked above");
+        // Why the worker's accepted snapshot is labelled down or its headers
+        // lag, which the holder still needs once it is published here.
+        let worker_note = result.sync.degraded_reason;
         if candidate.value.hd.is_none()
             && self
                 .state
@@ -1239,14 +1305,35 @@ impl WalletSyncSession {
             return Err(WalletSyncError::InvalidSnapshot(reason));
         }
         let mut next = self.state.clone();
-        let decision = next.reconcile_candidate(
+        // A weaker snapshot replaces a stronger one only at a newer tip the
+        // headers this round verified hold. The view is rebuilt from the
+        // lease only when that question comes up.
+        let decision = next.reconcile_refresh(
             candidate.value,
             candidate.source,
             candidate.evidence,
             candidate.chain_tip,
-            true,
+            |tip| {
+                lease
+                    .header_progress
+                    .as_ref()
+                    .and_then(|progress| {
+                        crate::header_view::VerifiedHeaderView::restore(
+                            &progress.view,
+                            lease.network,
+                            &progress.trusted,
+                        )
+                        .ok()
+                    })
+                    .is_some_and(|view| view.holds(tip))
+            },
         );
         if decision == ReconciliationDecision::Accepted {
+            if let Some(note) = worker_note {
+                next.note_degraded(note);
+            }
+            next.sync.snapshot_at_unix_ms =
+                crate::token_metadata::checked_unix_ms().and_then(|now| u64::try_from(now).ok());
             let mut next_restore_state = self.restore_state.clone();
             if let Some((height, _)) = candidate.chain_tip {
                 // A complete accepted rescan can end below the previous tip
@@ -2013,6 +2100,100 @@ mod tests {
         );
     }
 
+    /// A weaker snapshot replaces a stronger published one only at a newer
+    /// tip that this round's verified headers hold. The status says the
+    /// evidence was lowered, beside what the worker noted.
+    #[tokio::test]
+    async fn finish_lowers_evidence_only_at_a_newer_tip_the_headers_hold() {
+        use crate::header_verifier::shipped_header_verifier;
+        use crate::header_view::VerifiedHeaderView;
+
+        // Regtest, where the fixture can mine the blocks the view verifies.
+        let address = Address::from_hash("bchreg", AddressKind::P2pkh, [1; 20]).encode();
+        let mut app = observation_app();
+        app.network = Network::Regtest;
+        app.wallet.as_mut().unwrap().receive_address = address.clone();
+        let mut view = VerifiedHeaderView::new(
+            Network::Regtest,
+            shipped_header_verifier(Network::Regtest).expect("regtest genesis"),
+        );
+        view.extend(
+            &crate::sync_worker::tests::regtest_headers(2, None)
+                .into_iter()
+                .map(crate::chain::BlockHeaderBytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let (height, hash) = view.tip().expect("regtest tip");
+        let at = |mut result: WalletReconciliation, (height, hash): (u32, [u8; 32])| {
+            let snapshot = result.authoritative.as_mut().unwrap();
+            snapshot.value.tip = Some(ChainTip { height, hash });
+            snapshot.chain_tip = Some((height, hash));
+            result
+        };
+        for with_headers in [true, false] {
+            let runtime = AppRuntime::spawn(app.clone());
+            let lease = runtime
+                .begin_wallet_sync(vec![address.clone()])
+                .await
+                .unwrap();
+            let stronger = at(
+                candidate(Evidence::FullNodeValidated {
+                    source: SourceId::new("node"),
+                }),
+                (height - 1, [1; 32]),
+            );
+            assert_eq!(
+                runtime.finish_wallet_sync(lease, stronger).await.unwrap(),
+                ReconciliationDecision::Accepted
+            );
+
+            let mut lease = runtime
+                .begin_wallet_sync(vec![address.clone()])
+                .await
+                .unwrap();
+            if with_headers {
+                lease.capture_header_progress(Some(&view)).unwrap();
+            }
+            let mut weaker = at(candidate(Evidence::ServerAssertion), (height, hash));
+            weaker.note_degraded("headers did not advance: Exhausted");
+            let decision = runtime.finish_wallet_sync(lease, weaker).await.unwrap();
+            let status = runtime.subscribe_wallet_sync();
+            let status = status.borrow();
+            let published = status.authoritative.as_ref().unwrap();
+            if with_headers {
+                assert_eq!(decision, ReconciliationDecision::Accepted);
+                assert_eq!(published.evidence, Evidence::ServerAssertion);
+                assert_eq!(status.sync.chain_tip, Some((height, hash)));
+                assert!(status.sync.utxos_fresh);
+                assert_eq!(status.sync.header_checkpoint, Some(view.checkpoint()));
+                let shown = runtime.state().wallet_sync;
+                assert!(shown.snapshot_at_unix_ms.is_some());
+                assert_eq!(
+                    shown.header_checkpoint.map(|checkpoint| checkpoint.height),
+                    Some(view.checkpoint().height)
+                );
+                assert_eq!(
+                    status.sync.degraded_reason.as_deref(),
+                    Some(
+                        "evidence lowered from node-validated to server-reported at a newer \
+                         verified tip; headers did not advance: Exhausted"
+                    )
+                );
+            } else {
+                assert_eq!(decision, ReconciliationDecision::PreservedWeakerEvidence);
+                assert!(matches!(
+                    published.evidence,
+                    Evidence::FullNodeValidated { .. }
+                ));
+                assert_eq!(published.chain_tip, Some((height - 1, [1; 32])));
+                // The retained snapshot keeps the time it was accepted.
+                assert!(status.sync.snapshot_at_unix_ms.is_some());
+                assert_eq!(status.sync.header_checkpoint, None);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn shared_worker_restores_evidence_and_cannot_shrink_discovery_scope() {
         let runtime = runtime().await;
@@ -2043,6 +2224,12 @@ mod tests {
             ReconciliationDecision::PreservedWeakerEvidence
         );
         assert_eq!(runtime.state().coins, before);
+        // The refresh's providers are shown though its snapshot was refused.
+        let providers = runtime.state().wallet_sync.providers;
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].source, "server");
+        assert_eq!(providers[0].protocol, "Fulcrum / Electrum");
+        assert_eq!(providers[0].health, optn_app::ProviderHealthView::Healthy);
         let status = runtime.subscribe_wallet_sync();
         assert!(matches!(
             status.borrow().authoritative.as_ref().unwrap().evidence,
@@ -2111,6 +2298,7 @@ mod tests {
                 decimals: 0,
                 status: IdentityStatus::Unpublished,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         );
         // A registry can legitimately return a label beyond the restart-cache
@@ -2124,6 +2312,7 @@ mod tests {
                 decimals: 0,
                 status: IdentityStatus::Verified,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         );
         let (app_tx, _) = watch::channel(app.clone());
@@ -2427,6 +2616,7 @@ mod tests {
                                         .any(|(parent, index, _)| parent == txid && index == vout)
                                 })
                                 .cloned(),
+                            descendants: Vec::new(),
                         },
                         evidence: Evidence::ServerAssertion,
                         chain_tip: None,
@@ -3139,6 +3329,7 @@ mod tests {
                 decimals: 0,
                 status: IdentityStatus::Verified,
                 presentation: Default::default(),
+                basis: Default::default(),
             },
         });
         assert_eq!(

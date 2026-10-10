@@ -1,0 +1,119 @@
+{
+  "ports": {
+    "mainnet": 8333,
+    "testnet3": 18333,
+    "testnet4": 28333,
+    "chipnet": 48333
+  },
+  "projects": [
+    {
+      "project": "bchn",
+      "source": "https://gitlab.com/bitcoin-cash-node/bitcoin-cash-node/-/blob/abd433abe04f74780744b9eac06731f3690ce68a/src/chainparams.cpp",
+      "seeds": {
+        "mainnet": [
+          "seed.flowee.cash",
+          "seed-bch.bitcoinforks.org",
+          "btccash-seeder.bitcoinunlimited.info",
+          "seed.bchd.cash",
+          "seed.bch.loping.net",
+          "bchseed.c3-soft.com",
+          "bch.bitjson.com"
+        ],
+        "testnet3": [
+          "testnet-seed.bchd.cash",
+          "seed.tbch.loping.net",
+          "testnet-seed.bitcoinunlimited.info"
+        ],
+        "testnet4": [
+          "testnet4-seed-bch.toom.im",
+          "seed.tbch4.loping.net",
+          "testnet4-seed.flowee.cash",
+          "testnet4.bitjson.com"
+        ],
+        "chipnet": [
+          "chipnet.bitjson.com",
+          "seed.cbch.loping.net"
+        ]
+      }
+    },
+    {
+      "project": "flowee",
+      "source": "https://codeberg.org/Flowee/thehub/src/commit/69efc094a72dcc6733aaff55e088f27ebf77bad5/hub/server/chainparams.cpp",
+      "seeds": {
+        "mainnet": [
+          "seed.flowee.cash",
+          "seed.bchd.cash"
+        ],
+        "testnet3": [
+          "testnet-seed.bchd.cash",
+          "testnet-seed-bch.bitcoinforks.org"
+        ],
+        "testnet4": [
+          "testnet4-seed.flowee.cash",
+          "testnet4-seed-bch.toom.im",
+          "seed.tbch4.loping.net"
+        ],
+        "chipnet": [
+          "chipnet.bitjson.com"
+        ]
+      }
+    },
+    {
+      "project": "bchd",
+      "source": "https://github.com/gcash/bchd/blob/cd36a6472f8ca7a5319439b8e9a81bba5c4023e5/chaincfg/params.go",
+      "seeds": {
+        "mainnet": [
+          "seed.bchd.cash",
+          "btccash-seeder.bitcoinunlimited.info",
+          "seed.bch.loping.net"
+        ],
+        "testnet3": [
+          "testnet-seed.bchd.cash",
+          "testnet-seed-bch.bitcoinforks.org",
+          "seed.tbch.loping.net"
+        ],
+        "testnet4": [
+          "testnet4-seed.bchd.cash",
+          "testnet4.imaginary.cash",
+          "testnet4-seed-bch.toom.im",
+          "seed.tbch4.loping.net",
+          "testnet4-seed.flowee.cash"
+        ],
+        "chipnet": [
+          "chipnet.bitjson.com"
+        ]
+      }
+    },
+    {
+      "project": "knuth",
+      "source": "https://github.com/k-nuth/kth/blob/875fe334b8c28db706b1e60285092bbde39ea664/src/network/src/settings.cpp",
+      "seeds": {
+        "mainnet": [
+          "seed.flowee.cash",
+          "btccash-seeder.bitcoinunlimited.info",
+          "seed.bchd.cash",
+          "seed.bch.loping.net",
+          "dnsseed.electroncash.de",
+          "bchseed.c3-soft.com",
+          "bch.bitjson.com"
+        ],
+        "testnet3": [
+          "testnet-seed.bchd.cash",
+          "seed.tbch.loping.net",
+          "testnet-seed.bitcoinunlimited.info"
+        ],
+        "testnet4": [
+          "testnet4-seed-bch.toom.im",
+          "seed.tbch4.loping.net",
+          "testnet4-seed.flowee.cash",
+          "testnet4.bitjson.com"
+        ],
+        "chipnet": [
+          "chipnet.bitjson.com",
+          "chipnet.imaginary.cash",
+          "chipnet.bch.ninja"
+        ]
+      }
+    }
+  ]
+}

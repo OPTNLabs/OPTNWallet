@@ -13,6 +13,10 @@ all-features = true
 unmaintained = "workspace"
 unsound = "all"
 ignore = [
+  { id = "RUSTSEC-2026-0207", reason = "libcrux-sha3 0.0.8 comes with hpke-rs 0.6.1 through openmls_rust_crypto 0.5.1 in MDK (optn-chat), and no hpke-rs 0.6 release takes the fixed 0.0.10. The flaw is in SHAKE's incremental multi-call squeeze; hpke-rs calls only the one-shot shake256, and only to derive X-Wing and ML-KEM keys, while MDK accepts ciphersuite 0x0001 (DHKEM X25519) alone. Remove when openmls_rust_crypto moves to an hpke-rs on libcrux-sha3 >=0.0.10." },
+  { id = "RUSTSEC-2026-0208", reason = "libcrux-sha3 0.0.8, as for RUSTSEC-2026-0207: the panic is in the AVX2 SHAKE-256 used by ML-KEM and ML-DSA. hpke-rs calls the portable shake256, for X-Wing and ML-KEM keys only, which MDK's ciphersuite 0x0001 never derives. Remove with RUSTSEC-2026-0207." },
+  { id = "RUSTSEC-2026-0212", reason = "libcrux-secrets 0.0.5 comes in through libcrux-traits 0.0.6 under libcrux-sha3 0.0.8 (see RUSTSEC-2026-0207); its aarch64 constant-time select and swap are not used on any path MDK's ciphersuite 0x0001 reaches. Remove with RUSTSEC-2026-0207." },
+  { id = "RUSTSEC-2026-0253", reason = "lru 0.16.4 comes with mdk-memory-storage 0.8.0, MDK's in-memory store, which optn-chat uses in its tests only; the desktop uses MDK's SQLCipher store. LruCache::pop is unsound only when a key's Drop panics, and that store's keys are group ids, event ids and 32-byte arrays. Remove when mdk-memory-storage moves to lru >=0.18.2." },
   { id = "RUSTSEC-2024-0429", reason = "Tauri 2.11.5 Linux currently depends on GTK/glib 0.18.5; the RustSec fix requires glib >=0.20, outside Tauri's accepted GTK graph. OPTN does not call VariantStrIter directly. Remove this exception as soon as upstream Tauri/WebKitGTK moves to glib >=0.20." },
 ]
 

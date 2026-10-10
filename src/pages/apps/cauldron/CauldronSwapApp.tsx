@@ -122,6 +122,7 @@ import {
 import { toTokenAwareCashAddress } from '../../../utils/cashAddress';
 import ExplorerLink from '../../../components/ExplorerLink';
 import { networkProfile } from '../../../utils/networkProfile';
+import RemoteImg from '../../../components/RemoteImg';
 
 type CauldronSwapAppProps = {
   sdk: AddonSDK;
@@ -3564,7 +3565,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           }}
         >
           {iconUri ? (
-            <img
+            <RemoteImg
               src={iconUri}
               alt={primaryLabel}
               className="h-full w-full object-cover"

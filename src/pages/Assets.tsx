@@ -11,6 +11,7 @@ import { SATSINBITCOIN } from '../utils/constants';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 import { Network } from '../state/slices/networkSlice';
 import TokenIdentityBadge from '../components/ui/TokenIdentityBadge';
+import RemoteImg from '../components/RemoteImg';
 import Popup from '../components/transaction/Popup';
 import TokenQuery from '../components/TokenQuery';
 import WalletScreen from '../components/ui/WalletScreen';
@@ -452,7 +453,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                         >
                           <div className="flex items-center gap-2.5">
                             {card.imageUri && !runtimeMetadata ? (
-                              <img
+                              <RemoteImg
                                 src={card.imageUri}
                                 alt={card.primaryLabel}
                                 className="h-9 w-9 shrink-0 rounded-lg border border-[var(--wallet-border)] object-cover"

@@ -17,6 +17,9 @@ use tokio::time::{sleep, timeout, Instant};
 // Deliberately asymmetric: reversing an input hash must not accidentally match.
 const TARGET: [u8; 32] = *b"0123456789abcdef0123456789ABCDEF";
 const VOUT: u32 = 7;
+/// The parent most fixtures spend. No server knows it, so a walk back from a
+/// candidate asks for it once and is told it does not exist.
+const FUNDING: [u8; 32] = [9; 32];
 const SCRIPT: &[u8] = &[0x51];
 const UNSPENT: usize = 0;
 const HISTORY: usize = 1;
@@ -35,6 +38,9 @@ struct Mock {
     reconnect_protocol: Option<&'static str>,
     allow_disconnect: bool,
     pipeline_width: usize,
+    /// Close the probe connection once it is done, as a server would after an
+    /// idle period, so the first request finds its parked connection dead.
+    close_after_probe: bool,
 }
 
 impl Mock {
@@ -134,6 +140,7 @@ async fn query(
                         calls.push(request.clone());
                         let method = request["method"].as_str().unwrap();
                         assert!(pending.is_empty() || method == "blockchain.transaction.get");
+                        let mut error = Value::Null;
                         let result = match method {
                             "server.version" => json!(["outpoint-test", negotiated]),
                             "server.features" => json!({"genesis_hash": display_hash([9; 32])}),
@@ -141,13 +148,14 @@ async fn query(
                             "blockchain.transaction.get" => {
                                 let hash = request["params"][0].as_str().unwrap();
                                 assert_eq!(request["params"], json!([hash, false]));
-                                let result = mock.transactions.get(hash)
-                                    .unwrap_or_else(|| panic!("unexpected transaction: {hash}"))
-                                    .clone();
                                 if !mock.transaction_delay.is_zero() {
                                     sleep(mock.transaction_delay).await;
                                 }
-                                result
+                                mock.transactions.get(hash).cloned().unwrap_or_else(|| {
+                                    error = json!({"code": 2,
+                                        "message": "No such mempool or blockchain transaction"});
+                                    Value::Null
+                                })
                             }
                             method if METHODS.contains(&method) => {
                                 let index = METHODS.iter().position(|name| *name == method).unwrap();
@@ -156,7 +164,7 @@ async fn query(
                             other => panic!("unexpected RPC (no WalletRefresh is needed): {other}"),
                         };
                         let response = json!({"jsonrpc": "2.0", "id": request["id"],
-                            "result": result, "error": null});
+                            "result": result, "error": error});
                         pending.push(response);
                         if method == "blockchain.transaction.get" && pending.len() < mock.pipeline_width {
                             continue;
@@ -173,7 +181,10 @@ async fn query(
                                 break;
                             }
                         }
-                        if disconnected {
+                        if disconnected
+                            || (mock.close_after_probe && connections == 1
+                                && method == "server.peers.subscribe")
+                        {
                             break;
                         }
                     }
@@ -214,25 +225,35 @@ async fn query(
     let _ = stop.send(());
     let calls = server.await.expect("mock server must not fail silently");
     let result = result.expect("discovery must finish within its 20-second deadline");
-    let downloads = downloads(&calls);
+    let fetched = fetches(&calls);
     assert!(
-        downloads.len() <= 128,
+        fetched.len() <= 128,
         "global download budget: {}",
-        downloads.len()
+        fetched.len()
     );
     assert_eq!(
-        downloads.len(),
-        downloads.iter().collect::<BTreeSet<_>>().len(),
+        fetched.len(),
+        fetched.iter().collect::<BTreeSet<_>>().len(),
         "deduplicate transaction downloads across all three sources"
     );
     (result, calls)
 }
 
-fn downloads(calls: &[Value]) -> Vec<&str> {
+/// Every transaction requested, including ancestors a server does not know.
+fn fetches(calls: &[Value]) -> Vec<&str> {
     calls
         .iter()
         .filter(|call| call["method"] == "blockchain.transaction.get")
         .map(|call| call["params"][0].as_str().unwrap())
+        .collect()
+}
+
+/// The requests for transactions other than the unknown funding parent.
+fn downloads(calls: &[Value]) -> Vec<&str> {
+    let funding = display_hash(FUNDING);
+    fetches(calls)
+        .into_iter()
+        .filter(|hash| *hash != funding)
         .collect()
 }
 
@@ -271,6 +292,20 @@ fn assert_spender(
     result: Result<BackendObservation, ChainBackendError>,
     expected: Option<(&[u8], Option<u32>)>,
 ) {
+    assert_spender_via(result, expected, &[]);
+}
+
+/// `descendants` are the walked-back transactions, nearest the spender first.
+fn assert_spender_via(
+    result: Result<BackendObservation, ChainBackendError>,
+    expected: Option<(&[u8], Option<u32>)>,
+    descendants: &[(&[u8], Option<u32>)],
+) {
+    let observed = |(raw, block_height): (&[u8], Option<u32>)| ObservedTransaction {
+        txid: sha256d(raw),
+        raw: raw.to_vec(),
+        block_height,
+    };
     let observation = result.expect("valid bounded discovery");
     assert_eq!(observation.evidence, Evidence::ServerAssertion);
     assert_eq!(
@@ -278,11 +313,8 @@ fn assert_spender(
         ChainPayload::OutpointSpender {
             txid: TARGET,
             vout: VOUT,
-            spender: expected.map(|(raw, block_height)| ObservedTransaction {
-                txid: sha256d(raw),
-                raw: raw.to_vec(),
-                block_height,
-            }),
+            spender: expected.map(observed),
+            descendants: descendants.iter().copied().map(observed).collect(),
         }
     );
 }
@@ -330,6 +362,8 @@ async fn duplicate_candidates_across_all_sources_are_one_spender() {
     assert_spender(result, Some((&raw, None)));
     assert_queries(&calls, true, None, true);
     assert_eq!(downloads(&calls).len(), 2);
+    // The decoy's own parent was asked for once, refused, and skipped.
+    assert_eq!(fetches(&calls).len(), 3);
 }
 
 #[tokio::test]
@@ -358,7 +392,21 @@ async fn absent_or_inexact_inputs_are_unknown() {
         let (result, calls) = query(mock, "1.6", None).await;
         assert_spender(result, None);
         assert_queries(&calls, true, None, true);
-        assert_eq!(downloads(&calls).len(), if include_decoys { 4 } else { 0 });
+        let mut reversed_hash = TARGET;
+        reversed_hash.reverse();
+        let reversed_hash = display_hash(reversed_hash);
+        let fetched = downloads(&calls);
+        assert_eq!(
+            fetched
+                .iter()
+                .filter(|hash| **hash != reversed_hash)
+                .count(),
+            if include_decoys { 4 } else { 0 }
+        );
+        // Walking back asks for the unknown parents once each, never for the
+        // outpoint's own transaction, and still reports nothing.
+        assert_eq!(fetches(&calls).len(), if include_decoys { 6 } else { 0 });
+        assert!(!fetches(&calls).contains(&display_hash(TARGET).as_str()));
     }
 }
 
@@ -553,6 +601,7 @@ async fn reconnect_uses_current_protocol_for_history_parameters() {
         let raw = successor(1);
         let mut mock = Mock {
             reconnect_protocol: Some(reconnected),
+            close_after_probe: true,
             ..Mock::default()
         };
         mock.add(HISTORY, &raw, 100);
@@ -633,4 +682,89 @@ async fn twenty_second_deadline_is_global_despite_rpc_progress() {
         downloads(&calls).len() >= 3,
         "short successful RPCs precede the deadline"
     );
+}
+
+#[tokio::test]
+async fn a_descendant_still_at_the_address_leads_back_to_the_spender() {
+    // The spender's change was spent on; only that later transaction still
+    // has an output at the address. The history is never needed.
+    let spender = transaction_with_outputs(&[(FUNDING, 0), (TARGET, VOUT)], 1, SCRIPT, 2);
+    let change = transaction(&[(sha256d(&spender), 1)], 2);
+    let mut mock = Mock::default();
+    mock.transactions.insert(
+        display_hash(sha256d(&spender)),
+        json!(hex::encode(&spender)),
+    );
+    mock.add(UNSPENT, &change, 120);
+    let (result, calls) = query(mock, "1.6", None).await;
+    assert_spender_via(result, Some((&spender, None)), &[(&change, Some(120))]);
+    assert_queries(&calls, true, None, false);
+    assert_eq!(
+        fetches(&calls),
+        [
+            display_hash(sha256d(&change)),
+            display_hash(sha256d(&spender)),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_authchain_ending_at_the_address_walks_back_past_the_depth_limit() {
+    // rnbrady's forward-walk entry: the identity output at the end of the
+    // chain is unspent at this address, and following output-0 links back
+    // from it finds the spender and every hop between, in one pass.
+    let spender = transaction(&[(FUNDING, 0), (TARGET, VOUT)], 1);
+    let mut chain = vec![spender.clone()];
+    for marker in 2..6 {
+        let parent = sha256d(chain.last().unwrap());
+        chain.push(transaction(&[(parent, 0)], marker));
+    }
+    // The head also carries a coinbase-shaped input, which is never fetched.
+    let head = transaction(
+        &[(sha256d(chain.last().unwrap()), 0), ([0; 32], u32::MAX)],
+        6,
+    );
+    chain.push(head.clone());
+    let mut mock = Mock::default();
+    for raw in &chain[..chain.len() - 1] {
+        mock.transactions
+            .insert(display_hash(sha256d(raw)), json!(hex::encode(raw)));
+    }
+    mock.add(UNSPENT, &head, 130);
+    let (result, calls) = query(mock, "1.6", None).await;
+    let descendants: Vec<(&[u8], Option<u32>)> = chain[1..]
+        .iter()
+        .map(|raw| (raw.as_slice(), (raw == &head).then_some(130)))
+        .collect();
+    assert_spender_via(result, Some((&spender, None)), &descendants);
+    assert_queries(&calls, true, None, false);
+    // Five links back is deeper than the three-hop limit for other inputs.
+    assert_eq!(fetches(&calls).len(), chain.len());
+    assert!(!fetches(&calls).contains(&display_hash([0; 32]).as_str()));
+}
+
+#[tokio::test]
+async fn walks_along_other_outputs_stop_after_three_hops() {
+    // Each link spends output 1, so this is not an authchain: the walk gives
+    // up after three hops and the history scan finds the spender instead.
+    let spender = transaction_with_outputs(&[(FUNDING, 0), (TARGET, VOUT)], 1, SCRIPT, 2);
+    let mut chain = vec![spender.clone()];
+    for marker in 2..6 {
+        let parent = sha256d(chain.last().unwrap());
+        chain.push(transaction_with_outputs(&[(parent, 1)], marker, SCRIPT, 2));
+    }
+    let mut mock = Mock::default();
+    for raw in &chain[1..chain.len() - 1] {
+        mock.transactions
+            .insert(display_hash(sha256d(raw)), json!(hex::encode(raw)));
+    }
+    mock.add(UNSPENT, chain.last().unwrap(), 140);
+    mock.add(HISTORY, &spender, 101);
+    let (result, calls) = query(mock, "1.6", None).await;
+    assert_spender(result, Some((&spender, Some(101))));
+    assert_queries(&calls, true, None, true);
+    // The unspent transaction and three ancestors, then the history entry.
+    let fetched = fetches(&calls);
+    assert_eq!(fetched.len(), 5);
+    assert_eq!(fetched[4], display_hash(sha256d(&spender)));
 }

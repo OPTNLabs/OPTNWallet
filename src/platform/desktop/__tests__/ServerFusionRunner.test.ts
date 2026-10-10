@@ -16,8 +16,14 @@ vi.mock('../../../services/fusion/FusionStatusService', () => ({
 
 // --- Mock Tauri invoke ---
 const mockInvoke = vi.fn();
+// Native tier planning answers on its own, so each test's command mock only
+// has to describe the round.
+const mockAllocateTiers = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...a: unknown[]) => mockInvoke(...a),
+  invoke: (command: string, args?: unknown) =>
+    command === 'fusion_allocate_tiers'
+      ? mockAllocateTiers(args)
+      : mockInvoke(command, args),
 }));
 
 // --- Mock FusionCompletionService ---
@@ -47,9 +53,6 @@ vi.mock('../fusionRoundState', () => ({
 }));
 
 import {
-  validateServerHello,
-  randomOutputsForTier,
-  allocateAllFeasibleTiers,
   buildServerRunner,
   parseElectrumLookupEndpoint,
   inputLookupEndpoints,
@@ -58,11 +61,6 @@ import {
   type ServerHelloSnapshot,
 } from '../ServerFusionRunner';
 import { Network } from '../../../state/slices/networkSlice';
-
-// --- EC-compatible constants ---
-const MAX_COMPONENT_FEERATE = 5000;
-const MAX_EXCESS_FEE = 10_000;
-const MAX_COMPONENTS = 40;
 
 describe('server endpoint parsing', () => {
   it('parses CashFusion TLS/plain targets and rejects ambiguous input', () => {
@@ -153,139 +151,6 @@ function makeHello(overrides: Partial<ServerHelloSnapshot> = {}): ServerHelloSna
   };
 }
 
-describe('validateServerHello — EC limits', () => {
-  it('accepts a valid ServerHello', () => {
-    expect(() => validateServerHello(makeHello())).not.toThrow();
-  });
-
-  it('accepts the reference Electron Cash server\'s 72 E12 tiers', () => {
-    const factors = [10, 12, 15, 18, 22, 27, 33, 39, 47, 56, 68, 82];
-    const tiers = [10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 1_000_000_000]
-      .flatMap((base) => factors.map((factor) => (base * factor) / 10));
-
-    expect(tiers).toHaveLength(72);
-    expect(() => validateServerHello(makeHello({ tiers }))).not.toThrow();
-  });
-
-  it('rejects excessive component feerate (> MAX_COMPONENT_FEERATE=5000)', () => {
-    expect(() =>
-      validateServerHello(makeHello({ componentFeerate: MAX_COMPONENT_FEERATE + 1 }))
-    ).toThrow('excessive component feerate');
-  });
-
-  it('rejects min_excess_fee > 400', () => {
-    expect(() =>
-      validateServerHello(makeHello({ minExcessFee: 401 }))
-    ).toThrow('excessive min excess fee');
-  });
-
-  it('rejects min_excess_fee > max_excess_fee', () => {
-    expect(() =>
-      validateServerHello(makeHello({ minExcessFee: 100, maxExcessFee: 50 }))
-    ).toThrow('bad config on server: fees');
-  });
-
-  it('rejects num_components < 1.5 * MIN_TX_COMPONENTS', () => {
-    // 1.5 * 11 = 16.5, so 16 should fail
-    expect(() =>
-      validateServerHello(makeHello({ numComponents: 16 }))
-    ).toThrow('bad config on server: num_components');
-  });
-
-  it('accepts num_components >= 17 (ceil of 1.5 * 11)', () => {
-    expect(() =>
-      validateServerHello(makeHello({ numComponents: 17 }))
-    ).not.toThrow();
-  });
-
-  it('rejects duplicate tiers and component counts above the wallet cap', () => {
-    expect(() =>
-      validateServerHello(makeHello({ tiers: [10_000, 10_000] }))
-    ).toThrow('tiers');
-    expect(() =>
-      validateServerHello(makeHello({ numComponents: MAX_COMPONENTS + 1 }))
-    ).toThrow('num_components');
-  });
-});
-
-describe('randomOutputsForTier — EC-compatible exponential distribution', () => {
-  // Deterministic pseudo-random for tests
-  const seedRng = () => {
-    let x = 42;
-    return () => {
-      // xorshift32
-      x ^= x << 13;
-      x ^= x >>> 17;
-      x ^= x << 5;
-      return (x >>> 0) / 0x100000000;
-    };
-  };
-
-  it('returns null when input_amount < offset', () => {
-    expect(randomOutputsForTier(seedRng(), 99, 1000, 100, 5)).toBeNull();
-  });
-
-  it('output values sum exactly to input_amount', () => {
-    const result = randomOutputsForTier(seedRng(), 500_000, 100_000, 10_170, 10);
-    expect(result).not.toBeNull();
-    expect(result!.reduce((a, b) => a + b, 0)).toBe(500_000);
-  });
-
-  it('respects max_count', () => {
-    const result = randomOutputsForTier(seedRng(), 500_000, 50_000, 10_170, 3);
-    if (result) {
-      expect(result.length).toBeLessThanOrEqual(3);
-    }
-  });
-
-  it('every output is at least offset', () => {
-    const offset = 10_170;
-    const result = randomOutputsForTier(seedRng(), 500_000, 100_000, offset, 10);
-    if (result) {
-      for (const v of result) {
-        expect(v).toBeGreaterThanOrEqual(offset);
-      }
-    }
-  });
-});
-
-describe('allocateAllFeasibleTiers — registers every feasible tier', () => {
-  const hello = makeHello({ tiers: [10_000, 100_000, 1_000_000] });
-
-  // 6 distinct compressed pubkeys → minOutputs = max(11 - 6, 1) = 5
-  const sixPubkeys = Array.from({ length: 6 }, (_, i) => {
-    const pk = new Uint8Array(33);
-    pk[0] = 0x02;
-    pk[1] = i;
-    return pk;
-  });
-  // Total: 6 × 30_000 = 180_000 sats
-  const sumIn = 180_000;
-
-  it('returns plans for all tiers the inputs can afford', () => {
-    const rng = () => 0.5;
-    const result = allocateAllFeasibleTiers(hello, sumIn, sixPubkeys, rng);
-    // tier 10_000 should be feasible; 100_000 and 1_000_000 likely not
-    expect(result.size).toBeGreaterThanOrEqual(1);
-    expect(result.has(10_000)).toBe(true);
-    for (const [, plan] of result) {
-      // EC invariant: sumIn = inputFees + outputFees + Σvalues + excessFee
-      const outputFees = plan.values.length * 34; // componentFee(34, 1000) = 34
-      expect(
-        plan.inputFees + outputFees + plan.values.reduce((a, b) => a + b, 0) + plan.excessFee
-      ).toBe(sumIn);
-      expect(plan.excessFee).toBeGreaterThanOrEqual(hello.minExcessFee);
-      expect(plan.excessFee).toBeLessThanOrEqual(MAX_EXCESS_FEE);
-    }
-  });
-
-  it('excludes tiers the inputs cannot cover', () => {
-    const rng = () => 0.5;
-    const result = allocateAllFeasibleTiers(hello, sumIn, sixPubkeys, rng);
-    expect(result.has(1_000_000)).toBe(false);
-  });
-});
-
 describe('buildServerRunner — shared runner for manual and auto', () => {
   beforeEach(() => {
     mockGatherInputs.mockReset();
@@ -298,14 +163,16 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
     mockReserveOutpoints.mockReset();
     mockReleaseOutpoints.mockReset();
     mockFetchFusionStatus.mockReset();
+    mockAllocateTiers.mockReset();
+    mockAllocateTiers.mockResolvedValue(PLANS);
   });
 
-  // Deterministic rng that produces values making ~6 outputs at tier 10k.
-  // Needs to be deterministic so allocateAllFeasibleTiers always succeeds.
-  const testRng = () => 0.5;
-  // 6 distinct inputs × 30k each = 180k total.
-  // With 6 distinct pubkeys, minOutputs = max(11-6,1) = 5.
-  // inputFees ≈ 6 × 141 = 846. avail ≈ 179144. tier 10k → ~8-9 outputs.
+  // What native planning returns for six 30k inputs: tier 10k, nine outputs
+  // at most. Planning itself is tested in crates/optn-fusion (allocate.rs).
+  const PLANS = [
+    { tier: 10_000, outputValues: Array(9).fill(19_000), excessFee: 93 },
+    { tier: 12_000, outputValues: Array(7).fill(24_000), excessFee: 41 },
+  ];
   const makeInputs = () =>
     Array.from({ length: 6 }, (_, i) => ({
       prev_txid: (i + 10).toString(16).padStart(2, '0').repeat(32),
@@ -330,9 +197,63 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
       port: 8787,
       useSsl: false,
       tor: null,
-      _testRng: testRng,
       ...overrides,
     });
+
+  it('plans natively from public keys and values only, and runs those plans', async () => {
+    const runner = makeConfig({ onlyTiers: [10_000] });
+    mockGatherInputs.mockResolvedValue(makeInputs());
+    mockCreateFreshScripts.mockResolvedValue(
+      Array(9).fill('76a914' + '00'.repeat(20) + '88ac')
+    );
+    installNativeMocks({
+      ok: true,
+      broadcast_verified: true,
+      txid: 'cd'.repeat(32),
+      tx_hex: '01000000',
+      message: 'ok',
+    });
+    mockCompleteFusionBroadcast.mockResolvedValue({
+      tracked: true,
+      refreshed: true,
+      depthRecorded: 1,
+    });
+
+    await runner(makeCoins());
+
+    expect(mockAllocateTiers).toHaveBeenCalledWith({
+      expectedHello: makeHello(),
+      inputs: makeInputs().map(({ pubkey, value }) => ({ pubkey, value })),
+      onlyTiers: [10_000],
+    });
+    // Private keys never cross for planning.
+    expect(JSON.stringify(mockAllocateTiers.mock.calls)).not.toContain('privkey');
+    // Enough fresh scripts for the largest plan, and the plans unchanged.
+    expect(mockCreateFreshScripts).toHaveBeenCalledWith(1, Network.CHIPNET, 9);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'fusion_run',
+      expect.objectContaining({ tierPlans: PLANS })
+    );
+  });
+
+  it('stops on a planning refusal before any address or round', async () => {
+    const runner = makeConfig({ onlyTiers: [1_000_000] });
+    mockGatherInputs.mockResolvedValue(makeInputs());
+    installNativeMocks();
+    // Tauri rejects with the native error string.
+    mockAllocateTiers.mockRejectedValue(
+      'Selected inputs cannot fund the requested tier(s): 1000000 sats.'
+    );
+
+    await expect(runner(makeCoins())).rejects.toBe(
+      'Selected inputs cannot fund the requested tier(s): 1000000 sats.'
+    );
+    expect(mockCreateFreshScripts).not.toHaveBeenCalled();
+    const commands = mockInvoke.mock.calls.map((call) => call[0]);
+    expect(commands).not.toContain('fusion_run');
+    // The temporary reservation is released: nothing was disclosed.
+    expect(mockReleaseOutpoints).toHaveBeenCalled();
+  });
 
   it('rejects if fusion_run returns paused error', async () => {
     const runner = makeConfig({ tor: { host: '127.0.0.1', port: 9050 } });
@@ -788,68 +709,6 @@ describe('fusion server scheme defaults', () => {
   it('lets an explicit suffix override both defaults', () => {
     expect(parseFusionServerTarget('127.0.0.1:8787:s').useSsl).toBe(true);
     expect(parseFusionServerTarget('fusion.servo.cash:8789:t').useSsl).toBe(false);
-  });
-});
-
-describe('tier pinning', () => {
-  const hello = {
-    tiers: [10_000, 100_000, 1_000_000, 10_000_000],
-    numComponents: 23,
-    componentFeerate: 1000,
-    minExcessFee: 10,
-    maxExcessFee: 300_000,
-  };
-  // Deterministic RNG: allocation consumes randomness for the fuzz fee and the
-  // output draw, so a fixed sequence keeps these assertions stable.
-  const rng = () => 0.5;
-  // Ten DISTINCT pubkeys. Electron Cash requires MIN_TX_COMPONENTS (11)
-  // components, and minOutputs = 11 - numDistinctInputs — so with only two
-  // inputs a wallet must produce nine outputs, which no tier satisfies here.
-  // This is the real constraint, not a test artifact.
-  const pubkeys = Array.from({ length: 10 }, (_, i) =>
-    Uint8Array.from([0x02, ...new Array(32).fill(i + 1)])
-  );
-
-  it('registers whatever tiers the coins happen to afford', () => {
-    // Note how FEW qualify: the feasible band is a narrow function of sumIn and
-    // input count, and the fuzz fee moves it between runs. That narrowness is
-    // exactly why two wallets rarely land in the same pool by chance, and why
-    // pinning exists.
-    const all = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng);
-    expect(all.size).toBeGreaterThanOrEqual(1);
-  });
-
-  it('registers only the pinned tier', () => {
-    // The point: two wallets with different amounts otherwise land in
-    // different pools and wait forever with nothing on screen saying why.
-    const all = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng);
-    const target = [...all.keys()][0];
-
-    const pinned = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng, [
-      target,
-    ]);
-    expect([...pinned.keys()]).toEqual([target]);
-  });
-
-  it('returns nothing for a tier the wallet cannot fund', () => {
-    // Must be empty rather than silently falling back to every tier, which
-    // would reintroduce the problem pinning exists to solve.
-    const pinned = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng, [
-      10_000_000,
-    ]);
-    expect(pinned.size).toBe(0);
-  });
-
-  it('ignores a tier the server does not advertise', () => {
-    expect(
-      allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng, [777]).size
-    ).toBe(0);
-  });
-
-  it('treats an empty pin list as no preference', () => {
-    const all = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng);
-    const empty = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng, []);
-    expect([...empty.keys()]).toEqual([...all.keys()]);
   });
 });
 
