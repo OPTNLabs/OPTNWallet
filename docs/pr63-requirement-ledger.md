@@ -2415,3 +2415,7 @@ Tests:
   kind 9. 224 chat, nostr, state and i18n tests pass.
 - The desktop passes clippy with and without `mdk-chat`. cargo-deny passes
   for the root and the desktop, and cargo audit passes for the desktop.
+- Live, opt-in (`tests/live_relays.rs`): two throwaway identities on
+  relay.damus.io, nos.lol and relay.primal.net, through a local Tor. All
+  three relays took the key package, the invitee joined 1.5 s after the group
+  was made, and messages crossed both ways in about 1 s each.
