@@ -289,6 +289,11 @@ pub enum EndpointKind {
     ExplorerHttps,
     IpfsGatewayHttps,
     BcmrIndexerHttps,
+    /// A DNS seed: a name that resolves to BCH P2P nodes (#75 §21.3). Never a
+    /// peer itself. Each lookup can name different nodes, and a connection
+    /// made to the name lands on whichever one it resolved to, so the nodes
+    /// a seed names are the peers and the seed is how they are found.
+    BchDnsSeed,
 }
 
 impl EndpointKind {
@@ -301,7 +306,8 @@ impl EndpointKind {
             Self::ExplorerHttp
             | Self::ExplorerHttps
             | Self::IpfsGatewayHttps
-            | Self::BcmrIndexerHttps => None,
+            | Self::BcmrIndexerHttps
+            | Self::BchDnsSeed => None,
         }
     }
 
@@ -316,10 +322,12 @@ impl EndpointKind {
             Self::ElectrumTls | Self::ElectrumTcp => matches!(protocol, ProtocolFamily::Electrum),
             Self::BchnRpc => matches!(protocol, ProtocolFamily::BchnRpc),
             Self::BchnZmq => matches!(protocol, ProtocolFamily::BchnZmq),
+            // A seed carries no protocol; the nodes it names do.
             Self::ExplorerHttp
             | Self::ExplorerHttps
             | Self::IpfsGatewayHttps
-            | Self::BcmrIndexerHttps => false,
+            | Self::BcmrIndexerHttps
+            | Self::BchDnsSeed => false,
         }
     }
 }
@@ -339,6 +347,8 @@ pub enum BootstrapProject {
     Knuth,
     ElectronCash,
     FulcrumPeerNetwork,
+    /// BCH P2P nodes a DNS seed named, by DNS or through the node it led to.
+    BchPeerNetwork,
     Paytaca,
     Ipfs,
     /// General Protocols' `electrum-cash/servers` list. Declared last so a host
@@ -504,6 +514,9 @@ pub enum BootstrapFeedKind {
     NodeDnsOrDefaultPeerDiscovery,
     ElectrumServerCatalog,
     ElectrumPeerDiscovery,
+    /// Nodes found through a DNS seed: its DNS answer, or the `addr` list of
+    /// the node a seed led to.
+    P2pPeerDiscovery,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -522,7 +535,7 @@ pub const DEFAULT_BOOTSTRAP_FEEDS: &[BootstrapFeed] = &[
     BootstrapFeed {
         project: BootstrapProject::FloweeTheHub,
         kind: BootstrapFeedKind::NodeDnsOrDefaultPeerDiscovery,
-        reference: "FloweeTheHub/thehub: upstream node peer discovery",
+        reference: "Flowee/thehub: hub/server/chainparams.cpp",
     },
     BootstrapFeed {
         project: BootstrapProject::Bchd,
@@ -532,7 +545,7 @@ pub const DEFAULT_BOOTSTRAP_FEEDS: &[BootstrapFeed] = &[
     BootstrapFeed {
         project: BootstrapProject::Knuth,
         kind: BootstrapFeedKind::NodeDnsOrDefaultPeerDiscovery,
-        reference: "k-nuth/kth: upstream node peer discovery",
+        reference: "k-nuth/kth: src/network/src/settings.cpp",
     },
     BootstrapFeed {
         project: BootstrapProject::ElectronCash,
@@ -548,6 +561,11 @@ pub const DEFAULT_BOOTSTRAP_FEEDS: &[BootstrapFeed] = &[
         project: BootstrapProject::FulcrumPeerNetwork,
         kind: BootstrapFeedKind::ElectrumPeerDiscovery,
         reference: "Electrum server.peers.subscribe / Fulcrum peering",
+    },
+    BootstrapFeed {
+        project: BootstrapProject::BchPeerNetwork,
+        kind: BootstrapFeedKind::P2pPeerDiscovery,
+        reference: "DNS seed answers, or getaddr through a proxy (Bitcoin Core addrfetch)",
     },
 ];
 

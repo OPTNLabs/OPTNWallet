@@ -29,3 +29,5 @@ url = "2.5"
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["macros", "rt", "io-util", "net"] }
+# Frames a fake P2P node's messages in tests; the version the BIP37 adapter uses.
+sha2 = "0.10"

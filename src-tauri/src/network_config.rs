@@ -102,8 +102,11 @@ impl NetworkSettingsStore {
         self.discovered_file(network).load(network)
     }
 
-    /// Keep servers this network's sources advertised. Never a settings edit:
-    /// nothing is revoked or rebuilt because of it.
+    /// Keep servers this network's sources advertised, and nodes its seeds
+    /// named. Never a settings edit: nothing is revoked or rebuilt because of
+    /// it. Peers the holder set a disposition for are kept however old, so
+    /// that disposition stays in force; with the settings unreadable nothing
+    /// is written, so none is lost.
     pub fn record_discovered_peers(
         &self,
         network: Network,
@@ -112,10 +115,16 @@ impl NetworkSettingsStore {
         if peers.is_empty() || network == Network::Regtest {
             return Ok(false);
         }
+        let keep = self
+            .file_for(network)
+            .load()?
+            .map(|envelope| envelope.overlay.bootstrap_overrides.into_keys().collect())
+            .unwrap_or_default();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
-        self.discovered_file(network).record(network, peers, now)
+        self.discovered_file(network)
+            .record(network, peers, &keep, now)
     }
 
     /// `catalog` as routes are built and listed from it: plus the servers

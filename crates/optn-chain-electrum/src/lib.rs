@@ -1252,12 +1252,12 @@ async fn connect_transport(config: &ElectrumConfig) -> Result<DynIo, ChainBacken
             tls,
         } => {
             let proxy = format!("{proxy_host}:{proxy_port}");
-            let target = format!("{host}:{port}");
+            // As a pair, so an IPv6 literal reaches the proxy as an address.
             let socks = timeout(
                 config.request_timeout,
                 tokio_socks::tcp::Socks5Stream::connect_with_password(
                     proxy.as_str(),
-                    target.as_str(),
+                    (host, port),
                     username,
                     password,
                 ),

@@ -121,9 +121,10 @@ impl BootstrapCatalog {
 ///
 /// Pinned Electron Cash and General Protocols (`electrum-cash/servers`) snapshots
 /// supply network-specific TLS endpoints; a host both ship is one candidate
-/// credited to both. A shipped record grants no capability or health evidence;
-/// selection and transport policy still decide which candidates may be contacted.
-/// Regtest has no public hints.
+/// credited to both. The DNS seeds of BCHN, Flowee the Hub, bchd and Knuth
+/// supply the BCH P2P side the same way (#75 §21.3). A shipped record grants no
+/// capability or health evidence; selection and transport policy still decide
+/// which candidates may be contacted. Regtest has no public hints.
 pub fn shipped_bootstrap_catalog(network: optn_core::network::Network) -> BootstrapCatalog {
     use optn_core::network::Network;
 
@@ -205,7 +206,55 @@ pub fn shipped_bootstrap_catalog(network: optn_core::network::Network) -> Bootst
             );
         }
     }
+    ingest_p2p_seeds(&mut catalog, network);
     catalog
+}
+
+/// The reviewed DNS seed snapshot (`bootstrap/p2p_seeds.json`): each node
+/// implementation's seeds per network, as the source it pins lists them, and
+/// each network's P2P port, on which all four agree.
+#[derive(serde::Deserialize)]
+struct SeedSnapshot {
+    ports: BTreeMap<String, u16>,
+    projects: Vec<SeedProject>,
+}
+
+#[derive(serde::Deserialize)]
+struct SeedProject {
+    project: String,
+    source: String,
+    seeds: BTreeMap<String, Vec<String>>,
+}
+
+/// The node implementations' DNS seeds, as `BchDnsSeed` candidates. A seed
+/// several of them list is one candidate credited to each.
+fn ingest_p2p_seeds(catalog: &mut BootstrapCatalog, network: optn_core::network::Network) {
+    let snapshot: SeedSnapshot = serde_json::from_str(include_str!("bootstrap/p2p_seeds.json"))
+        .expect("reviewed embedded DNS seed list must be valid JSON");
+    // Regtest is a private chain: no seeds, and no port entry either.
+    let Some(&port) = snapshot.ports.get(network.as_str()) else {
+        return;
+    };
+    for project in &snapshot.projects {
+        let id = match project.project.as_str() {
+            "bchn" => BootstrapProject::Bchn,
+            "flowee" => BootstrapProject::FloweeTheHub,
+            "bchd" => BootstrapProject::Bchd,
+            "knuth" => BootstrapProject::Knuth,
+            other => panic!("reviewed DNS seed list names an unknown project {other:?}"),
+        };
+        for host in project.seeds.get(network.as_str()).into_iter().flatten() {
+            catalog.ingest(
+                Endpoint {
+                    kind: EndpointKind::BchDnsSeed,
+                    host: host.clone(),
+                    port: Some(port),
+                },
+                id,
+                project.source.as_str(),
+            );
+        }
+    }
 }
 
 /// Path-style gateways that answered `/ipfs/<cid>` with the exact committed
@@ -259,37 +308,90 @@ fn ingest_tls_snapshot(
     }
 }
 
-/// At most this many servers discovered from peer lists are kept per network.
+/// At most this many discovered servers are kept per network, and as many
+/// discovered BCH P2P nodes besides.
 pub const MAX_DISCOVERED_PEERS: usize = 32;
 
-/// An Electrum server another server advertised in `server.peers.subscribe`
-/// (#75 §21.3). A hint like any bootstrap entry, never a trust anchor.
+/// A source found at run time rather than shipped (#75 §21.3): an Electrum
+/// server another server advertised in `server.peers.subscribe`, or a BCH P2P
+/// node a DNS seed named. A hint like any bootstrap entry, never a trust anchor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredPeer {
     pub endpoint: Endpoint,
-    /// The source whose peer list named it.
+    /// The source whose peer list, or the seed whose answer, named it.
     pub advertised_by: SourceId,
 }
 
-/// Whether a source came from a server's peer list rather than a shipped list.
+/// Whether a source was discovered at run time rather than shipped.
 pub fn is_discovered(source: &ChainSource) -> bool {
     matches!(
         source.origin,
         SourceOrigin::Bootstrap {
-            project: BootstrapProject::FulcrumPeerNetwork,
+            project: BootstrapProject::FulcrumPeerNetwork | BootstrapProject::BchPeerNetwork,
             ..
         }
     )
 }
 
-/// The catalog plus servers discovered from peer lists, ranked after every
-/// source already in it.
+/// The catalog entry for a discovered peer, or `None` for one that cannot be
+/// one: an Electrum server is named by host, a P2P node only by IP address.
+/// A name would be another seed, reaching whichever node it resolved to, and
+/// so not one node a holder could disable or ban.
 ///
-/// A discovered server is a bootstrap candidate: public, so only the scopes
+/// Used both for peers read back from the cache and for nodes a seed names
+/// while a stack is built, so an entry has one ID and origin however it came.
+pub fn discovered_source(peer: &DiscoveredPeer, priority: u16) -> Option<ChainSource> {
+    let mut endpoint = peer.endpoint.clone();
+    let (project, provenance) = match endpoint.kind {
+        EndpointKind::ElectrumTls | EndpointKind::ElectrumTcp => {
+            endpoint.host = normalize_host(&endpoint.host);
+            (
+                BootstrapProject::FulcrumPeerNetwork,
+                format!("advertised by {}", peer.advertised_by.as_str()),
+            )
+        }
+        EndpointKind::BchP2p => {
+            let address: std::net::IpAddr = endpoint.host.trim().parse().ok()?;
+            // One spelling per address, so one node is one ID.
+            endpoint.host = match address {
+                std::net::IpAddr::V6(v6) => v6
+                    .to_ipv4_mapped()
+                    .map_or_else(|| v6.to_string(), |v4| v4.to_string()),
+                std::net::IpAddr::V4(v4) => v4.to_string(),
+            };
+            (
+                BootstrapProject::BchPeerNetwork,
+                format!("named by {}", peer.advertised_by.as_str()),
+            )
+        }
+        _ => return None,
+    };
+    if endpoint.host.is_empty() || endpoint.port.is_none_or(|port| port == 0) {
+        return None;
+    }
+    Some(ChainSource {
+        id: SourceId::new(stable_source_id(&endpoint)),
+        label: endpoint.host.clone(),
+        origin: SourceOrigin::Bootstrap {
+            project,
+            provenance,
+        },
+        endpoints: vec![endpoint],
+        capabilities: CapabilitySet::default(),
+        disposition: SourceDisposition::Enabled,
+        priority,
+    })
+}
+
+/// The catalog plus servers and nodes discovered at run time, ranked after
+/// every source already in it.
+///
+/// A discovered source is a bootstrap candidate: public, so only the scopes
 /// that admit public sources select it; never removable, only disabled or
 /// banned through the same overrides, which stay keyed by its stable ID; and
-/// gone again once no server advertises it. One already in the catalog keeps
-/// its entry and its place.
+/// gone again once nothing names it. One already in the catalog keeps its
+/// entry and its place. At most [`MAX_DISCOVERED_PEERS`] servers are added,
+/// and as many P2P nodes.
 pub fn with_discovered_peers(
     mut catalog: SourceCatalog,
     peers: &[DiscoveredPeer],
@@ -299,43 +401,39 @@ pub fn with_discovered_peers(
         .map(|source| source.priority)
         .max()
         .map_or(0, |last| last.saturating_add(1));
-    for peer in peers.iter().take(MAX_DISCOVERED_PEERS) {
-        if !matches!(
-            peer.endpoint.kind,
-            EndpointKind::ElectrumTls | EndpointKind::ElectrumTcp
-        ) {
+    let (mut servers, mut nodes) = (0, 0);
+    for peer in peers {
+        let Some(source) = discovered_source(peer, priority) else {
             continue;
-        }
-        let mut endpoint = peer.endpoint.clone();
-        endpoint.host = normalize_host(&endpoint.host);
-        let id = SourceId::new(stable_source_id(&endpoint));
-        let known = catalog.iter().any(|source| {
-            source.endpoints.iter().any(|existing| {
-                existing.kind == endpoint.kind
-                    && existing.port == endpoint.port
-                    && normalize_host(&existing.host) == endpoint.host
-            })
-        });
-        if known || catalog.get(&id).is_some() {
-            continue;
-        }
-        let source = ChainSource {
-            id,
-            label: endpoint.host.clone(),
-            origin: SourceOrigin::Bootstrap {
-                project: BootstrapProject::FulcrumPeerNetwork,
-                provenance: format!("advertised by {}", peer.advertised_by.as_str()),
-            },
-            endpoints: vec![endpoint],
-            capabilities: CapabilitySet::default(),
-            disposition: SourceDisposition::Enabled,
-            priority,
         };
+        let added = if peer.endpoint.kind == EndpointKind::BchP2p {
+            &mut nodes
+        } else {
+            &mut servers
+        };
+        if *added >= MAX_DISCOVERED_PEERS || is_listed(&catalog, &source) {
+            continue;
+        }
         if catalog.insert(source).is_ok() {
+            *added += 1;
             priority = priority.saturating_add(1);
         }
     }
     catalog
+}
+
+/// Whether `catalog` already holds `source`, by ID or by endpoint.
+pub fn is_listed(catalog: &SourceCatalog, source: &ChainSource) -> bool {
+    catalog.get(&source.id).is_some()
+        || catalog.iter().any(|existing| {
+            existing.endpoints.iter().any(|endpoint| {
+                source.endpoints.iter().any(|candidate| {
+                    endpoint.kind == candidate.kind
+                        && endpoint.port == candidate.port
+                        && normalize_host(&endpoint.host) == normalize_host(&candidate.host)
+                })
+            })
+        })
 }
 
 /// A persisted selection over the shipped catalog plus discovered servers.
@@ -395,6 +493,7 @@ const fn endpoint_kind_code(kind: EndpointKind) -> u8 {
         EndpointKind::ExplorerHttps => 6,
         EndpointKind::IpfsGatewayHttps => 7,
         EndpointKind::BcmrIndexerHttps => 8,
+        EndpointKind::BchDnsSeed => 9,
     }
 }
 
@@ -409,6 +508,7 @@ const fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::ExplorerHttps => "explorer-https",
         EndpointKind::IpfsGatewayHttps => "ipfs-gateway",
         EndpointKind::BcmrIndexerHttps => "bcmr-indexer",
+        EndpointKind::BchDnsSeed => "p2p-seed",
     }
 }
 
@@ -452,7 +552,7 @@ mod tests {
             ],
         );
         // One new entry: the shipped host keeps its own, the duplicate and
-        // the non-Electrum endpoint are dropped.
+        // the P2P endpoint named by host rather than address are dropped.
         assert_eq!(catalog.iter().count(), shipped.iter().count() + 1);
         let id = SourceId::new("bootstrap:electrum-tls:new.example.org:50002");
         let discovered = catalog.get(&id).unwrap();
@@ -513,6 +613,72 @@ mod tests {
             .collect();
         let bounded = with_discovered_peers(SourceCatalog::default(), &many);
         assert_eq!(bounded.iter().count(), MAX_DISCOVERED_PEERS);
+    }
+
+    /// A node a seed named is listed by its address, so one entry is one node
+    /// whatever spelling found it, and kept apart from the servers' bound.
+    #[test]
+    fn a_seed_named_node_is_a_discovered_p2p_source_by_address_only() {
+        use crate::chain::{build_selection_plan, ConnectionPolicy, ProtocolFamily, ProtocolSet};
+        let seed = SourceId::new("bootstrap:p2p-seed:seed.example.org:8333");
+        let node = |host: &str| DiscoveredPeer {
+            endpoint: Endpoint {
+                kind: EndpointKind::BchP2p,
+                host: host.into(),
+                port: Some(8333),
+            },
+            advertised_by: seed.clone(),
+        };
+        let catalog = with_discovered_peers(
+            SourceCatalog::default(),
+            &[
+                node("203.0.113.7"),
+                // The same address written as IPv4-mapped IPv6.
+                node("::ffff:203.0.113.7"),
+                node("2001:DB8:0:0::1"),
+                // A name is a seed of its own, not a node.
+                node("node.example.org"),
+            ],
+        );
+        assert_eq!(catalog.iter().count(), 2);
+        let v4 = catalog
+            .get(&SourceId::new("bootstrap:p2p:203.0.113.7:8333"))
+            .expect("one ID per address");
+        assert!(is_discovered(v4) && v4.is_public() && !v4.can_remove());
+        assert!(matches!(
+            &v4.origin,
+            SourceOrigin::Bootstrap { project: BootstrapProject::BchPeerNetwork, provenance }
+                if provenance == "named by bootstrap:p2p-seed:seed.example.org:8333"
+        ));
+        assert!(catalog
+            .get(&SourceId::new("bootstrap:p2p:2001:db8::1:8333"))
+            .is_some());
+
+        // Selected where P2P and public sources are; never as own infrastructure.
+        let mut privacy = ConnectionPolicy::auto();
+        privacy.protocols = ProtocolSet::only(ProtocolFamily::Bip37);
+        privacy.protocols.insert(ProtocolFamily::Neutrino);
+        assert!(build_selection_plan(&catalog, &privacy)
+            .primary
+            .contains(&v4.id));
+        let own = build_selection_plan(&catalog, &ConnectionPolicy::own_infrastructure());
+        assert!(own.primary.is_empty() && own.fallback.is_empty());
+
+        // Servers and nodes are bounded apart: many of one never crowd out the other.
+        let mut many: Vec<_> = (0..40)
+            .map(|index| node(&format!("203.0.113.{index}")))
+            .collect();
+        many.extend((0..40).map(|index| DiscoveredPeer {
+            endpoint: electrum(&format!("peer{index}.example.org")),
+            advertised_by: seed.clone(),
+        }));
+        let bounded = with_discovered_peers(SourceCatalog::default(), &many);
+        let nodes = bounded
+            .iter()
+            .filter(|source| source.endpoints[0].kind == EndpointKind::BchP2p)
+            .count();
+        assert_eq!(nodes, MAX_DISCOVERED_PEERS);
+        assert_eq!(bounded.iter().count(), 2 * MAX_DISCOVERED_PEERS);
     }
 
     #[test]
@@ -687,6 +853,129 @@ mod shipped {
                 .provenance
                 .iter()
                 .all(|provenance| provenance.project != BootstrapProject::ElectrumCash)));
+    }
+
+    /// #75 §21.3: the BCH P2P side starts from the DNS seeds of BCHN, Flowee
+    /// the Hub, bchd and Knuth, each seed one candidate credited to every
+    /// project that lists it.
+    #[test]
+    fn the_node_implementations_dns_seeds_ship_with_merged_provenance() {
+        use BootstrapProject::{Bchd, Bchn, FloweeTheHub, Knuth};
+        let seed = |network, host: &str| -> BTreeSet<BootstrapProject> {
+            let port = match network {
+                Network::Mainnet => 8333,
+                Network::Testnet3 => 18333,
+                Network::Testnet4 => 28333,
+                Network::Chipnet => 48333,
+                Network::Regtest => unreachable!(),
+            };
+            shipped_bootstrap_catalog(network)
+                .provenance_for(&Endpoint {
+                    kind: EndpointKind::BchDnsSeed,
+                    host: host.into(),
+                    port: Some(port),
+                })
+                .unwrap_or_else(|| panic!("{host} is not a {network} seed"))
+                .iter()
+                .map(|provenance| provenance.project)
+                .collect()
+        };
+        assert_eq!(
+            seed(Network::Mainnet, "seed.bchd.cash"),
+            BTreeSet::from([Bchn, FloweeTheHub, Bchd, Knuth])
+        );
+        assert_eq!(
+            seed(Network::Mainnet, "seed.flowee.cash"),
+            BTreeSet::from([Bchn, FloweeTheHub, Knuth])
+        );
+        assert_eq!(
+            seed(Network::Mainnet, "dnsseed.electroncash.de"),
+            BTreeSet::from([Knuth])
+        );
+        assert_eq!(
+            seed(Network::Testnet3, "testnet-seed-bch.bitcoinforks.org"),
+            BTreeSet::from([FloweeTheHub, Bchd])
+        );
+        assert_eq!(
+            seed(Network::Testnet4, "testnet4.imaginary.cash"),
+            BTreeSet::from([Bchd])
+        );
+        assert_eq!(
+            seed(Network::Chipnet, "chipnet.bitjson.com"),
+            BTreeSet::from([Bchn, FloweeTheHub, Bchd, Knuth])
+        );
+        for (network, distinct) in [
+            (Network::Mainnet, 8),
+            (Network::Testnet3, 4),
+            (Network::Testnet4, 6),
+            (Network::Chipnet, 4),
+            (Network::Regtest, 0),
+        ] {
+            let seeds: Vec<_> = shipped_bootstrap_catalog(network)
+                .candidates()
+                .filter(|candidate| candidate.endpoint.kind == EndpointKind::BchDnsSeed)
+                .map(|candidate| candidate.provenance.clone())
+                .collect();
+            assert_eq!(seeds.len(), distinct, "{network}");
+            // Each credit points at the exact upstream file it was read from.
+            for provenance in seeds.iter().flatten() {
+                assert!(
+                    [
+                        "abd433abe04f74780744b9eac06731f3690ce68a",
+                        "69efc094a72dcc6733aaff55e088f27ebf77bad5",
+                        "cd36a6472f8ca7a5319439b8e9a81bba5c4023e5",
+                        "875fe334b8c28db706b1e60285092bbde39ea664",
+                    ]
+                    .iter()
+                    .any(|commit| provenance.reference.contains(commit)),
+                    "{provenance:?}"
+                );
+            }
+        }
+    }
+
+    /// A seed is selected as a discovery source, by scope and disposition like
+    /// any entry, but never as a route: it carries no protocol.
+    #[test]
+    fn a_shipped_seed_is_never_a_route_and_ranks_after_the_servers() {
+        use crate::chain::{build_endpoint_selection_plan, build_selection_plan, ConnectionPolicy};
+        let catalog = shipped_source_catalog(Network::Mainnet);
+        let id = SourceId::new("bootstrap:p2p-seed:seed.bchd.cash:8333");
+        let seed = catalog.get(&id).expect("stable seed ID");
+        assert!(matches!(
+            seed.origin,
+            SourceOrigin::Bootstrap {
+                project: BootstrapProject::Bchn,
+                ..
+            }
+        ));
+        assert!(!is_discovered(seed));
+        let auto = ConnectionPolicy::auto();
+        let routes = build_selection_plan(&catalog, &auto);
+        assert!(!routes.primary.contains(&id) && !routes.fallback.contains(&id));
+        assert!(
+            build_endpoint_selection_plan(&catalog, &auto, EndpointKind::BchDnsSeed)
+                .primary
+                .contains(&id)
+        );
+        assert!(build_endpoint_selection_plan(
+            &catalog,
+            &ConnectionPolicy::own_infrastructure(),
+            EndpointKind::BchDnsSeed
+        )
+        .primary
+        .is_empty());
+        // Wallet operations still go to the servers first.
+        let last_server = catalog
+            .iter()
+            .filter(|source| source.endpoints[0].kind == EndpointKind::ElectrumTls)
+            .map(|source| source.priority)
+            .max()
+            .unwrap();
+        assert!(catalog
+            .iter()
+            .filter(|source| source.endpoints[0].kind == EndpointKind::BchDnsSeed)
+            .all(|source| source.priority > last_server));
     }
 
     /// Mainnet and chipnet do not share a starting point.

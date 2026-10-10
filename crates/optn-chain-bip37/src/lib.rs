@@ -6,6 +6,7 @@
 
 pub mod bloom;
 pub mod merkleblock;
+pub mod seed;
 pub mod shv;
 pub mod tx;
 
@@ -1114,12 +1115,14 @@ async fn connect_peer(
         } => {
             let token = format!("optn-node-{}", nonce());
             let proxy = format!("{proxy_host}:{proxy_port}");
-            let target = format!("{host}:{port}");
+            // As a pair, so an IP literal goes to the proxy as an address. An
+            // IPv6 one formatted "host:port" has no brackets and would be sent
+            // as a name for the proxy to resolve.
             let socks = tokio::time::timeout(
                 TOR_CONNECT_TIMEOUT,
                 tokio_socks::tcp::Socks5Stream::connect_with_password(
                     proxy.as_str(),
-                    target.as_str(),
+                    (host, port),
                     &token,
                     &token,
                 ),

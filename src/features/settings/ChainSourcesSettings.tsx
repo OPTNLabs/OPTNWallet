@@ -141,6 +141,7 @@ function endpointText(endpoint: ChainSource['endpoints'][number]): string {
 
 function serviceBadgeText(kind: string): string {
   if (kind.includes('electrum')) return 'Electrum';
+  if (kind === 'p2p-seed') return 'DNS seed';
   if (kind === 'p2p') return 'BIP37 / P2P';
   if (kind === 'node-rpc') return 'RPC';
   if (kind === 'node-zmq') return 'ZMQ';

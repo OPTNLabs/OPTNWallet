@@ -55,13 +55,21 @@ pub async fn build_stack(
         },
     )
     .await;
-    // Kept for a later run's failover, in the cache the desktop keeps too.
+    // Kept for a later run's failover, in the cache the desktop keeps too,
+    // with every peer the holder set a disposition for kept however old.
+    // Settings that cannot be read leave the cache as it is.
     if !stack.discovered_peers.is_empty() && network != Network::Regtest {
-        if let Some(file) = discovered_file(network, directory) {
+        if let (Some(file), Ok(envelope)) = (
+            discovered_file(network, directory),
+            shared_envelope(network, directory),
+        ) {
+            let keep = envelope
+                .map(|envelope| envelope.overlay.bootstrap_overrides.into_keys().collect())
+                .unwrap_or_default();
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |elapsed| elapsed.as_secs());
-            let _ = file.record(network, &stack.discovered_peers, now);
+            let _ = file.record(network, &stack.discovered_peers, &keep, now);
         }
     }
     stack
@@ -327,6 +335,7 @@ fn parse_endpoint_kind(value: &str) -> Result<EndpointKind, String> {
         "node-zmq" => Ok(EndpointKind::BchnZmq),
         "ipfs-gateway" => Ok(EndpointKind::IpfsGatewayHttps),
         "bcmr-indexer" => Ok(EndpointKind::BcmrIndexerHttps),
+        "p2p-seed" => Ok(EndpointKind::BchDnsSeed),
         "explorer-https" => Ok(EndpointKind::ExplorerHttps),
         "explorer-http" => Ok(EndpointKind::ExplorerHttp),
         other => Err(format!("unknown endpoint kind '{other}'")),

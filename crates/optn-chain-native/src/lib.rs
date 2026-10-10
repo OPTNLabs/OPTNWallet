@@ -167,11 +167,13 @@ pub struct NativeChainStack {
     /// No provider is registered in this state, so callers cannot fall back to
     /// a different route behind the user's back.
     pub configuration_error: Option<String>,
-    /// Electrum servers the connected servers advertised and the catalog does
-    /// not already hold (#75 §21.3). Hints for the host to keep, never routes
-    /// of this stack.
+    /// Electrum servers the connected servers advertised, and BCH P2P nodes
+    /// the DNS seeds named, that the catalog did not already hold (#75 §21.3).
+    /// Hints for the host to keep for later builds. A node a seed named while
+    /// this stack had no wallet route was admitted to it too; see
+    /// `build_native_chain_stack_with_tor_status`.
     pub discovered_peers: Vec<optn_runtime::bootstrap::DiscoveredPeer>,
-    /// Selected Electrum servers held back for failover.
+    /// Selected Electrum servers and BCH P2P nodes held back for failover.
     pub held_back: HeldBackServers,
 }
 
@@ -347,6 +349,15 @@ fn needs_default_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -
     {
         return true;
     }
+    // A DNS seed is asked for nodes through Tor wherever the transport
+    // requires it, and a stack that may need nodes may need to ask one.
+    if selected_seeds(catalog, policy).iter().any(|seed| {
+        seed.endpoints
+            .iter()
+            .any(|endpoint| transport.requires_tor(seed.is_user_infrastructure(), &endpoint.host))
+    }) {
+        return true;
+    }
     catalog.iter().any(|source| {
         source.is_enabled()
             && selected.contains(&source.id)
@@ -358,6 +369,42 @@ fn needs_default_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -
                     && endpoint_can_use_native_tor(endpoint, policy)
             })
     })
+}
+
+/// Whether `policy` lets BCH P2P nodes serve it at all.
+fn wants_p2p(policy: &ConnectionPolicy) -> bool {
+    policy.protocols.contains(ProtocolFamily::Bip37)
+        || policy.protocols.contains(ProtocolFamily::Neutrino)
+}
+
+/// The DNS seeds this policy may ask for nodes (#75 §21.3): selected by scope,
+/// disposition and preference like any source, and only where BCH P2P may be
+/// used. Seeds the holder preferred come first, in their order; the rest are
+/// shuffled each build, as a full node shuffles its seeds, so no one seed
+/// hears from every wallet first.
+fn selected_seeds(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> Vec<ChainSource> {
+    if !wants_p2p(policy) {
+        return Vec::new();
+    }
+    let plan = optn_runtime::chain::build_endpoint_selection_plan(
+        catalog,
+        policy,
+        EndpointKind::BchDnsSeed,
+    );
+    let mut seeds = Vec::new();
+    for tier in [&plan.primary, &plan.fallback] {
+        let (preferred, mut rest): (Vec<ChainSource>, Vec<ChainSource>) = tier
+            .iter()
+            .filter_map(|id| catalog.get(id))
+            .cloned()
+            .partition(|seed| policy.preferred.contains(&seed.id));
+        for index in (1..rest.len()).rev() {
+            rest.swap(index, OsRng.next_u32() as usize % (index + 1));
+        }
+        seeds.extend(preferred);
+        seeds.extend(rest);
+    }
+    seeds
 }
 
 /// Where a proxy may be, and why this wallet would trust it.
@@ -529,7 +576,7 @@ fn record_remote_route_failure(
                 error.to_owned(),
             ));
         }
-        EndpointKind::BchP2p => {
+        EndpointKind::BchP2p | EndpointKind::BchDnsSeed => {
             for protocol in [ProtocolFamily::Bip37, ProtocolFamily::Neutrino] {
                 if policy.protocols.contains(protocol) {
                     failures.push(failure(source, protocol, endpoint, error.to_owned()));
@@ -757,6 +804,7 @@ async fn build_native_chain_stack_with_tor_status(
     let (primary, fallback) = (enabled(&plan.primary), enabled(&plan.fallback));
     // Discovered servers are failover (#75 §21.6): after every other source,
     // in their own order, and dialled only while no Electrum route connected.
+    // Discovered nodes come after them, in the P2P stage at the end.
     let mut discovered: Vec<ChainSource> = primary
         .iter()
         .chain(fallback.iter())
@@ -764,6 +812,13 @@ async fn build_native_chain_stack_with_tor_status(
         .cloned()
         .collect();
     discovered.sort_by_key(|source| source.priority);
+    let (discovered_nodes, discovered): (Vec<ChainSource>, Vec<ChainSource>) =
+        discovered.into_iter().partition(|source| {
+            source
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.kind == EndpointKind::BchP2p)
+        });
     let known_endpoints: Vec<Endpoint> = catalog
         .iter()
         .filter(|source| !optn_runtime::bootstrap::is_discovered(source))
@@ -870,6 +925,84 @@ async fn build_native_chain_stack_with_tor_status(
         build.absorb(connect_jobs(jobs, network, &headers).await);
     }
 
+    // BCH P2P nodes found at run time are the last resort of a public scope
+    // (#75 §5.2: BIP37 is failover away from indexed servers). They are
+    // dialled only while nothing above gave a wallet route, and otherwise
+    // held back for when the routes that did connect stop answering. Nodes
+    // found before come first. Only when none of those answers are the DNS
+    // seeds asked for more (#75 §21.3), as a full node asks them only when it
+    // knows too few peers; a node a seed names is admitted to this stack's
+    // catalog and dialled at once, so a wallet whose policy allows nothing
+    // but P2P connects on its first start.
+    //
+    // The seeds are asked together and each answer used as it arrives:
+    // through Tor a node may hold its reply for most of a minute, and one
+    // seed's answer is enough to start with. Answers already in when a node
+    // connects are kept, held back and cached; the rest are dropped.
+    if wants_p2p(&policy) {
+        let mut nodes: VecDeque<Vec<ConnectJob>> = VecDeque::new();
+        for source in &discovered_nodes {
+            let jobs = plan_connect_jobs(
+                source,
+                &policy,
+                secrets,
+                network,
+                tor_status,
+                &mut build.failures,
+            );
+            if !jobs.is_empty() {
+                nodes.push_back(jobs);
+            }
+        }
+        let mut dialled = 0;
+        build
+            .dial_nodes(&mut nodes, &mut dialled, network, &headers)
+            .await;
+        if build.wallet_routes == 0 {
+            let mut asking = tokio::task::JoinSet::new();
+            for seed in selected_seeds(build.service.catalog(), &policy)
+                .into_iter()
+                .take(MAX_SEEDS_ASKED)
+            {
+                if let Some(question) = build.seed_question(seed, &policy, network, tor_status) {
+                    asking.spawn(question);
+                }
+            }
+            let admit =
+                |build: &mut StackBuild, answer: Option<SeedAnswer>, nodes: &mut VecDeque<_>| {
+                    let Some(answer) = answer else {
+                        return;
+                    };
+                    for source in build.admit_seed_answer(answer, &policy) {
+                        let jobs = plan_connect_jobs(
+                            &source,
+                            &policy,
+                            secrets,
+                            network,
+                            tor_status,
+                            &mut build.failures,
+                        );
+                        if !jobs.is_empty() {
+                            nodes.push_back(jobs);
+                        }
+                    }
+                };
+            while let Some(answer) = asking.join_next().await {
+                admit(&mut build, seed_answer(answer), &mut nodes);
+                build
+                    .dial_nodes(&mut nodes, &mut dialled, network, &headers)
+                    .await;
+                if build.wallet_routes > 0 || dialled >= MAX_NODES_DIALLED {
+                    break;
+                }
+            }
+            while let Some(answer) = asking.try_join_next() {
+                admit(&mut build, seed_answer(answer), &mut nodes);
+            }
+        }
+        held_back.extend(nodes.into_iter().flatten());
+    }
+
     let revocation = build.service.revocation();
     let service = Arc::new(Mutex::new(build.service));
     NativeChainStack {
@@ -889,6 +1022,14 @@ async fn build_native_chain_stack_with_tor_status(
 const MAX_CONCURRENT_CONNECTS: usize = 6;
 /// Electrum servers dialled at a time where the app chooses among public ones.
 const ELECTRUM_BATCH: usize = MAX_FAILOVER_ATTEMPTS;
+/// BCH P2P nodes dialled at a time while a build has no wallet route.
+const NODE_BATCH: usize = 2;
+/// BCH P2P nodes dialled in one build; the rest are held back.
+const MAX_NODES_DIALLED: usize = 8;
+/// DNS seeds asked in one build.
+const MAX_SEEDS_ASKED: usize = 3;
+/// Nodes admitted from one seed's answer.
+const MAX_NODES_PER_SEED: usize = 16;
 
 /// One provider to connect, decided without I/O.
 #[derive(Clone)]
@@ -972,6 +1113,163 @@ impl StackBuild {
                 )),
             }
         }
+    }
+
+    /// Dial `nodes` (each node's jobs together) a few at a time while the
+    /// build has no wallet route, and no more than [`MAX_NODES_DIALLED`] in
+    /// all. What is left stays in `nodes`.
+    async fn dial_nodes(
+        &mut self,
+        nodes: &mut VecDeque<Vec<ConnectJob>>,
+        dialled: &mut usize,
+        network: &str,
+        headers: &Arc<optn_runtime::header_store::SharedHeaders>,
+    ) {
+        while self.wallet_routes == 0 && *dialled < MAX_NODES_DIALLED && !nodes.is_empty() {
+            let take = nodes
+                .len()
+                .min(NODE_BATCH)
+                .min(MAX_NODES_DIALLED - *dialled);
+            *dialled += take;
+            let batch: Vec<ConnectJob> = nodes.drain(..take).flatten().collect();
+            self.absorb(connect_jobs(batch, network, headers).await);
+        }
+    }
+
+    /// How the DNS seed `seed` is to be asked for nodes, decided without I/O:
+    /// the question, ready to run, or `None` when the transport refuses the
+    /// route, recorded as a failure the holder can act on.
+    fn seed_question(
+        &mut self,
+        seed: ChainSource,
+        policy: &ConnectionPolicy,
+        network: &str,
+        tor_status: TorStatus,
+    ) -> Option<impl std::future::Future<Output = SeedAnswer> + Send + 'static> {
+        let endpoint = seed
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.kind == EndpointKind::BchDnsSeed)?
+            .clone();
+        let transport = match native_chain_route(&seed, &endpoint, policy.transport, tor_status) {
+            TorRoute::Direct => Bip37Transport::Direct,
+            TorRoute::Through { socks_port } => Bip37Transport::Tor {
+                proxy_host: DEFAULT_TOR_HOST.to_owned(),
+                proxy_port: socks_port,
+            },
+            TorRoute::Refused(_) => {
+                record_remote_route_failure(
+                    &mut self.failures,
+                    &seed,
+                    &endpoint,
+                    policy,
+                    REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE,
+                );
+                return None;
+            }
+        };
+        let port = endpoint
+            .port
+            .unwrap_or_else(|| optn_chain_bip37::params_for(network).default_port);
+        let network = network.to_owned();
+        Some(async move {
+            let nodes =
+                optn_chain_bip37::seed::seed_nodes(&endpoint.host, port, &network, &transport)
+                    .await;
+            SeedAnswer {
+                seed,
+                endpoint,
+                port,
+                nodes,
+            }
+        })
+    }
+
+    /// Admit the nodes a seed named that this stack may dial. Each joins the
+    /// service's catalog as a discovered source, and `discovered_peers` for the
+    /// host to keep. A seed that could not be asked is recorded as a failure.
+    ///
+    /// A seed, or the node it led to, may name any address at all. Only public
+    /// addresses on the port the seed was asked for are taken: not this
+    /// machine or its network, and not some other service on another port. A
+    /// seed on this machine may name nodes on it. A node the catalog already
+    /// holds is left as it is: dialled above if selected, and otherwise
+    /// disabled or banned by the holder, which stays so.
+    fn admit_seed_answer(
+        &mut self,
+        answer: SeedAnswer,
+        policy: &ConnectionPolicy,
+    ) -> Vec<ChainSource> {
+        let SeedAnswer {
+            seed,
+            endpoint,
+            port,
+            nodes,
+        } = answer;
+        let addresses = match nodes {
+            Ok(addresses) => addresses,
+            Err(error) => {
+                record_remote_route_failure(&mut self.failures, &seed, &endpoint, policy, &error);
+                return Vec::new();
+            }
+        };
+        let local_seed = is_loopback_host(&endpoint.host);
+        let mut admitted = Vec::new();
+        for address in addresses {
+            if admitted.len() == MAX_NODES_PER_SEED {
+                break;
+            }
+            let ip = address.ip();
+            let reachable =
+                registry_fetch::is_public_address(ip) || (local_seed && ip.is_loopback());
+            if !reachable || address.port() != port {
+                continue;
+            }
+            let peer = optn_runtime::bootstrap::DiscoveredPeer {
+                endpoint: Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: ip.to_string(),
+                    port: Some(port),
+                },
+                advertised_by: seed.id.clone(),
+            };
+            let catalog = self.service.catalog();
+            let priority = catalog
+                .iter()
+                .map(|source| source.priority)
+                .max()
+                .map_or(0, |last| last.saturating_add(1));
+            let Some(source) = optn_runtime::bootstrap::discovered_source(&peer, priority) else {
+                continue;
+            };
+            if optn_runtime::bootstrap::is_listed(catalog, &source)
+                || self.service.catalog_mut().insert(source.clone()).is_err()
+            {
+                continue;
+            }
+            self.discovered_peers.push(peer);
+            admitted.push(source);
+        }
+        admitted
+    }
+}
+
+/// What one DNS seed said, or why it could not be asked.
+struct SeedAnswer {
+    seed: ChainSource,
+    endpoint: Endpoint,
+    /// The port it was asked for, and the one its nodes must be on.
+    port: u16,
+    nodes: Result<Vec<std::net::SocketAddr>, String>,
+}
+
+/// A finished seed question. One that panicked fails the build, as a
+/// panicking connect does.
+fn seed_answer(joined: Result<SeedAnswer, tokio::task::JoinError>) -> Option<SeedAnswer> {
+    match joined {
+        Ok(answer) => Some(answer),
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(_) => None,
     }
 }
 
@@ -1156,10 +1454,11 @@ async fn connect_job(
     }
 }
 
-/// Selected Electrum servers a build did not dial because enough others
-/// connected (#75 §21). When the stack has no wallet route left, the next few
-/// are dialled into the same service, so the wallet fails over without a
-/// rebuild and without every public server seeing a handshake up front.
+/// Selected Electrum servers, then BCH P2P nodes, a build did not dial because
+/// enough others connected (#75 §21). When the stack has no wallet route left,
+/// the next few are dialled into the same service, so the wallet fails over
+/// without a rebuild and without every public server seeing a handshake up
+/// front.
 #[derive(Clone)]
 pub struct HeldBackServers {
     inner: Arc<HeldBackInner>,
@@ -2233,6 +2532,430 @@ mod tests {
         for server in servers {
             server.abort();
         }
+    }
+
+    /// A BCH P2P node on loopback that completes the handshake for `network`
+    /// advertising `services`, counting the connections it accepts.
+    async fn counting_node(
+        network: &str,
+        services: u64,
+    ) -> (
+        u16,
+        tokio::task::JoinHandle<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        fake_node(network, services, Vec::new()).await
+    }
+
+    /// As [`counting_node`], answering `getaddr` with `known`, each a full
+    /// node that serves bloom filters.
+    async fn fake_node(
+        network: &str,
+        services: u64,
+        known: Vec<std::net::SocketAddr>,
+    ) -> (
+        u16,
+        tokio::task::JoinHandle<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use sha2::{Digest, Sha256};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let magic = optn_chain_bip37::params_for(network).magic;
+        let frame = move |name: &[u8], payload: &[u8]| {
+            let mut message = magic.to_vec();
+            let mut command = [0u8; 12];
+            command[..name.len()].copy_from_slice(name);
+            message.extend_from_slice(&command);
+            message.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            message.extend_from_slice(&Sha256::digest(Sha256::digest(payload))[..4]);
+            message.extend_from_slice(payload);
+            message
+        };
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&70015i32.to_le_bytes());
+        payload.extend_from_slice(&services.to_le_bytes());
+        payload.extend_from_slice(&0i64.to_le_bytes());
+        payload.extend_from_slice(&[0u8; 52]);
+        payload.extend_from_slice(&7u64.to_le_bytes());
+        payload.push(0);
+        payload.extend_from_slice(&1i32.to_le_bytes());
+        payload.push(0);
+        let version = frame(b"version", &payload);
+        let mut payload = vec![known.len() as u8];
+        for address in &known {
+            payload.extend_from_slice(&1_700_000_000u32.to_le_bytes());
+            payload.extend_from_slice(&(1u64 | 4).to_le_bytes());
+            let ip = match address.ip() {
+                std::net::IpAddr::V4(v4) => v4.to_ipv6_mapped(),
+                std::net::IpAddr::V6(v6) => v6,
+            };
+            payload.extend_from_slice(&ip.octets());
+            payload.extend_from_slice(&address.port().to_be_bytes());
+        }
+        let addr = frame(b"addr", &payload);
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = accepted.clone();
+        let handle = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (version, addr) = (version.clone(), addr.clone());
+                tokio::spawn(async move {
+                    loop {
+                        let mut header = [0u8; 24];
+                        if stream.read_exact(&mut header).await.is_err() {
+                            return;
+                        }
+                        let length = u32::from_le_bytes(header[16..20].try_into().unwrap());
+                        let mut body = vec![0u8; length as usize];
+                        if stream.read_exact(&mut body).await.is_err() {
+                            return;
+                        }
+                        let reply = match &header[4..11] {
+                            b"version" => &version,
+                            b"getaddr" => &addr,
+                            _ => continue,
+                        };
+                        if stream.write_all(reply).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (port, handle, accepted)
+    }
+
+    /// A SOCKS5 proxy, as Tor is one, that records where each connection asked
+    /// to go and carries every one to the loopback port `to`.
+    async fn recording_socks_proxy(
+        to: u16,
+    ) -> (
+        u16,
+        tokio::task::JoinHandle<()>,
+        Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = asked.clone();
+        let handle = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let record = record.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 2];
+                    stream.read_exact(&mut buf).await.ok()?;
+                    let mut methods = vec![0u8; usize::from(buf[1])];
+                    stream.read_exact(&mut methods).await.ok()?;
+                    // Username and password: the wallet isolates each stream.
+                    stream.write_all(&[5, 2]).await.ok()?;
+                    stream.read_exact(&mut buf).await.ok()?;
+                    let mut user = vec![0u8; usize::from(buf[1])];
+                    stream.read_exact(&mut user).await.ok()?;
+                    let mut length = [0u8; 1];
+                    stream.read_exact(&mut length).await.ok()?;
+                    let mut password = vec![0u8; usize::from(length[0])];
+                    stream.read_exact(&mut password).await.ok()?;
+                    stream.write_all(&[1, 0]).await.ok()?;
+                    let mut request = [0u8; 4];
+                    stream.read_exact(&mut request).await.ok()?;
+                    let target = match request[3] {
+                        1 => {
+                            let mut ip = [0u8; 4];
+                            stream.read_exact(&mut ip).await.ok()?;
+                            std::net::IpAddr::from(ip).to_string()
+                        }
+                        4 => {
+                            let mut ip = [0u8; 16];
+                            stream.read_exact(&mut ip).await.ok()?;
+                            format!("[{}]", std::net::IpAddr::from(ip))
+                        }
+                        3 => {
+                            stream.read_exact(&mut length).await.ok()?;
+                            let mut name = vec![0u8; usize::from(length[0])];
+                            stream.read_exact(&mut name).await.ok()?;
+                            format!("name {}", String::from_utf8(name).ok()?)
+                        }
+                        _ => return None,
+                    };
+                    let mut port = [0u8; 2];
+                    stream.read_exact(&mut port).await.ok()?;
+                    record
+                        .lock()
+                        .unwrap()
+                        .push(format!("{target}:{}", u16::from_be_bytes(port)));
+                    stream
+                        .write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+                        .await
+                        .ok()?;
+                    let mut node = tokio::net::TcpStream::connect(("127.0.0.1", to))
+                        .await
+                        .ok()?;
+                    let _ = tokio::io::copy_bidirectional(&mut stream, &mut node).await;
+                    Some(())
+                });
+            }
+        });
+        (port, handle, asked)
+    }
+
+    /// A DNS seed the holder added, on this machine: it names nodes on this
+    /// machine, on `port`.
+    fn local_seed(port: u16) -> ChainSource {
+        ChainSource {
+            id: SourceId::new("seed"),
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::BchDnsSeed,
+                host: "localhost".into(),
+                port: Some(port),
+            }],
+            ..pasted_source()
+        }
+    }
+
+    fn p2p_only() -> ConnectionPolicy {
+        ConnectionPolicy {
+            protocols: ProtocolSet::only(ProtocolFamily::Bip37),
+            ..ConnectionPolicy::auto()
+        }
+    }
+
+    /// A node a seed named, as the catalog lists it.
+    fn seed_named(port: u16, priority: u16) -> ChainSource {
+        optn_runtime::bootstrap::discovered_source(
+            &optn_runtime::bootstrap::DiscoveredPeer {
+                endpoint: Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: "127.0.0.1".into(),
+                    port: Some(port),
+                },
+                advertised_by: SourceId::new("seed"),
+            },
+            priority,
+        )
+        .unwrap()
+    }
+
+    /// A wallet whose policy allows only BCH P2P, on a first start with no
+    /// node known, asks a seed and connects to a node it names (#75 §21.3).
+    /// The node joins the stack's catalog as a discovered source and is
+    /// handed to the host to keep.
+    #[tokio::test]
+    async fn with_no_node_known_a_p2p_policy_asks_a_seed_and_dials_its_nodes() {
+        let (port, node, accepted) = counting_node("chipnet", 1 | 4).await;
+        let mut catalog = SourceCatalog::default();
+        catalog.insert(local_seed(port)).unwrap();
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            p2p_only(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        assert!(accepted.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        let id = SourceId::new(format!("bootstrap:p2p:127.0.0.1:{port}"));
+        let service = stack.service.lock().await;
+        let source = service.catalog().get(&id).expect("admitted to the stack");
+        assert!(optn_runtime::bootstrap::is_discovered(source));
+        assert!(service
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .iter()
+            .any(|route| route.source == id));
+        assert!(stack.discovered_peers.iter().any(|peer| {
+            peer.endpoint.host == "127.0.0.1" && peer.advertised_by.as_str() == "seed"
+        }));
+        node.abort();
+    }
+
+    /// Under Auto a working server is enough: a known node is held back for
+    /// failover and no seed is asked. When the server stops serving, the
+    /// held-back node is what the stack turns to.
+    #[tokio::test]
+    async fn a_working_server_holds_nodes_back_and_leaves_seeds_unasked() {
+        let (server_port, server) = fake_electrum(serde_json::json!([])).await;
+        let (node_port, node, node_accepted) = counting_node("chipnet", 1 | 4).await;
+        let (seed_port, seed_node, seed_accepted) = counting_node("chipnet", 1 | 4).await;
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(tcp_source("server", server_port, false))
+            .unwrap();
+        catalog.insert(seed_named(node_port, 1)).unwrap();
+        catalog.insert(local_seed(seed_port)).unwrap();
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            ConnectionPolicy::auto(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        let accepted = |counter: &Arc<std::sync::atomic::AtomicUsize>| {
+            counter.load(std::sync::atomic::Ordering::SeqCst)
+        };
+        assert_eq!(accepted(&node_accepted), 0);
+        assert_eq!(accepted(&seed_accepted), 0);
+        assert!(stack
+            .discovered_peers
+            .iter()
+            .all(|peer| peer.endpoint.kind != EndpointKind::BchP2p));
+        // Its BIP37 and Neutrino probes, after every held-back server.
+        assert_eq!(stack.held_back.remaining().await, 2);
+        assert!(stack.held_back.connect_next().await >= 1);
+        assert!(accepted(&node_accepted) > 0);
+        for task in [server, node, seed_node] {
+            task.abort();
+        }
+    }
+
+    /// A node the holder banned stays banned when a seed names it again.
+    #[tokio::test]
+    async fn a_seed_cannot_bring_back_a_node_the_holder_banned() {
+        let (port, node, accepted) = counting_node("chipnet", 1 | 4).await;
+        let mut catalog = SourceCatalog::default();
+        let banned = seed_named(port, 1);
+        let id = banned.id.clone();
+        catalog.insert(banned).unwrap();
+        catalog
+            .set_disposition(&id, optn_runtime::chain::SourceDisposition::Banned)
+            .unwrap();
+        catalog.insert(local_seed(port)).unwrap();
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            p2p_only(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            stack
+                .service
+                .lock()
+                .await
+                .catalog()
+                .get(&id)
+                .unwrap()
+                .disposition,
+            optn_runtime::chain::SourceDisposition::Banned
+        );
+        assert!(stack
+            .discovered_peers
+            .iter()
+            .all(|peer| peer.endpoint.host != "127.0.0.1"));
+        node.abort();
+    }
+
+    /// With Tor on, a seed goes to Tor by name, so the exit resolves it and
+    /// nothing is looked up here (#75 §4.1); the node it leads to is asked for
+    /// addresses, and the public ones it names are dialled through Tor by
+    /// address, IPv6 as an address too.
+    #[tokio::test]
+    async fn through_tor_a_seed_is_asked_by_name_and_its_nodes_by_address() {
+        let v4: std::net::SocketAddr = "1.1.1.1:48333".parse().unwrap();
+        let v6: std::net::SocketAddr = "[2606:4700:4700::1111]:48333".parse().unwrap();
+        let (node_port, node, _) = fake_node(
+            "chipnet",
+            1 | 4,
+            vec![
+                v4,
+                v6,
+                // Never dialled: this machine, and another port.
+                "127.0.0.1:48333".parse().unwrap(),
+                "8.8.8.8:22".parse().unwrap(),
+            ],
+        )
+        .await;
+        let (proxy_port, proxy, asked) = recording_socks_proxy(node_port).await;
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(ChainSource {
+                endpoints: vec![Endpoint {
+                    kind: EndpointKind::BchDnsSeed,
+                    host: "seed.example.org".into(),
+                    port: Some(48333),
+                }],
+                ..local_seed(48333)
+            })
+            .unwrap();
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            p2p_only(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Verified {
+                socks_port: proxy_port,
+            },
+            None,
+        )
+        .await;
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked[0], "name seed.example.org:48333");
+        assert!(asked.contains(&"1.1.1.1:48333".to_owned()), "{asked:?}");
+        assert!(
+            asked.contains(&"[2606:4700:4700::1111]:48333".to_owned()),
+            "{asked:?}"
+        );
+        assert!(asked
+            .iter()
+            .all(|target| !target.contains("127.0.0.1") && !target.ends_with(":22")));
+        let found: Vec<_> = stack
+            .discovered_peers
+            .iter()
+            .map(|peer| peer.endpoint.host.clone())
+            .collect();
+        assert_eq!(found, ["1.1.1.1", "2606:4700:4700::1111"]);
+        assert!(!stack
+            .service
+            .lock()
+            .await
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .is_empty());
+        node.abort();
+        proxy.abort();
+    }
+
+    /// A public seed is asked only through Tor while Tor is on. With no Tor
+    /// to use, it is reported, not looked up directly; and a stack that may
+    /// need to ask it is one that looks for Tor.
+    #[tokio::test]
+    async fn a_public_seed_is_never_asked_directly_while_tor_is_on() {
+        let mut catalog = SourceCatalog::default();
+        let seed = ChainSource {
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::BchDnsSeed,
+                host: "seed.example.org".into(),
+                port: Some(48333),
+            }],
+            ..local_seed(48333)
+        };
+        catalog.insert(seed).unwrap();
+        assert!(requires_tor_proxy(&catalog, &p2p_only()));
+        assert!(!requires_tor_proxy(
+            &catalog,
+            &ConnectionPolicy {
+                protocols: ProtocolSet::only(ProtocolFamily::Electrum),
+                ..ConnectionPolicy::auto()
+            }
+        ));
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            p2p_only(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        assert!(stack.failures.iter().any(|failure| {
+            failure.source.as_str() == "seed"
+                && failure.error == REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE
+        }));
+        assert!(stack.discovered_peers.is_empty());
     }
 
     /// A public fallback sees no handshake while the holder's own node serves,

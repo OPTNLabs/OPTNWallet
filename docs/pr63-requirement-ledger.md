@@ -82,7 +82,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 
 | # | Requirement | Status | Entry point / evidence | Gap |
 | --- | --- | --- | --- | --- |
-| 1 | Auto is the default and operation-aware | **PARTIAL** | `optn-runtime/src/bootstrap.rs::shipped_bootstrap_catalog`, wired in `src-tauri/src/chain_runtime.rs::catalog_and_policy_from_app_state`; `a_fresh_install_starts_from_the_shipped_catalog` | Both halves that are implementation are done: the catalog is non-empty on a fresh install, and operation-aware selection is in `build_selection_plan`. What is left is breadth -- one reviewed endpoint per network rather than §21.3's upstream feeds -- and that is listed below as a deliberate non-blocker. It is a product decision about whose servers every fresh install should contact, not a coding task; inventing hostnames to close the row would point installs at hosts nobody reviewed |
+| 1 | Auto is the default and operation-aware | **PROVEN** | `optn-runtime/src/bootstrap.rs::shipped_bootstrap_catalog`, wired in `src-tauri/src/chain_runtime.rs::catalog_and_policy_from_app_state`; `a_fresh_install_starts_from_the_shipped_catalog`. The catalog carries every §21.3 feed: Electron Cash's and General Protocols' server lists, servers found through `server.peers.subscribe`, and the DNS seeds of BCHN, Flowee the Hub, bchd and Knuth (2026-10-10 entry), each pinned and reviewed, with provenance merged | Operation-aware selection is `build_selection_plan`. Wallet operations go to a server first; P2P nodes found through the seeds are failover |
 | 2 | Users can pin policies/providers | **PROVEN** (Rust adapters; bounded GUI live selection) | Shared source catalog and `WireConnectionPolicy`; Leptos advanced selection/failover/add/remove controls, CLI `network configure`, and portable configuration import/export. Windows GUI Electrum selection and custom Tor persistence exercised on 2026-09-19 | Full selection matrix on every packaged platform and legacy React migration remain separate |
 | 3 | Privacy / own-infrastructure fail closed | **PROVEN** | `ConnectionPolicy`, `optn-chain-native::build_native_chain_stack`; `remote_full_node_adapters_remain_fail_closed_even_with_tor`, and live against real hosts in `optn-chain-native`'s `live_route_eligibility_follows_ownership_not_address_shape`: a declared own-infrastructure node on a private mesh routes with no Tor running, while a public endpoint under the same policy is refused | — |
 | 4 | Tor modelled as transport policy, not a provider | **PROVEN** | `TorProxyTrust` in `optn-chain-native`, `UserNetworkOverlay::trusted_socks_ports`, `optn_chain_trust_socks_proxy`, `optn_tor_readiness`, the CLI's `Client::trusting_socks_ports`, and `AppTransport::{tor_status, start_tor, trust_socks_port}` consumed by `optn-ui`'s `TorSection`; `a_socks_greeting_alone_does_not_make_a_proxy_trusted`, `provenance_is_what_makes_a_proxy_usable`, `a_trusted_port_that_stops_answering_is_not_still_trusted`, `an_unconfirmed_socks_proxy_is_reported_but_not_used` | A SOCKS5 greeting no longer grants trust -- it proves SOCKS5, which every no-auth proxy answers identically. Trust is provenance: a proxy this application started and owns, or one the holder confirmed once, persisted in the overlay the desktop and CLI share. Anything merely found on a conventional port is `Unverified` and refused. Both renderers now ask the runtime the same question instead of deciding for themselves -- the Leptos surface had no Tor awareness at all, so a holder there saw every public source refused with nothing saying why |
@@ -206,9 +206,6 @@ These are future work and must not be read as release blockers.
 - **Removing TokenIndex or another specialized provider.** The point of the
   capability model is that this becomes an adapter deletion. It is not a
   precondition for the owned-asset work.
-- **Ingesting the full §21.3 bootstrap feeds.** The shipped catalog is the
-  product's own reviewed defaults today; broadening it is an ingest into the
-  same structure, which already preserves per-project provenance.
 
 ## Source settings integration evidence (2026-09-19)
 
@@ -1052,7 +1049,7 @@ lands evidence for them.
 | `authchain` registry extension unused | Registry extensions are parsed and never consulted | Use it as an untrusted candidate chain, checked like a restart hint |
 | Desktop token icons are always placeholders | `projectEngineTokenMetadata` sets `iconUri: null`. There is no policy-aware image port | Fetch image bytes in Rust under the wallet's transport policy, bounded by size and type |
 | Renderer requests bypass the Tor/proxy policy | `http-bridge.ts` routes only the price host natively. Every other webview request goes direct | Policy gate for renderer HTTP and image loads on desktop. **Closed 2026-10-09** (the webview cannot reach the network, below) |
-| §21.3 feeds partly ingested | P2P DNS-seed and Fulcrum peer-discovery feeds are declared but not ingested. Peers returned by `server.peers.subscribe` are dropped | Ingest them with provenance, unverified until probed. **Fulcrum peers closed 2026-10-09** (below); P2P DNS seeds are still not ingested |
+| §21.3 feeds partly ingested | P2P DNS-seed and Fulcrum peer-discovery feeds are declared but not ingested. Peers returned by `server.peers.subscribe` are dropped | Ingest them with provenance, unverified until probed. **Fulcrum peers closed 2026-10-09**, **P2P DNS seeds closed 2026-10-10** (below) |
 | Versioned network-configuration migrations | The schema is fixed at 1 and any other version is refused | Migration step with atomic write and rollback tests. **Closed 2026-10-09** (schema 2, below) |
 | Fusion input checks bypass the chain layer | `optn-fusion/src/electrum_input.rs` speaks Electrum JSON-RPC directly | Route through `chain_service`. Needs a live round to verify. **Closed 2026-10-09** (CashFusion checks inputs through the shared chain adapter, below) |
 | Stale open items | `open-items.md` #4 and #5 are already fixed in code. `src-tauri/src/fusion/component_vectors.rs` is no longer compiled | Document updated, orphan deleted |
@@ -2469,3 +2466,82 @@ Tests:
 - Suites: optn-app 176, optn-runtime 419, optn-transport 26, the CLI's fusion
   tests, and the renderer's depth and fusion suites (68) pass. Clippy is
   strict for the workspace, the CLI and the desktop.
+
+### 2026-10-10: BCH P2P nodes from the node implementations' DNS seeds
+
+#75 §21.3 asks for BCH P2P discovery from BCHN, Flowee the Hub, bchd and
+Knuth, with provenance kept where their lists overlap. The 2026-10-08 row for
+the P2P side closes, and with it the last gap of row 1.
+
+- Catalog: each project's DNS seeds, read from its source at a pinned commit
+  (`bootstrap/p2p_seeds.json`; the bootstrap README records the commits and
+  the review). A seed several projects list is one candidate credited to
+  each: `seed.bchd.cash` to all four, `dnsseed.electroncash.de` to Knuth
+  alone. Seeds rank after the Electrum servers, so under Auto wallet
+  operations still go to a server first.
+- A seed is an endpoint kind of its own (`p2p-seed`), not a peer. A seed name
+  resolves to a different node on each lookup. The BIP37 adapter opens a
+  connection per request, and under Tor each one takes a new circuit. A seed
+  dialled as a peer would be a different node each time, and the capabilities
+  probed on one would be claimed for the next. So the nodes a seed names are
+  the peers, and the seed is how they are found:
+  - Tor off: a DNS lookup, as a full node does.
+  - Tor on: the name goes to Tor and is never looked up here (#75 §4.1). The
+    node it leads to is asked for addresses (`getaddr`), then the connection
+    is closed. This is Bitcoin Core's addrfetch, which BCHN's seed list
+    relies on too.
+- Only public addresses on the port the seed was asked for are dialled. A seed,
+  or the node it led to, cannot point the wallet at this machine, its LAN or
+  another service. Chipnet and testnet4 share a P2P magic; their ports keep
+  their nodes apart.
+- Nodes found become discovered sources (`bootstrap:p2p:<ip>:<port>`), by IP
+  address only. They are listed, disabled or banned like discovered servers,
+  and never selected under own-infrastructure-only. They are cached beside the
+  servers, bounded apart from them; earlier builds skip them.
+- Builder (`build_native_chain_stack_with_tor_status`): P2P nodes are the last
+  resort of a public scope (#75 §5.2). They are dialled only while nothing
+  else gave a wallet route, two at a time and eight at most; the rest are held
+  back for failover. Known nodes come first. Seeds are asked only when none of
+  those answers: three at once, with each answer used as it arrives, since
+  through Tor a node may hold its `getaddr` reply for most of a minute. Under
+  Auto with a working server, no seed is asked.
+- A seed may name a node the holder banned. The cache now keeps every peer
+  the holder set a disposition for, however long since anything named it. The
+  ban is therefore in the catalog when the seed answers, and the node is not
+  admitted.
+- The BIP37, Neutrino and Electrum adapters now pass the SOCKS target as host
+  and port. Formatted as one string, an IPv6 literal had no brackets, and the
+  proxy was sent it as a name to resolve.
+- A stack that may need to ask a seed through Tor now looks for Tor. Before
+  this, Privacy, BIP37-only and Neutrino-only had nothing to connect to on a
+  fresh install.
+
+Tests:
+- Runtime:
+  - every list is the one its upstream file has (a script, recorded in the README);
+  - provenance is merged across projects;
+  - a seed is never a route, and ranks after the servers;
+  - a node is listed by address only, and bounded apart from servers.
+- BIP37: `addr` decoding; an addrfetch waits past a self-announcement; the deadline.
+- Builder:
+  - a P2P-only wallet with no node known asks a seed and connects;
+  - a working server leaves seeds unasked and holds nodes back, and those
+    nodes are dialled on failover;
+  - a node the holder banned stays banned when a seed names it;
+  - with Tor on and no Tor, a public seed is reported, not asked;
+  - end to end through a SOCKS proxy, the seed is asked by name and its nodes
+    by address, IPv6 included.
+- Cache: nodes beside servers, earlier builds skip them, and peers with a
+  disposition are kept.
+- Live, opt-in (`optn-chain-bip37/tests/seed_live.rs`):
+  - seed.flowee.cash, btccash-seeder.bitcoinunlimited.info,
+    seed.bch.loping.net and seed.bchd.cash each named 25 to 51 nodes;
+  - a node they named answered `getaddr` with 64 full nodes in 1.1 s. On an
+    earlier attempt it sent its own address and held the rest past 20 s.
+- Suites:
+  - the root workspace passes (optn-runtime 422), as do the desktop (144) and
+    the CLI; clippy is strict for all three;
+  - one CLI test fails on Windows only. In
+    `managed_spend_refuses_without_shared_runtime_coin_freshness`, a refused
+    loopback connect takes 2 s there, longer than the test's 1 s timeout.
+    CI runs it on Linux.
