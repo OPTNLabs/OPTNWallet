@@ -788,6 +788,7 @@ impl WalletSyncSession {
         app.wallet_sync.rescan_requested = checkpoint.rescan_requested;
         app.coins = checkpoint.coins;
         app.payment_outbox = checkpoint.payment_outbox;
+        app.fusion_depth = Some(checkpoint.fusion_depth);
         // The cache is useful presentation, never live authchain evidence.
         // `WalletCheckpoint` downgrades it before this actor publishes it.
         app.token_identities = token_identities;

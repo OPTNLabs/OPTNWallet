@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearFusionDepth,
   coinDepth,
@@ -8,7 +8,26 @@ import {
   isFusionTransaction,
   recordFusionRound,
   recordFusionTxid,
+  restoreSealedFusionDepth,
 } from '../fusionCoinDepth';
+
+// The host's sealed store, the unlocked wallet's key and the cipher, as the
+// desktop has them. No wallet is unlocked unless a test says so.
+const mocks = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  owner: { id: null as number | null },
+  disk: new Map<number, string>(),
+}));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
+vi.mock('../WalletKeyCache', () => ({
+  getCachedOwnerWalletId: () => mocks.owner.id,
+}));
+vi.mock('../SecretCryptoService', () => ({
+  default: {
+    encryptText: async (plain: string) => `enc:v1:${btoa(plain)}`,
+    decryptText: async (sealed: string) => atob(sealed.slice('enc:v1:'.length)),
+  },
+}));
 
 // The rules are Rust (optn-core fusion::depth) and tested there; these run
 // them through the real WASM core behind the desktop's storage.
@@ -242,5 +261,67 @@ describe('the desktop keeps each book where earlier builds kept it', () => {
     expect(importFusionDepthState(10, exported)).toEqual({ coins: 1, txids: 1 });
     expect(coinDepth(10, 'deep:0')).toBe(2);
     expect(isFusionTransaction(10, 'aa'.repeat(32))).toBe(true);
+  });
+});
+
+describe('a sealed copy outlives localStorage', () => {
+  beforeEach(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+    mocks.owner.id = null;
+    mocks.disk.clear();
+    mocks.invoke.mockReset();
+    mocks.invoke.mockImplementation(
+      async (command: string, args: { walletId: number; sealed?: string }) => {
+        if (command === 'optn_fusion_depth_store') {
+          mocks.disk.set(args.walletId, args.sealed as string);
+          return null;
+        }
+        if (command === 'optn_fusion_depth_load') {
+          return mocks.disk.get(args.walletId) ?? null;
+        }
+        throw new Error(`unexpected ${command}`);
+      }
+    );
+    clearFusionDepth(1);
+  });
+
+  it("seals each change with the wallet's own key, and only that wallet's", async () => {
+    mocks.owner.id = 2;
+    recordFusionRound(1, ['seed:0'], [`${'ab'.repeat(32)}:0`]);
+    await restoreSealedFusionDepth(1);
+    expect(mocks.disk.has(1)).toBe(false);
+
+    mocks.owner.id = 1;
+    recordFusionRound(1, ['seed:1'], [`${'ab'.repeat(32)}:1`]);
+    await vi.waitFor(() => expect(mocks.disk.has(1)).toBe(true));
+    const sealed = mocks.disk.get(1) as string;
+    expect(sealed.startsWith('enc:v1:')).toBe(true);
+    expect(sealed).not.toContain('ab'.repeat(32));
+  });
+
+  it('brings back a round a hard stop took from localStorage', async () => {
+    mocks.owner.id = 1;
+    const fused = `${'cd'.repeat(32)}:0`;
+    recordFusionRound(1, ['seed:0'], [fused]);
+    await vi.waitFor(() => expect(mocks.disk.has(1)).toBe(true));
+
+    // The stop: memory and localStorage are gone, the host's copy is not.
+    clearFusionDepth(1);
+    expect(coinDepth(1, fused)).toBe(0);
+
+    expect(await restoreSealedFusionDepth(1)).toBe(true);
+    expect(coinDepth(1, fused)).toBe(1);
+    expect(isFusionTransaction(1, 'cd'.repeat(32))).toBe(true);
+    expect(await restoreSealedFusionDepth(1)).toBe(false);
+  });
+
+  it('makes the first sealed copy of a book recorded before this build', async () => {
+    const fused = `${'ef'.repeat(32)}:0`;
+    recordFusionRound(1, ['seed:0'], [fused]);
+    expect(mocks.disk.has(1)).toBe(false);
+
+    mocks.owner.id = 1;
+    expect(await restoreSealedFusionDepth(1)).toBe(false);
+    expect(mocks.disk.has(1)).toBe(true);
   });
 });

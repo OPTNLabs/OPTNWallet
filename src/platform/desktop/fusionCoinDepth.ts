@@ -10,8 +10,18 @@
 // earlier build used, so no recorded depth is lost on upgrade. Fusion txids
 // are also kept durably in wallet SQL for history labels. Other windows get
 // each change over a BroadcastChannel and merge it by depth.
+//
+// localStorage reaches disk when WebView2 gets round to it, and in the fleet
+// run a hard stop lost a recorded round. So each change is also sealed with
+// the wallet's password-derived key and handed to the host, which writes it
+// whole and flushed before answering (src-tauri fusion_depth_store.rs); on
+// open it is merged back in, the deeper entry winning. Wallets the Rust
+// runtime holds keep the record in their sealed checkpoint instead.
 
+import { invoke } from '@tauri-apps/api/core';
 import { getLocalStorage } from '../../utils/browserStorage';
+import SecretCryptoService from './SecretCryptoService';
+import { getCachedOwnerWalletId } from './WalletKeyCache';
 import {
   ensureOptnCore,
   FusionDepthBook,
@@ -124,7 +134,83 @@ function save(walletId: number, options: { txidsChanged: boolean }): void {
   } catch {
     /* ignore */
   }
+  scheduleSeal(walletId);
   notifyFusionDepthChanged(walletId);
+}
+
+type SealedRecord = { coins: string; txDepth: string; txids: string };
+
+const sealing = new Map<number, Promise<void>>();
+
+/**
+ * Seal the wallet's whole book and have the host keep it. Chained per wallet,
+ * and each link reads the book when it runs, so the last write is always the
+ * newest book. Only while this wallet's key is the one unlocked: its record is
+ * sealed with its own key or not at all.
+ */
+function scheduleSeal(walletId: number): Promise<void> {
+  const next = (sealing.get(walletId) ?? Promise.resolve())
+    .then(async () => {
+      if (getCachedOwnerWalletId() !== walletId) return;
+      const current = book(walletId);
+      const record: SealedRecord = {
+        coins: current.storedCoins(),
+        txDepth: current.storedTxDepth(),
+        txids: current.storedTxids(),
+      };
+      const sealed = await SecretCryptoService.encryptText(JSON.stringify(record));
+      await invoke('optn_fusion_depth_store', { walletId, sealed });
+    })
+    .catch(() => {
+      /* localStorage still holds it; the next change seals again */
+    });
+  sealing.set(walletId, next);
+  return next;
+}
+
+/**
+ * Merge the sealed copy the host kept into the wallet's book: after a hard
+ * stop it may hold a round localStorage lost. With no sealed copy yet, make
+ * one. Returns whether the book gained anything.
+ */
+export async function restoreSealedFusionDepth(
+  walletId: number
+): Promise<boolean> {
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) return false;
+  if (getCachedOwnerWalletId() !== walletId) return false;
+  let sealed: string | null;
+  try {
+    sealed = await invoke<string | null>('optn_fusion_depth_load', { walletId });
+  } catch {
+    return false;
+  }
+  const current = book(walletId);
+  if (!sealed) {
+    await scheduleSeal(walletId);
+    return false;
+  }
+  let record: Partial<SealedRecord>;
+  try {
+    record = JSON.parse(
+      await SecretCryptoService.decryptText(sealed)
+    ) as Partial<SealedRecord>;
+  } catch {
+    return false;
+  }
+  const before = `${current.storedCoins()}|${current.storedTxDepth()}|${current.storedTxids()}`;
+  current.mergeStored(record.coins, record.txDepth);
+  try {
+    const txids: unknown = JSON.parse(record.txids ?? '[]');
+    if (Array.isArray(txids)) {
+      current.addTxids(txids.filter((txid): txid is string => typeof txid === 'string'));
+    }
+  } catch {
+    /* a damaged txid list leaves the rest */
+  }
+  const after = `${current.storedCoins()}|${current.storedTxDepth()}|${current.storedTxids()}`;
+  if (after === before) return false;
+  save(walletId, { txidsChanged: true });
+  return true;
 }
 
 /**
@@ -247,6 +333,7 @@ async function persistFusionTxidsToSql(
  */
 export async function hydrateFusionLabels(walletId: number): Promise<number> {
   if (!Number.isSafeInteger(walletId) || walletId <= 0) return 0;
+  await restoreSealedFusionDepth(walletId);
   try {
     const { db } = await openWalletDatabase();
     if (!db) return 0;

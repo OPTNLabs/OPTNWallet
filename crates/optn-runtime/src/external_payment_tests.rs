@@ -49,14 +49,14 @@ impl WalletCheckpointStorage for Checkpoints {
         self.store.store(id, value, key, expected)
     }
 }
-fn start(storage: Storage, checkpoints: Checkpoints) -> AppRuntime {
+pub(crate) fn start(storage: Storage, checkpoints: Checkpoints) -> AppRuntime {
     let security =
         WalletSecurity::new(Box::new(storage), None).with_checkpoints(Box::new(checkpoints));
     let (runtime, driver) = AppRuntime::new_with_security(AppState::default(), security).unwrap();
     tokio::spawn(driver.run());
     runtime
 }
-fn secret(s: &str) -> optn_app::SecretText {
+pub(crate) fn secret(s: &str) -> optn_app::SecretText {
     optn_app::SecretText::new(s.into())
 }
 pub(crate) async fn fixture() -> (AppRuntime, Storage, Checkpoints, String) {

@@ -2300,6 +2300,8 @@ impl TryFrom<WireState> for AppState {
         Ok(Self {
             snapshot_revision: value.snapshot_revision,
             payment_outbox: Vec::new(),
+            // Runtime-owned like the outbox: never taken from the wire.
+            fusion_depth: None,
             route: value.route.into(),
             theme: value.theme.into(),
             skin: value.skin.into(),

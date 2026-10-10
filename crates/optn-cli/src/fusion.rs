@@ -15,10 +15,10 @@
 //! Server rounds only. P2P fusion is coordinated over Nostr and has no Rust
 //! driver yet.
 //!
-//! The depth record (`optn_core::fusion::depth`) is kept beside the wallet in
-//! the same stored forms as the desktop's. Like the desktop's, it is not
-//! encrypted yet; moving it into the wallet's encrypted checkpoint waits on
-//! the checkpoint's forward-compatibility fix.
+//! The depth record (`optn_core::fusion::depth`) is the wallet runtime's,
+//! sealed with the wallet's encrypted checkpoint: a round the network holds is
+//! saved there before the next one starts. Earlier builds kept it in a
+//! plaintext file beside the wallet; that file is merged in once and removed.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +34,7 @@ use optn_core::fusion::FusionMode;
 use optn_fusion_native::depth_file::DepthFile;
 use optn_fusion_native::lookups::LookupEndpoint;
 use optn_fusion_native::server_round::{run_server_round, ServerRoundSettings, ServerTarget};
+use optn_runtime::AppRuntime;
 use serde_json::{json, Value};
 
 use crate::error::{CliError, Result};
@@ -138,6 +139,7 @@ async fn verified_proxy(
 }
 
 /// Where this wallet's depth record lives: beside its wallet file.
+/// Where earlier builds kept the depth record, in plaintext.
 fn depth_path(cli: &Cli, handle: &str) -> Result<PathBuf> {
     let directory = cli
         .wallet_directory
@@ -157,6 +159,32 @@ fn depth_path(cli: &Cli, handle: &str) -> Result<PathBuf> {
     Ok(directory
         .join(".state")
         .join(format!("fusion-depth-{}-{name}.json", cli.network)))
+}
+
+/// Merge the plaintext depth record earlier builds kept beside the wallet into
+/// the runtime's sealed one, then remove the file. The merge keeps the deeper
+/// entry, so nothing recorded on either side is lost. Returns the file's path
+/// when there was one.
+async fn import_legacy_depth(runtime: &AppRuntime, file: &DepthFile) -> Result<Option<String>> {
+    if !file.path().exists() {
+        return Ok(None);
+    }
+    let book = file.load().map_err(CliError::Usage)?;
+    runtime
+        .import_fusion_depth(
+            Some(book.stored_coins()),
+            Some(book.stored_tx_depth()),
+            book.fusion_txids().map(str::to_owned).collect(),
+        )
+        .await
+        .map_err(|error| CliError::Usage(wallet_security::message(error)))?;
+    let path = file.path().display().to_string();
+    std::fs::remove_file(file.path()).map_err(|error| {
+        CliError::Usage(format!(
+            "The depth record from {path} is now sealed with the wallet, but the file could not be removed: {error}"
+        ))
+    })?;
+    Ok(Some(path))
 }
 
 /// The synchronized wallet's coins, as coin selection sees them. Cash Code
@@ -243,8 +271,8 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
     let server = ServerTarget::parse(args.server).map_err(CliError::Usage)?;
     let lookup_servers = lookup_servers(cli)?;
     let verified_proxy = verified_proxy(cli, &server, &lookup_servers).await?;
-    let depth_file = DepthFile::new(depth_path(cli, handle)?);
-    let mut book = depth_file.load().map_err(CliError::Usage)?;
+    let legacy_depth = DepthFile::new(depth_path(cli, handle)?);
+    let mut depth_imported = false;
     let settings = ServerRoundSettings {
         network: cli.network,
         server: server.clone(),
@@ -275,6 +303,13 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
         let synced =
             crate::sync_shared_wallet(cli, args.gap, args.max_addresses, None, None, None).await?;
         let runtime = wallet_security::open_managed_runtime(cli).await?;
+        if !depth_imported {
+            if let Some(path) = import_legacy_depth(runtime, &legacy_depth).await? {
+                report(json!({"event": "depth_imported", "from": path}));
+            }
+            depth_imported = true;
+        }
+        let book = runtime.fusion_depth();
         let coins = fusion_coins(&synced, &book);
         let selection = select_fusion_coins(
             FusionMode::Server,
@@ -368,8 +403,10 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
                 // Only a transaction the network holds moves depth; a round
                 // the network never saw leaves its coins where they were.
                 if round.seen {
-                    book.record_round(&round.spent, &round.created, now_ms());
-                    depth_file.save(&book).map_err(CliError::Usage)?;
+                    runtime
+                        .record_fusion_round(round.spent.clone(), round.created.clone(), now_ms())
+                        .await
+                        .map_err(|error| CliError::Usage(wallet_security::message(error)))?;
                 }
                 let result = json!({
                     "txid": round.txid,
@@ -431,7 +468,7 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
         "tor": verified_proxy,
         "rounds": fused,
         "stopped": stopped,
-        "depth_file": depth_file.path().display().to_string(),
+        "depth_record": "sealed with the wallet",
     }))
 }
 
@@ -440,7 +477,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_depth_record_lives_beside_the_wallet_per_network() {
+    fn earlier_builds_kept_the_depth_record_beside_the_wallet_per_network() {
         use clap::Parser;
         let cli = Cli::parse_from([
             "optn",
@@ -458,5 +495,88 @@ mod tests {
                 .join(".state")
                 .join("fusion-depth-chipnet-fleet_01.optnwallet.json")
         );
+    }
+
+    /// The plaintext record an earlier build left beside the wallet is merged
+    /// into the runtime's, sealed with the wallet, and removed; a fresh
+    /// runtime over the same directory reads it back.
+    #[tokio::test]
+    async fn an_earlier_builds_plaintext_record_is_sealed_with_the_wallet_and_removed() {
+        use optn_app::{AppState, SecretText};
+        use optn_core::hd::{AccountPath, BIP39_TEST_VECTOR_MNEMONIC};
+        use optn_core::network::Network;
+        use optn_runtime::wallet_security::WalletSecurity;
+        use optn_transport::WalletSecurityRequest as Request;
+
+        let directory = tempfile::tempdir().unwrap();
+        let secret = |text: &str| SecretText::new(text.into());
+        let start = || {
+            let storage = optn_platform_native::wallet_storage::NativeWalletStorage::new(
+                directory.path().to_path_buf(),
+            );
+            let checkpoints = optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(
+                directory.path().join(".state"),
+            );
+            let (runtime, driver) = AppRuntime::new_with_security(
+                AppState {
+                    network: Network::Chipnet,
+                    ..Default::default()
+                },
+                WalletSecurity::new(Box::new(storage), None)
+                    .with_checkpoints(Box::new(checkpoints)),
+            )
+            .unwrap();
+            (runtime, tokio::spawn(driver.run()))
+        };
+
+        let (runtime, task) = start();
+        let handle = runtime
+            .wallet_security(Request::Create {
+                name: "depth".into(),
+                mnemonic: secret(BIP39_TEST_VECTOR_MNEMONIC),
+                bip39_passphrase: secret(""),
+                password: secret(""),
+                confirmation: secret(""),
+                network: "chipnet".into(),
+                account_path: AccountPath::default_for(Network::Chipnet).to_string(),
+                draft: None,
+            })
+            .await
+            .unwrap()
+            .active
+            .unwrap();
+
+        let fused = format!("{}:0", "ab".repeat(32));
+        let mut earlier = FusionDepthBook::new();
+        earlier.record_round(&[], std::slice::from_ref(&fused), 5);
+        let file = DepthFile::new(
+            directory
+                .path()
+                .join(".state")
+                .join("fusion-depth-chipnet-depth.json"),
+        );
+        file.save(&earlier).unwrap();
+
+        assert_eq!(
+            import_legacy_depth(&runtime, &file).await.unwrap(),
+            Some(file.path().display().to_string())
+        );
+        assert!(!file.path().exists());
+        assert_eq!(runtime.fusion_depth().depth_of(&fused), 1);
+        assert_eq!(import_legacy_depth(&runtime, &file).await.unwrap(), None);
+        drop(runtime);
+        task.await.unwrap();
+
+        let (runtime, task) = start();
+        runtime
+            .wallet_security(Request::Open {
+                handle,
+                password: secret(""),
+            })
+            .await
+            .unwrap();
+        assert_eq!(runtime.fusion_depth().depth_of(&fused), 1);
+        drop(runtime);
+        task.await.unwrap();
     }
 }

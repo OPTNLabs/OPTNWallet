@@ -17,6 +17,7 @@ use optn_app::{
 use optn_core::{
     cashaddr::Address,
     coins::{CoinSet, FreezeReason, Outpoint},
+    fusion::depth::FusionDepthBook,
     hd::{parse_account_path, AccountPath},
     header_hash::sha256d,
     network::Network,
@@ -74,6 +75,7 @@ pub struct WalletCheckpoint {
     pub(crate) state: WalletReconciliation,
     pub(crate) coins: CoinSet,
     pub(crate) payment_outbox: Vec<optn_core::payment::PaymentRecord>,
+    pub(crate) fusion_depth: FusionDepthBook,
     /// Cached chain-authenticated presentation only. It is deliberately
     /// downgraded before a restored checkpoint reaches application state.
     token_identities: BTreeMap<String, TokenIdentity>,
@@ -187,6 +189,48 @@ struct StoredCheckpoint {
     /// how old it is. Absent in older checkpoints, which then cannot.
     #[serde(default)]
     snapshot_at_unix_ms: Option<u64>,
+    /// The fusion depth record. Written only once a round has been recorded,
+    /// so a wallet that never fused stays readable by builds before this
+    /// field; a build that does not know it refuses a record that has it
+    /// rather than drop the depth on its next save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fusion_depth: Option<StoredFusionDepth>,
+}
+
+/// The depth record's three parts, in the forms every desktop build and the
+/// CLI's old plaintext file have written.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredFusionDepth {
+    coins: serde_json::Value,
+    tx_depth: serde_json::Value,
+    txids: serde_json::Value,
+}
+
+impl StoredFusionDepth {
+    fn of(book: &FusionDepthBook) -> Result<Option<Self>, String> {
+        if *book == FusionDepthBook::new() {
+            return Ok(None);
+        }
+        let part = |stored: String| {
+            serde_json::from_str(&stored).map_err(|_| "cannot encode the fusion depth record")
+        };
+        Ok(Some(Self {
+            coins: part(book.stored_coins())?,
+            tx_depth: part(book.stored_tx_depth())?,
+            txids: part(book.stored_txids())?,
+        }))
+    }
+
+    fn book(stored: Option<Self>) -> FusionDepthBook {
+        stored.map_or_else(FusionDepthBook::new, |stored| {
+            FusionDepthBook::from_stored(
+                Some(&stored.coins.to_string()),
+                Some(&stored.tx_depth.to_string()),
+                Some(&stored.txids.to_string()),
+            )
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -485,6 +529,7 @@ impl WalletCheckpoint {
             state: state.clone(),
             coins: app.coins.clone(),
             payment_outbox: app.payment_outbox.clone(),
+            fusion_depth: app.fusion_depth.clone().unwrap_or_default(),
             token_identities: cacheable_token_identities(&app.token_identities),
             bcmr_cache: BcmrIdentityCache::default(),
             // The view lives on the sync worker, which the host owns; it is
@@ -703,6 +748,7 @@ impl WalletCheckpoint {
                 })
                 .collect(),
             payment_outbox: self.payment_outbox.clone(),
+            fusion_depth: StoredFusionDepth::of(&self.fusion_depth)?,
             annotations: self
                 .coins
                 .iter()
@@ -837,6 +883,7 @@ impl WalletCheckpoint {
         validate_restore_state(&restore_state, stored.tip)?;
         let token_identities = decode_token_identities(&stored.token_identities)?;
         optn_core::payment::validate_outbox(&stored.payment_outbox)?;
+        let fusion_depth = StoredFusionDepth::book(stored.fusion_depth);
         let branch_lengths: [u32; 4] =
             match (stored.format.as_str(), stored.branch_lengths.as_slice()) {
                 (LEGACY_FORMAT, [receive, change, old_defi]) if stored.allocation.is_none() => {
@@ -898,6 +945,7 @@ impl WalletCheckpoint {
                     },
                     coins: CoinSet::new(),
                     payment_outbox: stored.payment_outbox,
+                    fusion_depth,
                     token_identities: BTreeMap::new(),
                     bcmr_cache: stored.bcmr_cache,
                     header_progress,
@@ -983,6 +1031,7 @@ impl WalletCheckpoint {
             state,
             coins,
             payment_outbox: stored.payment_outbox,
+            fusion_depth,
             token_identities,
             bcmr_cache: stored.bcmr_cache,
             header_progress,
@@ -1031,8 +1080,41 @@ mod tests {
                 token_identities: BTreeMap::new(),
                 bcmr_cache: BcmrIdentityCache::default(),
                 snapshot_at_unix_ms: None,
+                fusion_depth: None,
             },
         )
+    }
+
+    /// A wallet that never fused writes no depth record, so builds from
+    /// before it still read the checkpoint; once there is one it is sealed
+    /// and read back whole.
+    #[test]
+    fn the_depth_record_is_sealed_once_there_is_one() {
+        let (key, stored) = fixture();
+        let checkpoint = WalletCheckpoint::open(&key, &encoded(&key, &stored, 1)).unwrap();
+        assert_eq!(checkpoint.fusion_depth, FusionDepthBook::new());
+        let plaintext = |sealed: &[u8]| {
+            let nonce: &[u8; NONCE_LEN] = sealed[..NONCE_LEN].try_into().unwrap();
+            String::from_utf8(wallet_pack::open(&key, nonce, &sealed[NONCE_LEN..]).unwrap())
+                .unwrap()
+        };
+        let sealed = checkpoint.seal(&key, &fixture_nonce(2)).unwrap();
+        assert!(!plaintext(&sealed).contains("fusion_depth"));
+
+        let mut fused = checkpoint.clone();
+        fused
+            .fusion_depth
+            .record_round(&[], &[format!("{}:3", "ab".repeat(32))], 7);
+        let sealed = fused.seal(&key, &fixture_nonce(3)).unwrap();
+        assert!(plaintext(&sealed).contains("fusion_depth"));
+        let reopened = WalletCheckpoint::open(&key, &sealed).unwrap();
+        assert_eq!(reopened.fusion_depth, fused.fusion_depth);
+        assert_eq!(
+            reopened
+                .fusion_depth
+                .depth_of(&format!("{}:3", "AB".repeat(32))),
+            1
+        );
     }
 
     // Authenticated codec fixtures, never a production key or encryption entry point.

@@ -2372,7 +2372,7 @@ MDK does and does not do; each gap was checked against MDK's source.
   welcomes are kind 444), targeted publish, fetch and subscribe for a group's
   own relays, and `RelayRoute::Dialer`. Through the dialer the desktop's
   egress opens every relay stream (Tor switch, own hosts, public addresses
-  only, `ws://` only on this machine), and rust-nostr runs the WebSocket over
+  only, plain `ws` only on this machine), and rust-nostr runs the WebSocket over
   it.
 - Three faults found while testing, fixed in the engine:
   1. MDK returns a welcome it has already handled, and accepting it again
@@ -2419,3 +2419,53 @@ Tests:
   relay.damus.io, nos.lol and relay.primal.net, through a local Tor. All
   three relays took the key package, the invitee joined 1.5 s after the group
   was made, and messages crossed both ways in about 1 s each.
+
+### 2026-10-10: the fusion depth record is sealed with the wallet
+
+#83, from the fleet runs: the CLI kept each wallet's CashFusion depth record
+(`optn_core::fusion::depth`) in a plaintext file beside the wallet. The
+desktop renderer kept it in localStorage, which WebView2 writes back lazily,
+and a hard stop lost a recorded round.
+
+- Runtime: the record is part of the wallet's state (`AppState::fusion_depth`).
+  It is sealed in the encrypted checkpoint as one more field, written only
+  once a round has been recorded. A wallet that never fused stays readable by
+  earlier builds, and a build that does not know the field refuses a
+  checkpoint that has it, as with every field added before. Restored on open,
+  never taken from the wire.
+  - `AppRuntime::record_fusion_round` saves a round with the checkpoint before
+    it returns.
+  - `AppRuntime::import_fusion_depth` merges a record kept elsewhere; the
+    deeper entry wins.
+  - Both ask only that the same wallet session is still open. A wallet
+    operation's guard also refuses whenever coins are not fresh, and a
+    finished round's result must be kept whatever a refresh does meanwhile.
+- CLI: `optn fusion` reads and records through the runtime. The plaintext file
+  an earlier build left is merged in once and removed (`depth_imported`
+  event).
+- Desktop renderer wallets (keys in the renderer's key database) have no
+  runtime checkpoint. After each change their record is sealed with the
+  wallet's password-derived key (the desktop's SecretCryptoService) and
+  handed to the host (`fusion_depth_store.rs`), which writes it whole, flushed
+  and renamed into place before answering. The host stores only `enc:v1:`
+  ciphertext. On wallet open (`hydrateFusionLabels`) the sealed copy is merged
+  back in, the deeper entry winning, and a book from before this build gets
+  its first sealed copy. A record is sealed only while its own wallet's key is
+  the unlocked one. Seals are chained per wallet, so the last write is the
+  newest book.
+
+Tests:
+- A recorded round, and a second one on its output, survive a fresh runtime
+  over the same storage (sealed bytes, opened again).
+- A round whose save fails is not recorded. An import keeps deeper entries
+  and adds txids, and a shallower copy lowers nothing.
+- The checkpoint carries no `fusion_depth` until there is a record.
+- CLI: an earlier build's file is sealed and removed, and reads back from a
+  new runtime.
+- Host: only ciphertext is stored, kept whole, with no partial file left.
+- Renderer: a round a hard stop took from localStorage comes back from the
+  sealed copy; nothing is sealed under another wallet's key; an old book gets
+  its first sealed copy.
+- Suites: optn-app 176, optn-runtime 419, optn-transport 26, the CLI's fusion
+  tests, and the renderer's depth and fusion suites (68) pass. Clippy is
+  strict for the workspace, the CLI and the desktop.

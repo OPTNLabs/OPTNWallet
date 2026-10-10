@@ -1,6 +1,11 @@
 //! A wallet's fusion depth record (`optn_core::fusion::depth`) on disk, for
 //! native hosts.
 //!
+//! The wallet runtime now seals the record with the wallet's encrypted
+//! checkpoint (`AppRuntime::record_fusion_round`). This plaintext file is what
+//! earlier CLI builds wrote; the CLI reads it once, merges it into the sealed
+//! record and removes it.
+//!
 //! One JSON document per wallet holding the same three stored forms the desktop
 //! keeps (coins, txid depths, fusion txids), so a record moves between surfaces
 //! unchanged. Written whole to a temporary file and renamed over the old one, so

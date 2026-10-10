@@ -18,6 +18,10 @@
 //! every allocated index, so a saved wallet always finds the outputs. A host's
 //! ordinary send reserves its change the same way
 //! ([`AppRuntime::reserve_change_outputs`]).
+//!
+//! What a round did is recorded here too: the wallet's fusion depth record
+//! (`optn_core::fusion::depth`) lives in its state and is sealed with its
+//! checkpoint, so it is as durable and as private as the wallet's history.
 
 use crate::{AppRuntime, AppRuntimeDriver, PublicationGuard, RuntimeRequest};
 use optn_app::{AppEvent, AuthScope, HdBranch};
@@ -38,6 +42,19 @@ pub enum FusionContributionRequest {
     InputKeys { outpoints: Vec<String> },
     /// Reserve `count` fresh change outputs, durably.
     ReserveChange { count: usize },
+    /// Record a round the network holds in the depth record, durably.
+    RecordRound {
+        spent: Vec<String>,
+        created: Vec<String>,
+        at_ms: u64,
+    },
+    /// Merge a depth record kept outside the runtime (the CLI's former
+    /// plaintext file) into the wallet's, durably.
+    ImportDepth {
+        coins: Option<String>,
+        tx_depth: Option<String>,
+        txids: Vec<String>,
+    },
 }
 
 /// One offered coin and the key that signs it.
@@ -67,6 +84,8 @@ pub enum FusionContributionReply {
     InputKeys(Vec<FusionInputSecret>),
     /// Fresh P2PKH scripts, each reserved durably.
     Outputs(Vec<Vec<u8>>),
+    /// The depth record changed and was saved, or needed no change.
+    Recorded,
 }
 
 fn failure(error: impl ToString) -> TransportError {
@@ -106,7 +125,7 @@ impl AppRuntime {
             .await?
         {
             FusionContributionReply::InputKeys(keys) => Ok(keys),
-            FusionContributionReply::Outputs(_) => Err(failure("Unexpected fusion reply.")),
+            _ => Err(failure("Unexpected fusion reply.")),
         }
     }
 
@@ -121,7 +140,55 @@ impl AppRuntime {
             .await?
         {
             FusionContributionReply::Outputs(scripts) => Ok(scripts),
-            FusionContributionReply::InputKeys(_) => Err(failure("Unexpected fusion reply.")),
+            _ => Err(failure("Unexpected fusion reply.")),
+        }
+    }
+
+    /// The wallet's fusion depth record, as last saved.
+    pub fn fusion_depth(&self) -> optn_core::fusion::depth::FusionDepthBook {
+        self.state().fusion_depth.unwrap_or_default()
+    }
+
+    /// Trusted host API: record a round the network holds -- the coins it
+    /// spent and the outputs it created, each `txid:vout` -- in the depth
+    /// record, saved with the wallet's checkpoint before this returns.
+    pub async fn record_fusion_round(
+        &self,
+        spent: Vec<String>,
+        created: Vec<String>,
+        at_ms: u64,
+    ) -> Result<(), TransportError> {
+        match self
+            .fusion_contribution(FusionContributionRequest::RecordRound {
+                spent,
+                created,
+                at_ms,
+            })
+            .await?
+        {
+            FusionContributionReply::Recorded => Ok(()),
+            _ => Err(failure("Unexpected fusion reply.")),
+        }
+    }
+
+    /// Trusted host API: merge a depth record kept outside the runtime, in
+    /// its stored forms, into the wallet's. Depths only rise in a merge.
+    pub async fn import_fusion_depth(
+        &self,
+        coins: Option<String>,
+        tx_depth: Option<String>,
+        txids: Vec<String>,
+    ) -> Result<(), TransportError> {
+        match self
+            .fusion_contribution(FusionContributionRequest::ImportDepth {
+                coins,
+                tx_depth,
+                txids,
+            })
+            .await?
+        {
+            FusionContributionReply::Recorded => Ok(()),
+            _ => Err(failure("Unexpected fusion reply.")),
         }
     }
 }
@@ -143,6 +210,25 @@ impl AppRuntimeDriver {
             FusionContributionRequest::ReserveChange { count } => self
                 .reserve_change_outputs(count, &operation_guard, &reply)
                 .map(FusionContributionReply::Outputs),
+            FusionContributionRequest::RecordRound {
+                spent,
+                created,
+                at_ms,
+            } => self
+                .change_fusion_depth(&operation_guard, &reply, |book| {
+                    book.record_round(&spent, &created, at_ms);
+                })
+                .map(|()| FusionContributionReply::Recorded),
+            FusionContributionRequest::ImportDepth {
+                coins,
+                tx_depth,
+                txids,
+            } => self
+                .change_fusion_depth(&operation_guard, &reply, |book| {
+                    book.merge_stored(coins.as_deref(), tx_depth.as_deref());
+                    book.add_txids(txids.iter().map(String::as_str));
+                })
+                .map(|()| FusionContributionReply::Recorded),
         };
         if matches!(result, Err(TransportError::AuthenticationRequired)) {
             self.publish(AppEvent::AppLockChanged);
@@ -276,6 +362,59 @@ impl AppRuntimeDriver {
             .collect()
     }
 
+    /// Change the depth record and save it with the checkpoint. Unlike the
+    /// round's own requests this asks only that the same wallet session is
+    /// still open, not that its coins are fresh or untouched: a round already
+    /// finished, and its result must be kept whatever a refresh does
+    /// meanwhile.
+    fn change_fusion_depth(
+        &mut self,
+        operation_guard: &crate::WalletOperationGuard,
+        reply: &oneshot::Sender<Result<FusionContributionReply, TransportError>>,
+        change: impl FnOnce(&mut optn_core::fusion::depth::FusionDepthBook),
+    ) -> Result<(), TransportError> {
+        let guard = PublicationGuard {
+            generation: operation_guard.generation,
+            revocation: &self.revocation,
+            now_ms: &|| crate::elapsed_ms(self.started),
+        };
+        if !guard.allows(&self.state, reply.is_closed())
+            || self.state.wallet.is_none()
+            || self.state.surface.is_viewer_only()
+        {
+            return Err(failure("Wallet session changed."));
+        }
+        let security = self.security.as_mut().ok_or(TransportError::Unsupported)?;
+        security.require_durable_session(&self.state)?;
+        let mut candidate = self.state.clone();
+        change(candidate.fusion_depth.get_or_insert_with(Default::default));
+        if candidate.fusion_depth.clone().unwrap_or_default()
+            == self.state.fusion_depth.clone().unwrap_or_default()
+        {
+            return Ok(());
+        }
+        let restore = self.wallet_sync.restore_state().clone();
+        let event = self.wallet_sync.persist_annotation(
+            &mut candidate,
+            self.state.clone(),
+            &restore,
+            |app, sync, restore, progress, cache| {
+                security.persist_checkpoint(app, sync, restore, progress, cache)
+            },
+            |app| guard.allows(app, reply.is_closed()),
+        );
+        self.state = candidate;
+        if event != AppEvent::CoinsChanged {
+            self.publish(event);
+            return Err(failure(
+                "The fusion depth record could not be saved. Reopen the wallet before retrying.",
+            ));
+        }
+        security.checkpoint_published();
+        self.publish(event);
+        Ok(())
+    }
+
     fn reserve_change_outputs(
         &mut self,
         count: usize,
@@ -343,8 +482,9 @@ impl AppRuntimeDriver {
 
 #[cfg(test)]
 mod tests {
-    use crate::external_payment::tests::{fixture, prepare, sync_fixture};
+    use crate::external_payment::tests::{fixture, prepare, secret, start, sync_fixture};
     use crate::AppRuntime;
+    use optn_core::fusion::depth::FusionDepthBook;
     use std::sync::atomic::Ordering;
 
     fn funded_outpoint(runtime: &AppRuntime) -> String {
@@ -438,5 +578,103 @@ mod tests {
         // A payment's held input cannot join.
         prepare(&runtime, "held").await.unwrap();
         assert!(keys(vec![outpoint]).await.is_err());
+    }
+
+    /// The depth record is sealed with the wallet's checkpoint before the
+    /// call returns, so a fresh runtime over the same storage -- the next
+    /// start after a hard stop -- reads every recorded round.
+    #[tokio::test]
+    async fn a_recorded_round_survives_a_restart_sealed_with_the_wallet() {
+        let (runtime, storage, checkpoints, handle) = fixture().await;
+        sync_fixture(&runtime).await;
+        let spent = funded_outpoint(&runtime);
+        let fusion = "cd".repeat(32);
+        let created = vec![format!("{fusion}:0"), format!("{fusion}:1")];
+        assert_eq!(runtime.fusion_depth(), FusionDepthBook::new());
+
+        runtime
+            .record_fusion_round(vec![spent.clone()], created.clone(), 1_000)
+            .await
+            .unwrap();
+        let book = runtime.fusion_depth();
+        assert_eq!(book.depth_of(&created[0]), 1);
+        assert_eq!(book.depth_of(&spent), 0);
+        assert!(book.is_fusion_transaction(&fusion));
+
+        // A second round on one of its outputs goes one deeper.
+        let deeper = format!("{}:0", "ef".repeat(32));
+        runtime
+            .record_fusion_round(vec![created[0].clone()], vec![deeper.clone()], 2_000)
+            .await
+            .unwrap();
+        assert_eq!(runtime.fusion_depth().depth_of(&deeper), 2);
+
+        drop(runtime);
+        let restarted = start(storage, checkpoints);
+        restarted
+            .wallet_security(optn_transport::WalletSecurityRequest::Open {
+                handle,
+                password: secret(""),
+            })
+            .await
+            .unwrap();
+        let reopened = restarted.fusion_depth();
+        assert_eq!(reopened.depth_of(&deeper), 2);
+        assert_eq!(reopened.depth_of(&created[1]), 1);
+        assert!(reopened.is_fusion_transaction(&fusion));
+    }
+
+    /// A round whose save fails is not recorded: the record stays as last
+    /// saved, and the wallet asks to be reopened, as a failed payment save
+    /// does.
+    #[tokio::test]
+    async fn a_round_whose_save_fails_is_not_recorded() {
+        let (runtime, _storage, checkpoints, _handle) = fixture().await;
+        sync_fixture(&runtime).await;
+        let created = format!("{}:0", "ab".repeat(32));
+        checkpoints.fail.store(true, Ordering::SeqCst);
+        assert!(runtime
+            .record_fusion_round(vec![], vec![created.clone()], 1)
+            .await
+            .is_err());
+        assert_eq!(runtime.fusion_depth().depth_of(&created), 0);
+    }
+
+    /// A record kept outside the runtime merges in: the deeper entry wins,
+    /// and txids are added.
+    #[tokio::test]
+    async fn an_imported_record_merges_deeper_entries_and_txids() {
+        let (runtime, _storage, _checkpoints, _handle) = fixture().await;
+        sync_fixture(&runtime).await;
+        let first = format!("{}:0", "ab".repeat(32));
+        let second = format!("{}:0", "ba".repeat(32));
+        let mut outside = FusionDepthBook::new();
+        outside.record_round(&[], std::slice::from_ref(&first), 5);
+        outside.record_round(
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&second),
+            6,
+        );
+        outside.record_fusion_txid(&"99".repeat(32));
+        runtime
+            .import_fusion_depth(
+                Some(outside.stored_coins()),
+                Some(outside.stored_tx_depth()),
+                outside.fusion_txids().map(str::to_owned).collect(),
+            )
+            .await
+            .unwrap();
+        let book = runtime.fusion_depth();
+        assert_eq!(book.depth_of(&second), 2);
+        assert!(book.is_fusion_transaction(&"99".repeat(32)));
+
+        // A shallower copy of the same coin does not lower it.
+        let mut shallower = FusionDepthBook::new();
+        shallower.record_round(&[], std::slice::from_ref(&second), 7);
+        runtime
+            .import_fusion_depth(Some(shallower.stored_coins()), None, vec![])
+            .await
+            .unwrap();
+        assert_eq!(runtime.fusion_depth().depth_of(&second), 2);
     }
 }

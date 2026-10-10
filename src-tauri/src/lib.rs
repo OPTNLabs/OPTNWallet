@@ -18,6 +18,7 @@ mod egress;
 mod electrum_selection;
 pub mod electrum_tcp;
 pub mod fusion;
+mod fusion_depth_store;
 #[cfg(desktop)]
 pub mod hw;
 mod network_config;
@@ -1545,6 +1546,8 @@ pub fn run() {
             chat_mdk::chat_mdk_open,
             chat_mdk::chat_mdk_close,
             chat_mdk::chat_mdk_call,
+            fusion_depth_store::optn_fusion_depth_load,
+            fusion_depth_store::optn_fusion_depth_store,
             #[cfg(desktop)]
             hw::session::hw_enumerate,
             #[cfg(desktop)]

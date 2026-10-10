@@ -455,6 +455,11 @@ pub struct AppState {
     pub hd_addresses: Option<HdAddressAllocation>,
     /// Runtime-owned recovery records; never part of an untrusted guest response.
     pub payment_outbox: Vec<optn_core::payment::PaymentRecord>,
+    /// How many CashFusion rounds each coin has been through (Electron
+    /// Cash's `fuse_depth`). Runtime-owned and sealed with the wallet's
+    /// checkpoint, so a hard stop cannot lose a round already recorded.
+    /// `None` until the open wallet records or restores one.
+    pub fusion_depth: Option<optn_core::fusion::depth::FusionDepthBook>,
     /// Runtime-owned chain projection. A missing balance means no complete observation.
     pub wallet_sync: WalletSyncView,
     pub spend: Option<SpendPlan>,
@@ -573,6 +578,7 @@ impl AppState {
             wallet: None,
             hd_addresses: None,
             payment_outbox: Vec::new(),
+            fusion_depth: None,
             wallet_sync: WalletSyncView::empty(),
             spend: None,
             fee_preferences: FeePreferences::app_default(),
@@ -927,6 +933,7 @@ impl AppState {
                 self.coins.clear();
                 self.hd_addresses = None;
                 self.payment_outbox.clear();
+                self.fusion_depth = None;
                 self.wallet_sync = WalletSyncView::empty();
                 self.pledges.clear();
                 self.spend = None;
@@ -1486,6 +1493,7 @@ impl AppState {
         self.coins.clear();
         self.hd_addresses = None;
         self.payment_outbox.clear();
+        self.fusion_depth = None;
         self.wallet_sync = WalletSyncView::empty();
         self.pledges.clear();
         self.spend = None;
@@ -1515,6 +1523,7 @@ impl AppState {
         self.wallet = None;
         self.hd_addresses = None;
         self.payment_outbox.clear();
+        self.fusion_depth = None;
         self.wallet_sync = WalletSyncView::empty();
         self.spend = None;
         self.coins.clear();
