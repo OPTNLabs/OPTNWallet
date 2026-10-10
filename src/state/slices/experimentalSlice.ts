@@ -88,8 +88,8 @@ interface ExperimentalState {
   torHost: string;
   torPortManual: number;
   quantumrootEnabled: boolean;
-  // New open chat groups through MDK in the Rust host (desktop builds with
-  // the mdk-chat feature). Its groups show only while this is on.
+  // New open chat groups through MDK in the Rust host, the default. Off, new
+  // groups use ts-mls and MDK's groups are hidden.
   mdkChatEnabled: boolean;
 }
 
@@ -114,7 +114,7 @@ const initialState: ExperimentalState = {
   torPortManual: 9050,
   // Quantumroot ships enabled by default; the toggle lets users hide it.
   quantumrootEnabled: true,
-  mdkChatEnabled: false,
+  mdkChatEnabled: true,
 };
 
 /**
@@ -146,7 +146,8 @@ export function normalizeExperimentalPersistedState(
     fuseDepth: clampFuseDepth(persisted.fuseDepth ?? DEFAULT_FUSE_DEPTH),
     // Default false unless user explicitly opted in (must follow ...persisted).
     spendOnlyFusedCoins: persisted.spendOnlyFusedCoins === true,
-    mdkChatEnabled: persisted.mdkChatEnabled === true,
+    // On unless the holder turned it off: MDK is the default engine.
+    mdkChatEnabled: persisted.mdkChatEnabled !== false,
     // Ensure expanded bootstrap relays appear for older persisted 3-relay lists.
     nostrRelays: mergeWithDefaultRelays(
       Array.isArray(persisted.nostrRelays)

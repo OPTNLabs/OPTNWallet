@@ -366,9 +366,10 @@ export const NostrSettings: React.FC = () => {
                 </span>
                 <span className="text-[11px] leading-relaxed wallet-muted">
                   New open groups use MDK, the Rust Marmot engine White Noise
-                  also speaks. Groups made before keep their engine; private
-                  groups and Paytaca stay on the built-in one. MDK groups are
-                  hidden while this is off.
+                  also speaks. The earlier engine stays, so its users and
+                  groups are still reached; private groups and Paytaca use it.
+                  Off, new groups use the earlier engine and MDK groups are
+                  hidden.
                 </span>
               </span>
             </label>

@@ -114,6 +114,13 @@ jobs:
           toolchain: 1.98.1
           targets: ${{ matrix.rust-targets || matrix.target }}
 
+      # MDK chat's store is SQLCipher on OpenSSL built from source, whose
+      # configure needs a full Perl. Git Bash's Perl lacks modules it uses.
+      - name: Use Strawberry Perl for OpenSSL
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl.exe" >> "$GITHUB_ENV"
+
       - name: Rust cache
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:

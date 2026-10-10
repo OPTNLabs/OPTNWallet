@@ -2,7 +2,18 @@ use std::path::PathBuf;
 
 fn main() {
     build_fusion_proto();
+    mdk_chat_cfg();
     tauri_build::build()
+}
+
+// `mdk_chat`: the MDK chat engine is compiled in. The `mdk-chat` feature
+// (default) asks for it, and only desktop targets have its dependencies.
+fn mdk_chat_cfg() {
+    println!("cargo::rustc-check-cfg=cfg(mdk_chat)");
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if std::env::var_os("CARGO_FEATURE_MDK_CHAT").is_some() && os != "android" && os != "ios" {
+        println!("cargo::rustc-cfg=mdk_chat");
+    }
 }
 
 // Compile the vendored CashFusion protobuf schema (proto/fusion.proto, taken

@@ -2,18 +2,22 @@
 
 The desktop chat has two MLS engines:
 
-- **ts-mls** (`src/platform/desktop/nostr/mls.ts`): the original engine. It
-  runs in the renderer and keeps every group it made. It is the default.
 - **MDK** (`crates/optn-chat`, desktop module `src-tauri/src/chat_mdk.rs`):
   [MDK](https://github.com/marmot-protocol/mdk), the Marmot Development Kit
   from the rust-nostr project, used as published (`mdk-core` 0.8.0 from
   crates.io, unmodified). It runs in the Rust host and speaks current Marmot
   (MIP-00 to MIP-03), the protocol White Noise and other Marmot clients use.
+  It is built into desktop builds (the `mdk-chat` feature, on by default) and
+  is the default for new groups.
+- **ts-mls** (`src/platform/desktop/nostr/mls.ts`): the original engine, kept
+  for compatibility. It runs in the renderer, keeps every group it made, and
+  reaches people whose wallets still use it. MDK is not changed for it.
 
 Both engines read the same inbox at once. Each one takes the welcomes and
-group events in its own format and ignores the other's, so turning MDK on
-loses nothing ts-mls had. Which engine new groups use is the holder's choice,
-and existing groups stay on the engine that made them.
+group events in its own format and ignores the other's, so nothing ts-mls had
+is lost. A holder can turn MDK off in the chat settings; new groups then use
+ts-mls and MDK's groups are hidden. Existing groups stay on the engine that
+made them.
 
 ## What MDK does here
 
@@ -36,8 +40,8 @@ code. ts-mls keeps serving each case.
 
 | Case | Why | Where it stands |
 | --- | --- | --- |
-| Inviting a ts-mls user into an MDK group | ts-mls publishes key packages in the first NIP-EE format: hex content, `ciphersuite` instead of `mls_ciphersuite`, and no `encoding`, `mls_proposals` or `i` tags. Its `d` is the device index, not 64 hex characters. MDK refuses them (`parse_key_package`). | The engine answers `NoKeyPackage`; the group can be made on ts-mls instead. Fix on the ts-mls side: publish MIP-00 key packages beside the old ones. |
-| A ts-mls user reading MDK key packages or welcomes | ts-mls reads hex only (`keyPackageFromEventContent`, `hexToBytes(rumor.content)`). MDK writes base64 with an `encoding` tag. | Fix on the ts-mls side: decode by the `encoding` tag. |
+| Inviting a ts-mls user into an MDK group | ts-mls published key packages only in the first NIP-EE format (hex, `ciphersuite`, no `encoding`, `mls_proposals` or `i`, a device-index `d`), which MDK refuses. | **Key packages fixed (2026-10-10):** ts-mls also publishes a MIP-00 key package (`buildKind30443Mip00`): the bare KeyPackage in base64, its KeyPackageRef in `i`, a stable 64-hex `d` per device. MDK's own `parse_key_package` reads one (`crates/optn-chat/tests/ts_mls_key_package.rs`, opt-in). Whether a ts-mls client then joins the MDK group is the next row's question, still open. |
+| A ts-mls user reading MDK key packages or welcomes | ts-mls read hex only. MDK writes base64 with an `encoding` tag. | **Fixed (2026-10-10):** ts-mls reads key packages and welcomes by their `encoding` tag (`keyPackageFromEvent`, `mlsContentBytes`). |
 | MDK joining a ts-mls group | ts-mls groups require the app-data dictionary extension (0x0006) and the AppDataUpdate (0x0008) and SelfRemove (0x000A) proposals. MDK 0.8 advertises only LastResort (0x000A) and group data (0xF2EE), with SelfRemove. | Needs MDK support for app data, or ts-mls groups that do not require it. |
 | Account identity proof (0xF2F1) | An OPTN leaf extension that binds a leaf's MLS key to the Nostr account with a Nostr signature. MDK binds the two through the credential and the key package event's signature instead, and does not write 0xF2F1. | ts-mls groups that check it would refuse MDK leaves. |
 | Group profile through app data | ts-mls renames through an AppDataUpdate profile component (0x8001). MDK renames through the 0xF2EE group data, as Marmot specifies. | Each engine renames its own groups its own way. |
@@ -61,11 +65,12 @@ Git for Windows' Perl lacks `Locale::Maketext::Simple`, `IPC::Cmd` and others,
 so on Windows `OPENSSL_SRC_PERL` must name Strawberry Perl:
 
 ```sh
-OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl.exe \
-  npx --no-install tauri build --features mdk-chat
+OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl.exe npx --no-install tauri build
 ```
 
-GitHub's Windows runners have Strawberry Perl at `C:/Strawberry/perl/bin`.
-Without the `mdk-chat` feature the desktop builds as before and the chat runs
-on ts-mls alone. `crates/optn-chat` builds without OpenSSL unless its `sqlite`
+GitHub's Windows runners have Strawberry Perl at `C:/Strawberry/perl/bin`;
+the desktop workflows set `OPENSSL_SRC_PERL` there. Only desktop targets
+compile MDK (`src-tauri/build.rs`); the Android and iOS builds have no chat
+screen and no OpenSSL. `--no-default-features` builds a desktop without MDK,
+whose chat runs on ts-mls alone. `crates/optn-chat` builds without OpenSSL unless its `sqlite`
 feature is on: its tests run MDK on its in-memory store against a local relay.

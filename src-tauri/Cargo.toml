@@ -23,11 +23,13 @@ prost-build = "0.13"
 protox = "0.7"
 
 [features]
-# The MDK chat engine beside the renderer's ts-mls one. Off by default: MDK's
-# encrypted store is SQLCipher, whose crypto off Apple platforms is OpenSSL
-# built from source, so a Windows build needs a full Perl named by
-# OPENSSL_SRC_PERL (Strawberry; Git's Perl lacks modules OpenSSL's configure
-# uses). Without it the chat runs on ts-mls alone.
+# The MDK chat engine, the default for new groups, beside the renderer's
+# ts-mls one, kept so ts-mls users can still be reached. Desktop targets only
+# (see build.rs); the mobile builds have no chat screen. MDK's encrypted store
+# is SQLCipher, whose crypto off Apple platforms is OpenSSL built from source,
+# so a Windows build needs a full Perl named by OPENSSL_SRC_PERL (Strawberry;
+# Git's Perl lacks modules OpenSSL's configure uses).
+default = ["mdk-chat"]
 mdk-chat = ["dep:optn-chat", "optn-chat/sqlite", "dep:optn-nostr"]
 
 [dependencies]
@@ -78,9 +80,6 @@ k256 = "0.13"
 optn-core = { path = "../crates/optn-core", version = "=1.7.3" }
 optn-fusion = { path = "../crates/optn-fusion", version = "=1.7.3" }
 optn-fusion-native = { path = "../crates/optn-fusion-native", version = "=1.7.3" }
-# Marmot chat through MDK, behind the `mdk-chat` feature (see [features]).
-optn-chat = { path = "../crates/optn-chat", version = "=1.7.3", optional = true }
-optn-nostr = { path = "../crates/optn-nostr", version = "=1.7.3", optional = true }
 optn-app = { path = "../crates/optn-app", version = "=1.7.3" }
 optn-platform = { path = "../crates/optn-platform", version = "=1.7.3" }
 optn-runtime = { path = "../crates/optn-runtime", version = "=1.7.3" }
@@ -129,6 +128,10 @@ hex = "0.4"
 # is no external dylib to resolve and nothing for Library Validation to reject.
 # Fixes both halves of the launch failure rather than only the missing file.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Marmot chat through MDK, behind the `mdk-chat` feature (see [features]),
+# on desktop targets only, so mobile builds compile no OpenSSL.
+optn-chat = { path = "../crates/optn-chat", version = "=1.7.3", optional = true }
+optn-nostr = { path = "../crates/optn-nostr", version = "=1.7.3", optional = true }
 optn-platform-native = { path = "../crates/optn-platform-native", version = "=1.7.3", features = ["clipboard", "secure-storage"] }
 hidapi = "2.6"
 tauri-plugin-keyring = "=0.1.0"

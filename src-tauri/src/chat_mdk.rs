@@ -14,10 +14,10 @@ use serde_json::Value;
 /// Whether this build carries the MDK engine.
 #[tauri::command]
 pub fn chat_mdk_available() -> bool {
-    cfg!(feature = "mdk-chat")
+    cfg!(mdk_chat)
 }
 
-#[cfg(not(feature = "mdk-chat"))]
+#[cfg(not(mdk_chat))]
 fn not_built() -> String {
     "this build of the wallet has no MDK chat engine (built without the mdk-chat feature)".into()
 }
@@ -35,7 +35,7 @@ pub async fn chat_mdk_open(
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
     network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
 ) -> Result<Value, String> {
-    #[cfg(feature = "mdk-chat")]
+    #[cfg(mdk_chat)]
     {
         let networks = crate::egress::networks_for(runtime.state().network, None);
         enabled::open(
@@ -48,7 +48,7 @@ pub async fn chat_mdk_open(
         )
         .await
     }
-    #[cfg(not(feature = "mdk-chat"))]
+    #[cfg(not(mdk_chat))]
     {
         let _ = (app, webview, identity, relays, runtime, network_settings);
         Err(not_built())
@@ -64,9 +64,9 @@ pub async fn chat_mdk_close(webview: tauri::Webview) -> Result<(), String> {
 
 /// Close the chat identity a page owns: on reload and when its window goes.
 pub async fn close_owned_by(owner: &str) {
-    #[cfg(feature = "mdk-chat")]
+    #[cfg(mdk_chat)]
     enabled::close_owned_by(owner).await;
-    #[cfg(not(feature = "mdk-chat"))]
+    #[cfg(not(mdk_chat))]
     let _ = owner;
 }
 
@@ -87,18 +87,18 @@ pub async fn chat_mdk_call(
     op: String,
     args: Option<Value>,
 ) -> Result<Value, String> {
-    #[cfg(feature = "mdk-chat")]
+    #[cfg(mdk_chat)]
     {
         enabled::call(webview.label(), &op, args.unwrap_or(Value::Null)).await
     }
-    #[cfg(not(feature = "mdk-chat"))]
+    #[cfg(not(mdk_chat))]
     {
         let _ = (webview, op, args);
         Err(not_built())
     }
 }
 
-#[cfg(feature = "mdk-chat")]
+#[cfg(mdk_chat)]
 mod enabled {
     use std::sync::Arc;
     use std::time::Duration;
