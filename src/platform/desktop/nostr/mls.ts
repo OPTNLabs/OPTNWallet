@@ -36,7 +36,10 @@ import {
   getAppDataDictionary,
   getCiphersuiteImpl,
   joinGroup,
+  keyPackageDecoder,
+  keyPackageEncoder,
   makeCustomExtension,
+  makeKeyPackageRef,
   mlsExporter,
   mlsMessageDecoder,
   mlsMessageEncoder,
@@ -68,6 +71,7 @@ import {
 import { unwrapEvent } from 'nostr-tools/nip17';
 import { wrapManyEvents as wrapRumor } from 'nostr-tools/nip59';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
+import { sha256 } from '@noble/hashes/sha2';
 import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { del as idbDel, get as idbGet, set as idbSet } from 'idb-keyval';
 import SecretCryptoService from '../../../services/SecretCryptoService';
@@ -740,6 +744,73 @@ export function buildKind30443(
   );
 }
 
+/** The value of the first `name` tag. */
+function tagValue(tags: string[][], name: string): string | undefined {
+  return tags.find((tag) => tag[0] === name)?.[1];
+}
+
+/**
+ * An event's MLS bytes. Base64 when its `encoding` tag says so, as MIP-00/
+ * MIP-02 (MDK, White Noise) write them; hex otherwise, the first NIP-EE form.
+ */
+export function mlsContentBytes(event: {
+  content: string;
+  tags: string[][];
+}): Uint8Array {
+  return tagValue(event.tags, 'encoding') === 'base64'
+    ? b64ToBytes(event.content)
+    : hexToBytes(event.content);
+}
+
+/**
+ * This device's MIP-00 key-package slot: the 64-hex `d` that makes each
+ * publish replace the last. Derived rather than stored; it is public anyway.
+ */
+export function mip00Slot(nostrPubkeyHex: string, deviceIndex: number): string {
+  return bytesToHex(
+    sha256(
+      new TextEncoder().encode(
+        `optn:ts-mls:key-package:${nostrPubkeyHex}:${deviceIndex}`
+      )
+    )
+  );
+}
+
+/**
+ * The key package as MIP-00 has it, the form MDK and other current Marmot
+ * clients read: the bare KeyPackage in base64 with an `encoding` tag, its
+ * KeyPackageRef in `i`, `mls_ciphersuite`, `mls_proposals` and a 64-hex `d`.
+ * Published beside the first NIP-EE form, which earlier OPTN builds read.
+ */
+export async function buildKind30443Mip00(
+  keyPackage: KeyPackage,
+  identitySecret: Uint8Array,
+  relays: string[],
+  deviceIndex = 0
+): Promise<Event> {
+  const impl = await getCiphersuiteImpl(CIPHERSUITE);
+  const ref = await makeKeyPackageRef(keyPackage, impl.hash);
+  return finalizeEvent(
+    {
+      kind: KIND_KEYPACKAGE_ADDR,
+      created_at: Math.floor(Date.now() / 1000),
+      content: bytesToB64(encode(keyPackageEncoder, keyPackage)),
+      tags: [
+        ['d', mip00Slot(getPublicKey(identitySecret), deviceIndex)],
+        ['mls_protocol_version', '1.0'],
+        ['mls_ciphersuite', CIPHERSUITE_ID],
+        ['mls_extensions', '0x0006', '0xf2ee', '0x000a', '0xf2f1'],
+        ['mls_proposals', '0x000a'],
+        ['relays', ...relays],
+        ['i', bytesToHex(ref)],
+        ['client', 'OPTN'],
+        ['encoding', 'base64'],
+      ],
+    },
+    identitySecret
+  );
+}
+
 export function buildKind10051(
   relays: string[],
   identitySecret: Uint8Array
@@ -834,6 +905,12 @@ export async function publishMlsKeyPackage(
     targets,
     deviceIndex
   );
+  const mip00 = await buildKind30443Mip00(
+    publicPackage,
+    nostr.secretKey,
+    targets,
+    deviceIndex
+  );
   const kind10051 = buildKind10051(targets, nostr.secretKey);
   const paytaca = finalizeEvent(
     {
@@ -849,7 +926,30 @@ export async function publishMlsKeyPackage(
     },
     nostr.secretKey
   );
-  await publish(targets, [kind443, kind30443, kind10051, paytaca]);
+  await publish(targets, [kind443, kind30443, mip00, kind10051, paytaca]);
+}
+
+/** The key package an event carries, in any form a client publishes. */
+export function keyPackageFromEvent(event: {
+  content: string;
+  tags: string[][];
+}): KeyPackage | null {
+  if (tagValue(event.tags, 'encoding') === 'base64') {
+    let bytes: Uint8Array;
+    try {
+      bytes = b64ToBytes(event.content);
+    } catch {
+      return null;
+    }
+    // MIP-00 carries the bare KeyPackage; a wrapped one is read too.
+    const bare = decode(keyPackageDecoder, bytes);
+    if (bare) return bare;
+    const msg = decodeMlsBytes(bytes);
+    return msg?.wireformat === wireformats.mls_key_package
+      ? msg.keyPackage
+      : null;
+  }
+  return keyPackageFromEventContent(event.content);
 }
 
 function keyPackageFromEventContent(content: string): KeyPackage | null {
@@ -891,7 +991,7 @@ export async function fetchPeerKeyPackage(
       authors: [pubKey],
     }));
   if (nipEe) {
-    const kp = keyPackageFromEventContent(nipEe.content);
+    const kp = keyPackageFromEvent(nipEe);
     if (kp) return { keyPackage: kp, source: 'nip-ee', eventId: nipEe.id };
   }
   const paytaca = await getPool().get(lookup, {
@@ -1601,7 +1701,7 @@ export async function ingestMlsGiftWrap(
     return;
   }
   if (rumor.kind === KIND_WELCOME) {
-    const bytes = hexToBytes(rumor.content);
+    const bytes = mlsContentBytes(rumor);
     const h = rumor.tags.find((t) => t[0] === 'h')?.[1];
     const handle = await joinMlsGroupFromWelcome(
       walletId,

@@ -65,7 +65,8 @@ describe('chat engines', () => {
       ['wss://r'],
       undefined
     );
-  });
+    // The first import of the engine pulls in ts-mls, which can take over 5 s.
+  }, 20_000);
 
   it('makes new open groups on MDK only when asked, and private groups never', async () => {
     mocks.invoke.mockResolvedValue(view());
