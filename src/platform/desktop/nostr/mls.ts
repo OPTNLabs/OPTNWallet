@@ -180,6 +180,8 @@ export type MlsGroupRecord = {
   ownerPubKey: string;
   /** Group admins from NIP-EE group data. Empty means nobody can kick/rename. */
   adminPubKeys?: string[];
+  /** The engine holding the group: ts-mls when absent (see mlsEngine.ts). */
+  engine?: 'ts-mls' | 'mdk';
 };
 
 let pool: SimplePool | null = null;

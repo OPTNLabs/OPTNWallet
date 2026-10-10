@@ -88,6 +88,9 @@ interface ExperimentalState {
   torHost: string;
   torPortManual: number;
   quantumrootEnabled: boolean;
+  // New open chat groups through MDK in the Rust host (desktop builds with
+  // the mdk-chat feature). Its groups show only while this is on.
+  mdkChatEnabled: boolean;
 }
 
 const initialState: ExperimentalState = {
@@ -111,6 +114,7 @@ const initialState: ExperimentalState = {
   torPortManual: 9050,
   // Quantumroot ships enabled by default; the toggle lets users hide it.
   quantumrootEnabled: true,
+  mdkChatEnabled: false,
 };
 
 /**
@@ -142,6 +146,7 @@ export function normalizeExperimentalPersistedState(
     fuseDepth: clampFuseDepth(persisted.fuseDepth ?? DEFAULT_FUSE_DEPTH),
     // Default false unless user explicitly opted in (must follow ...persisted).
     spendOnlyFusedCoins: persisted.spendOnlyFusedCoins === true,
+    mdkChatEnabled: persisted.mdkChatEnabled === true,
     // Ensure expanded bootstrap relays appear for older persisted 3-relay lists.
     nostrRelays: mergeWithDefaultRelays(
       Array.isArray(persisted.nostrRelays)
@@ -259,6 +264,9 @@ const experimentalSlice = createSlice({
     setQuantumrootEnabled(state, action: PayloadAction<boolean>) {
       state.quantumrootEnabled = action.payload;
     },
+    setMdkChatEnabled(state, action: PayloadAction<boolean>) {
+      state.mdkChatEnabled = action.payload;
+    },
   },
 });
 
@@ -281,6 +289,7 @@ export const {
   setTorHost,
   setTorPortManual,
   setQuantumrootEnabled,
+  setMdkChatEnabled,
 } = experimentalSlice.actions;
 
 // The old default this app shipped points at a host that no longer resolves;
@@ -294,6 +303,8 @@ export const selectRpaEnabled = (state: RootState) =>
   state.experimental.rpaEnabled;
 export const selectCashFusionEnabled = (state: RootState) =>
   state.experimental.cashFusionEnabled;
+export const selectMdkChatEnabled = (state: RootState) =>
+  state.experimental.mdkChatEnabled === true;
 export const selectNostrRelays = createSelector(
   [(state: RootState) => state.experimental.nostrRelays],
   (relays): string[] => mergeWithDefaultRelays(relays)
