@@ -1,0 +1,25 @@
+# cargo audit reads every package in Cargo.lock, built or not. These come with
+# MDK (the optional `mdk-chat` feature: optn-chat -> mdk-core 0.8.0 ->
+# openmls_rust_crypto 0.5.1 -> hpke-rs 0.6.1) and stay ignored only until
+# openmls_rust_crypto moves to an hpke-rs on fixed libcrux releases; no hpke-rs
+# 0.6 release takes them. The same cases are in ../deny.toml.
+[advisories]
+ignore = [
+  # Built: libcrux-sha3 0.0.8. hpke-rs calls only the one-shot portable
+  # shake256, and only to derive X-Wing and ML-KEM keys; MDK accepts
+  # ciphersuite 0x0001 (DHKEM X25519) alone. The flaws are in the incremental
+  # squeeze API and in the AVX2 SHAKE-256.
+  "RUSTSEC-2026-0207",
+  "RUSTSEC-2026-0208",
+  # Built: libcrux-secrets 0.0.5 under libcrux-sha3; its aarch64 constant-time
+  # select and swap are on no path ciphersuite 0x0001 reaches.
+  "RUSTSEC-2026-0212",
+  # Not built: hpke-rs's optional libcrux backend (hpke-rs-libcrux), which
+  # nothing enables. It is in Cargo.lock only because Cargo records optional
+  # dependencies too.
+  "RUSTSEC-2026-0124", # libcrux-chacha20poly1305
+  "RUSTSEC-2026-0209", # libcrux-aesgcm
+  "RUSTSEC-2026-0211", # libcrux-aesgcm
+  "RUSTSEC-2026-0330", # libcrux-kem
+  "RUSTSEC-2026-0331", # libcrux-kem
+]

@@ -22,6 +22,14 @@ tauri-build = { version = "=2.6.3", features = [] }
 prost-build = "0.13"
 protox = "0.7"
 
+[features]
+# The MDK chat engine beside the renderer's ts-mls one. Off by default: MDK's
+# encrypted store is SQLCipher, whose crypto off Apple platforms is OpenSSL
+# built from source, so a Windows build needs a full Perl named by
+# OPENSSL_SRC_PERL (Strawberry; Git's Perl lacks modules OpenSSL's configure
+# uses). Without it the chat runs on ts-mls alone.
+mdk-chat = ["dep:optn-chat", "optn-chat/sqlite", "dep:optn-nostr"]
+
 [dependencies]
 optn-multisig-core = { path = "../crates/optn-multisig-core", version = "=1.7.3" }
 serde_json = "1.0"
@@ -70,6 +78,9 @@ k256 = "0.13"
 optn-core = { path = "../crates/optn-core", version = "=1.7.3" }
 optn-fusion = { path = "../crates/optn-fusion", version = "=1.7.3" }
 optn-fusion-native = { path = "../crates/optn-fusion-native", version = "=1.7.3" }
+# Marmot chat through MDK, behind the `mdk-chat` feature (see [features]).
+optn-chat = { path = "../crates/optn-chat", version = "=1.7.3", optional = true }
+optn-nostr = { path = "../crates/optn-nostr", version = "=1.7.3", optional = true }
 optn-app = { path = "../crates/optn-app", version = "=1.7.3" }
 optn-platform = { path = "../crates/optn-platform", version = "=1.7.3" }
 optn-runtime = { path = "../crates/optn-runtime", version = "=1.7.3" }

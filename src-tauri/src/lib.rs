@@ -10,6 +10,7 @@ mod app_update;
 mod appearance;
 pub mod chain_runtime;
 mod chain_sources;
+mod chat_mdk;
 #[cfg(desktop)]
 pub mod clipboard;
 mod coin_holds;
@@ -1446,6 +1447,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     nostr_tor::close_owned_by(&owner).await;
                     electrum_tcp::close_owned_by(&owner).await;
+                    chat_mdk::close_owned_by(&owner).await;
                 });
             }
         })
@@ -1455,6 +1457,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     nostr_tor::close_owned_by(&owner).await;
                     electrum_tcp::close_owned_by(&owner).await;
+                    chat_mdk::close_owned_by(&owner).await;
                 });
             }
         })
@@ -1538,6 +1541,10 @@ pub fn run() {
             nostr_tor::nostr_tor_send,
             nostr_tor::nostr_tor_close,
             nostr_tor::nostr_relay_health,
+            chat_mdk::chat_mdk_available,
+            chat_mdk::chat_mdk_open,
+            chat_mdk::chat_mdk_close,
+            chat_mdk::chat_mdk_call,
             #[cfg(desktop)]
             hw::session::hw_enumerate,
             #[cfg(desktop)]
