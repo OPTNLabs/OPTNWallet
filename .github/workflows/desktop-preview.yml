@@ -38,8 +38,11 @@ jobs:
     #
     # A timeout here is self-perpetuating: the run dies before "Post Rust cache",
     # so nothing is saved and the next run is uncached and slow for the same
-    # reason. 90 leaves the slowest observed leg about 35 minutes of headroom.
-    timeout-minutes: 90
+    # reason. 90 left the slowest observed leg about 35 minutes of headroom
+    # until MDK chat was built in: SQLCipher's vendored OpenSSL and the
+    # OpenMLS stack took an uncached linux-x64 build to 77 minutes, and
+    # linux-arm64 past 90. 120 restores the headroom.
+    timeout-minutes: 120
     env:
       # macOS runners have less memory; the Vite frontend build (Tauri beforeBuildCommand)
       # OOMs at Node's default heap. Raise it for all platforms (harmless on Windows/Linux).
