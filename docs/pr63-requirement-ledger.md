@@ -2541,7 +2541,10 @@ Tests:
 - Suites:
   - the root workspace passes (optn-runtime 422), as do the desktop (144) and
     the CLI; clippy is strict for all three;
-  - one CLI test fails on Windows only. In
-    `managed_spend_refuses_without_shared_runtime_coin_freshness`, a refused
-    loopback connect takes 2 s there, longer than the test's 1 s timeout.
-    CI runs it on Linux.
+  - `managed_spend_refuses_without_shared_runtime_coin_freshness` was failing
+    on every OS, not only on Windows as first read. `b43c43e3` made `send`
+    sync before spending, so with no route the refusal is "HD rescan
+    incomplete", not the runtime's freshness message; the test now asserts
+    that, against a server that hangs up at once (a refused loopback connect
+    takes 2 s on Windows, past the test's 1 s timeout). cli-preview does not
+    run on this PR, which is why CI did not show it.

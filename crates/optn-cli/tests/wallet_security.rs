@@ -739,7 +739,16 @@ fn managed_spend_refuses_without_shared_runtime_coin_freshness() {
     let directory = test_directory();
     fixture(directory.path(), "public.optn", 0);
     let destination = address(0);
-    let output = run_cli(
+    // A server that hangs up at once, so the rescan fails at once. A refused
+    // loopback connect takes about 2 s on Windows, longer than the 1 s timeout.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            drop(stream);
+        }
+    });
+    let output = run_cli_at(
         directory.path(),
         &[
             "--wallet",
@@ -751,13 +760,19 @@ fn managed_spend_refuses_without_shared_runtime_coin_freshness() {
             "--dry-run",
         ],
         "old-password\n",
+        port,
     );
+    // A saved wallet spends only from a fresh sync on the shared stack. With
+    // no route to refresh it, the spend is refused before anything is built.
     assert!(!output.status.success());
     let values = responses(&output);
-    assert!(values[0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("Refresh the wallet"));
+    assert!(
+        values[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("HD rescan incomplete"),
+        "{values:?}"
+    );
     assert!(values[0].get("raw").is_none() && values[0].get("txid").is_none());
 }
 
