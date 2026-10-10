@@ -89,7 +89,8 @@ impl RelayRoute {
 pub enum RelayError {
     /// No relay was given.
     NoRelays,
-    /// A relay URL that is not `ws://` or `wss://`, or does not parse.
+    /// A relay URL that is not a WebSocket URL (`wss`, or plain `ws`), or
+    /// does not parse.
     InvalidRelay { url: String, reason: String },
     /// A remote relay under [`RelayRoute::LocalOnly`]: it would have been
     /// reached without Tor.

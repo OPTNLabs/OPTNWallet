@@ -27,7 +27,7 @@ and existing groups stay on the engine that made them.
 | Order | Relays order nothing beyond `created_at`, and MDK never retries an event it failed to read. So nothing is published in the same second as the newest commit the engine has made or read (waiting up to 3 s), and each read is sorted by time. |
 | Reading | Catch-up reads the inbox (with the two days of NIP-59 timestamp skew) and every active group since the last read, then reads live. Every event read goes to one stream, once. MDK's own processed-event records decide what is new. |
 | Store | MDK's SQLCipher store, `<app data>/chat-mdk/<pubkey>.mdk.sqlite`. Its key is HKDF-SHA256 of the chat identity's secret key, so whoever holds the wallet seed can open it and nobody else can. Beside it, a plain state file holds the key-package slot and read times; neither is secret. |
-| Relays | `optn-nostr` (rust-nostr 0.45) over the desktop's own egress: the Tor switch, the holder's declared hosts, public addresses only for anyone else's relay, and `ws://` only on this machine. These are the same rules the renderer's relay sockets follow. |
+| Relays | `optn-nostr` (rust-nostr 0.45) over the desktop's own egress: the Tor switch, the holder's declared hosts, public addresses only for anyone else's relay, and plain `ws` only on this machine. These are the same rules the renderer's relay sockets follow. |
 
 ## What MDK does not do (yet)
 

@@ -113,15 +113,25 @@ jobs:
           done
           echo "::error::No ancestor of $BASE_SHA within 20 commits has a complete dependency comparison with $HEAD_SHA"
           exit 1
+      # GHSA-hc3c-63hc-2r9f (RUSTSEC-2026-0124) is in libcrux-chacha20poly1305,
+      # part of hpke-rs's optional libcrux backend. MDK's OpenMLS provider
+      # (optn-chat) uses hpke-rs's RustCrypto backend, and nothing enables the
+      # libcrux one: it is in Cargo.lock only because Cargo records optional
+      # dependencies too, and no build compiles it. The same case is in
+      # deny.toml's notes and src-tauri/.cargo/audit.toml. Remove when
+      # openmls_rust_crypto moves to an hpke-rs on fixed libcrux releases.
       - name: Dependency review
         if: steps.dependency-graph.outputs.status == 'enabled'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
+        with:
+          allow-ghsas: GHSA-hc3c-63hc-2r9f
       - name: Dependency review from the complete base
         if: steps.dependency-graph.outputs.status == 'enabled' && steps.review-base.outputs.sha != github.event.pull_request.base.sha
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48
         with:
           base-ref: ${{ steps.review-base.outputs.sha }}
           head-ref: ${{ github.event.pull_request.head.sha }}
+          allow-ghsas: GHSA-hc3c-63hc-2r9f
       - name: Skip dependency review
         if: steps.dependency-graph.outputs.status != 'enabled'
         run: echo "Dependency graph is disabled; skipping dependency review."

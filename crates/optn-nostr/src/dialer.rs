@@ -184,11 +184,11 @@ mod tests {
             })
         );
         assert_eq!(
-            endpoint("ws://[::1]:7777"),
+            endpoint("wss://[::1]:7777"),
             Ok(RelayEndpoint {
                 host: "::1".into(),
                 port: 7777,
-                tls: false
+                tls: true
             })
         );
         assert!(endpoint("https://relay.example.org").is_err());
