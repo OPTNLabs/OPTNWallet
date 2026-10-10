@@ -10,6 +10,8 @@
   --border: rgba(17, 24, 39, 0.12);
   --accent: #19b773;
   --accent-text: #051b12;
+  --danger: #b42318;
+  --warning: #8a5300;
 }
 
 * {
@@ -47,6 +49,8 @@ a {
   --border: rgba(17, 24, 39, 0.12);
   --accent: #19b773;
   --accent-text: #051b12;
+  --danger: #b42318;
+  --warning: #8a5300;
 }
 
 .app-shell.theme-gray {
@@ -57,6 +61,8 @@ a {
   --border: rgba(255, 255, 255, 0.1);
   --accent: #3dd68c;
   --accent-text: #052014;
+  --danger: #ff9a8f;
+  --warning: #f2c46b;
 }
 
 .app-shell.theme-green,
@@ -68,6 +74,8 @@ a {
   --border: rgba(61, 214, 140, 0.22);
   --accent: #3dd68c;
   --accent-text: #042016;
+  --danger: #ffa198;
+  --warning: #ffd27a;
 }
 
 .app-shell.theme-dark {
@@ -78,6 +86,8 @@ a {
   --border: rgba(255, 255, 255, 0.12);
   --accent: #31db90;
   --accent-text: #03150d;
+  --danger: #ff8f86;
+  --warning: #f2cc60;
 }
 
 .app-shell.skin-cyberpunk {
@@ -616,6 +626,16 @@ h1 {
   padding: 0;
   display: grid;
   gap: 0.75rem;
+}
+
+.error,
+.field-error {
+  color: var(--danger);
+}
+
+.warn,
+.warning {
+  color: var(--warning);
 }
 
 .notice {
