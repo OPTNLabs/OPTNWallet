@@ -8,6 +8,10 @@ members = [
   "crates/optn-chain-native",
   "crates/optn-chain-neutrino",
   "crates/optn-chain-zmq",
+  # Marmot chat through MDK. A member, so the workspace's tests and clippy
+  # cover it, but not a default member: MDK brings OpenMLS and its media
+  # stack, which builds of the wallet crates need not wait for.
+  "crates/optn-chat",
   "crates/optn-fusion",
   "crates/optn-fusion-native",
   "crates/optn-nostr",

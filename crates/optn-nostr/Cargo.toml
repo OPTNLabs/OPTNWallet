@@ -14,8 +14,13 @@ nostr = { version = "0.45.5", default-features = false, features = ["std", "nip4
 nostr-sdk = { version = "0.45.4", default-features = false, features = ["ring", "rustls-tls-webpki-roots"] }
 futures = "0.3"
 tokio = { version = "1", features = ["sync", "time"] }
+# A host's own dialer (the desktop's egress) hands over the stream and the
+# WebSocket runs over it: the socket message type rust-nostr's transport
+# speaks, and the handshake from the same tungstenite release.
+async-wsocket = { version = "0.17", default-features = false }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
 
 [dev-dependencies]
 nostr-sdk = { version = "0.45.4", default-features = false, features = ["ring", "rustls-tls-webpki-roots", "local-relay"] }
 serde_json = "1.0"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }

@@ -1,34 +1,42 @@
 #![forbid(unsafe_code)]
 
-//! Nostr relays for OPTN, over the holder's verified Tor proxy.
+//! Nostr relays for OPTN, over the holder's verified Tor proxy or the host's
+//! own egress.
 //!
 //! One crate for every Rust surface that speaks Nostr -- P2P CashFusion
 //! coordination and chat, on the desktop host, the CLI and the docker runner --
 //! so a relay is reached the same way everywhere:
 //!
 //! - [`Relays`]: a set of relays reached through [`RelayRoute`], publishing
-//!   with at-least-once acceptance and streaming subscribed events.
+//!   with at-least-once acceptance and streaming subscribed events, to the
+//!   whole set or to the relays one group or one peer reads.
 //! - [`nip17`]: NIP-17 private messages (a kind-14 rumor, sealed and
 //!   gift-wrapped per NIP-59), the envelope the TypeScript peers' nostr-tools
 //!   `wrapEvent` / `unwrapEvent` produce and read, so Rust and TypeScript peers
 //!   exchange the same bytes.
+//! - [`nip59`]: gift wraps for any rumor, such as a Marmot welcome.
+//! - [`dialer`]: relays reached through a dialer the host supplies.
 //!
 //! Built on rust-nostr (`nostr`, `nostr-sdk` 0.45).
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use nostr::prelude::{Event, Filter, RelayUrl, SubscriptionId};
 use nostr_sdk::prelude::{Client, ClientNotification, Proxy};
 
+pub mod dialer;
 pub mod nip17;
+pub mod nip59;
 
+pub use dialer::{Dialed, RelayDialer, RelayEndpoint, RelayIo};
 pub use nostr;
 
 /// How relays are reached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone)]
 pub enum RelayRoute {
     /// Remote relays through this SOCKS5 proxy: the holder's Tor, which the
     /// caller has verified the way every other remote leg is verified. Relays
@@ -37,15 +45,41 @@ pub enum RelayRoute {
     /// Relays on this machine only (tests, a relay the holder runs locally).
     /// A remote relay is refused rather than reached directly.
     LocalOnly,
+    /// Every relay through the host's dialer (see [`dialer`]), which applies
+    /// the holder's egress rules, Tor switch included, and may refuse.
+    Dialer(Arc<dyn RelayDialer>),
+}
+
+impl std::fmt::Debug for RelayRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RelayRoute::Tor(socks) => f.debug_tuple("Tor").field(socks).finish(),
+            RelayRoute::LocalOnly => f.write_str("LocalOnly"),
+            RelayRoute::Dialer(_) => f.write_str("Dialer"),
+        }
+    }
 }
 
 impl RelayRoute {
-    fn proxy(self) -> Option<Proxy> {
+    fn admits(&self, relay: &RelayUrl) -> bool {
+        !matches!(self, RelayRoute::LocalOnly) || relay.is_local_addr()
+    }
+
+    fn client(&self) -> Client {
+        let builder = Client::builder();
         match self {
-            RelayRoute::Tor(socks) => Some(Proxy::custom(move |url: &RelayUrl| {
-                (!url.is_local_addr()).then_some(socks)
-            })),
-            RelayRoute::LocalOnly => None,
+            RelayRoute::Tor(socks) => {
+                let socks = *socks;
+                builder
+                    .proxy(Proxy::custom(move |url: &RelayUrl| {
+                        (!url.is_local_addr()).then_some(socks)
+                    }))
+                    .build()
+            }
+            RelayRoute::LocalOnly => builder.build(),
+            RelayRoute::Dialer(dialer) => builder
+                .websocket_transport(dialer::DialerTransport(dialer.clone()))
+                .build(),
         }
     }
 }
@@ -107,6 +141,15 @@ fn client_error(error: impl std::fmt::Display) -> RelayError {
     RelayError::Client(error.to_string())
 }
 
+fn failures<V: std::fmt::Display>(
+    failed: impl IntoIterator<Item = (RelayUrl, V)>,
+) -> BTreeMap<String, String> {
+    failed
+        .into_iter()
+        .map(|(url, reason)| (url.to_string(), reason.to_string()))
+        .collect()
+}
+
 /// Relays the event was published to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Published {
@@ -116,88 +159,140 @@ pub struct Published {
     pub failed: BTreeMap<String, String>,
 }
 
-/// A connected set of relays.
+/// A connected set of relays. More can be reached later with
+/// [`Relays::add`]; the targeted calls reach theirs on demand.
 #[derive(Debug, Clone)]
 pub struct Relays {
     client: Client,
-    urls: Vec<RelayUrl>,
+    route: RelayRoute,
 }
 
 impl Relays {
     /// Reach `urls` through `route`, waiting up to `timeout` for at least one
-    /// to connect. Remote relays need [`RelayRoute::Tor`].
+    /// to connect. Remote relays need [`RelayRoute::Tor`] or a dialer.
     pub async fn connect(
         urls: &[impl AsRef<str>],
         route: RelayRoute,
         timeout: Duration,
     ) -> Result<Self, RelayError> {
-        if urls.is_empty() {
-            return Err(RelayError::NoRelays);
+        let parsed = parse(urls, &route)?;
+        let relays = Self {
+            client: route.client(),
+            route,
+        };
+        if let Err(error) = relays.reach(&parsed, timeout).await {
+            relays.client.shutdown().await;
+            return Err(error);
         }
-        let mut parsed = Vec::with_capacity(urls.len());
-        for url in urls {
-            let text = url.as_ref();
-            let relay = RelayUrl::parse(text).map_err(|error| RelayError::InvalidRelay {
-                url: text.to_owned(),
-                reason: error.to_string(),
-            })?;
-            if route == RelayRoute::LocalOnly && !relay.is_local_addr() {
-                return Err(RelayError::RemoteWithoutTor {
-                    url: text.to_owned(),
-                });
-            }
-            if !parsed.contains(&relay) {
-                parsed.push(relay);
-            }
-        }
-        let mut builder = Client::builder();
-        if let Some(proxy) = route.proxy() {
-            builder = builder.proxy(proxy);
-        }
-        let client = builder.build();
-        for relay in &parsed {
-            client
+        Ok(relays)
+    }
+
+    /// Reach `urls` as well, waiting up to `timeout` for them. Succeeds with
+    /// the ones connected when at least one is.
+    pub async fn add(
+        &self,
+        urls: &[impl AsRef<str>],
+        timeout: Duration,
+    ) -> Result<Vec<String>, RelayError> {
+        let parsed = parse(urls, &self.route)?;
+        let connected = self.reach(&parsed, timeout).await?;
+        Ok(connected.iter().map(ToString::to_string).collect())
+    }
+
+    async fn reach(
+        &self,
+        relays: &[RelayUrl],
+        timeout: Duration,
+    ) -> Result<Vec<RelayUrl>, RelayError> {
+        for relay in relays {
+            self.client
                 .add_relay(relay.clone())
                 .await
                 .map_err(client_error)?;
         }
-        let output = client.try_connect().timeout(timeout).await;
-        if output.success.is_empty() {
-            client.shutdown().await;
-            return Err(RelayError::NotConnected {
-                failed: output
-                    .failed
-                    .into_iter()
-                    .map(|(url, reason)| (url.to_string(), reason))
-                    .collect(),
-            });
+        // A relay already connected answers at once.
+        let attempts = relays.iter().map(|relay| async move {
+            let outcome = self.client.try_connect_relay(relay, timeout).await;
+            (relay.clone(), outcome)
+        });
+        let mut connected = Vec::new();
+        let mut failed = BTreeMap::new();
+        for (relay, outcome) in futures::future::join_all(attempts).await {
+            match outcome {
+                Ok(()) => connected.push(relay),
+                Err(error) => {
+                    failed.insert(relay.to_string(), error.to_string());
+                }
+            }
         }
-        Ok(Self {
-            client,
-            urls: parsed,
-        })
+        if connected.is_empty() {
+            return Err(RelayError::NotConnected { failed });
+        }
+        Ok(connected)
     }
 
-    /// The relays this set was asked to reach.
-    pub fn urls(&self) -> impl Iterator<Item = &str> {
-        self.urls.iter().map(RelayUrl::as_str)
+    /// The relays this set has been asked to reach.
+    pub async fn urls(&self) -> Vec<String> {
+        let mut urls: Vec<String> = self
+            .client
+            .relays()
+            .await
+            .into_keys()
+            .map(|url| url.to_string())
+            .collect();
+        urls.sort();
+        urls
     }
 
-    /// Publish `event`. Succeeds when at least one relay accepts it, which is
-    /// what a peer needs to see it; the relays that did not are reported.
+    /// Publish `event` to every relay in the set. Succeeds when at least one
+    /// relay accepts it, which is what a peer needs to see it; the relays
+    /// that did not are reported.
     pub async fn publish(&self, event: &Event) -> Result<Published, RelayError> {
         let output = self.client.send_event(event).await.map_err(client_error)?;
-        let failed: BTreeMap<String, String> = output
-            .failed
+        published(output.success.into_keys(), failures(output.failed))
+    }
+
+    /// Publish `event` to `urls`, reaching them first if need be: the relays
+    /// a group reads, or the ones a peer receives on.
+    pub async fn publish_to(
+        &self,
+        urls: &[impl AsRef<str>],
+        event: &Event,
+        timeout: Duration,
+    ) -> Result<Published, RelayError> {
+        let reached = self.reach_some(urls, timeout).await?;
+        let mut failed = reached.failed;
+        let output = self
+            .client
+            .send_event(event)
+            .to(reached.connected)
+            .await
+            .map_err(client_error)?;
+        failed.extend(failures(output.failed));
+        published(output.success.into_keys(), failed)
+    }
+
+    /// Events matching `filter` stored on `urls`, waiting up to `timeout`.
+    /// Relays that cannot be reached are skipped while one can.
+    pub async fn fetch(
+        &self,
+        urls: &[impl AsRef<str>],
+        filter: Filter,
+        timeout: Duration,
+    ) -> Result<Vec<Event>, RelayError> {
+        let reached = self.reach_some(urls, timeout).await?;
+        let targets: Vec<(RelayUrl, Vec<Filter>)> = reached
+            .connected
             .into_iter()
-            .map(|(url, reason)| (url.to_string(), reason))
+            .map(|relay| (relay, vec![filter.clone()]))
             .collect();
-        if output.success.is_empty() {
-            return Err(RelayError::NotAccepted { failed });
-        }
-        let mut accepted: Vec<String> = output.success.keys().map(ToString::to_string).collect();
-        accepted.sort();
-        Ok(Published { accepted, failed })
+        let events = self
+            .client
+            .fetch_events(targets)
+            .timeout(timeout)
+            .await
+            .map_err(client_error)?;
+        Ok(events.into_iter().collect())
     }
 
     /// Ask the relays for events matching `filter`, stored and new. They
@@ -206,14 +301,47 @@ impl Relays {
         let output = self.client.subscribe(filter).await.map_err(client_error)?;
         if output.success.is_empty() {
             return Err(RelayError::NotAccepted {
-                failed: output
-                    .failed
-                    .into_iter()
-                    .map(|(url, reason)| (url.to_string(), reason))
-                    .collect(),
+                failed: failures(output.failed),
             });
         }
         Ok(output.value)
+    }
+
+    /// [`Relays::subscribe`] on `urls`, reaching them first if need be.
+    pub async fn subscribe_to(
+        &self,
+        urls: &[impl AsRef<str>],
+        filter: Filter,
+        timeout: Duration,
+    ) -> Result<SubscriptionId, RelayError> {
+        let reached = self.reach_some(urls, timeout).await?;
+        let targets: Vec<(RelayUrl, Vec<Filter>)> = reached
+            .connected
+            .into_iter()
+            .map(|relay| (relay, vec![filter.clone()]))
+            .collect();
+        let output = self.client.subscribe(targets).await.map_err(client_error)?;
+        if output.success.is_empty() {
+            return Err(RelayError::NotAccepted {
+                failed: failures(output.failed),
+            });
+        }
+        Ok(output.value)
+    }
+
+    async fn reach_some(
+        &self,
+        urls: &[impl AsRef<str>],
+        timeout: Duration,
+    ) -> Result<Reached, RelayError> {
+        let parsed = parse(urls, &self.route)?;
+        let connected = self.reach(&parsed, timeout).await?;
+        let failed = parsed
+            .iter()
+            .filter(|relay| !connected.contains(relay))
+            .map(|relay| (relay.to_string(), "not reached".to_owned()))
+            .collect();
+        Ok(Reached { connected, failed })
     }
 
     /// Stop a subscription. Relays that cannot be told keep it until they
@@ -249,11 +377,52 @@ impl Relays {
     }
 }
 
+struct Reached {
+    connected: Vec<RelayUrl>,
+    failed: BTreeMap<String, String>,
+}
+
+fn published(
+    accepted: impl Iterator<Item = RelayUrl>,
+    failed: BTreeMap<String, String>,
+) -> Result<Published, RelayError> {
+    let mut accepted: Vec<String> = accepted.map(|url| url.to_string()).collect();
+    if accepted.is_empty() {
+        return Err(RelayError::NotAccepted { failed });
+    }
+    accepted.sort();
+    Ok(Published { accepted, failed })
+}
+
+fn parse(urls: &[impl AsRef<str>], route: &RelayRoute) -> Result<Vec<RelayUrl>, RelayError> {
+    if urls.is_empty() {
+        return Err(RelayError::NoRelays);
+    }
+    let mut parsed = Vec::with_capacity(urls.len());
+    for url in urls {
+        let text = url.as_ref();
+        let relay = RelayUrl::parse(text).map_err(|error| RelayError::InvalidRelay {
+            url: text.to_owned(),
+            reason: error.to_string(),
+        })?;
+        if !route.admits(&relay) {
+            return Err(RelayError::RemoteWithoutTor {
+                url: text.to_owned(),
+            });
+        }
+        if !parsed.contains(&relay) {
+            parsed.push(relay);
+        }
+    }
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use nostr::prelude::{EventBuilder, FinalizeEvent, Keys, Kind};
     use nostr_sdk::prelude::LocalRelay;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     async fn local_relay() -> (LocalRelay, String) {
         let relay = LocalRelay::new();
@@ -296,11 +465,12 @@ mod tests {
             Err(RelayError::InvalidRelay { .. })
         ));
         // Under Tor, a relay on this machine is still reached directly and a
-        // remote one through the proxy.
-        let proxy = RelayRoute::Tor("127.0.0.1:9050".parse().unwrap())
-            .proxy()
-            .unwrap();
-        let _ = proxy;
+        // remote one through the proxy; under a dialer, every relay is the
+        // dialer's to judge.
+        let tor = RelayRoute::Tor("127.0.0.1:9050".parse().unwrap());
+        let remote = RelayUrl::parse("wss://relay.example.org").unwrap();
+        assert!(tor.admits(&remote));
+        assert!(!RelayRoute::LocalOnly.admits(&remote));
     }
 
     #[tokio::test]
@@ -347,5 +517,117 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(error, RelayError::NotConnected { .. }), "{error}");
+    }
+
+    /// A group's relays are not the set the client started with: publishing
+    /// and fetching reach them on demand, and a relay that cannot be reached
+    /// is reported beside the one that took the event.
+    #[tokio::test]
+    async fn a_relay_outside_the_set_is_reached_on_demand() {
+        let (home, home_url) = local_relay().await;
+        let (group, group_url) = local_relay().await;
+        let relays = Relays::connect(&[&home_url], RelayRoute::LocalOnly, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(445), "group event")
+            .finalize(&keys)
+            .unwrap();
+
+        let published = relays
+            .publish_to(
+                &[group_url.as_str(), "ws://127.0.0.1:9"],
+                &event,
+                Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+        assert_eq!(published.accepted, vec![group_url.clone()]);
+        assert!(published.failed.contains_key("ws://127.0.0.1:9"));
+
+        let fetched = relays
+            .fetch(
+                &[&group_url],
+                Filter::new()
+                    .kind(Kind::Custom(445))
+                    .author(keys.public_key()),
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            fetched.iter().map(|event| event.id).collect::<Vec<_>>(),
+            vec![event.id]
+        );
+        // The home relay never saw it.
+        let home_only = relays
+            .fetch(
+                &[&home_url],
+                Filter::new().kind(Kind::Custom(445)),
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert!(home_only.is_empty());
+        assert_eq!(relays.urls().await.len(), 3);
+        relays.shutdown().await;
+        home.shutdown();
+        group.shutdown();
+    }
+
+    /// The host's dialer opens every stream, and its refusal is that relay's
+    /// failure, never a fallback to a direct connection.
+    #[tokio::test]
+    async fn a_dialer_opens_every_relay_and_its_refusal_stands() {
+        #[derive(Default)]
+        struct Counting {
+            dialed: AtomicUsize,
+        }
+        impl RelayDialer for Counting {
+            fn dial(&self, endpoint: RelayEndpoint) -> Dialed {
+                self.dialed.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    if endpoint.port == 9 {
+                        return Err("the holder's egress refuses this relay".to_owned());
+                    }
+                    let stream =
+                        tokio::net::TcpStream::connect((endpoint.host.as_str(), endpoint.port))
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    Ok(Box::new(stream) as Box<dyn RelayIo>)
+                })
+            }
+        }
+
+        let (relay, url) = local_relay().await;
+        let dialer = Arc::new(Counting::default());
+        let relays = Relays::connect(
+            &[&url],
+            RelayRoute::Dialer(dialer.clone()),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(dialer.dialed.load(Ordering::SeqCst), 1);
+
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::TextNote, "through the host")
+            .finalize(&keys)
+            .unwrap();
+        assert_eq!(relays.publish(&event).await.unwrap().accepted, vec![url]);
+
+        let refused = relays
+            .add(&["ws://127.0.0.1:9"], Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        match refused {
+            RelayError::NotConnected { failed } => {
+                let reason = &failed["ws://127.0.0.1:9"];
+                assert!(reason.contains("refuses"), "{reason}");
+            }
+            other => panic!("unexpected {other}"),
+        }
+        relays.shutdown().await;
+        relay.shutdown();
     }
 }

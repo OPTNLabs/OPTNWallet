@@ -9,7 +9,6 @@
 //! chat, not the kind.
 
 use nostr::nips::nip17::PrivateDirectMessageBuilder;
-use nostr::nips::nip59::UnwrappedGift;
 use nostr::prelude::{Event, FinalizeEvent, Keys, Kind, PublicKey};
 
 /// A private message, opened.
@@ -41,26 +40,19 @@ pub fn wrap(sender: &Keys, receiver: &PublicKey, content: &str) -> Result<Event,
 }
 
 /// Open a gift wrap addressed to `receiver`. The outer event and the seal are
-/// verified, and only a kind-14 rumor is a private message.
+/// verified, the rumor's author must be the key that sealed it (see
+/// [`crate::nip59::open`]), and only a kind-14 rumor is a private message.
 pub fn unwrap(receiver: &Keys, wrapped: &Event) -> Result<PrivateMessage, Nip17Error> {
-    let gift = UnwrappedGift::from_gift_wrap(receiver, wrapped)
-        .map_err(|error| Nip17Error(error.to_string()))?;
-    if gift.rumor.kind != Kind::PrivateDirectMessage {
+    let opened = crate::nip59::open(receiver, wrapped).map_err(|error| Nip17Error(error.0))?;
+    if opened.rumor.kind != Kind::PrivateDirectMessage {
         return Err(Nip17Error(format!(
             "the sealed event is kind {}, not a private message",
-            gift.rumor.kind.as_u16()
+            opened.rumor.kind.as_u16()
         )));
     }
-    // The rumor is unsigned: its author must be the key that sealed it, or
-    // anyone could put words in another peer's mouth inside a valid seal.
-    if gift.rumor.pubkey != gift.sender {
-        return Err(Nip17Error(
-            "the message names a different author than the key that sealed it".into(),
-        ));
-    }
     Ok(PrivateMessage {
-        sender: gift.sender,
-        content: gift.rumor.content,
+        sender: opened.sender,
+        content: opened.rumor.content,
     })
 }
 
