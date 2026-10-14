@@ -70,6 +70,24 @@ pub fn psbt_finalize_cash_tokens_p2pkh(
     crate::psbt::finalize_cash_tokens_p2pkh(original, signed, network_from(network)?).map_err(err)
 }
 
+/// Frames in one pass of a PSBT's animated `ur:crypto-psbt` QR.
+#[wasm_bindgen(js_name = psbtUrFrameCount)]
+pub fn psbt_ur_frame_count(psbt: &[u8], max_fragment_len: u32) -> Result<u32, JsValue> {
+    Ok(crate::ur::PsbtUr::new(psbt, max_fragment_len as usize)
+        .map_err(err)?
+        .frame_count())
+}
+
+/// Frame `seq_num` (from 1, without end) of a PSBT's animated
+/// `ur:crypto-psbt` QR. Stateless, so the screen owns only a counter and
+/// mobile and desktop draw the same frames.
+#[wasm_bindgen(js_name = psbtUrFrame)]
+pub fn psbt_ur_frame(psbt: &[u8], max_fragment_len: u32, seq_num: u32) -> Result<String, JsValue> {
+    crate::ur::PsbtUr::new(psbt, max_fragment_len as usize)
+        .and_then(|ur| ur.frame(seq_num))
+        .map_err(err)
+}
+
 /// The coin-control label of one reported coin, as JSON; see
 /// `coin_control::ReportedCoin`. Flat arguments keep a JSON parser out of
 /// this binary.

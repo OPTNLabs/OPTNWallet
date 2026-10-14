@@ -121,7 +121,6 @@ import {
 } from '../../services/psbt/psbtMultisig';
 import {
   DEFAULT_UR_FRAGMENT_LENGTH,
-  encodePsbtToUrFrames,
   UR_FRAGMENT_LENGTH_OPTIONS,
   encodePsbtToQrDisplay,
   UrPsbtScanner,
@@ -1218,22 +1217,15 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     }
   };
 
+  // One path for phone and desktop. Phones used to get a single static QR of
+  // up to 2,400 characters here, which SeedCash's camera cannot read.
   const startQrFrames = (psbt: Uint8Array, fragmentLength: number) => {
-    if (!desktopQr) {
-      const display = encodePsbtToQrDisplay(psbt);
-      frameIndexRef.current = 0;
-      frameCountRef.current = display.count;
-      setFrames(display.frames);
-      setQrMode(display.mode);
-      setQrUri(display.uri);
-      return;
-    }
-    const frameSource = encodePsbtToUrFrames(psbt, fragmentLength);
+    const display = encodePsbtToQrDisplay(psbt, fragmentLength);
     frameIndexRef.current = 0;
-    frameCountRef.current = frameSource.count;
-    setFrames(frameSource);
-    setQrMode('stream');
-    setQrUri(frameSource.next());
+    frameCountRef.current = display.count;
+    setFrames(display.frames);
+    setQrMode(display.mode);
+    setQrUri(display.uri);
   };
 
   const formatBchInput = (satoshis: bigint): string => {
@@ -1534,12 +1526,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
         setMergedPsbt(nextPsbt);
         // Carry the accumulated signatures to the next cosigner. Reusing the
         // original unsigned frames would restart the threshold flow.
-        const nextFrames = encodePsbtToQrDisplay(nextPsbt);
-        frameIndexRef.current = 0;
-        frameCountRef.current = nextFrames.count;
-        setFrames(nextFrames.frames);
-        setQrMode(nextFrames.mode);
-        setQrUri(nextFrames.uri);
+        startQrFrames(nextPsbt, urFragmentLength);
         setImportText('');
         setImportErrors(
           outcome.results
@@ -2400,7 +2387,8 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                     the QR's own quiet zone (`marginSize` below) is what a
                     camera needs to find the finder patterns, and it is inside
                     the SVG. A second white ring outside it just eats the space
-                    the code could have used.
+                    the code could have used. Phones get the same quiet zone
+                    as desktop: a one-module border is what SeedCash missed.
 
                     Desktop expands in place rather than behind a button. The
                     cap is the viewport height less the surrounding chrome, so
@@ -2418,7 +2406,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                     <QRCodeSVG
                       value={qrUri}
                       size={PSBT_UR_QR_DISPLAY_SIZE}
-                      marginSize={desktopQr ? PSBT_UR_QR_MARGIN_MODULES : 1}
+                      marginSize={PSBT_UR_QR_MARGIN_MODULES}
                       level={PSBT_UR_QR_ERROR_LEVEL}
                       className={
                         desktopQr

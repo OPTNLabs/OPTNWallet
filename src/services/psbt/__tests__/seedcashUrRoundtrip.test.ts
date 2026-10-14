@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { binToHex } from '@bitauth/libauth';
 
-import { encodePsbtToUrFrames, encodePsbtToSingleUr } from '../urPsbt';
+import { encodePsbtToUrFrames } from '../urPsbt';
 
 const SIGNER = join(process.cwd(), 'scripts', 'seedcash', 'sign_psbt.py');
 const CWD = join(process.cwd(), 'scripts', 'seedcash');
@@ -79,10 +79,24 @@ describeLive('SeedCash UR decoding', () => {
     expect(decodeWithSeedCash(shuffled)).toBe(binToHex(psbt));
   });
 
+  it('rebuilds the PSBT from mixed frames alone', () => {
+    // Skip the whole first pass, as a camera pointed late would. Only mixed
+    // frames remain, so this passes only if SeedCash picks the same fragments
+    // for each sequence number as the Rust encoder mixed.
+    const psbt = payload(1200);
+    const encoder = encodePsbtToUrFrames(psbt);
+    for (let i = 0; i < encoder.count; i += 1) encoder.next();
+    const frames = Array.from({ length: encoder.count * 4 }, () =>
+      encoder.next()
+    );
+
+    expect(decodeWithSeedCash(frames)).toBe(binToHex(psbt));
+  });
+
   it('reads the single-frame form too', () => {
     const psbt = payload(200);
-    expect(decodeWithSeedCash([encodePsbtToSingleUr(psbt)])).toBe(
-      binToHex(psbt)
-    );
+    const encoder = encodePsbtToUrFrames(psbt, 450);
+    expect(encoder.count).toBe(1);
+    expect(decodeWithSeedCash([encoder.next()])).toBe(binToHex(psbt));
   });
 });

@@ -56,6 +56,9 @@ pub mod spend;
 pub mod token;
 pub mod tor;
 pub mod tx;
+/// The animated `ur:crypto-psbt` QR an air-gapped signer scans, one encoder
+/// for every surface.
+pub mod ur;
 pub mod wallet_file;
 pub mod wallet_pack;
 pub mod watch_only;

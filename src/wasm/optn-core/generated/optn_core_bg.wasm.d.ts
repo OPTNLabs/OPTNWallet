@@ -44,6 +44,8 @@ export const paymentAddress: (a: number, b: number, c: number, d: number, e: num
 export const planTokenSpend: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: bigint) => [number, number, number, number];
 export const psbtFinalizeCashTokensP2pkh: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const psbtReviewP2pkh: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const psbtUrFrame: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const psbtUrFrameCount: (a: number, b: number, c: number) => [number, number, number];
 export const rpaKeyPaths: (a: number, b: number) => [number, number];
 export const scanTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const sendBlockReason: (a: number, b: number) => [number, number, number, number];

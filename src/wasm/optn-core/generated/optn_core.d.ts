@@ -260,6 +260,18 @@ export function psbtFinalizeCashTokensP2pkh(original: Uint8Array, signed: Uint8A
 export function psbtReviewP2pkh(raw: Uint8Array, network: string): string;
 
 /**
+ * Frame `seq_num` (from 1, without end) of a PSBT's animated
+ * `ur:crypto-psbt` QR. Stateless, so the screen owns only a counter and
+ * mobile and desktop draw the same frames.
+ */
+export function psbtUrFrame(psbt: Uint8Array, max_fragment_len: number, seq_num: number): string;
+
+/**
+ * Frames in one pass of a PSBT's animated `ur:crypto-psbt` QR.
+ */
+export function psbtUrFrameCount(psbt: Uint8Array, max_fragment_len: number): number;
+
+/**
  * `m/44'/<coin>'/<account>'/3/0` and `/3/1`, as a JSON object.
  */
 export function rpaKeyPaths(coin_type: number, account: number): string;
@@ -361,6 +373,8 @@ export interface InitOutput {
     readonly planTokenSpend: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: bigint) => [number, number, number, number];
     readonly psbtFinalizeCashTokensP2pkh: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly psbtReviewP2pkh: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly psbtUrFrame: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly psbtUrFrameCount: (a: number, b: number, c: number) => [number, number, number];
     readonly rpaKeyPaths: (a: number, b: number) => [number, number];
     readonly scanTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly sendBlockReason: (a: number, b: number) => [number, number, number, number];

@@ -1057,6 +1057,52 @@ export function psbtReviewP2pkh(raw, network) {
 }
 
 /**
+ * Frame `seq_num` (from 1, without end) of a PSBT's animated
+ * `ur:crypto-psbt` QR. Stateless, so the screen owns only a counter and
+ * mobile and desktop draw the same frames.
+ * @param {Uint8Array} psbt
+ * @param {number} max_fragment_len
+ * @param {number} seq_num
+ * @returns {string}
+ */
+export function psbtUrFrame(psbt, max_fragment_len, seq_num) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArray8ToWasm0(psbt, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.psbtUrFrame(ptr0, len0, max_fragment_len, seq_num);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Frames in one pass of a PSBT's animated `ur:crypto-psbt` QR.
+ * @param {Uint8Array} psbt
+ * @param {number} max_fragment_len
+ * @returns {number}
+ */
+export function psbtUrFrameCount(psbt, max_fragment_len) {
+    const ptr0 = passArray8ToWasm0(psbt, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.psbtUrFrameCount(ptr0, len0, max_fragment_len);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] >>> 0;
+}
+
+/**
  * `m/44'/<coin>'/<account>'/3/0` and `/3/1`, as a JSON object.
  * @param {number} coin_type
  * @param {number} account
