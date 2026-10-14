@@ -70,6 +70,28 @@ jobs:
           echo "$id_out"
           echo "$id_out" | grep -E 'uid=1000'
 
+      - name: Smoke — fusion-lab writes its volume as non-root
+        if: steps.docker.outputs.run_build == 'true'
+        run: |
+          set -euo pipefail
+          # A new named volume takes its owner from the image's mount point.
+          # Run the real supervisor as uid 1000 with Tor unreachable: it must
+          # fail closed (exit 3) and still record tor_down in the volume.
+          vol="optn-smoke-fusion-data-${GITHUB_RUN_ID}"
+          docker volume create "$vol" >/dev/null
+          code=0
+          docker run --rm --user 1000:1000 \
+            -v "$GITHUB_WORKSPACE":/optn:ro \
+            -v "$vol":/optn-data \
+            -e OPTN_TOR_SOCKS=127.0.0.1:9 \
+            -e OPTN_TOR_PROBE_MS=1000 \
+            --entrypoint bash \
+            optn-docker-dev:pr /optn/packages/docker-dev/scripts/fusion-lab-entrypoint.sh || code=$?
+          test "$code" -eq 3
+          docker run --rm -v "$vol":/optn-data optn-docker-dev:pr \
+            cat /optn-data/fusion-lab.health.json | grep -F '"status": "tor_down"'
+          docker volume rm "$vol" >/dev/null
+
       - name: npm ci + test:core inside image
         if: steps.docker.outputs.run_build == 'true'
         run: |

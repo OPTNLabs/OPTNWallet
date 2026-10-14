@@ -92,8 +92,11 @@ packages/docker-dev/
 
 | Issue | Fix |
 |-------|-----|
-| Permission denied on bind mount | `exec --user 1000:1000` or match host uid |
+| Permission denied on bind mount | Services run as uid 1000 (`exec --user 1000:1000`), and `dev` writes to the checkout. Checkout owned by root or another uid: `chown -R 1000:1000 <checkout>` (as CI does) or clone as uid 1000. Don't switch services to `user: "0:0"`: it drops the non-root boundary |
 | Port 5173 busy | `OPTN_VITE_PORT=5174` |
+| `curl 127.0.0.1:5173`: empty reply / connection reset | Expected: `dev` is an idle shell (`sleep infinity`), and nothing listens until you run `npm ci && npm run dev` inside it. The port binds to 127.0.0.1; `OPTN_VITE_BIND=0.0.0.0` exposes it. Fusion does not use it |
+| fusion-lab `unhealthy`, log shows `EACCES` on `/optn-data` | The volume was created root-owned (by an older image, or while a service ran as root). After rebuilding: `docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab run --rm --no-deps --user 0:0 --entrypoint chown fusion-lab -R 1000:1000 /optn-data` |
+| fusion-lab `healthy` but nothing fuses | `healthy` only means Tor's SOCKS port answers. Without `OPTN_HEADLESS_CMD` no wallet is loaded and no round runs (see VPS.md) |
 | GHCR pull denied | Package visibility / `docker login ghcr.io` |
 | fusion-lab exits immediately | Tor not ready / SOCKS wrong — check `logs:tor` |
 | Want consumer wallet | Use AppImage/DMG/MSI/APK — not this image |
