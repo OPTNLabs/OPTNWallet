@@ -19,6 +19,7 @@ mod electrum_selection;
 pub mod electrum_tcp;
 pub mod fusion;
 mod fusion_depth_store;
+mod fusion_driver;
 #[cfg(desktop)]
 pub mod hw;
 mod network_config;
@@ -85,7 +86,7 @@ fn fusion_transport_allows(transport: optn_runtime::chain::TransportPolicy) -> R
 /// The proxy for every leg of a Fusion operation: the transport must allow
 /// Fusion, and each remote leg then needs Tor with provenance, exactly as
 /// before. A loopback-only operation has no network hop and needs neither.
-async fn verified_fusion_proxy_for_network(
+pub(crate) async fn verified_fusion_proxy_for_network(
     destination_hosts: &[&str],
     network_settings: &crate::network_config::NetworkSettingsStore,
     network: optn_core::network::Network,
@@ -822,7 +823,7 @@ async fn fusion_transaction_is_known(
 }
 
 /// The selected servers, as the shared round host takes them.
-fn lookup_endpoints(
+pub(crate) fn lookup_endpoints(
     servers: &[electrum_selection::SelectedElectrum],
 ) -> Vec<optn_fusion_native::lookups::LookupEndpoint> {
     servers
@@ -1486,6 +1487,9 @@ pub fn run() {
             coin_holds::optn_coin_holds,
             coin_holds::optn_coin_freeze,
             coin_holds::optn_coin_unfreeze,
+            fusion_driver::optn_fusion_start,
+            fusion_driver::optn_fusion_stop,
+            fusion_driver::optn_fusion_running,
             wallet_spend::optn_wallet_prepare_spend,
             wallet_spend::optn_wallet_send,
             wallet_spend::optn_wallet_broadcast,
@@ -1683,6 +1687,7 @@ pub fn run() {
             app.manage(network_settings);
             app.manage(native_chain);
             app.manage(app_runtime);
+            app.manage(fusion_driver::FusionDriverState::default());
             // Menu bar is built on the frontend in TypeScript
             // (src/platform/desktop/useMenuBar.ts) so File → Open Wallet can list
             // the actual saved wallets from the webview's WASM SQLite DB. The old

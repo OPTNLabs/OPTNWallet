@@ -122,6 +122,8 @@ pub struct AppRuntime {
     operation_changes: watch::Sender<u64>,
     operation_mutations: Arc<AtomicU64>,
     wallet_sync_rx: watch::Receiver<wallet_sync::WalletReconciliation>,
+    /// Coins fusion rounds in this process are using.
+    fusion_holds: Arc<std::sync::Mutex<fusion_contribution::FusionHolds>>,
 }
 
 /// Lifetime of work authorized against one wallet/coin snapshot. This grants
@@ -390,6 +392,7 @@ impl AppRuntime {
                 operation_changes: operation_changes.clone(),
                 operation_mutations: Arc::new(AtomicU64::new(0)),
                 wallet_sync_rx,
+                fusion_holds: Arc::default(),
             },
             AppRuntimeDriver {
                 airgap: Default::default(),

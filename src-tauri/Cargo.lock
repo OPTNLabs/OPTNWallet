@@ -4483,6 +4483,7 @@ name = "optn-fusion-native"
 version = "1.7.3"
 dependencies = [
  "futures",
+ "optn-app",
  "optn-chain-native",
  "optn-core",
  "optn-fusion",

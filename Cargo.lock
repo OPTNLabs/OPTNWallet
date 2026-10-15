@@ -3445,6 +3445,7 @@ version = "1.7.3"
 dependencies = [
  "futures",
  "nostr-sdk",
+ "optn-app",
  "optn-chain-native",
  "optn-core",
  "optn-fusion",

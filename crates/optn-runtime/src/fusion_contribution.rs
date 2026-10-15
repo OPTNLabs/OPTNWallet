@@ -27,6 +27,8 @@ use crate::{AppRuntime, AppRuntimeDriver, PublicationGuard, RuntimeRequest};
 use optn_app::{AppEvent, AuthScope, HdBranch};
 use optn_core::{cashaddr::Address, coins::Outpoint};
 use optn_transport::TransportError;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use zeroize::Zeroizing;
 
@@ -98,7 +100,192 @@ fn display_txid(wire: [u8; 32]) -> String {
     display.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// What the guards both requests share established.
+struct Preconditions {
+    /// The synchronized account's public key.
+    account_xpub: String,
+    /// Its observed last-used indexes.
+    last_used: [Option<u32>; 3],
+    /// A migrated wallet's holds, read from its host's store.
+    host_held: Option<crate::coin_holds::CoinHolds>,
+}
+
+/// Coins rounds in this process are using, under the legacy id of the wallet
+/// whose host keeps its other holds (`None` for a runtime-managed wallet).
+///
+/// Kept in memory and nowhere else. A round does not survive the process, so
+/// neither may its holds: written to the host's file, a crash mid-round would
+/// leave the coins frozen under a hold only the round could lift.
+#[derive(Debug, Default)]
+pub(crate) struct FusionHolds(BTreeMap<Option<u32>, BTreeSet<String>>);
+
+/// The coins one round holds, released when this is dropped -- however the
+/// round ends.
+#[must_use = "the coins are released as soon as the hold is dropped"]
+pub struct FusionHold {
+    owner: Option<u32>,
+    outpoints: Vec<String>,
+    holds: Arc<Mutex<FusionHolds>>,
+}
+
+impl FusionHold {
+    /// The held coins, display-order `txid:vout`, lowercase.
+    pub fn outpoints(&self) -> &[String] {
+        &self.outpoints
+    }
+}
+
+impl Drop for FusionHold {
+    fn drop(&mut self) {
+        let mut holds = self
+            .holds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(held) = holds.0.get_mut(&self.owner) {
+            for outpoint in &self.outpoints {
+                held.remove(outpoint);
+            }
+            if held.is_empty() {
+                holds.0.remove(&self.owner);
+            }
+        }
+    }
+}
+
+/// `txid:vout` with a valid txid, lowercase.
+fn canonical_outpoint(text: &str) -> Result<String, TransportError> {
+    let text = text.trim().to_ascii_lowercase();
+    let (txid, vout) = text
+        .split_once(':')
+        .ok_or_else(|| failure(format!("{text} is not a coin.")))?;
+    let vout: u32 = vout
+        .parse()
+        .map_err(|_| failure(format!("{text} is not a coin.")))?;
+    Outpoint::parse(txid, vout).map_err(|_| failure(format!("{text} is not a coin.")))?;
+    Ok(format!("{txid}:{vout}"))
+}
+
 impl AppRuntime {
+    /// Trusted host API: hold `outpoints` for the round about to use them, in
+    /// this process only, until the returned hold is dropped.
+    ///
+    /// A host shows these alongside its own durable holds for the same wallet
+    /// ([`AppRuntime::fusion_holds`]), so a send cannot take a coin a round is
+    /// using. A coin another round holds is refused.
+    pub async fn hold_for_fusion(
+        &self,
+        outpoints: &[String],
+    ) -> Result<FusionHold, TransportError> {
+        if outpoints.is_empty() || outpoints.len() > MAX_CONTRIBUTION_ITEMS {
+            return Err(failure("A fusion round offers 1 to 40 coins."));
+        }
+        let mut canonical = Vec::with_capacity(outpoints.len());
+        for outpoint in outpoints {
+            let outpoint = canonical_outpoint(outpoint)?;
+            if canonical.contains(&outpoint) {
+                return Err(failure(format!("{outpoint} is offered twice.")));
+            }
+            canonical.push(outpoint);
+        }
+        let status = self
+            .wallet_security(optn_transport::WalletSecurityRequest::Status)
+            .await?;
+        if status.active.is_none() {
+            return Err(TransportError::AuthenticationRequired);
+        }
+        let owner = status.legacy_source_id;
+        let mut holds = self
+            .fusion_holds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(taken) = canonical
+            .iter()
+            .find(|outpoint| holds.0.values().any(|held| held.contains(*outpoint)))
+        {
+            return Err(failure(format!("{taken} is already in a fusion round.")));
+        }
+        holds
+            .0
+            .entry(owner)
+            .or_default()
+            .extend(canonical.iter().cloned());
+        Ok(FusionHold {
+            owner,
+            outpoints: canonical,
+            holds: Arc::clone(&self.fusion_holds),
+        })
+    }
+
+    /// The wallet's coins as fusion coin selection sees them, from this
+    /// runtime's own synchronized record. Every interface chooses from the
+    /// same list:
+    /// - mined, by its snapshot's heights;
+    /// - held, by its state, a payment in its outbox, or a round in this
+    ///   process;
+    /// - depth, from its sealed record.
+    ///
+    /// Cash Code coins are left out: their keys are not HD keys, and a round
+    /// asks for HD keys only. Holds a migrated wallet's host keeps are the
+    /// host's to add.
+    pub fn fusion_candidates(
+        &self,
+    ) -> Result<Vec<optn_core::fusion::coin_selection::FusionCoin>, TransportError> {
+        let mut state = self.state();
+        crate::external_payment::apply_holds(&mut state);
+        let confirmed: BTreeSet<String> = {
+            let reconciliation = self.wallet_sync_rx.borrow();
+            let snapshot = reconciliation
+                .authoritative
+                .as_ref()
+                .ok_or_else(|| failure("Sync the wallet first."))?;
+            snapshot
+                .value
+                .transactions
+                .iter()
+                .filter(|transaction| transaction.block_height.is_some())
+                .map(|transaction| display_txid(transaction.txid))
+                .collect()
+        };
+        let in_round: BTreeSet<String> = self
+            .fusion_holds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .0
+            .values()
+            .flatten()
+            .cloned()
+            .collect();
+        let book = state.fusion_depth.clone().unwrap_or_default();
+        Ok(state
+            .coins
+            .iter()
+            .filter(|coin| !coin.is_rpa())
+            .map(|coin| {
+                let outpoint = coin.outpoint().to_string();
+                optn_core::fusion::coin_selection::FusionCoin {
+                    confirmed: confirmed.contains(&coin.outpoint().txid_hex()),
+                    address: coin.address().to_owned(),
+                    value_sats: coin.value_sats(),
+                    token: coin.token().is_some(),
+                    frozen: coin.freeze().is_some() || in_round.contains(&outpoint),
+                    depth: book.depth_of(&outpoint),
+                    outpoint,
+                }
+            })
+            .collect())
+    }
+
+    /// The coins rounds in this process hold for the migrated wallet whose
+    /// legacy id is `wallet_id`, display-order `txid:vout`.
+    pub fn fusion_holds(&self, wallet_id: u32) -> BTreeSet<String> {
+        self.fusion_holds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .0
+            .get(&Some(wallet_id))
+            .cloned()
+            .unwrap_or_default()
+    }
     async fn fusion_contribution(
         &self,
         request: FusionContributionRequest,
@@ -237,13 +424,12 @@ impl AppRuntimeDriver {
         let _ = reply.send(result);
     }
 
-    /// The guards both requests share; returns the synchronized account's
-    /// public key and its observed last-used indexes.
+    /// The guards both requests share.
     fn fusion_preconditions(
         &self,
         operation_guard: &crate::WalletOperationGuard,
         reply_closed: bool,
-    ) -> Result<(String, [Option<u32>; 3]), TransportError> {
+    ) -> Result<Preconditions, TransportError> {
         let guard = PublicationGuard {
             generation: operation_guard.generation,
             revocation: &self.revocation,
@@ -257,13 +443,24 @@ impl AppRuntimeDriver {
         }
         let security = self.security.as_ref().ok_or(TransportError::Unsupported)?;
         security.require_durable_session(&self.state)?;
-        // A legacy host may hold coins outside the runtime's record, so their
-        // absence here proves nothing.
-        if security.status(&self.state)?.legacy_source_id.is_some() {
-            return Err(failure(
-                "This migrated wallet still uses legacy reservations. This needs a runtime-managed wallet.",
-            ));
-        }
+        // A migrated wallet's host may hold coins outside the runtime's record,
+        // so their absence here proves nothing -- unless the host's own store
+        // is read. Without one, the wallet cannot fuse here.
+        let host_held = match security.status(&self.state)?.legacy_source_id {
+            None => None,
+            Some(id) => {
+                let store = security.host_holds().filter(|_| id > 0).ok_or_else(|| {
+                    failure(
+                        "This migrated wallet still uses legacy reservations. This needs a runtime-managed wallet.",
+                    )
+                })?;
+                Some(store.load(id).map_err(|error| {
+                    failure(format!(
+                        "The wallet's coin holds could not be read: {error}"
+                    ))
+                })?)
+            }
+        };
         if !self.wallet_sync.coins_are_fresh() || self.state.wallet_sync.refreshing {
             return Err(failure("Refresh the wallet first."));
         }
@@ -289,7 +486,11 @@ impl AppRuntimeDriver {
         {
             return Err(failure("Account differs from the synchronized wallet."));
         }
-        Ok((book.account_xpub.clone(), book.allocation_last_used()))
+        Ok(Preconditions {
+            account_xpub: book.account_xpub.clone(),
+            last_used: book.allocation_last_used(),
+            host_held,
+        })
     }
 
     fn fusion_input_keys(
@@ -298,7 +499,8 @@ impl AppRuntimeDriver {
         operation_guard: &crate::WalletOperationGuard,
         reply: &oneshot::Sender<Result<FusionContributionReply, TransportError>>,
     ) -> Result<Vec<FusionInputSecret>, TransportError> {
-        self.fusion_preconditions(operation_guard, reply.is_closed())?;
+        let Preconditions { host_held, .. } =
+            self.fusion_preconditions(operation_guard, reply.is_closed())?;
         if outpoints.is_empty() || outpoints.len() > MAX_CONTRIBUTION_ITEMS {
             return Err(failure("A fusion round offers 1 to 40 coins."));
         }
@@ -331,6 +533,9 @@ impl AppRuntimeDriver {
                 .coins
                 .get(outpoint)
                 .is_some_and(|known| known.freeze().is_some())
+                || host_held
+                    .as_ref()
+                    .is_some_and(|holds| holds.is_held(&outpoint.txid_hex(), coin.utxo.vout))
             {
                 return Err(failure(format!(
                     "{wanted} is held and cannot join a fusion."
@@ -421,8 +626,11 @@ impl AppRuntimeDriver {
         operation_guard: &crate::WalletOperationGuard,
         reply: &oneshot::Sender<Result<FusionContributionReply, TransportError>>,
     ) -> Result<Vec<Vec<u8>>, TransportError> {
-        let (account_xpub, last_used) =
-            self.fusion_preconditions(operation_guard, reply.is_closed())?;
+        let Preconditions {
+            account_xpub,
+            last_used,
+            ..
+        } = self.fusion_preconditions(operation_guard, reply.is_closed())?;
         if count == 0 || count > MAX_CONTRIBUTION_ITEMS {
             return Err(failure("Reserve 1 to 40 change outputs."));
         }
@@ -638,6 +846,204 @@ mod tests {
             .await
             .is_err());
         assert_eq!(runtime.fusion_depth().depth_of(&created), 0);
+    }
+
+    /// A migrated wallet's host holds, as the desktop's hold file would.
+    #[derive(Clone, Default)]
+    struct HostHolds {
+        holds: std::sync::Arc<std::sync::Mutex<crate::coin_holds::CoinHolds>>,
+        asked_for: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    }
+
+    impl crate::coin_holds::HostHoldStore for HostHolds {
+        fn load(&self, wallet_id: u32) -> Result<crate::coin_holds::CoinHolds, String> {
+            self.asked_for.lock().unwrap().push(wallet_id);
+            Ok(self.holds.lock().unwrap().clone())
+        }
+    }
+
+    const LEGACY_ID: u32 = 7;
+
+    /// The fixture wallet, migrated from a host that names it `LEGACY_ID`,
+    /// reopened in a fresh runtime with or without that host's hold store.
+    async fn migrated(host: Option<HostHolds>) -> (AppRuntime, String) {
+        use optn_platform::WalletStorage;
+        let (runtime, storage, checkpoints, handle) = fixture().await;
+        drop(runtime);
+        let original = storage.read(&handle).unwrap();
+        let mut file = optn_core::wallet_file::WalletFile::parse(&original).unwrap();
+        file.extra
+            .insert("legacySourceId".into(), serde_json::json!(LEGACY_ID));
+        storage
+            .save(&handle, Some(&original), &file.encode().unwrap())
+            .unwrap();
+        let mut security = crate::wallet_security::WalletSecurity::new(Box::new(storage), None)
+            .with_checkpoints(Box::new(checkpoints));
+        if let Some(host) = host {
+            security = security.with_host_holds(Box::new(host));
+        }
+        let (runtime, driver) =
+            AppRuntime::new_with_security(optn_app::AppState::default(), security).unwrap();
+        tokio::spawn(driver.run());
+        runtime
+            .wallet_security(optn_transport::WalletSecurityRequest::Open {
+                handle: handle.clone(),
+                password: secret(""),
+            })
+            .await
+            .unwrap();
+        sync_fixture(&runtime).await;
+        let outpoint = funded_outpoint(&runtime);
+        (runtime, outpoint)
+    }
+
+    /// Without its host's hold store, a migrated wallet's held coins are
+    /// invisible here, so it cannot fuse at all.
+    #[tokio::test]
+    async fn a_migrated_wallet_without_its_hosts_holds_cannot_fuse() {
+        let (runtime, outpoint) = migrated(None).await;
+        let refused = runtime.fusion_input_keys(vec![outpoint]).await.unwrap_err();
+        assert!(
+            matches!(refused, optn_transport::TransportError::Other(ref message) if message.contains("legacy reservations")),
+            "{refused:?}"
+        );
+        assert!(runtime.reserve_change_outputs(1).await.is_err());
+    }
+
+    /// With it, a coin held there cannot join a round and an unheld one can.
+    #[tokio::test]
+    async fn a_migrated_wallet_fuses_only_coins_its_host_does_not_hold() {
+        let host = HostHolds::default();
+        let (runtime, outpoint) = migrated(Some(host.clone())).await;
+        let (txid, vout) = outpoint.split_once(':').unwrap();
+        host.holds
+            .lock()
+            .unwrap()
+            .hold(
+                &txid.to_uppercase(),
+                vout.parse().unwrap(),
+                optn_core::coins::FreezeReason::User,
+                None,
+            )
+            .unwrap();
+        let refused = runtime
+            .fusion_input_keys(vec![outpoint.clone()])
+            .await
+            .unwrap_err();
+        assert!(format!("{refused:?}").contains("is held"), "{refused:?}");
+        // The store is asked under the wallet's own legacy id.
+        assert!(host
+            .asked_for
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|id| *id == LEGACY_ID));
+
+        *host.holds.lock().unwrap() = Default::default();
+        let keys = runtime.fusion_input_keys(vec![outpoint]).await.unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(runtime.reserve_change_outputs(2).await.unwrap().len(), 2);
+    }
+
+    /// A round's holds are its own: another round cannot take the coins, the
+    /// host can see them under the wallet's legacy id, and they go the moment
+    /// the round lets go -- however it ended.
+    #[tokio::test]
+    async fn a_round_holds_its_coins_until_it_lets_go() {
+        let (runtime, outpoint) = migrated(Some(HostHolds::default())).await;
+        let hold = runtime
+            .hold_for_fusion(&[outpoint.to_uppercase()])
+            .await
+            .unwrap();
+        assert_eq!(hold.outpoints(), std::slice::from_ref(&outpoint));
+        assert!(runtime.fusion_holds(LEGACY_ID).contains(&outpoint));
+        assert!(runtime.fusion_holds(LEGACY_ID + 1).is_empty());
+        let refused = runtime
+            .hold_for_fusion(std::slice::from_ref(&outpoint))
+            .await
+            .err()
+            .unwrap();
+        assert!(format!("{refused:?}").contains("already in a fusion round"));
+        // Holding does not stop the round itself from getting the keys.
+        assert!(runtime
+            .fusion_input_keys(vec![outpoint.clone()])
+            .await
+            .is_ok());
+
+        drop(hold);
+        assert!(runtime.fusion_holds(LEGACY_ID).is_empty());
+        let again = runtime
+            .hold_for_fusion(std::slice::from_ref(&outpoint))
+            .await
+            .unwrap();
+        drop(again);
+
+        // Nonsense, duplicates and empty requests are refused outright.
+        for bad in [
+            vec!["nonsense".to_string()],
+            vec![outpoint.clone(), outpoint.clone()],
+            vec![],
+        ] {
+            assert!(runtime.hold_for_fusion(&bad).await.is_err(), "{bad:?}");
+        }
+    }
+
+    /// Selection chooses from the runtime's own record: a synced coin is a
+    /// candidate, a coin a round holds is frozen, a payment's input is
+    /// frozen, and a recorded round's output carries its depth.
+    #[tokio::test]
+    async fn candidates_come_from_the_runtimes_own_record() {
+        let (runtime, _storage, _checkpoints, _handle) = fixture().await;
+        assert!(
+            runtime.fusion_candidates().is_err(),
+            "nothing before a sync"
+        );
+        sync_fixture(&runtime).await;
+        let outpoint = funded_outpoint(&runtime);
+        let find = |coins: Vec<optn_core::fusion::coin_selection::FusionCoin>| {
+            coins
+                .into_iter()
+                .find(|coin| coin.outpoint == outpoint)
+                .unwrap()
+        };
+        let coin = find(runtime.fusion_candidates().unwrap());
+        assert!(!coin.frozen && !coin.token);
+        assert_eq!((coin.value_sats, coin.depth), (20_000, 0));
+
+        let hold = runtime
+            .hold_for_fusion(std::slice::from_ref(&outpoint))
+            .await
+            .unwrap();
+        assert!(find(runtime.fusion_candidates().unwrap()).frozen);
+        drop(hold);
+        assert!(!find(runtime.fusion_candidates().unwrap()).frozen);
+
+        runtime
+            .record_fusion_round(vec![], vec![outpoint.clone()], 1)
+            .await
+            .unwrap();
+        assert_eq!(find(runtime.fusion_candidates().unwrap()).depth, 1);
+
+        prepare(&runtime, "held").await.unwrap();
+        assert!(find(runtime.fusion_candidates().unwrap()).frozen);
+    }
+
+    /// A runtime-managed wallet's rounds hold coins too, under no legacy id.
+    #[tokio::test]
+    async fn a_runtime_managed_wallets_round_holds_coins_under_no_legacy_id() {
+        let (runtime, _storage, _checkpoints, _handle) = fixture().await;
+        sync_fixture(&runtime).await;
+        let outpoint = funded_outpoint(&runtime);
+        let hold = runtime
+            .hold_for_fusion(std::slice::from_ref(&outpoint))
+            .await
+            .unwrap();
+        assert!(runtime.fusion_holds(LEGACY_ID).is_empty());
+        assert!(runtime
+            .hold_for_fusion(std::slice::from_ref(&outpoint))
+            .await
+            .is_err());
+        drop(hold);
     }
 
     /// A record kept outside the runtime merges in: the deeper entry wins,

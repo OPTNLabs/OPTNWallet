@@ -143,6 +143,8 @@ pub struct WalletSecurity {
     biometrics: Option<Box<dyn WalletBiometrics>>,
     session: Option<Session>,
     checkpoints: Option<Box<dyn WalletCheckpointStorage>>,
+    /// The holds a migrated wallet's host keeps outside the runtime.
+    host_holds: Option<Box<dyn crate::coin_holds::HostHoldStore>>,
     /// The one recovery phrase drawn for a wallet not yet created.
     draft: Option<SeedDraftState>,
 }
@@ -210,6 +212,7 @@ impl WalletSecurity {
             biometrics,
             session: None,
             checkpoints: None,
+            host_holds: None,
             draft: None,
         }
     }
@@ -246,6 +249,17 @@ impl WalletSecurity {
     pub fn with_checkpoints(mut self, storage: Box<dyn WalletCheckpointStorage>) -> Self {
         self.checkpoints = Some(storage);
         self
+    }
+
+    /// Read a migrated wallet's holds from the host that keeps them, so the
+    /// runtime can tell which of its coins are held there.
+    pub fn with_host_holds(mut self, store: Box<dyn crate::coin_holds::HostHoldStore>) -> Self {
+        self.host_holds = Some(store);
+        self
+    }
+
+    pub(crate) fn host_holds(&self) -> Option<&dyn crate::coin_holds::HostHoldStore> {
+        self.host_holds.as_deref()
     }
 
     /// Taken only after open validated it against the newly derived account.
