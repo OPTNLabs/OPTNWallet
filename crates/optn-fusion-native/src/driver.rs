@@ -133,6 +133,12 @@ impl FusionWallet for AppRuntime {
                 Venue::Server(settings) => {
                     run_server_round(self, settings, coins, round_id, status).await
                 }
+                Venue::Failover(candidates) => {
+                    // Chosen before the round asks for a single key, and never
+                    // changed once it may have disclosed anything.
+                    let settings = ready_server(candidates, status).await?;
+                    run_server_round(self, settings, coins, round_id, status).await
+                }
                 Venue::P2p(settings) => {
                     run_p2p_round(self, settings, coins, round_id, status).await
                 }
@@ -143,14 +149,47 @@ impl FusionWallet for AppRuntime {
 
 /// Where rounds meet.
 pub enum Venue {
+    /// One CashFusion server.
     Server(ServerRoundSettings),
+    /// The holder's servers in order, the chosen one first: each round runs
+    /// on the first that answers with a valid ServerHello.
+    Failover(Vec<ServerRoundSettings>),
     P2p(P2pRoundSettings),
+}
+
+/// The first of `candidates` ready for a round. A single candidate is taken
+/// as it is: its round fetches the ServerHello anyway, and probing first
+/// would only add a connection.
+async fn ready_server<'a>(
+    candidates: &'a [ServerRoundSettings],
+    status: &(dyn Fn(&str) + Send + Sync),
+) -> Result<&'a ServerRoundSettings, String> {
+    match candidates {
+        [] => Err("no fusion server selected".into()),
+        [only] => Ok(only),
+        _ => {
+            let mut last = String::new();
+            for candidate in candidates {
+                match server_hello(candidate).await {
+                    Ok(_) => return Ok(candidate),
+                    Err(error) => {
+                        status(&format!(
+                            "{}:{} is not ready ({error}); trying the next server",
+                            candidate.server.host, candidate.server.port
+                        ));
+                        last = error;
+                    }
+                }
+            }
+            Err(format!("no configured fusion server is ready: {last}"))
+        }
+    }
 }
 
 impl Venue {
     pub fn mode(&self) -> FusionMode {
         match self {
-            Venue::Server(_) => FusionMode::Server,
+            Venue::Server(_) | Venue::Failover(_) => FusionMode::Server,
             Venue::P2p(_) => FusionMode::P2p,
         }
     }
@@ -159,6 +198,9 @@ impl Venue {
     pub fn verified_proxy(&self) -> Option<u16> {
         match self {
             Venue::Server(settings) => settings.verified_proxy,
+            Venue::Failover(candidates) => {
+                candidates.first().and_then(|first| first.verified_proxy)
+            }
             Venue::P2p(settings) => settings.verified_proxy,
         }
     }
@@ -170,6 +212,16 @@ impl Venue {
                 "mode": "server",
                 "server": format!("{}:{}", settings.server.host, settings.server.port),
             }),
+            Venue::Failover(candidates) => json!({
+                "mode": "server",
+                "server": candidates
+                    .first()
+                    .map(|first| format!("{}:{}", first.server.host, first.server.port)),
+                "servers": candidates
+                    .iter()
+                    .map(|candidate| format!("{}:{}", candidate.server.host, candidate.server.port))
+                    .collect::<Vec<_>>(),
+            }),
             Venue::P2p(settings) => json!({"mode": "p2p", "relays": settings.relays}),
         }
     }
@@ -177,8 +229,10 @@ impl Venue {
     /// Why no choice of `eligible` can fund a tier, when a server can say. A
     /// P2P pool has no server to ask.
     async fn unaffordable_reason(&self, eligible: &[&FusionCoin]) -> Option<String> {
-        let Venue::Server(settings) = self else {
-            return None;
+        let settings = match self {
+            Venue::Server(settings) => settings,
+            Venue::Failover(candidates) => ready_server(candidates, &|_: &str| {}).await.ok()?,
+            Venue::P2p(_) => return None,
         };
         let hello = server_hello(settings).await.ok()?;
         let addresses: BTreeSet<&str> = eligible.iter().map(|coin| coin.address.as_str()).collect();
@@ -831,6 +885,38 @@ mod tests {
             run(&once, &server, ONCE).await,
             Err(DriverError::Other(_))
         ));
+    }
+
+    fn server_at(target: &str) -> ServerRoundSettings {
+        ServerRoundSettings {
+            network: optn_core::network::Network::Chipnet,
+            server: crate::server_round::ServerTarget::parse(target).unwrap(),
+            verified_proxy: None,
+            lookup_servers: Vec::new(),
+            wallet_tag: "test".into(),
+            join_inactive_timeout: None,
+            only_tiers: None,
+        }
+    }
+
+    /// One server is taken as it is; with several, an unreachable one is
+    /// passed over for the next, and none ready is an error that names why.
+    #[tokio::test]
+    async fn failover_takes_the_first_server_that_answers() {
+        let quiet = |_: &str| {};
+        let only = [server_at("127.0.0.1:1")];
+        assert_eq!(ready_server(&only, &quiet).await.unwrap().server.port, 1);
+        assert!(ready_server(&[], &quiet).await.is_err());
+        // Port 1 on loopback refuses at once: neither is ready.
+        let none = [server_at("127.0.0.1:1"), server_at("127.0.0.1:2")];
+        let error = ready_server(&none, &quiet).await.unwrap_err();
+        assert!(
+            error.contains("no configured fusion server is ready"),
+            "{error}"
+        );
+        let venue = Venue::Failover(none.to_vec());
+        assert_eq!(venue.mode(), FusionMode::Server);
+        assert_eq!(venue.describe()["servers"].as_array().unwrap().len(), 2);
     }
 
     #[test]

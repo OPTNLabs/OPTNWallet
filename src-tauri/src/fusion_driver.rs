@@ -38,11 +38,12 @@ pub const FUSION_FINISHED: &str = "optn://fusion-finished";
     deny_unknown_fields
 )]
 pub enum FusionVenueRequest {
-    /// A CashFusion server.
+    /// CashFusion servers, `host[:port][:s|:t]`: the holder's choice, then
+    /// the rest they configured, tried in that order before each round.
     Server {
-        host: String,
-        port: u16,
-        use_ssl: bool,
+        #[serde(default)]
+        selected: Option<String>,
+        configured: Vec<String>,
         #[serde(default)]
         only_tiers: Option<Vec<u64>>,
     },
@@ -157,6 +158,19 @@ impl FusionHost for DesktopHost {
     }
 }
 
+/// The holder's choice first, then the rest, each once
+/// (`orderedFusionServerCandidates`).
+fn ordered_servers(selected: Option<&str>, configured: &[String]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    selected
+        .into_iter()
+        .chain(configured.iter().map(String::as_str))
+        .map(str::trim)
+        .filter(|server| !server.is_empty() && seen.insert(server.to_owned()))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Every relay must name a host: the Tor rule is decided per host.
 fn relay_hosts(relays: &[String]) -> Result<Vec<String>, String> {
     relays
@@ -196,30 +210,37 @@ async fn venue(
     let wallet_tag = status.active.clone().ok_or("Open a wallet to fuse it.")?;
     Ok(match request {
         FusionVenueRequest::Server {
-            host,
-            port,
-            use_ssl,
+            selected,
+            configured,
             only_tiers,
         } => {
-            let destinations: Vec<&str> = std::iter::once(host.as_str())
-                .chain(lookup_hosts.iter().copied())
-                .collect();
-            let verified_proxy =
-                crate::verified_fusion_proxy_for_network(&destinations, settings, network).await?;
-            Venue::Server(ServerRoundSettings {
-                network,
-                server: ServerTarget {
-                    host: host.clone(),
-                    port,
-                    use_ssl,
-                },
-                verified_proxy,
-                lookup_servers,
-                wallet_tag,
-                join_inactive_timeout: auto
-                    .then_some(crate::fusion::run::EC_AUTOFUSE_INACTIVE_TIMEOUT),
-                only_tiers,
-            })
+            let servers = ordered_servers(selected.as_deref(), &configured);
+            if servers.is_empty() {
+                return Err("no fusion server selected".into());
+            }
+            let mut candidates = Vec::with_capacity(servers.len());
+            for server in servers {
+                let target = ServerTarget::parse(&server)?;
+                // Each candidate meets the Tor rule on its own, with the
+                // lookup servers its rounds use.
+                let destinations: Vec<&str> = std::iter::once(target.host.as_str())
+                    .chain(lookup_hosts.iter().copied())
+                    .collect();
+                let verified_proxy =
+                    crate::verified_fusion_proxy_for_network(&destinations, settings, network)
+                        .await?;
+                candidates.push(ServerRoundSettings {
+                    network,
+                    server: target,
+                    verified_proxy,
+                    lookup_servers: lookup_servers.clone(),
+                    wallet_tag: wallet_tag.clone(),
+                    join_inactive_timeout: auto
+                        .then_some(crate::fusion::run::EC_AUTOFUSE_INACTIVE_TIMEOUT),
+                    only_tiers: only_tiers.clone(),
+                });
+            }
+            Venue::Failover(candidates)
         }
         FusionVenueRequest::P2p { relays } => {
             let relays = relays.unwrap_or_else(|| {
@@ -351,18 +372,14 @@ mod tests {
     #[test]
     fn the_renderer_names_a_venue_and_nothing_else() {
         let server: FusionStartRequest = serde_json::from_value(json!({
-            "venue": {"mode": "server", "host": "fusion.example", "port": 8788, "useSsl": true},
+            "venue": {"mode": "server", "selected": "fusion.example:8788:s", "configured": ["b.example"]},
             "auto": true,
             "fuseDepth": 3,
         }))
         .unwrap();
         assert!(matches!(
             server.venue,
-            FusionVenueRequest::Server {
-                port: 8788,
-                use_ssl: true,
-                ..
-            }
+            FusionVenueRequest::Server { ref configured, .. } if configured.len() == 1
         ));
         let p2p: FusionStartRequest = serde_json::from_value(json!({
             "venue": {"mode": "p2p"},
@@ -377,10 +394,21 @@ mod tests {
         // No keys, coins or lookup servers are accepted from the renderer.
         for smuggled in [
             json!({"venue": {"mode": "p2p"}, "auto": false, "fuseDepth": 3, "inputs": []}),
-            json!({"venue": {"mode": "server", "host": "h", "port": 1, "useSsl": false, "lookupHost": "x"}, "auto": false, "fuseDepth": 3}),
+            json!({"venue": {"mode": "server", "configured": ["h:1"], "lookupHost": "x"}, "auto": false, "fuseDepth": 3}),
         ] {
             assert!(serde_json::from_value::<FusionStartRequest>(smuggled).is_err());
         }
+    }
+
+    #[test]
+    fn the_chosen_server_comes_first_and_each_appears_once() {
+        let configured = vec!["b:1".into(), " a:1 ".into(), "".into(), "c:1".into()];
+        assert_eq!(
+            ordered_servers(Some("a:1"), &configured),
+            ["a:1", "b:1", "c:1"]
+        );
+        assert_eq!(ordered_servers(None, &configured), ["b:1", "a:1", "c:1"]);
+        assert!(ordered_servers(None, &[]).is_empty());
     }
 
     #[test]
