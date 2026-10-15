@@ -13,11 +13,13 @@
 //!    connections; every peer rebroadcasts what it verified; the host waits for
 //!    a selected server to hold the transaction.
 //!
-//! Every relay stream to a remote relay goes through the verified Tor proxy
-//! with its own isolation credentials, so each one-shot connection that
-//! carries an anonymous component is its own circuit — the property the
-//! desktop gets from one socket per component. A loopback relay is dialled
-//! directly.
+//! Every relay stream to a remote relay goes through the verified Tor proxy.
+//! The shared connection gives each relay stream its own isolation
+//! credentials. A one-shot connection that carries an anonymous component
+//! gives all of its relay streams one credential of its own, so the component
+//! travels on one circuit that no other component shares — the property the
+//! desktop gets from one socket per component — without asking Tor for a
+//! circuit per relay. A loopback relay is dialled directly.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -43,7 +45,9 @@ use optn_fusion::p2p::rendezvous::{Negotiated, Rendezvous};
 use optn_fusion::p2p::session::{Round, RoundParams};
 use optn_fusion::p2p::signer::{sign_native, SigningRound};
 use optn_fusion::p2p::timing::{round_timeout_ms, COMPONENT_JITTER_MS};
-use optn_fusion::p2p::wire::{parse_round_message, InputRef, OutputRef, PoolNetwork, RoundMessage};
+use optn_fusion::p2p::wire::{
+    parse_round_message, Body, InputRef, OutputRef, PoolNetwork, RoundMessage,
+};
 use optn_fusion::p2p::P2P_FEERATE;
 use optn_nostr::nip17;
 use optn_nostr::nostr::prelude::{
@@ -89,6 +93,12 @@ const PUBLISH_POOL_MIN_ACKS: usize = 2;
 /// How long a settled round waits for its last messages to reach a relay
 /// before the connections close. The coordinator's `final` is among them.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(15);
+/// One-shot connections a component sent only once gets (`inputs`, the last
+/// peeler's `outputs`): no resend timer stands behind it, so one that no
+/// relay took is tried again on a fresh connection, and a fresh circuit.
+const ONCE_SENT_ATTEMPTS: u32 = 3;
+/// The pause before the next connection, times the attempts so far.
+const ONCE_SENT_RETRY_BASE_MS: u64 = 2_000;
 
 /// Everything about a round that is not the coins.
 #[derive(Debug, Clone)]
@@ -127,19 +137,41 @@ fn is_ghost(key: &str) -> bool {
 }
 
 /// Every relay stream: a loopback relay directly, any other through the
-/// verified proxy with fresh isolation credentials (a new circuit).
+/// verified proxy.
 struct FusionRelayDialer {
     proxy: Option<u16>,
+    /// Credentials every stream of this dialer shares, so they may ride one
+    /// circuit; `None` gives each stream fresh ones (a new circuit each).
+    isolation: Option<String>,
+}
+
+impl FusionRelayDialer {
+    /// The route of one anonymous component's one-shot connection: one
+    /// credential of its own for all of its relay streams.
+    fn component_route(proxy: Option<u16>) -> ComponentRoute {
+        Arc::new(move || {
+            RelayRoute::Dialer(Arc::new(FusionRelayDialer {
+                proxy,
+                isolation: Some(optn_fusion::isolation_token()),
+            }))
+        })
+    }
 }
 
 impl RelayDialer for FusionRelayDialer {
     fn dial(&self, endpoint: RelayEndpoint) -> Dialed {
         let proxy = self.proxy;
+        let isolation = self.isolation.clone();
         Box::pin(async move {
             let transport = transport_for(&endpoint.host, proxy)?;
-            let stream =
-                optn_fusion::connect_stream(&endpoint.host, endpoint.port, endpoint.tls, transport)
-                    .await?;
+            let (host, port, tls) = (&endpoint.host, endpoint.port, endpoint.tls);
+            let stream = match isolation {
+                Some(isolation) => {
+                    optn_fusion::connect_stream_isolated(host, port, tls, transport, &isolation)
+                        .await?
+                }
+                None => optn_fusion::connect_stream(host, port, tls, transport).await?,
+            };
             Ok(Box::new(stream) as Box<dyn RelayIo>)
         })
     }
@@ -202,42 +234,137 @@ async fn publish_at_least_once(
     ))
 }
 
+/// One-shot connections `body` gets. `inputs` and the last peeler's
+/// `outputs` are sent once; onion blobs and signatures have resend timers of
+/// their own, which already open fresh connections.
+fn component_attempts(body: &Body) -> u32 {
+    if matches!(body, Body::Inputs { .. } | Body::Outputs { .. }) {
+        ONCE_SENT_ATTEMPTS
+    } else {
+        1
+    }
+}
+
+/// Publish an anonymous component on a one-shot connection of its own, up to
+/// `attempts` connections, each through a fresh route.
+async fn publish_component(
+    urls: &[String],
+    route: &ComponentRoute,
+    event: &Event,
+    attempts: u32,
+) -> Result<(), String> {
+    let mut last = String::new();
+    for attempt in 1..=attempts {
+        if attempt > 1 {
+            tokio::time::sleep(Duration::from_millis(
+                ONCE_SENT_RETRY_BASE_MS * u64::from(attempt - 1),
+            ))
+            .await;
+        }
+        match Relays::connect(urls, route(), CONNECT_TIMEOUT).await {
+            Ok(one_shot) => {
+                let published = publish_at_least_once(&one_shot, event, urls.len(), 1).await;
+                one_shot.shutdown().await;
+                match published {
+                    Ok(()) => return Ok(()),
+                    Err(error) => last = error,
+                }
+            }
+            Err(error) => last = format!("no Nostr relay could be reached: {error}"),
+        }
+    }
+    Err(last)
+}
+
+/// Makes the route of one anonymous component's one-shot connection.
+pub type ComponentRoute = Arc<dyn Fn() -> RelayRoute + Send + Sync>;
+
+/// Messages no relay took, by wire type, for the round's status line.
+#[derive(Default)]
+struct Dropped(Mutex<Vec<(&'static str, String)>>);
+
+impl Dropped {
+    fn record(&self, kind: &'static str, why: String) {
+        self.0.lock().expect("dropped publishes").push((kind, why));
+    }
+
+    /// One line per wire type since the last call: how many were lost, and
+    /// the last reason.
+    fn take_lines(&self) -> Vec<String> {
+        let taken = std::mem::take(&mut *self.0.lock().expect("dropped publishes"));
+        let mut lines: Vec<(&'static str, usize, String)> = Vec::new();
+        for (kind, why) in taken {
+            match lines.iter_mut().find(|(seen, _, _)| *seen == kind) {
+                Some(line) => {
+                    line.1 += 1;
+                    line.2 = why;
+                }
+                None => lines.push((kind, 1, why)),
+            }
+        }
+        lines
+            .into_iter()
+            .map(|(kind, count, why)| format!("{count} {kind} message(s) reached no relay: {why}"))
+            .collect()
+    }
+}
+
 /// The relays a round speaks through.
 struct Wire {
     relays: Relays,
     urls: Vec<String>,
-    route: RelayRoute,
+    component_route: ComponentRoute,
     keys: Keys,
     /// Publishes still on their way, so the round can let them land before
     /// the connections close.
     in_flight: Mutex<tokio::task::JoinSet<()>>,
+    dropped: Arc<Dropped>,
 }
 
 impl Wire {
     /// Gift-wrap `message` to `to`. A transaction component goes under a
-    /// throwaway key on a one-shot connection (a fresh circuit); the control
+    /// throwaway key on a one-shot connection (its own circuit); the control
     /// plane under the round key on the shared connection. Publishing never
-    /// blocks the round: a lost message is what the resend timers are for.
+    /// blocks the round: a lost message is what the resend timers are for,
+    /// and a component sent only once is tried again on a fresh connection.
+    /// Whatever no relay took is recorded for the status line.
     fn send(&self, to: &str, message: &RoundMessage) {
+        let kind = message.body.kind();
         let Ok(receiver) = PublicKey::from_hex(to) else {
+            self.dropped
+                .record(kind, format!("{to} is not a round key"));
             return;
         };
         let json = message.to_json();
+        let dropped = self.dropped.clone();
         if message.body.is_anonymous() {
-            let Ok(event) = nip17::wrap(&Keys::generate(), &receiver, &json) else {
-                return;
+            let event = match nip17::wrap(&Keys::generate(), &receiver, &json) {
+                Ok(event) => event,
+                Err(error) => {
+                    dropped.record(kind, error.to_string());
+                    return;
+                }
             };
-            let (urls, route) = (self.urls.clone(), self.route.clone());
+            let attempts = component_attempts(&message.body);
+            let (urls, route) = (self.urls.clone(), self.component_route.clone());
             self.spawn(async move {
-                if let Ok(one_shot) = Relays::connect(&urls, route, CONNECT_TIMEOUT).await {
-                    let _ = publish_at_least_once(&one_shot, &event, urls.len(), 1).await;
-                    one_shot.shutdown().await;
+                if let Err(why) = publish_component(&urls, &route, &event, attempts).await {
+                    dropped.record(kind, why);
                 }
             });
-        } else if let Ok(event) = nip17::wrap(&self.keys, &receiver, &json) {
+        } else {
+            let event = match nip17::wrap(&self.keys, &receiver, &json) {
+                Ok(event) => event,
+                Err(error) => {
+                    dropped.record(kind, error.to_string());
+                    return;
+                }
+            };
             let (relays, count) = (self.relays.clone(), self.urls.len());
             self.spawn(async move {
-                let _ = publish_at_least_once(&relays, &event, count, 1).await;
+                if let Err(why) = publish_at_least_once(&relays, &event, count, 1).await {
+                    dropped.record(kind, why);
+                }
             });
         }
     }
@@ -245,9 +372,21 @@ impl Wire {
     /// Publish a pool announcement or withdrawal under the round key.
     fn announce(&self, event: Event) {
         let (relays, count) = (self.relays.clone(), self.urls.len());
+        let dropped = self.dropped.clone();
         self.spawn(async move {
-            let _ = publish_at_least_once(&relays, &event, count, PUBLISH_POOL_MIN_ACKS).await;
+            if let Err(why) =
+                publish_at_least_once(&relays, &event, count, PUBLISH_POOL_MIN_ACKS).await
+            {
+                dropped.record("pool announcement", why);
+            }
         });
+    }
+
+    /// Report what no relay took since the last call.
+    fn report_dropped(&self, status: &(dyn Fn(&str) + Send + Sync)) {
+        for line in self.dropped.take_lines() {
+            status(&line);
+        }
     }
 
     fn spawn(&self, publish: impl std::future::Future<Output = ()> + Send + 'static) {
@@ -574,7 +713,11 @@ pub struct P2pCoins {
 pub struct P2pCore {
     pub network: PoolNetwork,
     pub relays: Vec<String>,
+    /// The shared connection's route.
     pub route: RelayRoute,
+    /// The route of each anonymous component's one-shot connection, made
+    /// fresh for every component; `None` uses `route` (a loopback relay).
+    pub component_route: Option<ComponentRoute>,
     pub auto: bool,
 }
 
@@ -631,12 +774,17 @@ pub async fn run_p2p(
         .map_err(|error| format!("could not reach the Nostr relays: {error}"))?;
     let round_keys = Keys::generate();
     let me = round_keys.public_key().to_hex();
+    let component_route = core.component_route.clone().unwrap_or_else(|| {
+        let route = core.route.clone();
+        Arc::new(move || route.clone())
+    });
     let wire = Wire {
         relays: relays.clone(),
         urls: core.relays.clone(),
-        route: core.route.clone(),
+        component_route,
         keys: round_keys.clone(),
         in_flight: Mutex::new(tokio::task::JoinSet::new()),
+        dropped: Arc::default(),
     };
     let mut pool = PoolView {
         network,
@@ -867,7 +1015,9 @@ pub async fn run_p2p_round(
         relays: settings.relays.clone(),
         route: RelayRoute::Dialer(Arc::new(FusionRelayDialer {
             proxy: settings.verified_proxy,
+            isolation: None,
         })),
+        component_route: Some(FusionRelayDialer::component_route(settings.verified_proxy)),
         auto: settings.auto,
     };
     let fused = run_p2p(
@@ -962,6 +1112,7 @@ async fn gather_and_agree(
     let mut early: Vec<(String, RoundMessage)> = Vec::new();
     let peers = loop {
         cancel.check()?;
+        wire.report_dropped(status);
         let clock = clocks.now();
         if clock.ms >= next_announce {
             announce(pool, clock.unix)?;
@@ -1034,6 +1185,7 @@ async fn gather_and_agree(
                 wire.send(&to, &message);
             }
         }
+        wire.report_dropped(status);
         if let Some(outcome) = rendezvous.outcome() {
             let negotiated = outcome.clone()?;
             let early_round = early
@@ -1092,6 +1244,7 @@ async fn drive_round(
                 perform(action, round, wire, clocks, broadcaster, status).await;
             }
         }
+        wire.report_dropped(status);
         if let Some(outcome) = round.outcome() {
             return outcome.clone();
         }
@@ -1251,5 +1404,205 @@ mod tests {
             PoolNetwork::Chipnet
         );
         assert!(pool_network(Network::Testnet4).is_err());
+    }
+
+    /// A SOCKS5 proxy that records each connection's username and then
+    /// refuses the CONNECT: it shows which credentials Tor would be given.
+    async fn recording_socks() -> (u16, Arc<Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let record = record.clone();
+                tokio::spawn(async move {
+                    let mut greeting = [0u8; 2];
+                    stream.read_exact(&mut greeting).await.ok()?;
+                    let mut methods = vec![0u8; usize::from(greeting[1])];
+                    stream.read_exact(&mut methods).await.ok()?;
+                    // Username and password.
+                    stream.write_all(&[5, 2]).await.ok()?;
+                    let mut head = [0u8; 2];
+                    stream.read_exact(&mut head).await.ok()?;
+                    let mut user = vec![0u8; usize::from(head[1])];
+                    stream.read_exact(&mut user).await.ok()?;
+                    let mut length = [0u8; 1];
+                    stream.read_exact(&mut length).await.ok()?;
+                    let mut password = vec![0u8; usize::from(length[0])];
+                    stream.read_exact(&mut password).await.ok()?;
+                    record.lock().unwrap().push(String::from_utf8(user).ok()?);
+                    stream.write_all(&[1, 0]).await.ok()?;
+                    // Host unreachable.
+                    stream
+                        .write_all(&[5, 4, 0, 1, 0, 0, 0, 0, 0, 0])
+                        .await
+                        .ok()?;
+                    Some(())
+                });
+            }
+        });
+        (port, seen)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_component_rides_one_circuit_that_no_other_component_shares() {
+        let (port, seen) = recording_socks().await;
+        let endpoint = |host: &str| RelayEndpoint {
+            host: host.into(),
+            port: 443,
+            tls: true,
+        };
+        let hosts = [
+            "one.relay.example",
+            "two.relay.example",
+            "three.relay.example",
+        ];
+        let route = FusionRelayDialer::component_route(Some(port));
+        for _component in 0..2 {
+            let RelayRoute::Dialer(dialer) = route() else {
+                panic!("a component's connection goes through the dialer");
+            };
+            for host in hosts {
+                assert!(dialer.dial(endpoint(host)).await.is_err());
+            }
+        }
+        // The shared connection keeps one circuit per relay stream.
+        let shared = FusionRelayDialer {
+            proxy: Some(port),
+            isolation: None,
+        };
+        for host in &hosts[..2] {
+            assert!(shared.dial(endpoint(host)).await.is_err());
+        }
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 8);
+        let (first, second, streams) = (&seen[..3], &seen[3..6], &seen[6..]);
+        assert!(first.iter().all(|user| *user == first[0]));
+        assert!(second.iter().all(|user| *user == second[0]));
+        assert_ne!(first[0], second[0]);
+        assert_ne!(streams[0], streams[1]);
+        assert!(!streams.contains(&first[0]) && !streams.contains(&second[0]));
+    }
+
+    /// Refuses every stream, as a Tor out of circuits does.
+    struct Refused;
+
+    impl RelayDialer for Refused {
+        fn dial(&self, _endpoint: RelayEndpoint) -> Dialed {
+            Box::pin(async { Err("Tor SOCKS5 connection failed: refused for the test".into()) })
+        }
+    }
+
+    /// One-shot routes whose first `refused` are refused and the rest reach
+    /// the loopback relay, with a count of the routes made.
+    fn flaky_route(refused: usize) -> (ComponentRoute, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let made = Arc::new(AtomicUsize::new(0));
+        let count = made.clone();
+        let route: ComponentRoute = Arc::new(move || {
+            if count.fetch_add(1, Ordering::SeqCst) < refused {
+                RelayRoute::Dialer(Arc::new(Refused))
+            } else {
+                RelayRoute::LocalOnly
+            }
+        });
+        (route, made)
+    }
+
+    async fn wire_on(url: &str, component_route: ComponentRoute) -> Wire {
+        let relays = Relays::connect(&[url], RelayRoute::LocalOnly, Duration::from_secs(5))
+            .await
+            .unwrap();
+        Wire {
+            relays,
+            urls: vec![url.to_owned()],
+            component_route,
+            keys: Keys::generate(),
+            in_flight: Mutex::new(tokio::task::JoinSet::new()),
+            dropped: Arc::default(),
+        }
+    }
+
+    fn message(body: Body) -> RoundMessage {
+        RoundMessage::new("session", body, 1_800_000_000)
+    }
+
+    fn inputs() -> RoundMessage {
+        message(Body::Inputs {
+            inputs: Vec::new(),
+            credential_sigs: Vec::new(),
+            salt_commitments: Vec::new(),
+        })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inputs_whose_connection_fails_go_out_on_a_fresh_one() {
+        use std::sync::atomic::Ordering;
+        let relay = nostr_sdk::prelude::LocalRelay::builder().build();
+        relay.run().await.unwrap();
+        let url = relay.url().await.to_string();
+        let (route, made) = flaky_route(1);
+        let wire = wire_on(&url, route).await;
+        let receiver = Keys::generate();
+
+        wire.send(&receiver.public_key().to_hex(), &inputs());
+        wire.flush(Duration::from_secs(30)).await;
+
+        assert_eq!(made.load(Ordering::SeqCst), 2);
+        assert!(wire.dropped.take_lines().is_empty());
+        let stored = wire
+            .relays
+            .fetch(
+                &[&url],
+                Filter::new()
+                    .kind(Kind::GiftWrap)
+                    .pubkey(receiver.public_key()),
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stored.len(), 1);
+        let opened = nip17::unwrap(&receiver, &stored[0]).unwrap();
+        assert!(opened.content.contains(r#""type":"inputs""#));
+        wire.relays.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn what_no_relay_takes_is_reported_and_only_once_sent_components_retry() {
+        use std::sync::atomic::Ordering;
+        let relay = nostr_sdk::prelude::LocalRelay::builder().build();
+        relay.run().await.unwrap();
+        let url = relay.url().await.to_string();
+        let (route, made) = flaky_route(usize::MAX);
+        let wire = wire_on(&url, route).await;
+        let to = Keys::generate().public_key().to_hex();
+
+        wire.send(&to, &inputs());
+        // An onion blob has the round's resend timer behind it.
+        wire.send(
+            &to,
+            &message(Body::OnionOutput {
+                onion: "AA".into(),
+                mix_order: Vec::new(),
+            }),
+        );
+        wire.flush(Duration::from_secs(30)).await;
+
+        assert_eq!(made.load(Ordering::SeqCst), ONCE_SENT_ATTEMPTS as usize + 1);
+        let lines = wire.dropped.take_lines();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        for kind in ["inputs", "onion_output"] {
+            assert!(
+                lines.iter().any(|line| line
+                    .starts_with(&format!("1 {kind} message(s) reached no relay: "))
+                    && line.contains("refused for the test")),
+                "{lines:?}"
+            );
+        }
+        assert!(wire.dropped.take_lines().is_empty());
+        wire.relays.shutdown().await;
     }
 }

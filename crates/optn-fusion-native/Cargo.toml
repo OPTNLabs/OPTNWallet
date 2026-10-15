@@ -25,4 +25,4 @@ zeroize = "1"
 [dev-dependencies]
 # An in-process relay for whole P2P rounds in tests.
 nostr-sdk = { version = "0.45.4", default-features = false, features = ["ring", "rustls-tls-webpki-roots", "local-relay"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread"] }
