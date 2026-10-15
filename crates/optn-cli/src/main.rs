@@ -255,20 +255,29 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// Fuse this wallet's coins in CashFusion server rounds (Electron Cash
-    /// protocol), through the same native fusion host as the desktop.
+    /// Fuse this wallet's coins in CashFusion rounds, through a server
+    /// (Electron Cash protocol) or peer to peer over Nostr (--p2p), in the same
+    /// native fusion host as the desktop.
     ///
     /// Needs a saved wallet (--wallet) and --yes: every round pays fees. Tor is
     /// required for any remote leg. Without --auto, runs one round (or
     /// --rounds). With --auto, keeps fusing until every coin reaches
     /// --fuse-depth, then idles and watches the wallet. Progress goes to
-    /// stderr as JSON lines; the result is on stdout. P2P fusion is not yet
-    /// available here.
+    /// stderr as JSON lines; the result is on stdout.
     Fusion {
         /// CashFusion server: host[:port][:s|:t]. A local server defaults to
-        /// plain TCP, a remote one to TLS; port 8789 if omitted.
+        /// plain TCP, a remote one to TLS; port 8789 if omitted. Required
+        /// unless --p2p.
+        #[arg(long, required_unless_present = "p2p", conflicts_with = "p2p")]
+        server: Option<String>,
+        /// Fuse with other wallets peer to peer, coordinated over Nostr,
+        /// instead of through a server. Needs at least six wallets in the pool.
         #[arg(long)]
-        server: String,
+        p2p: bool,
+        /// Nostr relay for P2P rounds, wss:// or a loopback ws://
+        /// (repeatable). The desktop's relay set if omitted.
+        #[arg(long = "relay", requires = "p2p")]
+        relays: Vec<String>,
         /// Keep fusing like the desktop's Auto Fusion.
         #[arg(long)]
         auto: bool,
@@ -279,8 +288,8 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         fuse_depth: u32,
         /// Register only this tier, in satoshis (repeatable), so wallets that
-        /// must meet do.
-        #[arg(long = "tier")]
+        /// must meet do. Server rounds only: a P2P pool agrees its own tier.
+        #[arg(long = "tier", conflicts_with = "p2p")]
         tiers: Vec<u64>,
         /// Addresses per chain to scan before each round.
         #[arg(long, default_value_t = 20)]
@@ -2628,6 +2637,8 @@ async fn run(cli: &Cli) -> Result<Value> {
         }
         Command::Fusion {
             server,
+            p2p,
+            relays,
             auto,
             rounds,
             fuse_depth,
@@ -2641,10 +2652,19 @@ async fn run(cli: &Cli) -> Result<Value> {
                     "refusing to fuse without --yes: every round pays fees".to_string(),
                 ));
             }
+            let venue = match (server.as_deref(), *p2p) {
+                (_, true) => fusion::Venue::P2p { relays },
+                (Some(server), false) => fusion::Venue::Server(server),
+                (None, false) => {
+                    return Err(CliError::Usage(
+                        "pass --server for a CashFusion server, or --p2p".to_string(),
+                    ))
+                }
+            };
             fusion::run(
                 cli,
                 fusion::FusionArgs {
-                    server,
+                    venue,
                     auto: *auto,
                     rounds: *rounds,
                     fuse_depth: *fuse_depth,

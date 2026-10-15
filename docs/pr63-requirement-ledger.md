@@ -95,7 +95,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | 11 | No 2-of-3 provider voting | **PROVEN** | `reconciliation.rs` ranks evidence; no vote count exists | — |
 | 12 | SHV/MMR passes reference vectors | **PROVEN** | `optn-core/src/header_mmr.rs::reference_vectors` against bitcoincashautist's published vectors, byte-identical to BCHN's | — |
 | 13 | Pruning preserves historical verification and reorg recovery | **PROVEN** | `header_store.rs::prune_below`/`rewind_to`; driven against a node that actually reorganised by `optn-chain-neutrino/tests/regtest_live.rs::a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment` — pruning leaves the commitment unmoved, a forked branch is refused rather than extended onto, and the rebuild reaches the node's longer branch with a different commitment | Recovery is a rebuild from the anchor, not an in-place rewind: the accumulator is append-only and the test pins that rewinding the index alone does not let it extend. A pruned range still needs an SHV peer to re-prove, which BCHD does not serve |
-| 14 | CashFusion uses the shared chain observation layer | **PROVEN** (component) | A round checks its own and its peers' inputs through `optn_fusion::lookup::InputLookups`, implemented once by `optn_fusion_native::lookups::ChainInputLookups` over `optn-chain-electrum` (`ElectrumBackend::script_unspent_values`), on connections of the round's own and only through the verified Tor proxy for remote servers. The desktop and the CLI both use it; `electrum_input.rs` is deleted. Live on chipnet: six server rounds on the native host from the CLI and the docker runner, one with the desktop as a third player ("a live mixed fleet fuses") | Rounds are driven natively for the CLI and the docker runner (`optn-fusion-native::server_round`). The desktop still drives its rounds from `Fusion*.ts` for wallets whose keys live in the TypeScript key database, and P2P rounds (Nostr) have no Rust driver yet |
+| 14 | CashFusion uses the shared chain observation layer | **PROVEN** (component) | A round checks its own and its peers' inputs through `optn_fusion::lookup::InputLookups`, implemented once by `optn_fusion_native::lookups::ChainInputLookups` over `optn-chain-electrum` (`ElectrumBackend::script_unspent_values`), on connections of the round's own and only through the verified Tor proxy for remote servers. The desktop and the CLI both use it; `electrum_input.rs` is deleted. Live on chipnet: six server rounds on the native host from the CLI and the docker runner, one with the desktop as a third player ("a live mixed fleet fuses") | Rounds are driven natively for the CLI and the docker runner, through a server (`optn-fusion-native::server_round`) or peer to peer over Nostr (`optn-fusion-native::p2p_round`, `optn fusion --p2p`). The desktop still drives its rounds from `Fusion*.ts` for wallets whose keys live in the TypeScript key database. The Rust P2P host is proven over a local relay; a live chipnet round mixing Rust and TypeScript peers is still to run |
 | 15 | Explorer routing independent of consensus | **PROVEN** | `optn-core/src/explorer.rs` owns the presets, the templates and the refusal; `optn-runtime/src/explorer.rs::route_for_overlay` turns a saved `UserNetworkOverlay` into a link or a refusal; the renderer calls through via `explorerPresetUrl`/`explorerCustomUrl` and `src/utils/servers/useExplorerLink.ts`. `a_saved_own_infrastructure_policy_refuses_a_public_explorer`, `the_same_policy_opens_the_holders_own_explorer`, `own_infrastructure_refuses_every_public_preset`, and the renderer-side `explorers.test.ts`; `cargo run -p xtask -- architecture` fails any surface that names a public explorer host | Explorer links were the one path around the policy: the renderer held its own preset table and built URLs itself, so a wallet set to own-infrastructure-only still handed txids to a public site. The decision now has one home, and the refusal is rendered with its reason rather than as a missing button |
 | 16 | No renderer/shell owns networking or chain truth | **PARTIAL** | `cargo run -p xtask -- architecture` proves declared dependency boundaries | Legacy desktop Home/subscriptions still call TypeScript `ElectrumService` through `UTXOService`. Dependency checks do not prove every packaged interface uses the shared Rust runtime. |
 
@@ -2605,3 +2605,81 @@ Evidence:
 Not yet: the host that carries these machines over Nostr and Tor, `optn fusion
 --p2p`, the docker lab's P2P mode, and a live chipnet round mixing Rust and
 TypeScript peers.
+
+### 2026-10-15: the Rust P2P host, `optn fusion --p2p` and the lab's P2P mode
+
+`crates/optn-fusion-native/src/p2p_round.rs` carries the `p2p` state machines
+over Nostr and Tor, as `FusionP2pService.ts` does on the desktop:
+
+- Relays through `optn-nostr`. A remote relay is dialled through the verified
+  Tor proxy with fresh isolation credentials per connection; a loopback relay
+  directly.
+- The desktop's gather policy (`collectRolling`), then the rendezvous and the
+  round. A transaction component goes under a throwaway key on a one-shot
+  connection; the control plane under the round key.
+- Keys and fresh outputs come from the wallet runtime. Signing goes through
+  the native boundary (`p2p::signer`). The coordinator broadcasts through the
+  round's own Electrum connections (`ChainInputLookups::broadcast`), and the
+  host waits for a selected server to hold the transaction.
+- Every publish is retried up to three times (400 ms, then 800 ms), and pool
+  announcements need two relays when there are two, as
+  `publishEventAtLeastOnce` does. A settled round lets its last publishes land
+  before it withdraws its key and closes.
+
+Found and fixed under the relay test:
+
+- The coordinator's `final` was never sent. A broadcast's outcome queues
+  `final` and settles the round in the same call, and the host returned on
+  the outcome before taking those actions. Participants then waited out the
+  whole round timeout, about six minutes for ten peers.
+- The relays were closed under publishes still in flight.
+- A publish a relay refused was dropped, with no retry.
+- The host marked its own round key as a ghost when the round started, so
+  peers in one process ignored each other. It now does this when the key is
+  withdrawn (`retireRoundKey`).
+
+Evidence:
+
+- `tests/p2p_local_relay.rs`: ten hosts, each with its own relay connection
+  and round key, through nostr-sdk's in-process relay. They gather, agree,
+  take credentials, peel the onion, assemble, sign and broadcast in about 15
+  s. Every peer returns the same txid. The transaction verifies against the
+  template rebuilt from every peer's inputs and the outputs, and pays exactly
+  the outputs the peers reserved. With either of the first two bugs above
+  restored, the test fails.
+- optn-fusion 168 tests, optn-fusion-native 13 plus the relay test, the CLI
+  156; strict clippy for both crates and the CLI; rustfmt.
+- `cargo deny` for the root, `src-tauri` and `optn-core`; `cargo audit` for
+  `src-tauri`. The CLI's lock gains the `optn-nostr` tree at the root's
+  versions and changes nothing it already locked; `src-tauri`'s gains only the
+  new edges. All six locks pass `--locked`.
+
+Relay budget (open): a ten-peer coordinator publishes about 220
+control-plane events on its one connection in its first minute. Measured in
+this test: 117 `onion_declare` attempts (nine peelers, sent once and resent
+twelve times until assembly), 45 proposals, and params, responses,
+`assembled` and `final`. nostr-sdk's local relay allows 60 per connection per
+minute by default and refuses the rest with "rate-limited". Under that limit
+the coordinator's credential responses were refused and the round failed. The
+desktop coordinator keeps the same cadence (`fusionSession.ts`: declare to
+the whole mix order every `P2P_ONION_DECLARE_RESEND_MS`, up to
+`P2P_ONION_DECLARE_RESEND_MAX`, until assembled). Same-window desktop peers
+also reach each other over `BroadcastChannel`, which no relay limits. The
+test sets 1,200 per minute. Lowering the volume would change the protocol on
+both sides, so that is left for review.
+
+CLI and lab:
+
+- `optn fusion --p2p [--relay URL]...` runs the same loop as server rounds:
+  P2P coin selection (`FusionMode::P2p`), depth recording, Ctrl-C through the
+  round. The desktop's six relays are used when none is named. Each relay host
+  must be on Tor by the holder's transport, as a server host is. `--tier` is
+  for server rounds only, since a P2P pool agrees its own tier.
+- `packages/docker-dev/scripts/fusion-lab-headless.sh` runs
+  `optn fusion --p2p --auto` for `OPTN_FUSION_MODE=p2p`, which is already the
+  compose default (it used to refuse it and exit). `OPTN_FUSION_RELAYS` names
+  relays; `OPTN_FUSION_TIER` is refused in P2P mode.
+
+Not yet: a live chipnet round mixing Rust and TypeScript peers. It needs six
+funded wallets online with Tor on public relays, where the relay budget above
+applies.

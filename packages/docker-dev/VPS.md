@@ -43,16 +43,18 @@ Health file (in volume): `/optn-data/fusion-lab.health.json`
 # Default — P2P (recommended)
 OPTN_FUSION_MODE=p2p
 
-# Classic fusion server path (when headless runner supports it)
+# Classic fusion server path
 OPTN_FUSION_MODE=server
 ```
 
-## Full Auto rounds (server mode)
+## Full Auto rounds
 
 `scripts/fusion-lab-headless.sh` runs `optn fusion --auto`, the Rust CLI's Auto
 Fusion. It uses the same native fusion host as the desktop and the CLI
 (`crates/optn-fusion-native`): coin choice, the depth record, keys and fresh
-change outputs from the wallet runtime, the Electron Cash protocol. It builds the
+change outputs from the wallet runtime, and the Electron Cash protocol
+(`OPTN_FUSION_MODE=server`) or the P2P protocol over Nostr, which the
+desktop's peers speak too (`OPTN_FUSION_MODE=p2p`). It builds the
 CLI from the mounted repository on first start (cached in the data volume) unless
 `OPTN_CLI_BIN` names a prebuilt binary, turns Tor on, trusts the container's own
 Tor port, and fuses until stopped.
@@ -62,7 +64,7 @@ Tor port, and fuses until stopped.
 | Tor-bound VPS process | ✅ supervisor |
 | Mode / network env | ✅ |
 | Headless server-mode Auto Fusion | ✅ `scripts/fusion-lab-headless.sh` |
-| Headless P2P (Nostr) Auto Fusion | ⬜ no Rust driver yet; the script refuses `p2p` |
+| Headless P2P (Nostr) Auto Fusion | ✅ same script, `OPTN_FUSION_MODE=p2p` (`optn fusion --p2p`); a round needs six wallets in the pool |
 
 1. Put a saved wallet in the volume: run the wallet console once,
    `docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab run --rm --entrypoint bash fusion-lab`,
@@ -94,10 +96,11 @@ lines (JSON) go to the container log.
 | `OPTN_DATA_DIR` | `/optn-data` | Volume |
 | `OPTN_HEADLESS_CMD` | _(empty)_ | Runner started after Tor is ready; `scripts/fusion-lab-headless.sh` for Auto Fusion |
 | `OPTN_WALLET` | _(empty)_ | Runner: saved wallet file name in `/optn-data/wallets` |
-| `OPTN_FUSION_SERVER` | _(empty)_ | Runner: CashFusion server, `host[:port][:s\|:t]` |
+| `OPTN_FUSION_SERVER` | _(empty)_ | Runner, server mode: CashFusion server, `host[:port][:s\|:t]` |
+| `OPTN_FUSION_RELAYS` | _(empty)_ | Runner, P2P mode: Nostr relays, space separated; the desktop's set when empty |
 | `OPTN_WALLET_PASSWORD_FILE` | _(empty)_ | Runner: file with the wallet password; empty means no password |
 | `OPTN_FUSION_DEPTH` | `3` | Runner: rounds per coin before Auto leaves it |
-| `OPTN_FUSION_TIER` | _(empty)_ | Runner: pin one tier (sats) so lab wallets meet |
+| `OPTN_FUSION_TIER` | _(empty)_ | Runner, server mode: pin one tier (sats) so lab wallets meet |
 | `OPTN_CLI_BIN` | _(empty)_ | Runner: prebuilt `optn`; otherwise built from the repo |
 | `OPTN_TOR_PROBE_MS` | `5000` | Probe timeout |
 | `OPTN_TOR_RECHECK_MS` | `30000` | Health recheck |

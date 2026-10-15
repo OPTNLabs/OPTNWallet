@@ -1,19 +1,17 @@
-//! `optn fusion`: CashFusion server rounds for a saved wallet.
+//! `optn fusion`: CashFusion rounds for a saved wallet, through a server or
+//! peer to peer over Nostr.
 //!
 //! Everything a round does runs in the shared native fusion host
 //! (`optn-fusion-native`), the same code the desktop uses: coins chosen by
 //! `optn_core::fusion::coin_selection`, keys and fresh change outputs from the
-//! wallet runtime, tier plans, the Electron Cash protocol, and a wait for the
-//! network to hold the transaction. This file only reads the holder's
-//! settings, keeps the loop, and reports.
+//! wallet runtime, tier plans, the Electron Cash protocol or the P2P one, and
+//! a wait for the network to hold the transaction. This file only reads the
+//! holder's settings, keeps the loop, and reports.
 //!
 //! Tor follows the desktop's rule: CashFusion runs only while the holder's
 //! transport keeps public destinations on Tor, and every remote leg goes
-//! through a verified proxy. A loopback server and loopback lookup servers
-//! need neither.
-//!
-//! Server rounds only. P2P fusion is coordinated over Nostr and has no Rust
-//! driver yet.
+//! through a verified proxy. A loopback server, loopback relays and loopback
+//! lookup servers need neither.
 //!
 //! The depth record (`optn_core::fusion::depth`) is the wallet runtime's,
 //! sealed with the wallet's encrypted checkpoint: a round the network holds is
@@ -33,7 +31,12 @@ use optn_core::fusion::depth::FusionDepthBook;
 use optn_core::fusion::FusionMode;
 use optn_fusion_native::depth_file::DepthFile;
 use optn_fusion_native::lookups::LookupEndpoint;
-use optn_fusion_native::server_round::{run_server_round, ServerRoundSettings, ServerTarget};
+use optn_fusion_native::p2p_round::{
+    relay_host, run_p2p_round, P2pRoundSettings, FUSION_CORE_RELAYS,
+};
+use optn_fusion_native::server_round::{
+    run_server_round, FusedRound, ServerRoundSettings, ServerTarget,
+};
 use optn_runtime::AppRuntime;
 use serde_json::{json, Value};
 
@@ -47,8 +50,16 @@ const FUSION_NEEDS_TOR: &str =
 /// on the desktop.
 const LOOKUP_SERVER_LIMIT: usize = 8;
 
+/// Where a round meets the wallets it fuses with.
+pub(crate) enum Venue<'a> {
+    /// A CashFusion server: host[:port][:s|:t].
+    Server(&'a str),
+    /// Peer to peer over these Nostr relays; the desktop's set when empty.
+    P2p { relays: &'a [String] },
+}
+
 pub(crate) struct FusionArgs<'a> {
-    pub server: &'a str,
+    pub venue: Venue<'a>,
     pub auto: bool,
     pub rounds: Option<u32>,
     pub fuse_depth: u32,
@@ -101,25 +112,29 @@ fn lookup_servers(cli: &Cli) -> Result<Vec<LookupEndpoint>> {
 }
 
 /// The verified Tor proxy every remote leg needs, or `None` when every leg is
-/// loopback.
+/// loopback. `hosts` are where the round meets: the server, or the relays.
 async fn verified_proxy(
     cli: &Cli,
-    server: &ServerTarget,
+    hosts: &[String],
     lookups: &[LookupEndpoint],
 ) -> Result<Option<u16>> {
-    let remote = std::iter::once(server.host.as_str())
+    let remote = hosts
+        .iter()
+        .map(String::as_str)
         .chain(lookups.iter().map(|lookup| lookup.host.as_str()))
         .any(|host| !optn_fusion::is_local_server(host));
     if !remote {
         return Ok(None);
     }
-    let (transport, _) = network_settings::transport_for_host(
-        cli.network,
-        cli.network_config_dir.as_deref(),
-        &server.host,
-    );
-    if !transport.tor_for(false) {
-        return Err(CliError::Usage(FUSION_NEEDS_TOR.into()));
+    for host in hosts {
+        let (transport, _) = network_settings::transport_for_host(
+            cli.network,
+            cli.network_config_dir.as_deref(),
+            host,
+        );
+        if !transport.tor_for(false) {
+            return Err(CliError::Usage(FUSION_NEEDS_TOR.into()));
+        }
     }
     let trusted =
         network_settings::trusted_socks_ports(cli.network, cli.network_config_dir.as_deref());
@@ -255,6 +270,65 @@ async fn unaffordable_reason(
         })
 }
 
+/// A round's settings, for the venue the holder chose.
+enum Rounds {
+    Server(ServerRoundSettings),
+    P2p(P2pRoundSettings),
+}
+
+impl Rounds {
+    fn mode(&self) -> FusionMode {
+        match self {
+            Rounds::Server(_) => FusionMode::Server,
+            Rounds::P2p(_) => FusionMode::P2p,
+        }
+    }
+
+    fn verified_proxy(&self) -> Option<u16> {
+        match self {
+            Rounds::Server(settings) => settings.verified_proxy,
+            Rounds::P2p(settings) => settings.verified_proxy,
+        }
+    }
+
+    /// Where rounds meet, for the progress lines and the result.
+    fn venue(&self) -> Value {
+        match self {
+            Rounds::Server(settings) => json!({
+                "mode": "server",
+                "server": format!("{}:{}", settings.server.host, settings.server.port),
+            }),
+            Rounds::P2p(settings) => json!({"mode": "p2p", "relays": settings.relays}),
+        }
+    }
+
+    async fn run(
+        &self,
+        runtime: &AppRuntime,
+        coins: &[String],
+        round_id: &str,
+        status: &(dyn Fn(&str) + Send + Sync),
+    ) -> std::result::Result<FusedRound, String> {
+        match self {
+            Rounds::Server(settings) => {
+                run_server_round(runtime, settings, coins, round_id, status).await
+            }
+            Rounds::P2p(settings) => {
+                run_p2p_round(runtime, settings, coins, round_id, status).await
+            }
+        }
+    }
+
+    /// Why no choice of `eligible` can fund a tier, when a server can say. A
+    /// P2P pool has no server to ask.
+    async fn unaffordable_reason(&self, eligible: &[&FusionCoin]) -> Option<String> {
+        match self {
+            Rounds::Server(settings) => unaffordable_reason(settings, eligible).await,
+            Rounds::P2p(_) => None,
+        }
+    }
+}
+
 /// After `streak` rounds in a row that missed every tier by the draw: the
 /// retry wait doubled each time, up to the idle wait.
 fn unaffordable_backoff(streak: u32) -> u64 {
@@ -268,22 +342,53 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
         .wallet
         .as_deref()
         .ok_or_else(|| CliError::Usage("CashFusion needs a saved wallet: pass --wallet.".into()))?;
-    let server = ServerTarget::parse(args.server).map_err(CliError::Usage)?;
     let lookup_servers = lookup_servers(cli)?;
-    let verified_proxy = verified_proxy(cli, &server, &lookup_servers).await?;
+    let rounds = match args.venue {
+        Venue::Server(server) => {
+            let server = ServerTarget::parse(server).map_err(CliError::Usage)?;
+            let verified_proxy =
+                verified_proxy(cli, std::slice::from_ref(&server.host), &lookup_servers).await?;
+            Rounds::Server(ServerRoundSettings {
+                network: cli.network,
+                server,
+                verified_proxy,
+                lookup_servers,
+                wallet_tag: handle.to_owned(),
+                join_inactive_timeout: args
+                    .auto
+                    .then_some(optn_fusion::run::EC_AUTOFUSE_INACTIVE_TIMEOUT),
+                only_tiers: (!args.tiers.is_empty()).then(|| args.tiers.to_vec()),
+            })
+        }
+        Venue::P2p { relays } => {
+            let relays: Vec<String> = if relays.is_empty() {
+                FUSION_CORE_RELAYS
+                    .iter()
+                    .map(|relay| relay.to_string())
+                    .collect()
+            } else {
+                relays.to_vec()
+            };
+            let hosts = relays
+                .iter()
+                .map(|relay| {
+                    relay_host(relay).ok_or_else(|| {
+                        CliError::Usage(format!("{relay} is not a Nostr relay address"))
+                    })
+                })
+                .collect::<Result<Vec<String>>>()?;
+            let verified_proxy = verified_proxy(cli, &hosts, &lookup_servers).await?;
+            Rounds::P2p(P2pRoundSettings {
+                network: cli.network,
+                relays,
+                verified_proxy,
+                lookup_servers,
+                auto: args.auto,
+            })
+        }
+    };
     let legacy_depth = DepthFile::new(depth_path(cli, handle)?);
     let mut depth_imported = false;
-    let settings = ServerRoundSettings {
-        network: cli.network,
-        server: server.clone(),
-        verified_proxy,
-        lookup_servers,
-        wallet_tag: handle.to_owned(),
-        join_inactive_timeout: args
-            .auto
-            .then_some(optn_fusion::run::EC_AUTOFUSE_INACTIVE_TIMEOUT),
-        only_tiers: (!args.tiers.is_empty()).then(|| args.tiers.to_vec()),
-    };
     let trigger = if args.auto {
         FusionTrigger::Auto
     } else {
@@ -312,7 +417,7 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
         let book = runtime.fusion_depth();
         let coins = fusion_coins(&synced, &book);
         let selection = select_fusion_coins(
-            FusionMode::Server,
+            rounds.mode(),
             trigger,
             &coins,
             args.fuse_depth,
@@ -328,7 +433,7 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
             eligible.iter().map(|coin| coin.outpoint.clone()).collect();
         eligible_outpoints.sort();
         if never_for.as_ref() == Some(&eligible_outpoints) {
-            match unaffordable_reason(&settings, &eligible).await {
+            match rounds.unaffordable_reason(&eligible).await {
                 Some(reason) => {
                     report(json!({"event": "idle", "reason": reason}));
                     if !pause(AUTO_FUSION_DEPTH_MET_IDLE_MS).await {
@@ -374,9 +479,10 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
             .iter()
             .map(|coin| coin.outpoint.clone())
             .collect();
-        report(
-            json!({"event": "round", "coins": outpoints.len(), "server": format!("{}:{}", server.host, server.port)}),
-        );
+        let mut event = rounds.venue();
+        event["event"] = json!("round");
+        event["coins"] = json!(outpoints.len());
+        report(event);
         // Ctrl-C cancels the round through the engine, which still finishes
         // what it must once components are disclosed.
         let interrupted = Arc::new(AtomicBool::new(false));
@@ -391,7 +497,7 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
             }
         });
         let status = |line: &str| report(json!({"event": "status", "message": line}));
-        let attempt = run_server_round(runtime, &settings, &outpoints, &round_id, &status).await;
+        let attempt = rounds.run(runtime, &outpoints, &round_id, &status).await;
         watcher.abort();
         if interrupted.load(Ordering::SeqCst) {
             stopped = Some("interrupted".into());
@@ -429,7 +535,7 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
                     return Err(CliError::Network(error));
                 }
                 if optn_fusion::allocate::is_unaffordable(&error) {
-                    if let Some(reason) = unaffordable_reason(&settings, &eligible).await {
+                    if let Some(reason) = rounds.unaffordable_reason(&eligible).await {
                         never_for = Some(eligible_outpoints.clone());
                         report(json!({"event": "idle", "reason": reason}));
                         if !pause(AUTO_FUSION_DEPTH_MET_IDLE_MS).await {
@@ -461,15 +567,18 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
         }
     }
 
-    Ok(json!({
-        "ok": true,
-        "network": cli.network.to_string(),
-        "server": format!("{}:{}", server.host, server.port),
-        "tor": verified_proxy,
-        "rounds": fused,
-        "stopped": stopped,
-        "depth_record": "sealed with the wallet",
-    }))
+    let mut result = rounds.venue();
+    for (key, value) in [
+        ("ok", json!(true)),
+        ("network", json!(cli.network.to_string())),
+        ("tor", json!(rounds.verified_proxy())),
+        ("rounds", json!(fused)),
+        ("stopped", json!(stopped)),
+        ("depth_record", json!("sealed with the wallet")),
+    ] {
+        result[key] = value;
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

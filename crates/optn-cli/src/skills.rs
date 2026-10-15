@@ -367,7 +367,7 @@ pub const SKILLS: &[Skill] = &[
         // Signs and spends the wallet's coins into a CoinJoin, paying fees.
         name: "fusion",
         capability: Capability::Spend,
-        summary: "Fuse the wallet's coins in CashFusion server rounds.",
+        summary: "Fuse the wallet's coins in CashFusion rounds, through a server or peer to peer.",
         needs_wallet: true,
         needs_network: true,
         requires_confirmation: true,

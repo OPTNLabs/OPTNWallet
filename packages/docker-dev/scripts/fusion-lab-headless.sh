@@ -8,12 +8,16 @@
 #
 # Required:
 #   OPTN_WALLET            saved wallet file name in the wallet directory
-#   OPTN_FUSION_SERVER     CashFusion server, host[:port][:s|:t]
+#   OPTN_FUSION_MODE       p2p (the default, as on the desktop) or server
+#   OPTN_FUSION_SERVER     server mode: CashFusion server, host[:port][:s|:t]
 # Optional:
+#   OPTN_FUSION_RELAYS     p2p mode: Nostr relays, space separated; the
+#                          desktop's relay set when empty
 #   OPTN_WALLET_PASSWORD_FILE  file holding the wallet password (one line);
 #                              absent means a wallet without a password
 #   OPTN_FUSION_DEPTH      rounds per coin before Auto leaves it (default 3)
-#   OPTN_FUSION_TIER       pin one tier in satoshis, so lab wallets meet
+#   OPTN_FUSION_TIER       server mode: pin one tier in satoshis, so lab
+#                          wallets meet (a P2P pool agrees its own tier)
 #   OPTN_CLI_BIN           a prebuilt `optn`; otherwise built from /optn
 #   OPTN_WALLET_DIRECTORY  default $OPTN_DATA_DIR/wallets
 #   OPTN_NETWORK_CONFIG_DIR default $OPTN_DATA_DIR/network
@@ -23,7 +27,6 @@
 set -euo pipefail
 
 : "${OPTN_WALLET:?set OPTN_WALLET to the saved wallet file name}"
-: "${OPTN_FUSION_SERVER:?set OPTN_FUSION_SERVER to a CashFusion server, host:port}"
 
 ROOT="${OPTN_ROOT:-/optn}"
 NETWORK="${OPTN_NETWORK:-chipnet}"
@@ -31,11 +34,31 @@ DATA="${OPTN_DATA_DIR:-/optn-data}"
 WALLETS="${OPTN_WALLET_DIRECTORY:-${DATA}/wallets}"
 CONFIG="${OPTN_NETWORK_CONFIG_DIR:-${DATA}/network}"
 DEPTH="${OPTN_FUSION_DEPTH:-3}"
+MODE="${OPTN_FUSION_MODE:-p2p}"
 
-if [[ "${OPTN_FUSION_MODE:-server}" != "server" ]]; then
-  echo "[fusion-lab] OPTN_FUSION_MODE=${OPTN_FUSION_MODE}: the headless runner fuses through a CashFusion server only. P2P fusion is coordinated over Nostr and has no Rust driver yet. Set OPTN_FUSION_MODE=server." >&2
-  exit 2
-fi
+case "${MODE}" in
+  server)
+    : "${OPTN_FUSION_SERVER:?set OPTN_FUSION_SERVER to a CashFusion server, host:port}"
+    venue=(--server "${OPTN_FUSION_SERVER}")
+    if [[ -n "${OPTN_FUSION_TIER:-}" ]]; then
+      venue+=(--tier "${OPTN_FUSION_TIER}")
+    fi
+    ;;
+  p2p)
+    if [[ -n "${OPTN_FUSION_TIER:-}" ]]; then
+      echo "[fusion-lab] OPTN_FUSION_TIER pins a CashFusion server tier; a P2P pool agrees its own. Unset it, or set OPTN_FUSION_MODE=server." >&2
+      exit 2
+    fi
+    venue=(--p2p)
+    for relay in ${OPTN_FUSION_RELAYS:-}; do
+      venue+=(--relay "${relay}")
+    done
+    ;;
+  *)
+    echo "[fusion-lab] OPTN_FUSION_MODE=${MODE}: use p2p or server." >&2
+    exit 2
+    ;;
+esac
 
 SOCKS="${OPTN_TOR_SOCKS:-127.0.0.1:9050}"
 SOCKS_HOST="${SOCKS%:*}"
@@ -61,10 +84,7 @@ common=(--network "${NETWORK}" --wallet-directory "${WALLETS}" --network-config-
 "${CLI}" "${common[@]}" network tor on >/dev/null
 "${CLI}" "${common[@]}" network tor-trust "${SOCKS_PORT}" >/dev/null
 
-fusion=(fusion --server "${OPTN_FUSION_SERVER}" --auto --fuse-depth "${DEPTH}" --yes)
-if [[ -n "${OPTN_FUSION_TIER:-}" ]]; then
-  fusion+=(--tier "${OPTN_FUSION_TIER}")
-fi
+fusion=(fusion "${venue[@]}" --auto --fuse-depth "${DEPTH}" --yes)
 
 if [[ -n "${OPTN_WALLET_PASSWORD_FILE:-}" ]]; then
   exec "${CLI}" "${common[@]}" --wallet "${OPTN_WALLET}" --password-stdin "${fusion[@]}" \
