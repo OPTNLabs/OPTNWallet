@@ -99,6 +99,16 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(15);
 const ONCE_SENT_ATTEMPTS: u32 = 3;
 /// The pause before the next connection, times the attempts so far.
 const ONCE_SENT_RETRY_BASE_MS: u64 = 2_000;
+/// One-shot connections opening at once. Each asks Tor for a circuit and
+/// opens a SOCKS stream per relay; Tor builds at most 32 circuits at a time
+/// and the shared connection holds six, and on chipnet a peeler forwarding
+/// thirty blobs, resent every two seconds, had its own Tor refuse the SOCKS
+/// streams. Components past this wait their turn.
+const ONE_SHOT_CONCURRENCY: usize = 16;
+/// How long a one-shot connection waits for its relays. One that has not
+/// connected by then is left out of this component, so a relay that hangs
+/// does not hold a turn the next component needs.
+const ONE_SHOT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Everything about a round that is not the coins.
 #[derive(Debug, Clone)]
@@ -246,10 +256,12 @@ fn component_attempts(body: &Body) -> u32 {
 }
 
 /// Publish an anonymous component on a one-shot connection of its own, up to
-/// `attempts` connections, each through a fresh route.
+/// `attempts` connections, each through a fresh route and each waiting for
+/// one of `turns`.
 async fn publish_component(
     urls: &[String],
     route: &ComponentRoute,
+    turns: &tokio::sync::Semaphore,
     event: &Event,
     attempts: u32,
 ) -> Result<(), String> {
@@ -261,7 +273,10 @@ async fn publish_component(
             ))
             .await;
         }
-        match Relays::connect(urls, route(), CONNECT_TIMEOUT).await {
+        let Ok(_turn) = turns.acquire().await else {
+            return Err("the round's connections are closed".into());
+        };
+        match Relays::connect(urls, route(), ONE_SHOT_CONNECT_TIMEOUT).await {
             Ok(one_shot) => {
                 let published = publish_at_least_once(&one_shot, event, urls.len(), 1).await;
                 one_shot.shutdown().await;
@@ -319,6 +334,11 @@ struct Wire {
     /// the connections close.
     in_flight: Mutex<tokio::task::JoinSet<()>>,
     dropped: Arc<Dropped>,
+    /// Turns for one-shot connections ([`ONE_SHOT_CONCURRENCY`]).
+    one_shot_turns: Arc<tokio::sync::Semaphore>,
+    /// Components queued or connecting, by recipient and body: a resend of
+    /// one still on its way would only take another turn.
+    components_pending: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Wire {
@@ -327,7 +347,8 @@ impl Wire {
     /// plane under the round key on the shared connection. Publishing never
     /// blocks the round: a lost message is what the resend timers are for,
     /// and a component sent only once is tried again on a fresh connection.
-    /// Whatever no relay took is recorded for the status line.
+    /// A resend of a component whose last copy is still queued or connecting
+    /// is left out. Whatever no relay took is recorded for the status line.
     fn send(&self, to: &str, message: &RoundMessage) {
         let kind = message.body.kind();
         let Ok(receiver) = PublicKey::from_hex(to) else {
@@ -345,10 +366,29 @@ impl Wire {
                     return;
                 }
             };
+            let Ok(body) = serde_json::to_string(&message.body) else {
+                dropped.record(kind, "could not be encoded".into());
+                return;
+            };
+            let pending_key = format!("{to} {body}");
+            let pending = self.components_pending.clone();
+            if !pending
+                .lock()
+                .expect("pending components")
+                .insert(pending_key.clone())
+            {
+                return;
+            }
             let attempts = component_attempts(&message.body);
             let (urls, route) = (self.urls.clone(), self.component_route.clone());
+            let turns = self.one_shot_turns.clone();
             self.spawn(async move {
-                if let Err(why) = publish_component(&urls, &route, &event, attempts).await {
+                let published = publish_component(&urls, &route, &turns, &event, attempts).await;
+                pending
+                    .lock()
+                    .expect("pending components")
+                    .remove(&pending_key);
+                if let Err(why) = published {
                     dropped.record(kind, why);
                 }
             });
@@ -785,6 +825,8 @@ pub async fn run_p2p(
         keys: round_keys.clone(),
         in_flight: Mutex::new(tokio::task::JoinSet::new()),
         dropped: Arc::default(),
+        one_shot_turns: Arc::new(tokio::sync::Semaphore::new(ONE_SHOT_CONCURRENCY)),
+        components_pending: Arc::default(),
     };
     let mut pool = PoolView {
         network,
@@ -1512,7 +1554,7 @@ mod tests {
         (route, made)
     }
 
-    async fn wire_on(url: &str, component_route: ComponentRoute) -> Wire {
+    async fn wire_on(url: &str, component_route: ComponentRoute, turns: usize) -> Wire {
         let relays = Relays::connect(&[url], RelayRoute::LocalOnly, Duration::from_secs(5))
             .await
             .unwrap();
@@ -1523,6 +1565,8 @@ mod tests {
             keys: Keys::generate(),
             in_flight: Mutex::new(tokio::task::JoinSet::new()),
             dropped: Arc::default(),
+            one_shot_turns: Arc::new(tokio::sync::Semaphore::new(turns)),
+            components_pending: Arc::default(),
         }
     }
 
@@ -1545,7 +1589,7 @@ mod tests {
         relay.run().await.unwrap();
         let url = relay.url().await.to_string();
         let (route, made) = flaky_route(1);
-        let wire = wire_on(&url, route).await;
+        let wire = wire_on(&url, route, ONE_SHOT_CONCURRENCY).await;
         let receiver = Keys::generate();
 
         wire.send(&receiver.public_key().to_hex(), &inputs());
@@ -1577,7 +1621,7 @@ mod tests {
         relay.run().await.unwrap();
         let url = relay.url().await.to_string();
         let (route, made) = flaky_route(usize::MAX);
-        let wire = wire_on(&url, route).await;
+        let wire = wire_on(&url, route, ONE_SHOT_CONCURRENCY).await;
         let to = Keys::generate().public_key().to_hex();
 
         wire.send(&to, &inputs());
@@ -1603,6 +1647,113 @@ mod tests {
             );
         }
         assert!(wire.dropped.take_lines().is_empty());
+        wire.relays.shutdown().await;
+    }
+
+    /// Refuses every stream after a pause, and records the most streams it
+    /// held open at once.
+    struct Slow {
+        open: Arc<std::sync::atomic::AtomicUsize>,
+        most: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl RelayDialer for Slow {
+        fn dial(&self, _endpoint: RelayEndpoint) -> Dialed {
+            use std::sync::atomic::Ordering;
+            let (open, most) = (self.open.clone(), self.most.clone());
+            Box::pin(async move {
+                let now = open.fetch_add(1, Ordering::SeqCst) + 1;
+                most.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                open.fetch_sub(1, Ordering::SeqCst);
+                Err("refused for the test".into())
+            })
+        }
+    }
+
+    /// Routes through one [`Slow`] dialer, with a count of the routes made and
+    /// the most streams open at once.
+    fn slow_route() -> (
+        ComponentRoute,
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let made = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let dialer = Arc::new(Slow {
+            open: Arc::new(AtomicUsize::new(0)),
+            most: most.clone(),
+        });
+        let count = made.clone();
+        let route: ComponentRoute = Arc::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            RelayRoute::Dialer(dialer.clone())
+        });
+        (route, made, most)
+    }
+
+    fn onion(payload: &str) -> RoundMessage {
+        message(Body::OnionOutput {
+            onion: payload.into(),
+            mix_order: Vec::new(),
+        })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_resend_of_a_component_still_connecting_takes_no_connection() {
+        use std::sync::atomic::Ordering;
+        let relay = nostr_sdk::prelude::LocalRelay::builder().build();
+        relay.run().await.unwrap();
+        let url = relay.url().await.to_string();
+        let (route, made, _) = slow_route();
+        let wire = wire_on(&url, route, ONE_SHOT_CONCURRENCY).await;
+        let to = Keys::generate().public_key().to_hex();
+
+        // Three copies of one blob, as the resend timer makes them, and one
+        // other blob.
+        for _ in 0..3 {
+            wire.send(&to, &onion("AA"));
+        }
+        wire.send(&to, &onion("BB"));
+        wire.flush(Duration::from_secs(30)).await;
+        assert_eq!(made.load(Ordering::SeqCst), 2);
+        let lines = wire.dropped.take_lines();
+        assert!(
+            lines.len() == 1
+                && lines[0].starts_with("2 onion_output message(s) reached no relay: "),
+            "{lines:?}"
+        );
+
+        // Once the last copy has settled, a resend goes out again.
+        wire.send(&to, &onion("AA"));
+        wire.flush(Duration::from_secs(30)).await;
+        assert_eq!(made.load(Ordering::SeqCst), 3);
+        wire.relays.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_shot_connections_past_the_limit_wait_their_turn() {
+        use std::sync::atomic::Ordering;
+        let relay = nostr_sdk::prelude::LocalRelay::builder().build();
+        relay.run().await.unwrap();
+        let url = relay.url().await.to_string();
+        let (route, made, most) = slow_route();
+        let wire = wire_on(&url, route, 2).await;
+        let to = Keys::generate().public_key().to_hex();
+
+        for payload in ["AA", "BB", "CC", "DD", "EE"] {
+            wire.send(&to, &onion(payload));
+        }
+        wire.flush(Duration::from_secs(30)).await;
+        assert_eq!(made.load(Ordering::SeqCst), 5);
+        assert_eq!(most.load(Ordering::SeqCst), 2);
+        let lines = wire.dropped.take_lines();
+        assert!(
+            lines.len() == 1
+                && lines[0].starts_with("5 onion_output message(s) reached no relay: "),
+            "{lines:?}"
+        );
         wire.relays.shutdown().await;
     }
 }
