@@ -95,7 +95,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | 11 | No 2-of-3 provider voting | **PROVEN** | `reconciliation.rs` ranks evidence; no vote count exists | — |
 | 12 | SHV/MMR passes reference vectors | **PROVEN** | `optn-core/src/header_mmr.rs::reference_vectors` against bitcoincashautist's published vectors, byte-identical to BCHN's | — |
 | 13 | Pruning preserves historical verification and reorg recovery | **PROVEN** | `header_store.rs::prune_below`/`rewind_to`; driven against a node that actually reorganised by `optn-chain-neutrino/tests/regtest_live.rs::a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment` — pruning leaves the commitment unmoved, a forked branch is refused rather than extended onto, and the rebuild reaches the node's longer branch with a different commitment | Recovery is a rebuild from the anchor, not an in-place rewind: the accumulator is append-only and the test pins that rewinding the index alone does not let it extend. A pruned range still needs an SHV peer to re-prove, which BCHD does not serve |
-| 14 | CashFusion uses the shared chain observation layer | **PROVEN** (component) | A round checks its own and its peers' inputs through `optn_fusion::lookup::InputLookups`, implemented once by `optn_fusion_native::lookups::ChainInputLookups` over `optn-chain-electrum` (`ElectrumBackend::script_unspent_values`), on connections of the round's own and only through the verified Tor proxy for remote servers. The desktop and the CLI both use it; `electrum_input.rs` is deleted. Live on chipnet: six server rounds on the native host from the CLI and the docker runner, one with the desktop as a third player ("a live mixed fleet fuses") | Rounds are driven natively for the CLI and the docker runner, through a server (`optn-fusion-native::server_round`) or peer to peer over Nostr (`optn-fusion-native::p2p_round`, `optn fusion --p2p`). The desktop still drives its rounds from `Fusion*.ts` for wallets whose keys live in the TypeScript key database. The Rust P2P host is proven over a local relay; a live chipnet round mixing Rust and TypeScript peers is still to run |
+| 14 | CashFusion uses the shared chain observation layer | **PROVEN** (component) | A round checks its own and its peers' inputs through `optn_fusion::lookup::InputLookups`, implemented once by `optn_fusion_native::lookups::ChainInputLookups` over `optn-chain-electrum` (`ElectrumBackend::script_unspent_values`), on connections of the round's own and only through the verified Tor proxy for remote servers. The desktop and the CLI both use it; `electrum_input.rs` is deleted. Live on chipnet: six server rounds on the native host from the CLI and the docker runner, one with the desktop as a third player ("a live mixed fleet fuses") | Rounds are driven natively for the CLI and the docker runner, through a server (`optn-fusion-native::server_round`) or peer to peer over Nostr (`optn-fusion-native::p2p_round`, `optn fusion --p2p`). The desktop still drives its rounds from `Fusion*.ts` for wallets whose keys live in the TypeScript key database. The Rust P2P host is proven over a local relay. A live chipnet round mixing Rust and TypeScript peers did not fuse: its one-shot component connections exhaust Tor's circuits and `inputs` are lost ("a live mixed P2P round does not fuse") |
 | 15 | Explorer routing independent of consensus | **PROVEN** | `optn-core/src/explorer.rs` owns the presets, the templates and the refusal; `optn-runtime/src/explorer.rs::route_for_overlay` turns a saved `UserNetworkOverlay` into a link or a refusal; the renderer calls through via `explorerPresetUrl`/`explorerCustomUrl` and `src/utils/servers/useExplorerLink.ts`. `a_saved_own_infrastructure_policy_refuses_a_public_explorer`, `the_same_policy_opens_the_holders_own_explorer`, `own_infrastructure_refuses_every_public_preset`, and the renderer-side `explorers.test.ts`; `cargo run -p xtask -- architecture` fails any surface that names a public explorer host | Explorer links were the one path around the policy: the renderer held its own preset table and built URLs itself, so a wallet set to own-infrastructure-only still handed txids to a public site. The decision now has one home, and the refusal is rendered with its reason rather than as a missing button |
 | 16 | No renderer/shell owns networking or chain truth | **PARTIAL** | `cargo run -p xtask -- architecture` proves declared dependency boundaries | Legacy desktop Home/subscriptions still call TypeScript `ElectrumService` through `UTXOService`. Dependency checks do not prove every packaged interface uses the shared Rust runtime. |
 
@@ -2683,3 +2683,126 @@ CLI and lab:
 Not yet: a live chipnet round mixing Rust and TypeScript peers. It needs six
 funded wallets online with Tor on public relays, where the relay budget above
 applies.
+
+### 2026-10-15: a live mixed P2P round does not fuse: the Rust host loses its anonymous components
+
+Run on chipnet against `bd21524f`, with seven wallets on public relays (the
+desktop's six unless a round says otherwise). The test-only pieces stay outside
+the repository:
+
+- Four Rust peers, each running `optn fusion --p2p --yes` (the CLI built from
+  `bd21524f`) on a wallet in its own directory. Two are new wallets, funded
+  with 140,000 sats each from the 2026-10-09 fleet's CLI w1
+  (`7f9b3b30cafff31952c1ccc1cb31d412fba712606430b25d555be1efd434063f`,
+  `41e44047b0d55ec05768734f9a4c185d8d061bb93208de77b7e6efeedfcb5cde`). The
+  other two are that fleet's CLI w1 (135,967 sats left) and w2 (120,000).
+- Three TypeScript peers: the desktop debug build from `bd21524f`, one window
+  each for fleet wallets #7, #8 and #9 (about 1.2M sats each). Each window
+  pressed Start P2P round with Auto off, driven over the WebView2 DevTools
+  port.
+- The CLI scans its wallet first (about 10 s), so the desktop was pressed when
+  the first CLI reached its round.
+- The CLI peers announced the 10,000 and 100,000 tiers, and the desktop
+  peers 1,000,000 as well. Groups formed at 100,000.
+- In rounds A to D one Tor daemon served all seven peers. In E and F each CLI
+  had its own (`--network-config-dir` naming its own `trusted_socks_ports`),
+  and the desktop kept one.
+
+None of the six rounds fused. Nothing was broadcast and no coin moved. The CLI
+balances read back unchanged afterwards, and so did the desktop's depth books,
+read after round D.
+
+| Round | CLI build, relays, Tor | Agreed | Coordinator | Furthest step | Ended with |
+| --- | --- | --- | --- | --- | --- |
+| A | stock, six, shared | 7 | Rust | onion: desktop hops 2, 3 and 5 saw 0/31 blobs | "fusion round timed out (coord: inputs signed 0/0, assembled=false)" |
+| B | trace, six, shared | 5 | Rust | onion hop 1 peeled | the same |
+| C | trace, six, shared | 7 | Rust | coordinator holds 3 of 23 inputs | the same |
+| D | trace, primal and snort, shared | 7 | Rust | coordinator holds no inputs | "All 7 peers marked ready but outputs never arrived (batches=0, peelers=6)" |
+| E | stock, primal and snort, one per CLI | 6 | desktop | onion hops 1-3 peeled (Rust, Rust, desktop) | "All 6 peers marked ready but outputs never arrived (outputSlots=0/1, anonBatches=0, pool=0, onion=on, peelers=5)" |
+| F | stock, six, one per CLI | none | none | rendezvous | "round acknowledgments timed out (only 3/5 answered)"; two CLI peers never saw six |
+
+"Stock" is the unmodified build. "Trace" is that build plus stderr
+logging of each publish (relays accepted and refused), each gift wrap opened,
+and each one-shot connection's outcome. It was built from a scratch worktree
+and never committed.
+
+What works live between the two implementations:
+
+- Discovery: Rust and TypeScript announcements find each other on public
+  relays, and all seven agreed in A, C and D.
+- Credentials in both directions. TypeScript participants took blind
+  credentials from a Rust coordinator (A to D), and Rust participants from a
+  TypeScript coordinator (E).
+- The onion across implementations. In E a Rust peeler fed a Rust peeler,
+  which fed a desktop peeler; that one peeled 30/30 blobs and forwarded them.
+
+Why the rounds failed: the Rust host loses anonymous components.
+
+- Every anonymous component (`inputs`, `outputs`, `onion_output`, `signature`)
+  leaves on a one-shot `Relays::connect`. `FusionRelayDialer` gives every relay
+  stream fresh SOCKS credentials, so each component needs six new circuits,
+  and each resend six more. A peer registering eight inputs asks Tor for 48
+  circuits at once.
+- Tor keeps at most 32 general-purpose circuits pending: "we already have 32
+  general-purpose client circuits pending. Waiting until some finish." On the
+  shared daemon that line was suppressed 751 times in the 14 minutes to 19:12
+  and 7,052 times in the 14 minutes to 19:26. The same daemon logged 422
+  "Giving up" connection failures over the run. In E, two of the per-CLI
+  daemons hit the cap too, with only two relays.
+- The one-shot connection then fails, with "Tor SOCKS5 connection failed:
+  Proxy server unreachable" or "timed out connecting … over Tor" at the 25 s
+  `CONNECT_TIMEOUT`. The host drops the component without a word
+  (`if let Ok(one_shot) = …`).
+- `inputs` is sent once, with no resend. In C all eight inputs from the old
+  CLI w1 failed to connect; in D all 11 Rust inputs did. `onion_output` has a
+  resend timer and got through later (in C, 61 of 189 one-shots connected). A
+  coordinator missing inputs never assembles, so every round reached its
+  timeout.
+- None of the desktop's 12 inputs reached the Rust coordinator in C or D,
+  although its onion blobs did reach Rust peelers (B and E). The
+  desktop's egress isolates per relay host (`egress.rs`
+  `isolation_token(host)`) and so reuses circuits, but in A to D it shared the
+  saturated Tor. The renderer logs no per-relay publish result, so this part
+  is not traced.
+
+Relay refusals, from the trace build in B and C: the four CLI peers made 1,367
+publish attempts to six relays.
+
+- relay.damus.io: "rate-limited: you are noting too much" (14) after about
+  five events, then "banned: too many rate-limit violations, try again later"
+  (663).
+- offchain.pub: "Policy violated and pubkey is not in our web of trust." (107),
+  for throwaway keys. Otherwise it timed out (1,117).
+- nostr.oxtr.dev: "rate limited" (3) and timeouts (900). nos.lol: timeouts
+  (667).
+- "invalid: event expired" (34) from primal, damus, nos.lol, oxtr and
+  offchain. "replaced: have newer event" for pool re-announcements, from both
+  implementations.
+- Accepted: relay.snort.social 1,223, relay.primal.net 1,210, nos.lol 568,
+  nostr.oxtr.dev 334, relay.damus.io 128, offchain.pub 15. Six relays are
+  configured, but two carried the rounds.
+
+Coordinator volume, measured live:
+
+- In C the Rust coordinator made 307 publish attempts in its first minute,
+  more than the relay test's 220: 158 `onion_declare`, 77
+  `credential_params`, 30 `round_proposal`, 21 `onion_output` and 12
+  `credential_response`.
+- In B it made 260 `round_proposal` attempts while a seven-wallet proposal
+  shrank to five.
+- Protocol timing and resend volume were not changed. The relay budget is
+  still for review.
+
+The desktop's view of the pool was thinner than the CLI's on the same relays.
+In B two windows gave up ("P2P Fusion needs at least 6 peers") after seeing at
+most three peers, while the CLI peers saw seven. In E one window gave up with
+"No peers left (peak was 3, now only you)".
+
+Not yet:
+
+- The Rust host needs to reuse circuits for one-shot connections: one circuit
+  per component, or per relay host as the desktop does. It also needs to
+  retry an `inputs` (and `signature`) send that never connected, and to report
+  a dropped publish.
+- After that, this round needs to be rerun. The four CLI wallets and the three
+  desktop wallets above still hold their funding.
