@@ -365,6 +365,43 @@ pub fn optn_fusion_running(state: tauri::State<'_, FusionDriverState>) -> bool {
         .is_some()
 }
 
+/// The wallet's fusion depth record as the runtime keeps it, in its stored
+/// forms, for the renderer's view of coin depth.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FusionDepthRecord {
+    pub coins: String,
+    pub tx_depth: String,
+    pub txids: Vec<String>,
+}
+
+/// The runtime's depth record, which the renderer's coin badges mirror.
+#[tauri::command]
+pub fn optn_fusion_depth(runtime: tauri::State<'_, optn_runtime::AppRuntime>) -> FusionDepthRecord {
+    let book = runtime.fusion_depth();
+    FusionDepthRecord {
+        coins: book.stored_coins(),
+        tx_depth: book.stored_tx_depth(),
+        txids: book.fusion_txids().map(str::to_owned).collect(),
+    }
+}
+
+/// Merge the depth record the renderer kept before rounds ran in Rust into
+/// the runtime's, sealed with the wallet. Depths only rise in a merge, so
+/// importing twice, or after rounds the runtime recorded, loses nothing.
+#[tauri::command]
+pub async fn optn_fusion_depth_import(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    coins: Option<String>,
+    tx_depth: Option<String>,
+    txids: Vec<String>,
+) -> Result<(), String> {
+    runtime
+        .import_fusion_depth(coins, tx_depth, txids)
+        .await
+        .map_err(optn_fusion_native::server_round::runtime_refusal)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

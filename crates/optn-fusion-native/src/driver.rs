@@ -444,6 +444,9 @@ pub async fn run<H: FusionHost>(
         let mut event = venue.describe();
         event["event"] = json!("round");
         event["coins"] = json!(outpoints.len());
+        // Which coins the round holds, so an interface can show them held
+        // until `released`. The hold itself is the runtime's.
+        event["outpoints"] = json!(outpoints);
         host.report(event);
         host.round_started(&round_id);
         let status = |line: &str| host.report(json!({"event": "status", "message": line}));
@@ -463,6 +466,7 @@ pub async fn run<H: FusionHost>(
                     _ => Ok(()),
                 };
                 drop(hold);
+                host.report(json!({"event": "released", "outpoints": outpoints}));
                 recorded?;
                 attempt
             }
@@ -719,7 +723,11 @@ mod tests {
                 Call::Release(picked),
             ]
         );
-        assert_eq!(host.kinds(), ["round", "fused"]);
+        assert_eq!(host.kinds(), ["round", "released", "fused"]);
+        // The round names the coins it holds, and lets them go by name.
+        let events = host.events.lock().unwrap().clone();
+        assert_eq!(events[0]["outpoints"], json!([coin(1, 0).outpoint]));
+        assert_eq!(events[1]["outpoints"], events[0]["outpoints"]);
     }
 
     /// A round the network never showed moves no depth, and its coins are
@@ -806,7 +814,10 @@ mod tests {
         .unwrap();
         assert_eq!(outcome.fused.len(), 1);
         assert_eq!(outcome.stopped.as_deref(), Some(INTERRUPTED));
-        assert_eq!(host.kinds(), ["round", "retry", "round", "fused"]);
+        assert_eq!(
+            host.kinds(),
+            ["round", "released", "retry", "round", "released", "fused"]
+        );
         let fuses = wallet
             .calls()
             .iter()
@@ -875,7 +886,7 @@ mod tests {
         });
         let outcome = run(&flaky, &server, auto).await.unwrap();
         assert_eq!(outcome.fused.len(), 1);
-        assert_eq!(flaky.inner.kinds(), ["retry", "round", "fused"]);
+        assert_eq!(flaky.inner.kinds(), ["retry", "round", "released", "fused"]);
 
         let once = FlakyHost {
             inner: FakeHost::new(&wallet, &[], 0),

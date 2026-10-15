@@ -1490,6 +1490,8 @@ pub fn run() {
             fusion_driver::optn_fusion_start,
             fusion_driver::optn_fusion_stop,
             fusion_driver::optn_fusion_running,
+            fusion_driver::optn_fusion_depth,
+            fusion_driver::optn_fusion_depth_import,
             wallet_spend::optn_wallet_prepare_spend,
             wallet_spend::optn_wallet_send,
             wallet_spend::optn_wallet_broadcast,
