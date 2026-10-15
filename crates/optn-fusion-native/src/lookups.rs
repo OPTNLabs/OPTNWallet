@@ -52,6 +52,16 @@ pub trait LookupServer: Send + Sync {
     ) -> LookupFuture<'a, Result<ServerValues, String>>;
     /// The raw bytes the server returns for `txid` (internal byte order).
     fn transaction<'a>(&'a self, txid: [u8; 32]) -> LookupFuture<'a, Result<Vec<u8>, String>>;
+
+    /// Hand `raw` (txid `txid`, internal byte order) to the server for its
+    /// mempool. A server that cannot is an error.
+    fn broadcast<'a>(
+        &'a self,
+        _raw: &'a [u8],
+        _txid: [u8; 32],
+    ) -> LookupFuture<'a, Result<(), String>> {
+        Box::pin(async { Err("this server cannot broadcast".into()) })
+    }
 }
 
 /// An Electrum server, connected on first use and kept for the round.
@@ -121,6 +131,30 @@ impl LookupServer for ElectrumLookupServer {
             }
         })
     }
+
+    fn broadcast<'a>(
+        &'a self,
+        raw: &'a [u8],
+        txid: [u8; 32],
+    ) -> LookupFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let backend = self.backend().await?;
+            let observation = backend
+                .execute(&ChainRequest::Broadcast {
+                    raw_tx: raw.to_vec(),
+                    txid,
+                })
+                .await
+                .map_err(|error| format!("{error:?}"))?;
+            match observation.payload {
+                ChainPayload::BroadcastObserved { txid: observed } if observed == txid => Ok(()),
+                ChainPayload::BroadcastObserved { .. } => {
+                    Err("acknowledged a different transaction".into())
+                }
+                _ => Err("answered a broadcast with something else".into()),
+            }
+        })
+    }
 }
 
 /// The servers a round asks, in the holder's order.
@@ -153,6 +187,26 @@ impl ChainInputLookups {
 
     pub fn over(servers: Vec<Box<dyn LookupServer>>) -> Self {
         Self { servers }
+    }
+
+    /// Broadcast `raw` through the round's own connections, server by server,
+    /// until one accepts it. A P2P round has no fusion server to broadcast for
+    /// it, and these connections are already isolated from the wallet's own.
+    /// The display txid on success.
+    pub async fn broadcast(&self, raw: &[u8]) -> Result<String, String> {
+        let txid = optn_core::header_hash::sha256d(raw);
+        let mut last_error = String::from("no Electrum server is selected to broadcast through");
+        for server in &self.servers {
+            match server.broadcast(raw, txid).await {
+                Ok(()) => {
+                    let mut display = txid;
+                    display.reverse();
+                    return Ok(optn_core::payment::hex(&display));
+                }
+                Err(error) => last_error = format!("{}: {error}", server.label()),
+            }
+        }
+        Err(last_error)
     }
 }
 

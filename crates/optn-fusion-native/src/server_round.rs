@@ -123,7 +123,7 @@ pub struct FusedRound {
 }
 
 /// A wallet runtime refusal, in words.
-fn runtime_refusal(error: optn_transport::TransportError) -> String {
+pub(crate) fn runtime_refusal(error: optn_transport::TransportError) -> String {
     use optn_transport::TransportError;
     match error {
         TransportError::Other(message) | TransportError::InvalidData(message) => message,

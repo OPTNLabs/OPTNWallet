@@ -10,7 +10,9 @@
 //! - [`depth_file`]: the wallet's fusion depth record on disk.
 //! - [`server_round`]: one server round, from the server's settings to a
 //!   transaction the network holds.
+//! - [`p2p_round`]: one P2P round over Nostr and Tor, with the desktop's peers.
 
 pub mod depth_file;
 pub mod lookups;
+pub mod p2p_round;
 pub mod server_round;

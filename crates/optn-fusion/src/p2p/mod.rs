@@ -19,6 +19,7 @@
 //! - [`allocation`]: how a peer splits its inputs into outputs.
 //! - [`rendezvous`]: proposal, ACK, shrink and start.
 //! - [`session`]: the round itself, as coordinator or participant.
+//! - [`signer`]: the native signing boundary a real wallet signs through.
 //!
 //! Each TypeScript rule this ports is cited at its definition, and
 //! `test-vectors/p2p-fusion.json`, generated from the TypeScript, pins the
@@ -33,6 +34,7 @@ pub mod onion;
 pub mod pool;
 pub mod rendezvous;
 pub mod session;
+pub mod signer;
 pub mod wire;
 
 #[cfg(test)]

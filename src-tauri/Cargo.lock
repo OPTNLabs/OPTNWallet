@@ -4482,13 +4482,17 @@ dependencies = [
 name = "optn-fusion-native"
 version = "1.7.3"
 dependencies = [
+ "futures",
  "optn-chain-native",
  "optn-core",
  "optn-fusion",
+ "optn-nostr",
  "optn-runtime",
  "optn-transport",
+ "rand_core 0.6.4",
  "serde_json",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
