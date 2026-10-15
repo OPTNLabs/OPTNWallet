@@ -103,7 +103,7 @@ describe('CashFusion identity isolation', () => {
     const rel = files.map((f) =>
       relative(DESKTOP_ROOT, f).split(sep).join('/')
     );
-    expect(rel.some((p) => p.endsWith('FusionP2pService.ts'))).toBe(true);
+    expect(rel.some((p) => p.endsWith('FusionRunnerService.ts'))).toBe(true);
     expect(rel.some((p) => p.includes('nostr/fusionTransport.ts'))).toBe(true);
     expect(rel.some((p) => p.includes('nostr/fusion.ts'))).toBe(true);
   });

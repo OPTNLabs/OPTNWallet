@@ -35,9 +35,9 @@ Desktop P2P fusion is **Tor fail-closed**. Any Docker/VPS fusion path must match
 
 **Supervisor** (`scripts/fusion-lab-supervisor.mjs`) enforces Tor fail-closed,
 validates `OPTN_FUSION_MODE` / `OPTN_NETWORK`, writes a health file, and optionally
-execs `OPTN_HEADLESS_CMD`. **Server-mode Auto Fusion** runs headless through
-`scripts/fusion-lab-headless.sh` (the Rust CLI's `optn fusion --auto`); P2P (Nostr)
-has no headless driver yet — see [VPS.md](./VPS.md).
+execs `OPTN_HEADLESS_CMD`. **Auto Fusion**, on a server or P2P over Nostr, runs
+headless through `scripts/fusion-lab-headless.sh` (the Rust CLI's
+`optn fusion --auto`), the same driver the desktop runs — see [VPS.md](./VPS.md).
 
 ## What we will not claim
 

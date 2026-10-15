@@ -219,17 +219,24 @@ that disappears before proposing is dropped; a coordinator that sends an
 invalid or incomplete transaction is rejected before any honest participant
 signs.
 
-Before each round the wallet reconciles live, non-token UTXOs, excludes coins
-reserved by another round, and persists fresh output keys before sharing their
-locking scripts. Automatic and manual starts use the same wallet-scoped runner.
-Automatic starts additionally enforce the configured fuse depth and a durable
-fee cooldown. Wallet, network, master-Fusion, or transport-mode changes abort
-the active round and release its reservations when the session unwinds. Auto,
-Tor, relay, and server-preference edits apply to the next round without
-cancelling an in-flight financial action. Cancellation
-cannot reverse a transaction once a network broadcast has already begun.
+Rounds run in Rust, in one shared driver (`optn_fusion_native::driver`) that
+the desktop, the CLI and the docker lab all run. Before each round it brings
+the wallet's coins up to date in the runtime, excludes coins another round or
+a send holds, and holds the ones it uses until the round ends. Automatic and
+manual starts use the same driver; Auto additionally enforces the configured
+fuse depth, the cooldowns and the shared P2P rendezvous window. Keys and coin
+lists stay in Rust: the desktop renderer names a venue, starts or stops a run,
+and shows the events it reports (`src/platform/desktop/nativeFusion.ts`). A run
+fuses only the wallet session it was started for. Wallet, network,
+master-Fusion, or transport-mode changes stop the run. Auto, Tor, relay, and
+server-preference edits restart Auto between rounds, never inside one.
+Cancellation cannot reverse a transaction once a network broadcast has already
+begun.
 
-The implementation is split across:
+The P2P protocol is `optn_fusion::p2p` (the round's state machines) and
+`crates/optn-fusion-native/src/p2p_round.rs` (its Nostr host). The TypeScript
+modules below are its reference implementation, kept as the parity oracle for
+the interop tests:
 
 - `src/platform/desktop/nostr/fusion.ts` — rolling pool announcements and group
   selection
@@ -239,13 +246,11 @@ The implementation is split across:
   relay transport and anonymous output registration
 - `src/platform/desktop/nostr/fusionRound.ts` — deterministic assembly and the
   pre-signing value/fee safety gate
-- `src-tauri/src/fusion/p2p_sign.rs` — bounded native P2P template validation
-  and Electron Cash-compatible BCH signing
 - `src/platform/desktop/nostr/fusionBlindSchnorr.ts` — one-use blind input and
   output credentials with v3 domain separation
 - `src/platform/desktop/nostr/fusionCredentialNullifiers.ts` — active-round
   output credential replay protection
 - `src/platform/desktop/nostr/fusionSession.ts` — registration, verification,
   signing, finalization, and broadcast choreography
-- `src/platform/desktop/FusionP2pService.ts` — wallet/Tor integration, fresh
-  outputs, reservations, completion tracking, and cleanup
+- `src/platform/desktop/FusionRunnerService.ts` — the desktop's view of a run:
+  live activity, the last result, and the coins a round holds

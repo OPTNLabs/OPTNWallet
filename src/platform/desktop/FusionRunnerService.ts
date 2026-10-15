@@ -1,57 +1,38 @@
-// The ONE place a fusion round starts — manual button or automatic engine.
+// The desktop's view of CashFusion, which runs in Rust.
 //
-// Both callers route through `startFusionRound`. The alternative considered was
-// leaving the manual handlers in the settings component and giving the engine its
-// own copy of the start sequence; that was rejected because the server path does
-// status query -> tier choice -> output allocation before running, and two copies
-// of that would drift. The automatic path is the one nobody is watching when it
-// spends a fee, so it is the worst possible place for a silent divergence.
+// A round -- manual or Auto -- is the shared driver's
+// (`optn_fusion_native::driver`, the loop the CLI and the docker lab run),
+// reached through `nativeFusion`. It chooses coins from the runtime's own
+// synchronized record, holds them, runs the round on a server or over Nostr,
+// records depth and keeps Auto's timing. This file starts and stops it and
+// turns what it reports into what the screens show: the live activity, the
+// last result, and the coins a round holds, mirrored for the synchronous
+// checks of the send screens (`fusionRoundState`). It decides nothing.
 //
-// Coin freshness is this service's job, never the screen's: inputs come either
-// from a live reconciliation or from the committed snapshot that just woke the
-// automatic engine, never from the Redux UI list. Trusting that list is what
-// produced signed CoinJoins referencing coins that were already gone.
+// One run at a time, for the whole app: the Rust side refuses a second, and a
+// run fuses only the wallet session it was started for.
 
-import {
-  reconcileActiveWalletUtxosForSpend,
-  type WalletUtxoSnapshot,
-} from '../../services/WalletUtxoRefreshService';
 import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
 import { reconcileOutboundTransactions } from '../../services/OutboundTransactionReconciler';
-import { Network } from '../../state/slices/networkSlice';
-import type { UTXO } from '../../types/types';
-import { fuseDepthEligibility } from './fusionCoinDepth';
+import { reconcileActiveWalletUtxosForSpend } from '../../services/WalletUtxoRefreshService';
+import type { Network } from '../../state/slices/networkSlice';
+import { logError } from '../../utils/errorHandling';
+import type { FusionMode } from './fusionAutoEngine';
 import {
-  acquireRoundLease,
-  hasLiveRoundLease,
-  isAutoCooldownReady,
-  isAutoDepthMetIdle,
-  LEASE_HEARTBEAT_MS,
-  reclaimStaleRoundState,
-  releaseRoundLease,
-  stampAutoDepthMetIdle,
-  stampAutoFailure,
-  stampAutoSuccess,
-  touchRoundLease,
-  tryClaimAutoCooldown,
-} from './fusionWalletLease';
-import { clearOutpointReservations } from './fusionRoundState';
+  clearOutpointReservations,
+  releaseOutpoints,
+  reserveOutpoints,
+} from './fusionRoundState';
 import {
-  AUTO_FUSION_COOLDOWN_MS,
-  AUTO_FUSION_DEPTH_MET_IDLE_MS,
-  AUTO_FUSION_EMPTY_POOL_RETRY_MS,
-  AUTO_FUSION_RETRY_MS,
-  isAutoTransientFailure,
-  type FusionMode,
-} from './fusionAutoEngine';
-import {
-  selectFusionCoins,
-  type FusionCoinBucket,
-} from './fusionCoinSelection';
-import {
-  consolidateCrowdedFusionAddress,
-  walletCanPreConsolidate,
-} from './fusionPreConsolidate';
+  listenNativeFusion,
+  nativeFusionRunning,
+  startNativeFusion,
+  stopNativeFusion,
+  type NativeFusionEvent,
+  type NativeFusionFinished,
+  type NativeFusionRound,
+  type NativeFusionVenue,
+} from './nativeFusion';
 
 /** Structured, so callers never parse a human string to learn what happened. */
 export type FusionRunOutcome =
@@ -68,95 +49,13 @@ export type FusionRunOutcome =
       message: string;
     }
   | { status: 'busy' }
-  /** Wallet state is mid-refresh; not an error, and not a reason to use stale coins. */
-  | { status: 'waiting-for-wallet' }
   | { status: 'no-eligible-coins'; detail?: string }
   | { status: 'cancelled' }
-  /** Automatic only: the durable fee cooldown has not elapsed, or could not be
-   *  claimed exclusively. Distinct from `busy` so callers can say which it was. */
-  | { status: 'cooldown' }
   | { status: 'failed'; mode: FusionMode; message: string };
 
-export interface StartFusionRoundOptions {
-  walletId: number;
-  network: Network;
-  mode: FusionMode;
-  /** Automatic rounds respect fuse depth; a manual round may re-fuse deliberately. */
-  trigger: 'auto' | 'manual';
-  fuseDepth: number;
-  /** Snapshot supplied only by WalletUtxoRefreshService's post-commit event. */
-  freshSnapshot?: WalletUtxoSnapshot;
-  onStatus?: (message: string) => void;
-  onPhase?: (phase: number) => void;
-  signal?: AbortSignal;
-  /** Injected so this stays testable without the Tauri/Electrum stack. */
-  runners: {
-    runP2p: (
-      coins: UTXO[],
-      signal?: AbortSignal,
-      progress?: {
-        onStatus?: (m: string) => void;
-        onPhase?: (p: number) => void;
-      }
-    ) => Promise<{
-      txid: string;
-      warning?: string;
-      verificationPending?: boolean;
-    }>;
-    runServer: (
-      coins: UTXO[],
-      signal?: AbortSignal,
-      progress?: {
-        onStatus?: (m: string) => void;
-        onPhase?: (p: number) => void;
-      }
-    ) => Promise<{
-      txid: string;
-      warning?: string;
-      verificationPending?: boolean;
-    }>;
-  };
-}
-
 /**
- * Windows in which THIS context holds the lease, for cheap UI state only.
- *
- * Exclusivity itself lives in `fusionWalletLease` (Web Lock + durable record),
- * because a module-level Set is per WebView context: two windows on the same
- * wallet each passed it and could both start a round. Outpoint reservations were
- * the stated fallback, but server Fusion never honoured the P2P reservations, so
- * that path had no protection at all.
- */
-const heldLeases = new Map<number, string>();
-
-/**
- * Service-owned cancellation, separate from any screen component.
- *
- * A settings route may unmount while a manual round is gathering peers; that
- * must not cancel the financial action. Wallet/session lifecycle code can still
- * stop it explicitly on lock, wallet switch, network switch, or mode shutdown.
- */
-const activeRoundControllers = new Map<
-  number,
-  { lease: string; controller: AbortController }
->();
-
-export function cancelFusionRound(
-  walletId: number,
-  reason = 'wallet session changed'
-): boolean {
-  const active = activeRoundControllers.get(walletId);
-  if (!active || active.controller.signal.aborted) return false;
-  active.controller.abort(new Error(reason));
-  return true;
-}
-
-/**
- * UI-visible lifecycle for a round owned by this wallet WebView.
- *
- * This deliberately lives beside the round lease instead of in a screen
- * component. Settings pages can unmount while a round is gathering peers or
- * signing; navigation must not make the round disappear or cancel it.
+ * A live round, for the screens. Settings pages can unmount while a round is
+ * gathering peers or signing; navigation neither hides nor cancels it.
  */
 export interface FusionActivity {
   walletId: number;
@@ -179,19 +78,34 @@ export interface FusionLastResult {
   at: number;
 }
 
+interface NativeRun {
+  walletId: number;
+  mode: FusionMode;
+  trigger: 'auto' | 'manual';
+  /** The Auto settings it was started with, so a change can restart it. */
+  key: string | null;
+  /** The coins the round in progress holds, as the driver reported them. */
+  held: string[];
+  /** A manual start's caller, told how the run ended. */
+  settle: ((outcome: FusionRunOutcome) => void) | null;
+  /** Resolves once the driver says the run finished. */
+  finished: Promise<void>;
+  markFinished: () => void;
+}
+
+let run: NativeRun | null = null;
+/** A manual start is waiting for Auto to step aside; Auto must not restart. */
+let manualStarting = false;
+const activities = new Map<number, FusionActivity>();
 const lastResults = new Map<number, FusionLastResult>();
 
 type FusionActivityListener = (activity: FusionActivity | null) => void;
+const activityListeners = new Map<number, Set<FusionActivityListener>>();
+const runListeners = new Set<() => void>();
 
-const fusionActivities = new Map<
-  number,
-  { lease: string; activity: FusionActivity }
->();
-const fusionActivityListeners = new Map<number, Set<FusionActivityListener>>();
-
-function emitFusionActivity(walletId: number): void {
+function emitActivity(walletId: number): void {
   const activity = getFusionActivity(walletId);
-  for (const listener of fusionActivityListeners.get(walletId) ?? []) {
+  for (const listener of activityListeners.get(walletId) ?? []) {
     try {
       listener(activity);
     } catch {
@@ -200,69 +114,25 @@ function emitFusionActivity(walletId: number): void {
   }
 }
 
+function emitRun(): void {
+  for (const listener of runListeners) {
+    try {
+      listener();
+    } catch {
+      /* a view subscriber only */
+    }
+  }
+}
+
+/** Disk + stdout via tauri-plugin-log, so agents can tail a live run. */
+function logLine(walletId: number, line: string): void {
+  void import('./logger')
+    .then(({ log }) => log.info('p2p-live', `w${walletId} ${line}`))
+    .catch(() => undefined);
+}
+
 export function getFusionActivity(walletId: number): FusionActivity | null {
-  // Activity without a live in-memory lease is a ghost (HMR / failed finally).
-  // Never let that greyscale the CashFusion UI as "fusing".
-  if (!heldLeases.has(walletId)) {
-    if (fusionActivities.has(walletId)) {
-      fusionActivities.delete(walletId);
-    }
-    return null;
-  }
-  return fusionActivities.get(walletId)?.activity ?? null;
-}
-
-/** Last disk-logged line per wallet — status every 2s filled the 5MB log cap. */
-const lastLoggedStatus = new Map<number, string>();
-const lastLoggedPhase = new Map<number, number>();
-
-/** Collapse countdown noise so "up to 94s" / "up to 92s" is one log family. */
-function statusLogKey(status: string): string {
-  return status
-    .replace(/\b\d+s\b/g, 'Ns')
-    .replace(/\b\d+\/\d+\b/g, 'N/M')
-    .replace(/\bpeak \d+\b/gi, 'peak N');
-}
-
-/** Push phase/status into the live activity (auto-fuse and manual share this). */
-export function reportFusionProgress(
-  walletId: number,
-  update: { phase?: number; status?: string | null }
-): void {
-  const entry = fusionActivities.get(walletId);
-  if (!entry || !heldLeases.has(walletId)) return;
-  entry.activity = {
-    ...entry.activity,
-    ...(update.phase !== undefined ? { phase: update.phase } : {}),
-    ...(update.status !== undefined ? { status: update.status } : {}),
-  };
-  fusionActivities.set(walletId, entry);
-  emitFusionActivity(walletId);
-  // Disk + stdout via tauri-plugin-log so agents can tail
-  // %LOCALAPPDATA%\com.optilabs.wallet\logs\optn-wallet.log live.
-  // Dedup: countdown-only changes used to triple-write every 2s × 4 wallets
-  // and hit the 5MB rotation cap mid-run (watcher went blind at 04:01).
-  if (update.status) {
-    const key = statusLogKey(update.status);
-    if (lastLoggedStatus.get(walletId) !== key) {
-      lastLoggedStatus.set(walletId, key);
-      void import('./logger')
-        .then(({ log }) =>
-          log.info('p2p-live', `w${walletId} ${update.status}`)
-        )
-        .catch(() => undefined);
-    }
-  }
-  if (update.phase !== undefined) {
-    if (lastLoggedPhase.get(walletId) !== update.phase) {
-      lastLoggedPhase.set(walletId, update.phase);
-      void import('./logger')
-        .then(({ log }) =>
-          log.info('p2p-live', `w${walletId} phase=${update.phase}`)
-        )
-        .catch(() => undefined);
-    }
-  }
+  return activities.get(walletId) ?? null;
 }
 
 export function getFusionLastResult(walletId: number): FusionLastResult | null {
@@ -273,13 +143,8 @@ export function setFusionLastResult(
   walletId: number,
   result: Omit<FusionLastResult, 'walletId' | 'at'>
 ): void {
-  lastResults.set(walletId, {
-    ...result,
-    walletId,
-    at: Date.now(),
-  });
-  // Notify listeners so the CashFusion panel can show auto failure without a round.
-  emitFusionActivity(walletId);
+  lastResults.set(walletId, { ...result, walletId, at: Date.now() });
+  emitActivity(walletId);
 }
 
 export function subscribeFusionActivity(
@@ -287,638 +152,538 @@ export function subscribeFusionActivity(
   listener: FusionActivityListener
 ): () => void {
   const listeners =
-    fusionActivityListeners.get(walletId) ?? new Set<FusionActivityListener>();
+    activityListeners.get(walletId) ?? new Set<FusionActivityListener>();
   listeners.add(listener);
-  fusionActivityListeners.set(walletId, listeners);
+  activityListeners.set(walletId, listeners);
   listener(getFusionActivity(walletId));
-
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) fusionActivityListeners.delete(walletId);
+    if (listeners.size === 0) activityListeners.delete(walletId);
   };
 }
 
-function isCancellationError(error: unknown): boolean {
-  if (error instanceof Error) {
-    return (
-      error.name === 'AbortError' || error.message === 'fusion round cancelled'
-    );
-  }
-  return error === 'fusion round cancelled';
+/** Told whenever a run starts or finishes, for `useSyncExternalStore`. */
+export function subscribeFusionRun(listener: () => void): () => void {
+  runListeners.add(listener);
+  return () => {
+    runListeners.delete(listener);
+  };
 }
 
+/** A round in progress, or a manual run, for this wallet. */
 export function isFusionRunning(walletId: number): boolean {
-  return heldLeases.has(walletId);
+  return (
+    activities.has(walletId) ||
+    (run?.walletId === walletId && run.trigger === 'manual')
+  );
+}
+
+/** The Auto run for this wallet, and the settings it was started with. */
+export function autoFusionRun(walletId: number): { key: string } | null {
+  return run?.walletId === walletId && run.trigger === 'auto'
+    ? { key: run.key ?? '' }
+    : null;
+}
+
+/** Any run at all, for any wallet. */
+export function isNativeFusionBusy(): boolean {
+  return run !== null;
+}
+
+function setActivity(walletId: number, activity: FusionActivity | null): void {
+  if (activity) activities.set(walletId, activity);
+  else activities.delete(walletId);
+  emitActivity(walletId);
+}
+
+function progress(
+  walletId: number,
+  update: { phase?: number; status?: string | null }
+): void {
+  const current = activities.get(walletId);
+  if (!current) return;
+  setActivity(walletId, {
+    ...current,
+    ...(update.phase !== undefined ? { phase: update.phase } : {}),
+    ...(update.status !== undefined ? { status: update.status } : {}),
+  });
+  if (update.status) logLine(walletId, update.status);
+}
+
+/** Let go of the coins the round in progress held, in this view. */
+function releaseHeld(current: NativeRun): void {
+  if (current.held.length > 0) {
+    releaseOutpoints(current.walletId, current.held);
+    current.held = [];
+  }
+}
+
+/** The history row for a CoinJoin the network holds, before Electrum lists it. */
+async function persistFusionHistoryRow(
+  walletId: number,
+  txid: string
+): Promise<void> {
+  const hash = txid.trim().toLowerCase();
+  const timestamp = new Date().toISOString();
+  const DatabaseService = (
+    await import('../../apis/DatabaseManager/DatabaseService')
+  ).default;
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) throw new Error('Wallet database is unavailable.');
+  // height 0 = not yet in a block. Never overwrite a height Electrum wrote.
+  db.run(
+    `INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
+     VALUES (?, ?, 0, ?, 0)
+     ON CONFLICT(wallet_id, tx_hash) DO UPDATE SET
+       timestamp = CASE
+         WHEN transactions.timestamp IS NULL OR transactions.timestamp = ''
+         THEN excluded.timestamp
+         ELSE transactions.timestamp
+       END,
+       height = CASE
+         WHEN COALESCE(transactions.height, 0) > 0 THEN transactions.height
+         ELSE excluded.height
+       END`,
+    [walletId, hash, timestamp]
+  );
+  await dbService.saveDatabaseToFile(walletId);
+  const { store } = await import('../../state/store');
+  const { addTransactions } = await import(
+    '../../state/slices/transactionSlice'
+  );
+  store.dispatch(
+    addTransactions({
+      wallet_id: walletId,
+      transactions: [{ tx_hash: hash, height: 0, timestamp }],
+    })
+  );
 }
 
 /**
- * Drop durable ghost leases and orphan activity for this wallet when THIS
- * window is not running a round. Called automatically on CashFusion mount and
- * before acquire — users should never need a "clear stuck" button.
+ * What the screens keep of a round the driver fused: the Fused label, the
+ * depth the runtime recorded, the history row and fresh coins. The runtime
+ * already recorded the round; none of this decides anything.
+ */
+async function showFused(
+  walletId: number,
+  round: NativeFusionRound
+): Promise<void> {
+  const depth = await import('./fusionCoinDepth');
+  if (round.seen) {
+    depth.recordFusionTxid(walletId, round.txid);
+    await depth.syncRuntimeFusionDepth(walletId);
+    await persistFusionHistoryRow(walletId, round.txid).catch((error) =>
+      logError('FusionRunnerService.history', error, {
+        walletId,
+        txid: round.txid,
+      })
+    );
+  }
+  await reconcileActiveWalletUtxosForSpend(walletId).catch(() => null);
+}
+
+function fusedMessage(round: NativeFusionRound): string {
+  return round.seen
+    ? `Fused ✓ — ${round.txid}`
+    : `Fusion verification pending — ${round.txid}. The signed Fusion transaction is awaiting independent network visibility.`;
+}
+
+function onEvent(event: NativeFusionEvent): void {
+  const current = run;
+  if (!current || current.walletId !== event.walletId) return;
+  const { walletId, trigger } = current;
+  const auto = trigger === 'auto';
+  switch (event.event) {
+    case 'round':
+      current.mode = event.mode;
+      current.held = event.outpoints;
+      reserveOutpoints(walletId, event.outpoints);
+      setActivity(walletId, {
+        walletId,
+        mode: event.mode,
+        trigger,
+        startedAt: Date.now(),
+        phase: 1,
+        status: `${auto ? 'Auto-fuse: ' : ''}${event.coins} coin(s) — finding peers…`,
+      });
+      logLine(walletId, `round ${event.mode} coins=${event.coins}`);
+      return;
+    case 'status':
+      progress(walletId, { status: event.message });
+      return;
+    case 'released':
+      releaseOutpoints(walletId, event.outpoints);
+      current.held = current.held.filter(
+        (outpoint) => !event.outpoints.includes(outpoint)
+      );
+      return;
+    case 'fused': {
+      const message = fusedMessage(event.round);
+      logLine(walletId, `OUTCOME fused: ${message}`);
+      void showFused(walletId, event.round).catch((error) =>
+        logError('FusionRunnerService.fused', error, { walletId })
+      );
+      if (auto) {
+        setActivity(walletId, null);
+        setFusionLastResult(walletId, {
+          mode: current.mode,
+          trigger,
+          ok: event.round.seen,
+          message: `Auto: ${message}`,
+        });
+      } else {
+        progress(walletId, { phase: 5, status: message });
+      }
+      return;
+    }
+    case 'idle':
+    case 'waiting':
+      if (!auto) return;
+      setActivity(walletId, null);
+      setFusionLastResult(walletId, {
+        mode: current.mode,
+        trigger,
+        ok: true,
+        message:
+          event.event === 'idle'
+            ? `Auto: ${event.reason}`
+            : `Auto: waiting for ${event.reason}.`,
+      });
+      return;
+    case 'retry':
+      if (!auto) return;
+      releaseHeld(current);
+      setActivity(walletId, null);
+      setFusionLastResult(walletId, {
+        mode: current.mode,
+        trigger,
+        ok: false,
+        message: `Auto: ${event.error} — retrying…`,
+      });
+      logLine(walletId, `OUTCOME failed: ${event.error}`);
+      return;
+  }
+}
+
+/** How a manual run ended, from the driver's own summary. */
+export function outcomeOf(
+  finished: NativeFusionFinished,
+  mode: FusionMode
+): FusionRunOutcome {
+  if (!finished.ok) {
+    return {
+      status: 'failed',
+      mode,
+      message: finished.error ?? 'Fusion failed.',
+    };
+  }
+  const round = finished.rounds?.[finished.rounds.length - 1];
+  if (round) {
+    return round.seen
+      ? { status: 'fused', mode, txid: round.txid }
+      : {
+          status: 'verification-pending',
+          mode,
+          txid: round.txid,
+          message:
+            'The signed Fusion transaction is awaiting independent network visibility.',
+        };
+  }
+  if (finished.stopped === 'interrupted') return { status: 'cancelled' };
+  return {
+    status: 'no-eligible-coins',
+    ...(finished.stopped ? { detail: finished.stopped } : {}),
+  };
+}
+
+function onFinished(finished: NativeFusionFinished): void {
+  const current = run;
+  if (!current || current.walletId !== finished.walletId) return;
+  run = null;
+  releaseHeld(current);
+  setActivity(current.walletId, null);
+  const outcome = outcomeOf(finished, current.mode);
+  if (current.trigger === 'manual') {
+    setFusionLastResult(current.walletId, {
+      mode: current.mode,
+      trigger: 'manual',
+      ok: outcome.status === 'fused' || outcome.status === 'no-eligible-coins',
+      message: describeOutcome(outcome),
+    });
+  } else if (!finished.ok) {
+    setFusionLastResult(current.walletId, {
+      mode: current.mode,
+      trigger: 'auto',
+      ok: false,
+      message: `Auto: ${finished.error ?? 'stopped.'}`,
+    });
+  }
+  logLine(current.walletId, `run finished: ${outcome.status}`);
+  current.settle?.(outcome);
+  current.markFinished();
+  emitRun();
+}
+
+function describeOutcome(outcome: FusionRunOutcome): string {
+  switch (outcome.status) {
+    case 'fused':
+      return `Fused ✓ — ${outcome.txid}`;
+    case 'verification-pending':
+      return `Fusion verification pending — ${outcome.txid}. ${outcome.message}`;
+    case 'no-eligible-coins':
+      return outcome.detail ?? 'No eligible coins to fuse.';
+    case 'cancelled':
+      return 'Fusion stopped.';
+    case 'busy':
+      return 'Fusion busy (another round is running).';
+    case 'failed':
+      return outcome.message;
+  }
+}
+
+let listening: Promise<void> | null = null;
+
+/** Hear the driver from the first start on, for as long as the window lives. */
+function ensureListening(): Promise<void> {
+  listening ??= listenNativeFusion(onEvent, onFinished).then(
+    () => undefined,
+    (error) => {
+      listening = null;
+      throw error;
+    }
+  );
+  return listening;
+}
+
+/**
+ * A Fusion transaction an earlier, renderer-run round signed and the network
+ * has not yet been seen to hold. Another fee-spending round waits for it.
+ */
+async function pendingVerification(
+  walletId: number
+): Promise<{ txid: string; source: string } | null> {
+  const pending =
+    await OutboundTransactionTracker.findFusionVerificationPending(walletId);
+  if (!pending) return null;
+  await reconcileOutboundTransactions(walletId).catch(() => undefined);
+  return (
+    (await OutboundTransactionTracker.findFusionVerificationPending(
+      walletId
+    )) ?? null
+  );
+}
+
+function newRun(
+  walletId: number,
+  mode: FusionMode,
+  trigger: 'auto' | 'manual',
+  key: string | null
+): NativeRun {
+  let markFinished: () => void = () => undefined;
+  const finished = new Promise<void>((resolve) => {
+    markFinished = resolve;
+  });
+  return {
+    walletId,
+    mode,
+    trigger,
+    key,
+    held: [],
+    settle: null,
+    finished,
+    markFinished,
+  };
+}
+
+/** Ask Rust to start, keeping this view's run only if it did. */
+async function begin(
+  next: NativeRun,
+  request: Parameters<typeof startNativeFusion>[0]
+) {
+  await ensureListening();
+  run = next;
+  emitRun();
+  try {
+    await startNativeFusion(request);
+  } catch (error) {
+    if (run === next) run = null;
+    emitRun();
+    throw error;
+  }
+}
+
+export interface StartFusionRoundOptions {
+  walletId: number;
+  network: Network;
+  mode: FusionMode;
+  /** Where to fuse: the chosen server and the rest, or the Nostr relays. */
+  venue: NativeFusionVenue;
+  fuseDepth: number;
+}
+
+/**
+ * One manual round. An Auto run of the same wallet steps aside for it; the
+ * Auto hook starts Auto again once it ends.
+ */
+export async function startFusionRound(
+  options: StartFusionRoundOptions
+): Promise<FusionRunOutcome> {
+  const { walletId } = options;
+  if (!Number.isInteger(walletId) || walletId <= 0) return { status: 'busy' };
+  if (run && !(run.walletId === walletId && run.trigger === 'auto')) {
+    return { status: 'busy' };
+  }
+  const pending = await pendingVerification(walletId);
+  if (pending) {
+    return {
+      status: 'verification-pending',
+      mode: /server/i.test(pending.source) ? 'server' : 'p2p',
+      txid: pending.txid,
+      message:
+        'A previous Fusion transaction is still awaiting independent network visibility.',
+    };
+  }
+  if (manualStarting) return { status: 'busy' };
+  manualStarting = true;
+  try {
+    return await startManual(options);
+  } finally {
+    manualStarting = false;
+  }
+}
+
+async function startManual(
+  options: StartFusionRoundOptions
+): Promise<FusionRunOutcome> {
+  const { walletId, mode } = options;
+  if (run) {
+    const auto = run;
+    await stopNativeFusion().catch(() => false);
+    await auto.finished;
+  }
+  if (run) return { status: 'busy' };
+
+  const next = newRun(walletId, mode, 'manual', null);
+  const outcome = new Promise<FusionRunOutcome>((resolve) => {
+    next.settle = resolve;
+  });
+  setActivity(walletId, {
+    walletId,
+    mode,
+    trigger: 'manual',
+    startedAt: Date.now(),
+    phase: 1,
+    status: 'Refreshing coins…',
+  });
+  try {
+    await begin(next, {
+      walletId,
+      venue: options.venue,
+      auto: false,
+      fuseDepth: options.fuseDepth,
+    });
+  } catch (error) {
+    setActivity(walletId, null);
+    const message = error instanceof Error ? error.message : String(error);
+    const failed: FusionRunOutcome = /already running/i.test(message)
+      ? { status: 'busy' }
+      : { status: 'failed', mode, message };
+    setFusionLastResult(walletId, {
+      mode,
+      trigger: 'manual',
+      ok: false,
+      message: describeOutcome(failed),
+    });
+    return failed;
+  }
+  return outcome;
+}
+
+export interface StartAutoFusionOptions {
+  walletId: number;
+  mode: FusionMode;
+  venue: NativeFusionVenue;
+  fuseDepth: number;
+  /** The settings this run uses, so the hook can tell when they change. */
+  key: string;
+}
+
+/**
+ * Keep fusing this wallet as Auto Fusion until stopped. Rust keeps the
+ * cooldowns, the depth target and the P2P rendezvous window.
+ */
+export async function startAutoFusion(
+  options: StartAutoFusionOptions
+): Promise<'started' | 'busy' | 'pending'> {
+  const { walletId, mode } = options;
+  if (run || manualStarting) return 'busy';
+  const pending = await pendingVerification(walletId);
+  if (pending) {
+    setFusionLastResult(walletId, {
+      mode,
+      trigger: 'auto',
+      ok: false,
+      message: `Auto: Fusion verification pending — ${pending.txid}. Waiting before another round.`,
+    });
+    return 'pending';
+  }
+  if (run || manualStarting) return 'busy';
+  await begin(newRun(walletId, mode, 'auto', options.key), {
+    walletId,
+    venue: options.venue,
+    auto: true,
+    fuseDepth: options.fuseDepth,
+  });
+  return 'started';
+}
+
+/**
+ * Stop this wallet's run, cancelling its round. The engine still finishes
+ * what it must once components are disclosed. `false` when none was running.
+ */
+export function cancelFusionRound(
+  walletId: number,
+  reason = 'wallet session changed'
+): boolean {
+  if (run?.walletId !== walletId) return false;
+  logLine(walletId, `stop: ${reason}`);
+  void stopNativeFusion().catch((error) =>
+    logError('FusionRunnerService.stop', error, { walletId })
+  );
+  return true;
+}
+
+/** Stop the run and wait until the driver says it finished. */
+export async function stopFusionRun(walletId: number): Promise<void> {
+  const current = run;
+  if (current?.walletId !== walletId) return;
+  cancelFusionRound(walletId, 'stopped');
+  await current.finished;
+}
+
+/**
+ * Drop what this view mirrors of a run Rust no longer has -- a reload while
+ * a round ran, or a lost finish event. Called when the CashFusion panel opens.
  */
 export async function reconcileIdleFusionState(
   walletId: number
 ): Promise<void> {
   if (!Number.isInteger(walletId) || walletId <= 0) return;
-  if (heldLeases.has(walletId)) return; // real round in this window
-  if (fusionActivities.has(walletId)) {
-    fusionActivities.delete(walletId);
-    emitFusionActivity(walletId);
-  }
-  // Reclaim durable lock only if stale (another window may still be live).
-  if (!hasLiveRoundLease(walletId)) {
-    await reclaimStaleRoundState(walletId, () =>
-      clearOutpointReservations(walletId)
-    ).catch(() => false);
-    // Ghost input locks from a dead round (HMR / kill) left Start clickable but
-    // every coin "committed" — clear them whenever no live lease remains.
-  }
-}
-
-// Release our lease if the WebView dies mid-round (reload / close).
-if (typeof window !== 'undefined') {
-  const releaseOnUnload = () => {
-    for (const { controller } of activeRoundControllers.values()) {
-      controller.abort(new Error('wallet window closed'));
-    }
-    activeRoundControllers.clear();
-    for (const [walletId, owner] of heldLeases) {
-      // Sync best-effort: async release may not finish on unload.
-      try {
-        const key = `optn-fusion-lease-${walletId}`;
-        const raw = window.localStorage?.getItem(key);
-        if (!raw) continue;
-        const held = JSON.parse(raw) as { owner?: string };
-        if (held?.owner === owner) window.localStorage?.removeItem(key);
-      } catch {
-        /* ignore */
-      }
-    }
-    heldLeases.clear();
-    fusionActivities.clear();
-  };
-  window.addEventListener('pagehide', releaseOnUnload);
-  window.addEventListener('beforeunload', releaseOnUnload);
-}
-
-interface FreshCoinSelection {
-  /** Coins used only for depth/status reporting; never a second chain scan. */
-  depthCoins: UTXO[];
-  /** Exact coins offered to the selected transport. */
-  selectedCoins: UTXO[];
-  serverDepthSatisfied: boolean;
-  /** Server rounds: why no address is eligible, worded for the trigger. */
-  emptyReason: string | null;
-  crowdedBuckets: FusionCoinBucket[];
-  allCoins: UTXO[];
-}
-
-/**
- * Live, spendable, non-token coins for this wallet, chosen by the shared Rust
- * policy (optn-core fusion::coin_selection).
- *
- * `null` from the refresh means this trigger joined an in-progress refresh or the
- * wallet session changed — it is NOT "no coins". Returning an empty array here
- * would read as "nothing to fuse" and, worse, tempt a caller into falling back to
- * the Redux list. The distinction is preserved all the way out to the caller.
- */
-async function freshCoinSelection(
-  walletId: number,
-  mode: FusionMode,
-  trigger: 'auto' | 'manual',
-  fuseDepth: number,
-  freshSnapshot?: WalletUtxoSnapshot,
-  signal?: AbortSignal
-): Promise<FreshCoinSelection | null> {
-  // Exclusive listunspent for fusion — shared reconcile soft-fails (null)
-  // whenever a background refresh is in flight, which made Fuse feel broken.
-  const snapshot =
-    freshSnapshot ??
-    (await reconcileActiveWalletUtxosForSpend(walletId, signal));
-  if (!snapshot) return null;
-
-  const allCoins = Object.values(snapshot).flat().filter(Boolean) as UTXO[];
-  const selection = selectFusionCoins({
-    walletId,
-    mode,
-    trigger,
-    fuseDepth,
-    coins: allCoins,
-  });
-  if (mode === 'server') {
-    void import('./logger')
-      .then(({ log }) =>
-        log.info(
-          'fusion-diag',
-          `w${walletId} server ${trigger}: coins=${allCoins.length} ` +
-            `eligibleBuckets=${selection.eligibleBuckets} ` +
-            `eligibleCoins=${selection.eligibleCoins} ` +
-            `crowded=${selection.crowded.length} ` +
-            `skipped=${JSON.stringify(Object.fromEntries(selection.skipCounts))} ` +
-            `depthSatisfied=${selection.depthSatisfied} fuseDepth=${fuseDepth}`
-        )
-      )
-      .catch(() => undefined);
-  }
-  return {
-    depthCoins: selection.depthCoins,
-    selectedCoins: selection.selected,
-    serverDepthSatisfied: selection.depthSatisfied,
-    emptyReason: selection.emptyReason,
-    crowdedBuckets: selection.crowded,
-    allCoins,
-  };
-}
-
-async function maybePreConsolidateCrowdedCoins(
-  selection: FreshCoinSelection,
-  options: {
-    walletId: number;
-    network: Network;
-    mode: FusionMode;
-    trigger: 'auto' | 'manual';
-    fuseDepth: number;
-    signal?: AbortSignal;
-    onStatus: (status: string) => void;
-  }
-): Promise<FreshCoinSelection> {
-  // Only when one address has more than 3 usable plain coins. Auto stays
-  // quiet on every other tick — no extra click, no status flash.
-  if (selection.crowdedBuckets.length === 0 || !walletCanPreConsolidate()) {
-    return selection;
-  }
-  const bucket = selection.crowdedBuckets[0];
-  options.onStatus(
-    `Consolidating ${bucket.coins.length} coins on one address before fusion…`
-  );
-  void import('./logger')
-    .then(({ log }) =>
-      log.info(
-        'fusion-diag',
-        `w${options.walletId} pre-consolidate ${bucket.coins.length} coins on one address`
-      )
-    )
-    .catch(() => undefined);
-  const result = await consolidateCrowdedFusionAddress({
-    walletId: options.walletId,
-    network: options.network,
-    bucket,
-    signal: options.signal,
-  });
-  if (result.ok === false) {
-    const skipReason = result.reason;
-    void import('./logger')
-      .then(({ log }) =>
-        log.info(
-          'fusion-diag',
-          `w${options.walletId} pre-consolidate skipped: ${skipReason}`
-        )
-      )
-      .catch(() => undefined);
-    return selection;
-  }
-  options.onStatus('Consolidate sent — refreshing coins…');
-  const next = await freshCoinSelection(
-    options.walletId,
-    options.mode,
-    options.trigger,
-    options.fuseDepth,
-    undefined,
-    options.signal
-  );
-  return next ?? selection;
-}
-
-export async function startFusionRound(
-  options: StartFusionRoundOptions
-): Promise<FusionRunOutcome> {
-  const { walletId, mode, trigger } = options;
-  if (options.signal?.aborted) return { status: 'cancelled' };
-  if (!Number.isInteger(walletId) || walletId <= 0) return { status: 'busy' };
-
-  // Durable Fused labels (SQL) into sync cache before depth gate / history.
-  void import('./fusionCoinDepth')
-    .then(({ hydrateFusionLabels }) => hydrateFusionLabels(walletId))
-    .catch(() => undefined);
-
-  // Same-window double Start / Auto+manual race before acquire completes.
-  if (heldLeases.has(walletId)) return { status: 'busy' };
-
-  // Most automatic ticks happen during the durable cooldown. Reject those
-  // before Web Locks, UI activity, or Electrum work. This is advisory only:
-  // the atomic claim below remains the final spending gate.
-  if (
-    trigger === 'auto' &&
-    !isAutoCooldownReady(walletId, AUTO_FUSION_COOLDOWN_MS)
-  ) {
-    return { status: 'cooldown' };
-  }
-
-  // Depth-met long idle: do not re-reconcile / re-log every engine tick.
-  // Wake only via wallet UTXO activity (or fuseDepth change) that clears the stamp.
-  if (trigger === 'auto' && isAutoDepthMetIdle(walletId)) {
-    return { status: 'cooldown' };
-  }
-
-  // A Tor-only broadcast can finish signing while its network receipt remains
-  // ambiguous. Starting another fee-spending round with different coins would
-  // accumulate unknown transactions and make the wallet's state harder to
-  // reconcile. Pause both transports until ordinary wallet evidence resolves
-  // the prior transaction as seen (or a deterministic rejection removes it).
-  const pendingFusion =
-    await OutboundTransactionTracker.findFusionVerificationPending(walletId);
-  if (pendingFusion) {
-    // Local history or spent-coin drop is enough to clear a tor-only Fusion.
-    // Cheap check so Auto does not sit on a tx another wallet already fused.
-    await reconcileOutboundTransactions(walletId).catch(() => undefined);
-    const stillPending =
-      await OutboundTransactionTracker.findFusionVerificationPending(walletId);
-    if (stillPending) {
-      if (trigger === 'auto') {
-        await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
-          () => undefined
-        );
-      }
-      return {
-        status: 'verification-pending',
-        mode: /server/i.test(stillPending.source) ? 'server' : 'p2p',
-        txid: stillPending.txid,
-        message:
-          'A previous Fusion transaction is still awaiting independent network visibility.',
-      };
-    }
-  }
-
-  // Drop orphan UI/durable state before acquire so grey-idle ghosts never block.
-  // Only clears the lease when it is STALE (no heartbeat) — a live other window
-  // keeps the lock and we return busy below.
-  await reconcileIdleFusionState(walletId);
-
-  if (hasLiveRoundLease(walletId)) return { status: 'busy' };
-
-  // Exclusivity first. Stale durable leases (no heartbeat) are reclaimed inside
-  // acquireRoundLease — no user-facing "clear stuck" control required.
-  const lease = await acquireRoundLease(walletId, Date.now());
-  if (lease === null) {
-    // Automatic Fusion must not spend fees without an atomic cross-window lock.
-    return trigger === 'auto' ? { status: 'cooldown' } : { status: 'busy' };
-  }
-  heldLeases.set(walletId, lease);
-  const callerSignal = options.signal;
-  const roundController = new AbortController();
-  const forwardCallerAbort = () =>
-    roundController.abort(
-      callerSignal?.reason ?? new Error('fusion round cancelled')
-    );
-  callerSignal?.addEventListener('abort', forwardCallerAbort, { once: true });
-  if (callerSignal?.aborted) forwardCallerAbort();
-  activeRoundControllers.set(walletId, {
-    lease,
-    controller: roundController,
-  });
-  // From this point cancellation is owned by the wallet session, not by the
-  // currently mounted route. The caller signal is forwarded into this one.
-  options = { ...options, signal: roundController.signal };
-  fusionActivities.set(walletId, {
-    lease,
-    activity: {
-      walletId,
-      mode,
-      trigger,
-      startedAt: Date.now(),
-      phase: 1,
-      status: trigger === 'auto' ? 'Auto-fuse: preparing…' : 'Starting fusion…',
-    },
-  });
-  emitFusionActivity(walletId);
-
-  const pushProgress = (update: { phase?: number; status?: string | null }) => {
-    reportFusionProgress(walletId, update);
-    if (update.status !== undefined && update.status !== null) {
-      options.onStatus?.(update.status);
-    }
-    if (update.phase !== undefined) {
-      options.onPhase?.(update.phase);
-    }
-  };
-
-  // Keep the durable lease fresh so other windows see a live holder, not a ghost.
-  const heartbeat = setInterval(() => {
-    void touchRoundLease(walletId, lease)
-      .then((stillOwned) => {
-        if (!stillOwned && !roundController.signal.aborted) {
-          roundController.abort(new Error('fusion round cancelled'));
-        }
-      })
-      .catch(() => {
-        if (!roundController.signal.aborted) {
-          roundController.abort(new Error('fusion round cancelled'));
-        }
-      });
-  }, LEASE_HEARTBEAT_MS);
-
-  const finish = (outcome: FusionRunOutcome): FusionRunOutcome => {
-    // Persist a readable last result so CashFusion still shows auto failures
-    // after the live lease is released.
-    if (outcome.status === 'fused') {
-      const fusedMsg = outcome.warning
-        ? `Fused ✓ — ${outcome.txid}. ${outcome.warning}`
-        : `Fused ✓ — ${outcome.txid}`;
-      setFusionLastResult(walletId, {
-        mode,
-        trigger,
-        ok: true,
-        message: fusedMsg,
-      });
-      void import('./logger')
-        .then(({ log }) =>
-          log.info('p2p-live', `w${walletId} OUTCOME fused: ${fusedMsg}`)
-        )
-        .catch(() => undefined);
-    } else if (outcome.status === 'verification-pending') {
-      setFusionLastResult(walletId, {
-        mode,
-        trigger,
-        ok: false,
-        message: `Fusion verification pending — ${outcome.txid}. ${outcome.message}`,
-      });
-    } else if (outcome.status === 'failed') {
-      setFusionLastResult(walletId, {
-        mode,
-        trigger,
-        ok: false,
-        message: outcome.message,
-      });
-      void import('./logger')
-        .then(({ log }) =>
-          log.info(
-            'p2p-live',
-            `w${walletId} OUTCOME failed: ${outcome.message}`
-          )
-        )
-        .catch(() => undefined);
-    } else if (outcome.status === 'no-eligible-coins') {
-      // Not a hard failure for auto: every coin already meets the box target.
-      const depthMsg =
-        trigger === 'auto'
-          ? outcome.detail ??
-            'Auto: nothing to fuse — all BCH coins already at rounds-per-coin depth (or no BCH coins). Manual Start can still re-fuse.'
-          : 'No eligible coins to fuse.';
-      setFusionLastResult(walletId, {
-        mode,
-        trigger,
-        ok: true,
-        message: depthMsg,
-      });
-      // One quiet log line — do not spam p2p-live every tick.
-      if (trigger === 'auto') {
-        void import('./logger')
-          .then(({ log }) =>
-            log.info('p2p-live', `w${walletId} OUTCOME idle: ${depthMsg}`)
-          )
-          .catch(() => undefined);
-      }
-    } else if (outcome.status === 'busy') {
-      setFusionLastResult(walletId, {
-        mode,
-        trigger,
-        ok: false,
-        message: 'Fusion busy (another window or round holds the lock).',
-      });
-    }
-    return outcome;
-  };
-
-  try {
-    if (options.signal?.aborted) return finish({ status: 'cancelled' });
-
-    // Auto: resolve coins first WITHOUT activity spam. If depth is already met,
-    // return quietly — no "refreshing coins" lease thrash every engine tick.
-    if (trigger === 'auto') {
-      let selection = await freshCoinSelection(
-        walletId,
-        mode,
-        trigger,
-        options.fuseDepth,
-        options.freshSnapshot,
-        options.signal
-      );
-      if (options.signal?.aborted) return finish({ status: 'cancelled' });
-      if (selection === null) return finish({ status: 'waiting-for-wallet' });
-      // Auto stays automatic: if an address is crowded, consolidate inside
-      // this same tick, then continue into the fusion round. No extra Start.
-      let autoCooldownClaimed = false;
-      if (selection.crowdedBuckets.length > 0) {
-        autoCooldownClaimed = await tryClaimAutoCooldown(
-          walletId,
-          AUTO_FUSION_COOLDOWN_MS
-        );
-        if (!autoCooldownClaimed) return finish({ status: 'cooldown' });
-        selection = await maybePreConsolidateCrowdedCoins(selection, {
-          walletId,
-          network: options.network,
-          mode,
-          trigger,
-          fuseDepth: options.fuseDepth,
-          signal: options.signal,
-          onStatus: (status) => pushProgress({ status }),
-        });
-      }
-      const coinsQuiet = selection.selectedCoins;
-      if (coinsQuiet.length === 0) {
-        const elig = fuseDepthEligibility(
-          walletId,
-          selection.depthCoins,
-          options.fuseDepth
-        );
-        const detail = selection.emptyReason ?? elig.metMessage;
-        // Long depth-met idle so Auto does not thrash every engine tick.
-        await stampAutoDepthMetIdle(
-          walletId,
-          AUTO_FUSION_DEPTH_MET_IDLE_MS
-        ).catch(() => undefined);
-        return finish({ status: 'no-eligible-coins', detail });
-      }
-      // Eligible coins exist — now show activity and claim the cooldown.
-      pushProgress({
-        phase: 1,
-        status: 'Auto-fuse: refreshing coins…',
-      });
-      const claimed =
-        autoCooldownClaimed ||
-        (await tryClaimAutoCooldown(walletId, AUTO_FUSION_COOLDOWN_MS));
-      if (!claimed) return finish({ status: 'cooldown' });
-
-      try {
-        const eligStart = fuseDepthEligibility(
-          walletId,
-          coinsQuiet,
-          options.fuseDepth
-        );
-        void import('./logger')
-          .then(({ log }) =>
-            log.info('p2p-live', `w${walletId} depth gate: ${eligStart.gateLog}`)
-          )
-          .catch(() => undefined);
-        pushProgress({
-          phase: 1,
-          status: `Auto-fuse (${mode}): ${coinsQuiet.length} coin(s) — finding peers…`,
-        });
-        const progressHooks = {
-          onStatus: (message: string) => pushProgress({ status: message }),
-          onPhase: (phase: number) => pushProgress({ phase }),
-        };
-        const result =
-          mode === 'p2p'
-            ? await options.runners.runP2p(
-                coinsQuiet,
-                options.signal,
-                progressHooks
-              )
-            : await options.runners.runServer(
-                coinsQuiet,
-                options.signal,
-                progressHooks
-              );
-        // Inside trigger==='auto' block — always stamp Auto cooldown.
-        if (result.verificationPending) {
-          await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
-            () => undefined
-          );
-          return finish({
-            status: 'verification-pending',
-            mode,
-            txid: result.txid,
-            message:
-              result.warning ??
-              'The signed Fusion transaction is awaiting independent network visibility.',
-          });
-        }
-        await stampAutoSuccess(walletId, AUTO_FUSION_COOLDOWN_MS).catch(
-          () => undefined
-        );
-        return finish({
-          status: 'fused',
-          mode,
-          txid: result.txid,
-          ...(result.warning ? { warning: result.warning } : {}),
-        });
-      } catch (error) {
-        if (options.signal?.aborted && isCancellationError(error)) {
-          await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
-            () => undefined
-          );
-          return finish({ status: 'cancelled' });
-        }
-        const msg = error instanceof Error ? error.message : String(error);
-        // Server connect refused / empty pool / P2P alone — short retry so Auto
-        // keeps looping until a round completes or depth is met.
-        const transient = isAutoTransientFailure(msg);
-        await stampAutoFailure(
-          walletId,
-          transient ? AUTO_FUSION_EMPTY_POOL_RETRY_MS : AUTO_FUSION_RETRY_MS
-        ).catch(() => undefined);
-        return finish({
-          status: 'failed',
-          mode,
-          message: msg,
-        });
-      }
-    }
-
-    // Manual Start path only (Auto returns above).
-    pushProgress({
-      phase: 1,
-      status: 'Refreshing coins…',
+  if (run) {
+    if (await nativeFusionRunning().catch(() => true)) return;
+    onFinished({
+      walletId: run.walletId,
+      mode: run.mode,
+      auto: run.trigger === 'auto',
+      ok: true,
+      stopped: 'interrupted',
     });
-    let selection = await freshCoinSelection(
-      walletId,
-      mode,
-      'manual',
-      options.fuseDepth,
-      options.freshSnapshot,
-      options.signal
-    );
-    if (options.signal?.aborted) return finish({ status: 'cancelled' });
-    if (selection === null) return finish({ status: 'waiting-for-wallet' });
-    if (selection.crowdedBuckets.length > 0) {
-      selection = await maybePreConsolidateCrowdedCoins(selection, {
-        walletId,
-        network: options.network,
-        mode,
-        trigger: 'manual',
-        fuseDepth: options.fuseDepth,
-        signal: options.signal,
-        onStatus: (status) => pushProgress({ status }),
-      });
-    }
-    const coins = selection.selectedCoins;
-    if (coins.length === 0) {
-      const detail = selection.emptyReason ?? 'No eligible coins to fuse.';
-      return finish({
-        status: 'no-eligible-coins',
-        detail,
-      });
-    }
-
-    try {
-      pushProgress({
-        phase: 1,
-        status: `Using ${coins.length} coin(s)…`,
-      });
-      // Expose progress hooks to runners that wire into runP2pFusion/server.
-      const progressHooks = {
-        onStatus: (message: string) => pushProgress({ status: message }),
-        onPhase: (phase: number) => pushProgress({ phase }),
-      };
-      const result =
-        mode === 'p2p'
-          ? await options.runners.runP2p(coins, options.signal, progressHooks)
-          : await options.runners.runServer(
-              coins,
-              options.signal,
-              progressHooks
-            );
-      if (result.verificationPending) {
-        return finish({
-          status: 'verification-pending',
-          mode,
-          txid: result.txid,
-          message:
-            result.warning ??
-            'The signed Fusion transaction is awaiting independent network visibility.',
-        });
-      }
-      return finish({
-        status: 'fused',
-        mode,
-        txid: result.txid,
-        ...(result.warning ? { warning: result.warning } : {}),
-      });
-    } catch (error) {
-      if (options.signal?.aborted && isCancellationError(error)) {
-        return finish({ status: 'cancelled' });
-      }
-      return finish({
-        status: 'failed',
-        mode,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  } finally {
-    callerSignal?.removeEventListener('abort', forwardCallerAbort);
-    const activeController = activeRoundControllers.get(walletId);
-    if (activeController?.lease === lease) {
-      activeRoundControllers.delete(walletId);
-    }
-    clearInterval(heartbeat);
-    heldLeases.delete(walletId);
-    if (fusionActivities.get(walletId)?.lease === lease) {
-      fusionActivities.delete(walletId);
-      emitFusionActivity(walletId);
-    }
-    // Conditional, owner-only: a lease we already lost to TTL now belongs to
-    // another window, and clearing it would let a third start concurrently.
-    await releaseRoundLease(walletId, lease).catch(() => undefined);
+    return;
+  }
+  if (activities.has(walletId)) setActivity(walletId, null);
+  if (!(await nativeFusionRunning().catch(() => true))) {
+    clearOutpointReservations(walletId);
   }
 }

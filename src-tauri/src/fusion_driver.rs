@@ -57,6 +57,10 @@ pub enum FusionVenueRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FusionStartRequest {
+    /// The wallet the renderer has open, and the session it opened it in:
+    /// the run fuses that wallet or none, as a send does (`wallet_spend`).
+    pub wallet_id: u32,
+    pub epoch: u64,
     pub venue: FusionVenueRequest,
     /// Keep fusing as Auto Fusion, rather than run once.
     pub auto: bool,
@@ -101,6 +105,8 @@ pub struct FusionDriverState {
 /// goes to the renderer as events.
 struct DesktopHost {
     app: tauri::AppHandle,
+    wallet_id: u32,
+    epoch: u64,
     runtime: optn_runtime::AppRuntime,
     chain: Arc<NativeChainRuntime>,
     control: Arc<Control>,
@@ -108,6 +114,17 @@ struct DesktopHost {
 
 impl FusionHost for DesktopHost {
     async fn refresh(&self) -> Result<&dyn FusionWallet, String> {
+        // A run belongs to the wallet session it started in. Locked, closed or
+        // switched, the run ends rather than fuse whatever is open now.
+        let status = self
+            .runtime
+            .wallet_security(optn_transport::WalletSecurityRequest::Status)
+            .await
+            .map_err(|_| "Wallet session is unavailable. Reopen it.".to_string())?;
+        if let Err(error) = same_session(&status, self.wallet_id, self.epoch) {
+            self.control.stop();
+            return Err(error);
+        }
         self.chain.refresh_wallet().await?;
         Ok(&self.runtime as &dyn FusionWallet)
     }
@@ -118,18 +135,19 @@ impl FusionHost for DesktopHost {
             .wallet_security(optn_transport::WalletSecurityRequest::Status)
             .await
             .map_err(|_| "Wallet session is unavailable. Reopen it.".to_string())?;
-        // Only a wallet migrated from this desktop has a hold file here.
-        let Some(id) = status.legacy_source_id.filter(|id| *id > 0) else {
-            return Ok(BTreeSet::new());
-        };
-        Ok(crate::coin_holds::optn_coin_holds(self.app.clone(), id)?
-            .into_iter()
-            .map(|hold| hold.outpoint.to_ascii_lowercase())
-            .collect())
+        same_session(&status, self.wallet_id, self.epoch)?;
+        Ok(
+            crate::coin_holds::optn_coin_holds(self.app.clone(), self.wallet_id)?
+                .into_iter()
+                .map(|hold| hold.outpoint.to_ascii_lowercase())
+                .collect(),
+        )
     }
 
     fn report(&self, event: Value) {
-        let _ = self.app.emit(FUSION_EVENT, event);
+        let _ = self
+            .app
+            .emit(FUSION_EVENT, for_wallet(event, self.wallet_id));
     }
 
     async fn pause(&self, ms: u64) -> bool {
@@ -156,6 +174,30 @@ impl FusionHost for DesktopHost {
     fn stopped(&self) -> bool {
         self.control.stopped.load(Ordering::SeqCst)
     }
+}
+
+/// Whether `status` is still the session a run was started for.
+fn same_session(
+    status: &optn_transport::WalletSecurityStatus,
+    wallet_id: u32,
+    epoch: u64,
+) -> Result<(), String> {
+    if wallet_id == 0
+        || status.active.is_none()
+        || status.epoch != epoch
+        || status.legacy_source_id != Some(wallet_id)
+    {
+        return Err("Wallet changed. Open this wallet in the shared engine before fusing.".into());
+    }
+    Ok(())
+}
+
+/// Every event names its wallet, so a window showing another wallet ignores it.
+fn for_wallet(mut event: Value, wallet_id: u32) -> Value {
+    if let Value::Object(fields) = &mut event {
+        fields.insert("walletId".into(), json!(wallet_id));
+    }
+    event
 }
 
 /// The holder's choice first, then the rest, each once
@@ -282,6 +324,11 @@ pub async fn optn_fusion_start(
     if !crate::fusion::fusion_execution_ready() {
         return Err(crate::fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
     }
+    let status = runtime
+        .wallet_security(optn_transport::WalletSecurityRequest::Status)
+        .await
+        .map_err(|_| "Wallet session is unavailable. Reopen it.".to_string())?;
+    same_session(&status, request.wallet_id, request.epoch)?;
     let options = DriverOptions {
         auto: request.auto,
         rounds: request.rounds,
@@ -301,13 +348,16 @@ pub async fn optn_fusion_start(
     }
     let host = DesktopHost {
         app: app.clone(),
+        wallet_id: request.wallet_id,
+        epoch: request.epoch,
         runtime: runtime.inner().clone(),
         chain: Arc::clone(chain.inner()),
         control: Arc::clone(&control),
     };
     tauri::async_runtime::spawn(async move {
         let outcome = driver::run(&host, &venue, options).await;
-        let mut finished = venue.describe();
+        let mut finished = for_wallet(venue.describe(), host.wallet_id);
+        finished["auto"] = json!(options.auto);
         match outcome {
             Ok(outcome) => {
                 finished["ok"] = json!(true);
@@ -375,15 +425,34 @@ pub struct FusionDepthRecord {
     pub txids: Vec<String>,
 }
 
+/// The wallet's session, when it is still the one `wallet_id` opened in
+/// `epoch`.
+async fn open_session(
+    runtime: &optn_runtime::AppRuntime,
+    wallet_id: u32,
+    epoch: u64,
+) -> Result<(), String> {
+    let status = runtime
+        .wallet_security(optn_transport::WalletSecurityRequest::Status)
+        .await
+        .map_err(|_| "Wallet session is unavailable. Reopen it.".to_string())?;
+    same_session(&status, wallet_id, epoch)
+}
+
 /// The runtime's depth record, which the renderer's coin badges mirror.
 #[tauri::command]
-pub fn optn_fusion_depth(runtime: tauri::State<'_, optn_runtime::AppRuntime>) -> FusionDepthRecord {
+pub async fn optn_fusion_depth(
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    wallet_id: u32,
+    epoch: u64,
+) -> Result<FusionDepthRecord, String> {
+    open_session(&runtime, wallet_id, epoch).await?;
     let book = runtime.fusion_depth();
-    FusionDepthRecord {
+    Ok(FusionDepthRecord {
         coins: book.stored_coins(),
         tx_depth: book.stored_tx_depth(),
         txids: book.fusion_txids().map(str::to_owned).collect(),
-    }
+    })
 }
 
 /// Merge the depth record the renderer kept before rounds ran in Rust into
@@ -392,10 +461,13 @@ pub fn optn_fusion_depth(runtime: tauri::State<'_, optn_runtime::AppRuntime>) ->
 #[tauri::command]
 pub async fn optn_fusion_depth_import(
     runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    wallet_id: u32,
+    epoch: u64,
     coins: Option<String>,
     tx_depth: Option<String>,
     txids: Vec<String>,
 ) -> Result<(), String> {
+    open_session(&runtime, wallet_id, epoch).await?;
     runtime
         .import_fusion_depth(coins, tx_depth, txids)
         .await
@@ -409,6 +481,8 @@ mod tests {
     #[test]
     fn the_renderer_names_a_venue_and_nothing_else() {
         let server: FusionStartRequest = serde_json::from_value(json!({
+            "walletId": 4,
+            "epoch": 7,
             "venue": {"mode": "server", "selected": "fusion.example:8788:s", "configured": ["b.example"]},
             "auto": true,
             "fuseDepth": 3,
@@ -419,6 +493,8 @@ mod tests {
             FusionVenueRequest::Server { ref configured, .. } if configured.len() == 1
         ));
         let p2p: FusionStartRequest = serde_json::from_value(json!({
+            "walletId": 4,
+            "epoch": 7,
             "venue": {"mode": "p2p"},
             "auto": false,
             "fuseDepth": 3,
@@ -430,11 +506,48 @@ mod tests {
         ));
         // No keys, coins or lookup servers are accepted from the renderer.
         for smuggled in [
-            json!({"venue": {"mode": "p2p"}, "auto": false, "fuseDepth": 3, "inputs": []}),
-            json!({"venue": {"mode": "server", "configured": ["h:1"], "lookupHost": "x"}, "auto": false, "fuseDepth": 3}),
+            json!({"walletId": 4, "epoch": 7, "venue": {"mode": "p2p"}, "auto": false, "fuseDepth": 3, "inputs": []}),
+            json!({"walletId": 4, "epoch": 7, "venue": {"mode": "server", "configured": ["h:1"], "lookupHost": "x"}, "auto": false, "fuseDepth": 3}),
+            // Nor a run that does not say which wallet session it is for.
+            json!({"venue": {"mode": "p2p"}, "auto": false, "fuseDepth": 3}),
         ] {
             assert!(serde_json::from_value::<FusionStartRequest>(smuggled).is_err());
         }
+    }
+
+    #[test]
+    fn a_run_fuses_only_the_session_it_was_started_for() {
+        let status = optn_transport::WalletSecurityStatus {
+            active: Some("bound-wallet.optn".into()),
+            epoch: 7,
+            legacy_source_id: Some(4),
+            ..Default::default()
+        };
+        assert!(same_session(&status, 4, 7).is_ok());
+        // Another wallet, a later session, a locked or native-only wallet.
+        assert!(same_session(&status, 5, 7).is_err());
+        assert!(same_session(&status, 4, 8).is_err());
+        assert!(same_session(&status, 0, 7).is_err());
+        for changed in [
+            optn_transport::WalletSecurityStatus {
+                active: None,
+                ..status.clone()
+            },
+            optn_transport::WalletSecurityStatus {
+                legacy_source_id: None,
+                ..status.clone()
+            },
+        ] {
+            assert!(same_session(&changed, 4, 7).is_err());
+        }
+    }
+
+    #[test]
+    fn events_name_their_wallet() {
+        assert_eq!(
+            for_wallet(json!({"event": "round", "coins": 2}), 4),
+            json!({"event": "round", "coins": 2, "walletId": 4})
+        );
     }
 
     #[test]

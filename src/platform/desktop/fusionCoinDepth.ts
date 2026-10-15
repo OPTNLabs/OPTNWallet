@@ -214,6 +214,41 @@ export async function restoreSealedFusionDepth(
 }
 
 /**
+ * Bring this view and the runtime's record together. Rounds run in Rust (the
+ * shared driver), which records them in the record sealed with the wallet;
+ * what this view kept from rounds before that goes into it, and what the
+ * runtime recorded since comes back for the badges. Depths only rise in a
+ * merge, either way. Best effort: the engine may not have this wallet open.
+ */
+export async function syncRuntimeFusionDepth(
+  walletId: number
+): Promise<boolean> {
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) return false;
+  if (getCachedOwnerWalletId() !== walletId) return false;
+  const current = book(walletId);
+  try {
+    const { importNativeFusionDepth, nativeFusionDepth } = await import(
+      './nativeFusion'
+    );
+    await importNativeFusionDepth(walletId, {
+      coins: current.storedCoins(),
+      txDepth: current.storedTxDepth(),
+      txids: current.fusionTxids(),
+    });
+    const runtime = await nativeFusionDepth(walletId);
+    const before = `${current.storedCoins()}|${current.storedTxDepth()}|${current.storedTxids()}`;
+    current.mergeStored(runtime.coins, runtime.txDepth);
+    current.addTxids(runtime.txids);
+    const after = `${current.storedCoins()}|${current.storedTxDepth()}|${current.storedTxids()}`;
+    if (after === before) return false;
+    save(walletId, { txidsChanged: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Rounds this coin has been through. Unknown coins are fresh (0).
  * Same rules for UI badges and Auto eligibility (server + P2P).
  */
@@ -334,6 +369,7 @@ async function persistFusionTxidsToSql(
 export async function hydrateFusionLabels(walletId: number): Promise<number> {
   if (!Number.isSafeInteger(walletId) || walletId <= 0) return 0;
   await restoreSealedFusionDepth(walletId);
+  await syncRuntimeFusionDepth(walletId);
   try {
     const { db } = await openWalletDatabase();
     if (!db) return 0;

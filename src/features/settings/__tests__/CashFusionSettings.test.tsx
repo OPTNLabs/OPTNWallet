@@ -22,7 +22,7 @@ vi.mock(
       >();
     return {
       ...actual,
-      // Activity only greys the UI when this window holds a real lease.
+      // A round this window runs greys the panel.
       isFusionRunning: (walletId: number) =>
         activityState.current?.walletId === walletId,
       getFusionActivity: () => activityState.current,
@@ -81,7 +81,7 @@ describe('CashFusion settings mode enforcement', () => {
     expect(serverCard).toContain('Fuse Now using CashFusion server');
   });
 
-  it('greys Start P2P when every coin is reserved by another round', async () => {
+  it('greys Start P2P when a round holds every coin', async () => {
     class MemoryStorage {
       private map = new Map<string, string>();
       getItem(key: string): string | null {
@@ -138,7 +138,7 @@ describe('CashFusion settings mode enforcement', () => {
     );
 
     expect(html).toContain('Start P2P round');
-    expect(html).toContain('All coins are reserved by another fusion round');
+    expect(html).toContain('All coins are held by a fusion round');
     expect(html).toMatch(/disabled=""[^>]*>Start P2P round/);
     clearOutpointReservations(7);
   });
