@@ -7,10 +7,12 @@
 // a vector the code under test wrote would only prove it agrees with itself.
 // Each case runs past the pure fragments into mixed ones, so the Xoshiro256**
 // seed, the degree sampler and the shuffle are pinned too, not just the
-// partition. The UR CBOR field is the raw PSBT, which is what SeedCash emits
-// and parses.
+// partition. The UR message is the PSBT in one CBOR byte string
+// (BCR-2020-006), wrapped by Keystone's CryptoPSBT rather than by the wallet:
+// SeedCash 30c5ba6 decodes nothing else.
 import { writeFileSync } from 'node:fs';
-import { UR, UREncoder } from '@ngraveio/bc-ur';
+import { UREncoder } from '@ngraveio/bc-ur';
+import { CryptoPSBT } from '@keystonehq/bc-ur-registry-btc';
 
 /** A PSBT-shaped payload: the magic, then a fixed pattern. */
 function payload(size: number): Uint8Array {
@@ -22,10 +24,13 @@ function payload(size: number): Uint8Array {
   return bytes;
 }
 
+// Sizes are of the PSBT. The byte-string head adds 1 byte up to 23, 2 up to
+// 255 and 3 above, so 48 and 49 put the wrapped message on either side of a
+// 50-byte fragment, and 9 makes exactly the 10-byte minimum.
 const cases = [
   { size: 30, fragmentLength: 50, why: 'fits one fragment: a single-part UR' },
-  { size: 50, fragmentLength: 50, why: 'exactly one fragment' },
-  { size: 51, fragmentLength: 50, why: 'one byte over: two fragments' },
+  { size: 48, fragmentLength: 50, why: 'exactly one fragment' },
+  { size: 49, fragmentLength: 50, why: 'one byte over: two fragments' },
   { size: 300, fragmentLength: 50, why: 'an ordinary watch-only send' },
   { size: 1_200, fragmentLength: 50, why: 'a large send at the default' },
   {
@@ -41,7 +46,7 @@ const cases = [
 const vectors = cases.map(({ size, fragmentLength, why }) => {
   const message = payload(size);
   const encoder = new UREncoder(
-    new UR(Buffer.from(message), 'crypto-psbt'),
+    new CryptoPSBT(Buffer.from(message)).toUR(),
     fragmentLength
   );
   const frameCount = encoder.fragmentsLength;

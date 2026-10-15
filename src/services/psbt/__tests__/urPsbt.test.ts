@@ -1,5 +1,5 @@
 import { CryptoPSBT } from '@keystonehq/bc-ur-registry-btc';
-import { UR, URDecoder, UREncoder } from '@ngraveio/bc-ur';
+import { URDecoder, UREncoder } from '@ngraveio/bc-ur';
 import { describe, expect, it } from 'vitest';
 import vectorDocument from '../../../../test-vectors/psbt-ur.json';
 import {
@@ -101,11 +101,10 @@ describe('UR crypto-psbt transport', () => {
     expect(frames.count).toBeGreaterThan(0);
   });
 
-  it('puts the raw PSBT in the UR CBOR so SeedCash parse_psbt can read it', () => {
-    // Stock SeedCash does `parse_psbt(decoder.result_message().cbor)`.
-    // CryptoPSBT wraps that in a CBOR byte string (59 01 .. 70 73 62 74 ff),
-    // which SeedCash rejects as "invalid PSBT magic". Reproduced live against
-    // seedcash/helpers/ur2/ur_decoder.py + models/psbt_parser.py.
+  it('wraps the PSBT in one CBOR byte string, which SeedCash requires', () => {
+    // SeedCash 30c5ba6 decodes a crypto-psbt message as exactly one CBOR byte
+    // string and drops anything else, so the raw PSBT this used to send
+    // (70 73 62 74 ff …, a CBOR text head) never completed a scan there.
     const original = psbt();
     const decoder = new URDecoder();
     decoder.receivePart(
@@ -113,8 +112,13 @@ describe('UR crypto-psbt transport', () => {
     );
     expect(decoder.isComplete()).toBe(true);
     const cbor = Uint8Array.from(decoder.resultUR().cbor);
-    expect(startsWithPsbtMagic(cbor)).toBe(true);
-    expect([...cbor]).toEqual([...original]);
+    expect(startsWithPsbtMagic(cbor)).toBe(false);
+    expect([...cbor]).toEqual([
+      ...new CryptoPSBT(Buffer.from(original)).toCBOR(),
+    ]);
+    expect([...CryptoPSBT.fromCBOR(Buffer.from(cbor)).getPSBT()]).toEqual([
+      ...original,
+    ]);
   });
 
   it('still reads a BCR-2020-006 / Keystone wrapped crypto-psbt', () => {
@@ -244,9 +248,10 @@ describe('Rust UR frames match an independent BC-UR encoder', () => {
   // The frames come from crates/optn-core through WASM. @ngraveio/bc-ur is a
   // separate implementation of the same fountain code, so agreeing with it
   // frame for frame, mixed frames included, is agreement with the format
-  // rather than with ourselves.
+  // rather than with ourselves. Keystone's CryptoPSBT does the byte-string
+  // wrap, so the wrap is checked independently too.
   const reference = (bytes: Uint8Array, fragmentLength: number) =>
-    new UREncoder(new UR(Buffer.from(bytes), 'crypto-psbt'), fragmentLength);
+    new UREncoder(new CryptoPSBT(Buffer.from(bytes)).toUR(), fragmentLength);
 
   function payload(size: number, seed: number): Uint8Array {
     const bytes = new Uint8Array(size);

@@ -82,7 +82,10 @@ fn reviewed(output: &tx::DecodedOutput) -> ReviewedOutput {
 
 pub(super) fn review_maps(maps: &ParsedMaps) -> Result<P2pkhReview> {
     if let Some(version) = field_value(&maps.global, GLOBAL_VERSION) {
-        if version != compact_size(PSBT_VERSION_145) && version != [0, 0, 0, 0] {
+        // The 32-bit field the wallet writes now, or the one-byte CompactSize
+        // that PSBTs it built before still carry.
+        let legacy = compact_size(u64::from(PSBT_VERSION_145));
+        if version != PSBT_VERSION_145_FIELD && version != legacy && version != [0, 0, 0, 0] {
             return Err(invalid("unsupported PSBT version"));
         }
     }

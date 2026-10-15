@@ -892,9 +892,16 @@ pub const OUT_CASHTOKEN: u8 = 0x36;
 
 /// The PSBT version this wallet writes.
 ///
-/// Paytaca's reader requires the field; SeedCash skips it. Writing it costs
-/// nothing and is the difference between the two reading the same bytes.
-pub const PSBT_VERSION_145: u64 = 145;
+/// Paytaca's reader requires the field. Writing it costs nothing and is the
+/// difference between the two reading the same bytes.
+pub const PSBT_VERSION_145: u32 = 145;
+
+/// The version field's value: a 32-bit little-endian integer (BIP 174/370),
+/// as Paytaca writes it. SeedCash (`psbt_parser.py`, `30c5ba6`) refuses any
+/// other length, so the one-byte CompactSize this wallet used to write made
+/// every PSBT unsignable there. Earlier SeedCash read the field as a
+/// CompactSize, which takes the same first byte, 145.
+pub const PSBT_VERSION_145_FIELD: [u8; 4] = PSBT_VERSION_145.to_le_bytes();
 
 /// The FORKID bit. Without it a signature is not valid on Bitcoin Cash at all.
 pub const SIGHASH_FORKID_BIT: u32 = 0x40;
@@ -1039,7 +1046,7 @@ pub fn encode_unsigned_with_sighash(
         &[GLOBAL_UNSIGNED_TX],
         &unsigned_transaction(inputs, outputs),
     );
-    record(&mut out, &[GLOBAL_VERSION], &compact_size(PSBT_VERSION_145));
+    record(&mut out, &[GLOBAL_VERSION], &PSBT_VERSION_145_FIELD);
     for xpub in global_xpubs {
         if xpub.xpub_payload.len() != 78 {
             return Err(CliError::Usage(format!(

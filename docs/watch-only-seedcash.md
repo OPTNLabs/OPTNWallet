@@ -17,15 +17,18 @@ flow. It is **implemented**, not a plan.
    retain their stored derivation path.
 4. Gap-limit discovery, receive, balance, history, UTXOs, and coin control
    work with no signing path.
-5. Send builds a binary Paytaca-compatible PSBT (global version `145`,
-   default sighash `ALL | FORKID` = `0x41`). Advanced sighash choices are
-   behind **Advanced**. QR density +/− is desktop-only; mobile fills more of
-   the screen with the animated QR.
+5. Send builds a binary Paytaca-compatible PSBT (global version `145` as a
+   4-byte integer, default sighash `ALL | FORKID` = `0x41`). Advanced sighash
+   choices are behind **Advanced**. QR density +/− is desktop-only; mobile
+   fills more of the screen with the animated QR.
 6. Export is multipart `ur:crypto-psbt` (PSBT bytes, not JSON), 50 bytes per
    frame by default, on phones and desktop alike. The frames come from Rust
    (`crates/optn-core/src/ur.rs`), which refuses frames over 450 bytes. Phones
    used to show one static QR of up to 2,400 characters, and SeedCash cannot
-   scan that. A PSBT that fits in one frame is the only static QR.
+   scan that. A PSBT that fits in one frame is the only static QR. The UR
+   message is the PSBT in one CBOR byte string (BCR-2020-006). SeedCash
+   `30c5ba6` and later decode nothing else, and refuse a version field that
+   is not 4 bytes; earlier OPTN builds sent the raw PSBT and a 1-byte version.
 7. SeedCash reviews and signs offline, then returns `ur:crypto-psbt`.
 8. Import binds the signed PSBT to the approved unsigned transaction,
    verifies signatures, and only then offers broadcast. SeedCash never

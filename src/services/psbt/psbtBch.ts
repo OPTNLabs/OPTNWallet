@@ -12,7 +12,8 @@
 // boundaries explicit, per-input PREVIOUS_TXID/OUTPUT_INDEX/SEQUENCE
 // (0x0e/0x0f/0x10), per-output AMOUNT/SCRIPT (0x03/0x04) and CASHTOKEN (0x36).
 // Paytaca throws when those are missing on a v145 PSBT, so they are always
-// emitted here. SeedCash skips the unknown globals and parses by the counts.
+// emitted here. SeedCash parses by the counts, refuses key types it does not
+// know, and since 30c5ba6 refuses a version that is not a 4-byte integer.
 //
 // What SeedCash requires, read off its parser rather than assumed:
 //   * the input amount, from PSBT_IN_WITNESS_UTXO (0x01) — it reads
@@ -467,8 +468,10 @@ export function encodeUnsignedPsbt(
       Uint8Array.from([PSBT_GLOBAL_UNSIGNED_TX]),
       unsignedTransaction(inputs, outputs)
     ),
-    // Paytaca's v145 reader requires this field; SeedCash skips it.
-    record(Uint8Array.from([PSBT_GLOBAL_VERSION]), varInt(PSBT_VERSION_145)),
+    // Paytaca's v145 reader requires this field. The value is a 32-bit
+    // little-endian integer (BIP 174/370), as Paytaca writes it; SeedCash
+    // refuses the one-byte CompactSize this used to write.
+    record(Uint8Array.from([PSBT_GLOBAL_VERSION]), uint32LE(PSBT_VERSION_145)),
   ];
   for (const xpub of options.globalXpubs ?? []) {
     if (xpub.xpubPayload.length !== 78) {
@@ -913,7 +916,16 @@ export function decodePsbt(bytes: Uint8Array): ParsedPsbt {
   const globalXpubs: ParsedPsbtGlobalXpub[] = [];
   for (const { key, value } of global) {
     if (key.length === 1 && key[0] === PSBT_GLOBAL_VERSION) {
-      version = new Reader(value).varInt();
+      // Four bytes is the BIP's integer; PSBTs this wallet wrote before carry
+      // the one-byte CompactSize.
+      version =
+        value.length === 4
+          ? new DataView(
+              value.buffer,
+              value.byteOffset,
+              value.byteLength
+            ).getUint32(0, true)
+          : new Reader(value).varInt();
     } else if (key.length === 1 && key[0] === PSBT_GLOBAL_INPUT_COUNT) {
       inputCount = new Reader(value).varInt();
     } else if (key.length === 1 && key[0] === PSBT_GLOBAL_OUTPUT_COUNT) {

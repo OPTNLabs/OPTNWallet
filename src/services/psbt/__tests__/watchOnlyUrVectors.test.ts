@@ -1,3 +1,4 @@
+import { URDecoder } from '@ngraveio/bc-ur';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -63,11 +64,19 @@ describe('watch-only UR test vectors', () => {
         expect(() => assertWatchOnlySighash(psbt)).not.toThrow();
       });
 
-      it('is a raw PSBT in the UR CBOR, not a spec byte-string wrapper', () => {
-        // Stock SeedCash never unwraps the BCR-2020-006 wrapper: a wrapped
-        // payload arrives as `59 01 90 70 73 62 74 ff …` and its parser dies
-        // on "invalid PSBT magic".
-        expect(hex(extractPsbtFromUrCbor(psbt))).toBe(vector.psbtHex);
+      it('carries the PSBT in one CBOR byte string, as SeedCash requires', () => {
+        // SeedCash 30c5ba6 decodes a crypto-psbt message as exactly one byte
+        // string and never completes on the raw PSBT this used to send.
+        const decoder = new URDecoder();
+        for (const frame of vector.frames) {
+          decoder.receivePart(frame.toLowerCase());
+          if (decoder.isComplete()) break;
+        }
+        expect(decoder.isSuccess()).toBe(true);
+        const message = Uint8Array.from(decoder.resultUR().cbor);
+        expect(message[0]).toBe(0x59);
+        expect(hex(message.subarray(3))).toBe(vector.psbtHex);
+        expect(hex(extractPsbtFromUrCbor(message))).toBe(vector.psbtHex);
       });
 
       it('is accepted from hex and base64, as the CLI reads it', () => {

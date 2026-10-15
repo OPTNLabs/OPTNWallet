@@ -9,16 +9,18 @@
 //! fragment longer than [`PSBT_UR_MAX_FRAGMENT_LEN`], so no caller can bring
 //! the dense QR back.
 //!
-//! The UR's CBOR field is the raw PSBT, not the BCR-2020-006 byte-string
-//! wrap. SeedCash emits `UR("crypto-psbt", psbt)` and hands
-//! `result_message().cbor` straight to its PSBT parser, so a wrapped payload
-//! fails there with "invalid PSBT magic". Reading either shape back is
+//! The UR message is the PSBT inside one CBOR byte string (BCR-2020-006), as
+//! Keystone writes it and as SeedCash now requires. SeedCash `30c5ba6`
+//! (`ur_decoder.py`, `decode_cbor_by_type`) decodes a `crypto-psbt` message as
+//! exactly one byte string and drops anything else, so the raw PSBT an earlier
+//! SeedCash read directly never completes a scan there. Its own encoder wraps
+//! the signed PSBT it hands back the same way. Reading either shape back is
 //! [`crate::psbt::psbt_from_ur_cbor`].
 //!
 //! The fountain code follows the Blockchain Commons reference encoder
 //! (BCR-2020-005). `test-vectors/psbt-ur.json` pins its frames, pure and mixed,
-//! from `@ngraveio/bc-ur`, and the wallet's tests decode these frames with
-//! SeedCash's own `ur2` decoder.
+//! from `@ngraveio/bc-ur` over Keystone's `CryptoPSBT` wrap, and the wallet's
+//! tests decode these frames with SeedCash's own `ur2` decoder.
 
 use sha2::{Digest, Sha256};
 
@@ -264,17 +266,27 @@ fn cbor_head(out: &mut Vec<u8>, major: u8, value: u64) {
     }
 }
 
+/// The `crypto-psbt` UR message: `psbt` as one CBOR byte string.
+pub fn crypto_psbt_cbor(psbt: &[u8]) -> Vec<u8> {
+    let mut cbor = Vec::with_capacity(psbt.len() + 9);
+    cbor_head(&mut cbor, 2, psbt.len() as u64);
+    cbor.extend_from_slice(psbt);
+    cbor
+}
+
 /// A PSBT split for an animated `ur:crypto-psbt` QR.
 #[derive(Debug, Clone)]
 pub struct PsbtUr {
-    psbt: Vec<u8>,
+    /// The UR message: the PSBT wrapped by [`crypto_psbt_cbor`].
+    message: Vec<u8>,
     fragment_len: usize,
     frame_count: u32,
     checksum: u32,
 }
 
 impl PsbtUr {
-    /// Split `psbt` into frames of at most `max_fragment_len` bytes.
+    /// Wrap `psbt` and split it into frames of at most `max_fragment_len`
+    /// bytes.
     ///
     /// Refuses anything that is not a PSBT, and any fragment length outside
     /// [`UR_MIN_FRAGMENT_LEN`]..=[`PSBT_UR_MAX_FRAGMENT_LEN`].
@@ -290,19 +302,20 @@ impl PsbtUr {
                 "UR fragment length must be {UR_MIN_FRAGMENT_LEN} to {PSBT_UR_MAX_FRAGMENT_LEN} bytes, got {max_fragment_len}"
             )));
         }
-        let fragment_len = nominal_fragment_len(psbt.len(), max_fragment_len);
-        let frame_count = u32::try_from(psbt.len().div_ceil(fragment_len))
+        let message = crypto_psbt_cbor(psbt);
+        let fragment_len = nominal_fragment_len(message.len(), max_fragment_len);
+        let frame_count = u32::try_from(message.len().div_ceil(fragment_len))
             .map_err(|_| CliError::Usage("the PSBT is too large to animate".into()))?;
         Ok(Self {
-            psbt: psbt.to_vec(),
+            checksum: crc32(&message),
+            message,
             fragment_len,
             frame_count,
-            checksum: crc32(psbt),
         })
     }
 
     /// Frames in one pass of the animation. One means a single static QR,
-    /// which only happens when the whole PSBT fits in one fragment.
+    /// which only happens when the whole wrapped PSBT fits in one fragment.
     pub fn frame_count(&self) -> u32 {
         self.frame_count
     }
@@ -316,7 +329,7 @@ impl PsbtUr {
             return Err(CliError::Usage("UR frames are numbered from 1".into()));
         }
         let ur = if self.frame_count == 1 {
-            format!("ur:{PSBT_UR_TYPE}/{}", bytewords_minimal(&self.psbt))
+            format!("ur:{PSBT_UR_TYPE}/{}", bytewords_minimal(&self.message))
         } else {
             format!(
                 "ur:{PSBT_UR_TYPE}/{seq_num}-{}/{}",
@@ -332,9 +345,9 @@ impl PsbtUr {
         let mut fragment = vec![0u8; self.fragment_len];
         for index in choose_fragments(seq_num, self.frame_count as usize, self.checksum) {
             let start = index * self.fragment_len;
-            let end = (start + self.fragment_len).min(self.psbt.len());
+            let end = (start + self.fragment_len).min(self.message.len());
             // The last fragment is zero-padded, which XOR leaves implicit.
-            for (mixed, byte) in fragment.iter_mut().zip(&self.psbt[start..end]) {
+            for (mixed, byte) in fragment.iter_mut().zip(&self.message[start..end]) {
                 *mixed ^= byte;
             }
         }
@@ -342,7 +355,7 @@ impl PsbtUr {
         cbor_head(&mut cbor, 4, 5);
         cbor_head(&mut cbor, 0, u64::from(seq_num));
         cbor_head(&mut cbor, 0, u64::from(self.frame_count));
-        cbor_head(&mut cbor, 0, self.psbt.len() as u64);
+        cbor_head(&mut cbor, 0, self.message.len() as u64);
         cbor_head(&mut cbor, 0, u64::from(self.checksum));
         cbor_head(&mut cbor, 2, self.fragment_len as u64);
         cbor.extend(fragment);
@@ -451,11 +464,12 @@ mod tests {
     #[test]
     fn a_phone_sized_psbt_animates_instead_of_becoming_one_dense_qr() {
         // 1,200 bytes was one static QR of about 2,400 characters on phones.
+        // Wrapped, it is a 1,203-byte message: 25 fragments of 49 bytes.
         let ur = PsbtUr::new(&psbt_of(1_200), PSBT_UR_DEFAULT_FRAGMENT_LEN).expect("encodes");
-        assert_eq!(ur.frame_count(), 24);
+        assert_eq!(ur.frame_count(), 25);
         for seq_num in 1..=60 {
             let frame = ur.frame(seq_num).expect("frame");
-            assert!(frame.starts_with(&format!("UR:CRYPTO-PSBT/{seq_num}-24/")));
+            assert!(frame.starts_with(&format!("UR:CRYPTO-PSBT/{seq_num}-25/")));
             assert!(
                 frame.len() < 160,
                 "frame {seq_num} is {} characters",
@@ -474,11 +488,16 @@ mod tests {
         let body = frame
             .strip_prefix("UR:CRYPTO-PSBT/")
             .expect("single-part prefix");
-        assert_eq!(bytewords_minimal_decode(body).expect("decodes"), psbt);
+        let message = bytewords_minimal_decode(body).expect("decodes");
+        assert_eq!(message, crypto_psbt_cbor(&psbt));
+        assert_eq!(
+            crate::psbt::psbt_from_ur_cbor(&message).expect("unwraps"),
+            psbt.as_slice()
+        );
     }
 
     #[test]
-    fn the_raw_psbt_is_the_payload_seedcash_parses() {
+    fn the_message_is_the_psbt_in_one_cbor_byte_string() {
         let psbt = psbt_of(120);
         let ur = PsbtUr::new(&psbt, PSBT_UR_DEFAULT_FRAGMENT_LEN).expect("encodes");
         let mut message = Vec::new();
@@ -489,9 +508,38 @@ mod tests {
             // The fragment is the byte string at the end of the part.
             message.extend(&part[part.len() - ur.fragment_len..]);
         }
-        message.truncate(psbt.len());
-        assert_eq!(message, psbt);
-        assert!(crate::psbt::psbt_from_ur_cbor(&message).is_ok());
+        message.truncate(psbt.len() + 2);
+        // SeedCash drops a message that is not exactly one byte string, which
+        // is what the raw PSBT, starting with the text header 0x70, was.
+        assert_eq!(&message[..2], &[0x58, 120]);
+        assert_eq!(&message[2..], psbt.as_slice());
+        assert_eq!(
+            crate::psbt::psbt_from_ur_cbor(&message).expect("unwraps"),
+            psbt.as_slice()
+        );
+    }
+
+    #[test]
+    fn the_byte_string_head_uses_the_shortest_length() {
+        for (len, head) in [
+            (5, vec![0x45]),
+            (23, vec![0x57]),
+            (24, vec![0x58, 24]),
+            (255, vec![0x58, 0xff]),
+            (256, vec![0x59, 0x01, 0x00]),
+            (65_535, vec![0x59, 0xff, 0xff]),
+            (65_536, vec![0x5a, 0x00, 0x01, 0x00, 0x00]),
+        ] {
+            let cbor = crypto_psbt_cbor(&psbt_of(len));
+            assert_eq!(&cbor[..head.len()], head.as_slice(), "{len} bytes");
+            assert_eq!(cbor.len(), head.len() + len);
+            assert_eq!(
+                crate::psbt::psbt_from_ur_cbor(&cbor)
+                    .expect("unwraps")
+                    .len(),
+                len
+            );
+        }
     }
 
     #[test]

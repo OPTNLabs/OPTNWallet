@@ -70,10 +70,13 @@ fn input(index: u32, vout: u32, token: Option<TokenData>) -> PsbtInputSpec {
         partial_signatures: vec![],
         derivations: vec![origin],
     };
+    // Outputs before `vout` only move the spent one into place. They pay a
+    // standard P2PKH to an unrelated hash: SeedCash refuses a parent with any
+    // output script it cannot classify, and a bare OP_1 is one.
     let mut outputs = vec![
         PsbtOutputSpec {
             satoshis: 1000,
-            locking_bytecode: vec![0x51],
+            locking_bytecode: [vec![0x76, 0xa9, 0x14], vec![0x5a; 20], vec![0x88, 0xac]].concat(),
             ..Default::default()
         };
         vout as usize

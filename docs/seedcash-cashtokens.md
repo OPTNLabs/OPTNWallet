@@ -11,8 +11,10 @@ categories, unused vout-zero inputs, mutable downgrades, NFT minting, authority
 splitting/destruction, selective burns, maximum amounts/commitments, interleaved
 OP_RETURN, 100-input consolidation, and 100-output distribution. The 55 valid
 cases were freshly signed by SeedCash and verified by Rust and libauth's BCH VM.
-The 9 invalid cases carry real signatures too: signatures do not make an invalid
-token transition valid. Both token validators reject them.
+Seven of the 9 invalid cases carry real signatures too: signatures do not make
+an invalid token transition valid. Both token validators reject them. SeedCash
+refuses to sign the other two (`reject-wrong-category`,
+`reject-genesis-without-vout-zero`), recorded as `seedcash_refused`.
 
 The source workbook's 69 rows are requirements, not 69 completed tests. Related
 row IDs describe coverage, not full row completion. P2SH/multisig, CSV/CLTV,
@@ -31,10 +33,13 @@ SHA-256 recorded. Their old row-coverage claims are not copied.
 | M01             | Offline structural review passes; the harness adds no signature. Requires matching signer/key-origin investigation.                 |
 | M03 through M08 | Refused: an input's committed public key does not match its parent P2PKH output. M03/M07 also return no signature from the harness. |
 
-The source used for the final run was exported directly from canonical SeedCash
-commit `4e1016637edf12bc478fc01bff354a5e384563ca`, including its original parser.
-Only the existing hardware import shim was used; cryptography was not patched.
-This is software signing evidence, **not physical-device approval/display proof**.
+The generated cases were signed by canonical SeedCash commit
+`30c5ba609e97649f50603cfc447644b99c461047`, including its original parser,
+which refuses a PSBT version field that is not 4 bytes and a parent output
+script it cannot classify. Only the existing hardware import shim was used;
+cryptography was not patched. The supplied cases keep the returns captured at
+`4e1016637edf12bc478fc01bff354a5e384563ca`. This is software signing evidence,
+**not physical-device approval/display proof**.
 
 ## Reproduce or give the files to a signer
 

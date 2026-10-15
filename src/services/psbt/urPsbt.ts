@@ -6,18 +6,16 @@
 // desktop got 50-byte frames, and SeedCash's camera cannot read the static
 // one. The core now refuses any frame denser than the density control's top.
 //
-// SeedCash and Keystone both use type `crypto-psbt`, but they do not put the
-// same bytes in the UR CBOR field:
+// The UR message is the PSBT in one CBOR byte string (BCR-2020-006), which is
+// what Keystone writes and what SeedCash now requires:
 //
-//   SeedCash  encode_qr.py:280  UR("crypto-psbt", raw_psbt_bytes)
-//             decode_qr.py:141  parse_psbt(decoder.result_message().cbor)
-//   Keystone  CryptoPSBT        CBOR byte-string wrap (BCR-2020-006)
+//   SeedCash 30c5ba6  ur_decoder.py  decode_cbor_by_type: one byte string or
+//                                    nothing, so a raw PSBT never completes
+//                     encode_qr.py   UrPsbtQrEncoder wraps its signed return
+//   Keystone          CryptoPSBT     the same wrap
 //
-// Stock SeedCash never unwraps that byte string. A spec-wrapped QR therefore
-// arrives as `59 01 90 70 73 62 74 ff …` and `parse_psbt` dies with
-// "invalid PSBT magic". Issue #8 is the SeedCash air-gap, so we emit the
-// device's native payload (raw PSBT as the UR CBOR) and accept both shapes
-// on the way back.
+// SeedCash before that read the message as the raw PSBT. Signed returns of
+// either shape are accepted on the way back.
 
 import { CryptoPSBT } from '@keystonehq/bc-ur-registry-btc';
 import { URRegistryDecoder } from '@keystonehq/bc-ur-registry';
@@ -87,8 +85,9 @@ export function startsWithPsbtMagic(bytes: Uint8Array): boolean {
 /**
  * Recover PSBT bytes from a decoded `crypto-psbt` UR CBOR field.
  *
- * SeedCash puts the raw PSBT there. BCR-2020-006 / Keystone wrap it in a
- * CBOR byte string. Accept both so a signed return from either device works.
+ * BCR-2020-006, Keystone and current SeedCash wrap it in a CBOR byte string;
+ * SeedCash before 30c5ba6 put the raw PSBT there. Accept both so a signed
+ * return from any of them works.
  */
 export function extractPsbtFromUrCbor(cbor: Uint8Array): Uint8Array {
   if (startsWithPsbtMagic(cbor)) {
