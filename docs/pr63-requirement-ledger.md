@@ -144,7 +144,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | PSBT / SeedCash / UR | **INTEGRATION** | `optn-core/src/airgap_spend.rs`, `psbt.rs`; `optn-runtime/src/airgap.rs` reserve HD change durably before export and bind signed imports to the current request. Captured SeedCash Schnorr return and ECDSA finalization pass; runtime actor tests cover reservation, storage failure, cancellation and restart | Fresh GUI/CLI signing and packaged-platform verification are still pending. Single-input Chipnet P2PKH `0x41` path; multisig, advanced sighash and broadcast integration remain separate |
 | RPA / Cash Code | **INTEGRATION** | `optn-core/src/rpa.rs` | Matrix `unit` |
 | Hardware | **PARTIAL** | `optn-ui/src/hardware.rs`, `HardwareVendor` | Vendor-by-surface audit not done; no device evidence |
-| CashFusion | **PARTIAL** | Protocol in `crates/optn-fusion`; coin selection, tier planning and the depth record in Rust (`optn_core::fusion::{coin_selection, depth}`, `optn_fusion::allocate`), reached by the desktop through the WASM core and Tauri commands; native server-round host `crates/optn-fusion-native`, used by `optn fusion` and the docker runner | Released; reported working on chipnet and mainnet. Remaining: a Rust P2P (Nostr) round driver, moving the desktop's renderer driver onto the native host once its wallets are runtime-managed, and a Leptos fusion screen |
+| CashFusion | **PARTIAL** | Protocol in `crates/optn-fusion`; coin selection, tier planning and the depth record in Rust (`optn_core::fusion::{coin_selection, depth}`, `optn_fusion::allocate`), reached by the desktop through the WASM core and Tauri commands; native server-round host `crates/optn-fusion-native`, used by `optn fusion` and the docker runner | Released; reported working on chipnet and mainnet. The P2P (Nostr) protocol is now also in Rust (`optn_fusion::p2p`), checked against the TypeScript peers in both directions. Remaining: the P2P host that carries it over Nostr and Tor for the CLI and docker, moving the desktop's renderer driver onto the native host once its wallets are runtime-managed, and a Leptos fusion screen |
 | 44px targets, safe areas, contrast | **PROVEN** (measured in the stylesheet) | `optn-ui/style.css`, measured by `optn-ui/src/stylesheet.rs`: `interactive_controls_declare_a_44px_minimum_tap_target` requires an explicit `min-height: 44px` on `.primary`, `.secondary`, `.chip`, `.tab-item` and `.settings-row`; `the_shell_respects_the_devices_safe_areas` requires both safe-area insets; `text_meets_wcag_contrast_in_every_mode` (2026-10-10) checks text, muted, danger and warning at WCAG 4.5:1 against the page and the surface in all four modes and the default | Failure and caution text (`.error`, `.field-error`, `.warn`, `.warning`) now use the use-named `--danger` and `--warning` tokens, where before a failure read as body text. 13 layout classes remain in `UNSTYLED_TODAY`, and `no_new_class_is_left_unstyled` stops the list growing |
 | Capacitor/React retained until Leptos is proven | **PROVEN** | Both trees present | — |
 
@@ -2548,3 +2548,60 @@ Tests:
     that, against a server that hangs up at once (a refused loopback connect
     takes 2 s on Windows, past the test's 1 s timeout). cli-preview does not
     run on this PR, which is why CI did not show it.
+
+### 2026-10-15: the P2P CashFusion protocol in Rust
+
+The P2P round the desktop runs in TypeScript (`src/platform/desktop/nostr/`)
+is now also in `crates/optn-fusion/src/p2p`, as pure state machines: messages
+and the time in, messages and actions out. Ported rule for rule, each cited at
+its definition:
+
+- `wire`: the v4 round messages and the strict parser.
+- `pool`: announcements, the live filter, group selection and the set-bound
+  election.
+- `onion`: the output onion (ECDH, AES-256-GCM, the fixed 384-byte block).
+- `assemble`: the canonical CoinJoin, the signing gate, the final check.
+- `credentials`: slots, blind requests, the one-shot issuer, Pedersen balance
+  and output batches.
+- `blame`: prove-or-don't-blame reports, created and verified.
+- `allocation`: output planning.
+- `rendezvous`: proposal, ACK, one shrink, ghost failover.
+- `session`: the round as coordinator or participant.
+
+Evidence:
+
+- TypeScript to Rust: `scripts/generate-p2p-fusion-vectors.mts` writes
+  `test-vectors/p2p-fusion.json` from the desktop's own code. Rust reproduces
+  every value (`p2p::vectors`):
+  - the elected coordinator and the group that forms;
+  - the canonical order (`"…:10"` before `"…:9"`) and the fee gate's
+    verdicts, reason strings included;
+  - a libauth-signed transaction, finalized byte for byte and verified;
+  - a TypeScript onion peeled;
+  - the credential hashes;
+  - all 35 parser verdicts and all 8 blame verdicts;
+  - a byte-identical announcement and identical output plans.
+- Rust to TypeScript: `cargo run -p optn-fusion --example p2p_fusion_vectors`
+  writes `test-vectors/p2p-fusion-rust.json`, and
+  `nostr/__tests__/p2pRustInterop.test.ts` passes it through the functions a
+  live round uses:
+  - every message kind through `parseRoundMessage`;
+  - the onion through `onionPeel`;
+  - Rust-issued credentials through the coordinator's checks;
+  - the same assembly;
+  - a Rust-signed CoinJoin through libauth's BCH VM.
+- Whole rounds (`p2p::sim`): in-memory peers on a simulated clock, every
+  message through JSON and the parser, every component from a throwaway key.
+  - Four and six peers fuse one transaction that verifies.
+  - Two silent peers shrink six to the ACKed four.
+  - A peer whose inputs never arrive fails the round with no broadcast.
+  - A coordinator that drops an output gets no signature from its owner.
+  - An unbalanced Pedersen claim is blamed, and every peer verifies the
+    report.
+  - Wrapping the onion in the wrong order fails five of these tests, four of
+    them whole rounds.
+- optn-fusion: 167 tests, strict clippy and rustfmt.
+
+Not yet: the host that carries these machines over Nostr and Tor, `optn fusion
+--p2p`, the docker lab's P2P mode, and a live chipnet round mixing Rust and
+TypeScript peers.

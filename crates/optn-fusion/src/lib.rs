@@ -7,7 +7,8 @@
 // Scope (see docs/cashfusion-implementation-scope.md): handshake + pool/round
 // participation — Pedersen, blind Schnorr, covert circuits, Tor, blame, plan
 // validation (`pedersen`, `schnorr`, `covert`, `run`, `session`, `tor`, …).
-// P2P CashFusion (Nostr) is a separate TS path under platform/desktop/nostr/.
+// P2P CashFusion (Nostr) is `p2p`, the same protocol as the TypeScript path
+// under platform/desktop/nostr/.
 //
 // Every wire-level constant here is taken from the reference implementation
 // (Electron Cash, electroncash_plugins/fusion/), not inferred:
@@ -34,6 +35,7 @@ pub mod components;
 pub mod covert;
 pub mod encrypt;
 pub mod lookup;
+pub mod p2p;
 pub mod p2p_component;
 pub mod p2p_sign;
 pub mod pedersen;

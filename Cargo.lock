@@ -3415,6 +3415,8 @@ name = "optn-fusion"
 version = "1.7.3"
 dependencies = [
  "aes",
+ "aes-gcm",
+ "base64 0.22.1",
  "cbc",
  "futures-util",
  "hex",
