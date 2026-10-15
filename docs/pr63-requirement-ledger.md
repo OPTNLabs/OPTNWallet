@@ -144,7 +144,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | PSBT / SeedCash / UR | **INTEGRATION** | `optn-core/src/airgap_spend.rs`, `psbt.rs`; `optn-runtime/src/airgap.rs` reserve HD change durably before export and bind signed imports to the current request. Captured SeedCash Schnorr return and ECDSA finalization pass; runtime actor tests cover reservation, storage failure, cancellation and restart | Fresh GUI/CLI signing and packaged-platform verification are still pending. Single-input Chipnet P2PKH `0x41` path; multisig, advanced sighash and broadcast integration remain separate |
 | RPA / Cash Code | **INTEGRATION** | `optn-core/src/rpa.rs` | Matrix `unit` |
 | Hardware | **PARTIAL** | `optn-ui/src/hardware.rs`, `HardwareVendor` | Vendor-by-surface audit not done; no device evidence |
-| CashFusion | **PARTIAL** | Protocol in `crates/optn-fusion`; coin selection, tier planning and the depth record in Rust (`optn_core::fusion::{coin_selection, depth}`, `optn_fusion::allocate`), reached by the desktop through the WASM core and Tauri commands; native server-round host `crates/optn-fusion-native`, used by `optn fusion` and the docker runner | Released; reported working on chipnet and mainnet. The P2P (Nostr) protocol is now also in Rust (`optn_fusion::p2p`), checked against the TypeScript peers in both directions, and the native host carries it over Nostr and Tor for the CLI and docker (`optn-fusion-native::p2p_round`, `optn fusion --p2p`; proven over a local relay, 2026-10-15). Remaining: a live chipnet round mixing Rust and TypeScript peers, the coordinator's relay budget (see 2026-10-15), moving the desktop's renderer driver onto the native host once its wallets are runtime-managed, and a Leptos fusion screen |
+| CashFusion | **PARTIAL** | Protocol in `crates/optn-fusion`; coin selection, tier planning and the depth record in Rust (`optn_core::fusion::{coin_selection, depth}`, `optn_fusion::allocate`); one Rust driver (`optn_fusion_native::driver`) runs every round, manual and Auto, server and P2P, for the desktop (`optn_fusion_start`), `optn fusion` and the docker runner | Released; reported working on chipnet and mainnet. The P2P (Nostr) protocol is now also in Rust (`optn_fusion::p2p`), checked against the TypeScript peers in both directions, and the native host carries it over Nostr and Tor for the CLI and docker (`optn-fusion-native::p2p_round`, `optn fusion --p2p`; proven over a local relay, 2026-10-15). The desktop's TypeScript round runners are gone; the renderer only starts, stops and shows a run (2026-10-15). Remaining: a live chipnet round mixing Rust and TypeScript peers, the coordinator's relay budget (see 2026-10-15), a desktop round through the shared driver on chipnet, pre-consolidation of crowded addresses and the P2P stepper's phases in Rust, and a Leptos fusion screen |
 | 44px targets, safe areas, contrast | **PROVEN** (measured in the stylesheet) | `optn-ui/style.css`, measured by `optn-ui/src/stylesheet.rs`: `interactive_controls_declare_a_44px_minimum_tap_target` requires an explicit `min-height: 44px` on `.primary`, `.secondary`, `.chip`, `.tab-item` and `.settings-row`; `the_shell_respects_the_devices_safe_areas` requires both safe-area insets; `text_meets_wcag_contrast_in_every_mode` (2026-10-10) checks text, muted, danger and warning at WCAG 4.5:1 against the page and the surface in all four modes and the default | Failure and caution text (`.error`, `.field-error`, `.warn`, `.warning`) now use the use-named `--danger` and `--warning` tokens, where before a failure read as body text. 13 layout classes remain in `UNSTYLED_TODAY`, and `no_new_class_is_left_unstyled` stops the list growing |
 | Capacitor/React retained until Leptos is proven | **PROVEN** | Both trees present | — |
 
@@ -2915,3 +2915,68 @@ Not yet:
   timing), so they are left for review.
 - Nothing was broadcast that chipnet holds. The four CLI wallets still hold
   their funding.
+
+### 2026-10-15: the desktop's CashFusion runs on the shared Rust driver
+
+For #71/#75/#83 (`98dfc78b`, `9212c1a7`, `1d619374`): the desktop now fuses
+through `optn_fusion_native::driver`, the loop `optn fusion` and the docker lab
+run. The renderer names a venue, starts or stops a run, and shows what the
+driver reports.
+
+- `optn_fusion_start`, `optn_fusion_stop` and `optn_fusion_running`
+  (`src-tauri/src/fusion_driver.rs`) take a venue: CashFusion servers (the
+  holder's choice, then the rest, tried in order) or P2P (the Rust host's
+  relay set). Coins, keys, holds, the round, the depth record and Auto's timing
+  stay in Rust. Progress reaches the renderer as `optn://fusion-event`, and the
+  end of a run as `optn://fusion-finished`.
+- A run fuses only the wallet session it was started for. The request names
+  the wallet id and epoch, checked as a send checks them, and checked again
+  before every round. A locked, closed or switched wallet ends the run. Every
+  event names its wallet.
+- The driver's `round` event lists the coins the round holds, and a `released`
+  event follows the hold's drop. The renderer mirrors them into
+  `fusionRoundState`, which the send screens read synchronously. The hold
+  itself is the runtime's.
+- `optn_fusion_depth` and `optn_fusion_depth_import` merge the renderer's older
+  depth record into the runtime's sealed one, and bring the runtime's back for
+  the badges, on wallet open and after each round.
+- Renderer: `nativeFusion.ts` (the bridge), `FusionRunnerService` (a view of
+  the events), `useAutoFusion` (Auto is one native run, restarted between
+  rounds when its settings change) and the Settings start handlers.
+- Removed: the TypeScript round runners (`ServerFusionRunner`,
+  `FusionP2pService`, `FusionService`) and their coin selection,
+  pre-consolidation, server failover, completion, depth recorder, execution
+  safety and lease code, with their tests. Also removed: the Tauri commands
+  only they called, among them `fusion_run`, which took private keys from the
+  renderer, and `fusion_p2p_sign`. The `nostr/` TypeScript protocol stays as
+  the interop parity oracle.
+
+What changed in behaviour:
+
+- A crowded address (more than three plain coins) now fuses its three
+  largest coins, as the CLI does. The renderer no longer sends a consolidation
+  transaction first; pre-consolidation in the runtime is open.
+- Auto's cooldowns live in the run and do not survive a restart. Auto still
+  needs an explicit start after a wallet opens.
+- The P2P stepper shows only a round's start and end: `p2p_round` drops the
+  engine's `Action::Phase`. Open.
+- A desktop built from these commits is a Rust peer in P2P rounds. A mixed
+  round needs a desktop build from before `9212c1a7` for its TypeScript side.
+
+Checks run on the merge with `fca7ff2c`:
+
+- `test:core`: 1853 tests in 302 files, after the identity-isolation audit's
+  file-walk check names `FusionRunnerService.ts` in place of the deleted
+  `FusionP2pService.ts`. `test:ui`: 50 tests.
+- `typecheck:core`, `lint:core`, `deps:check`, `security:test` and
+  `addons:validate`. `format:check` fails locally on 91 files this change does
+  not touch, because the Windows checkout has CRLF line endings.
+- `FusionRunnerService`: 12 tests. The hold-mirror test fails with its
+  reservation call removed.
+- `src-tauri`: 145 tests and strict clippy without default features, including
+  6 for `fusion_driver`.
+- optn-fusion-native: 28 tests plus the ten-peer relay round. The CLI's tests
+  and strict clippy.
+- `xtask architecture`, rustfmt, and all six lock files with `--locked`.
+
+Not yet run: a desktop round through the new path on chipnet.
