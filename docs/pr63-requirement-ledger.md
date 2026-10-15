@@ -95,7 +95,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | 11 | No 2-of-3 provider voting | **PROVEN** | `reconciliation.rs` ranks evidence; no vote count exists | — |
 | 12 | SHV/MMR passes reference vectors | **PROVEN** | `optn-core/src/header_mmr.rs::reference_vectors` against bitcoincashautist's published vectors, byte-identical to BCHN's | — |
 | 13 | Pruning preserves historical verification and reorg recovery | **PROVEN** | `header_store.rs::prune_below`/`rewind_to`; driven against a node that actually reorganised by `optn-chain-neutrino/tests/regtest_live.rs::a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment` — pruning leaves the commitment unmoved, a forked branch is refused rather than extended onto, and the rebuild reaches the node's longer branch with a different commitment | Recovery is a rebuild from the anchor, not an in-place rewind: the accumulator is append-only and the test pins that rewinding the index alone does not let it extend. A pruned range still needs an SHV peer to re-prove, which BCHD does not serve |
-| 14 | CashFusion uses the shared chain observation layer | **PROVEN** (component) | A round checks its own and its peers' inputs through `optn_fusion::lookup::InputLookups`, implemented once by `optn_fusion_native::lookups::ChainInputLookups` over `optn-chain-electrum` (`ElectrumBackend::script_unspent_values`), on connections of the round's own and only through the verified Tor proxy for remote servers. The desktop and the CLI both use it; `electrum_input.rs` is deleted. Live on chipnet: six server rounds on the native host from the CLI and the docker runner, one with the desktop as a third player ("a live mixed fleet fuses") | Rounds are driven natively for the CLI and the docker runner, through a server (`optn-fusion-native::server_round`) or peer to peer over Nostr (`optn-fusion-native::p2p_round`, `optn fusion --p2p`). The desktop still drives its rounds from `Fusion*.ts` for wallets whose keys live in the TypeScript key database. The Rust P2P host is proven over a local relay. A live chipnet round mixing Rust and TypeScript peers did not fuse: its one-shot component connections exhaust Tor's circuits and `inputs` are lost ("a live mixed P2P round does not fuse") |
+| 14 | CashFusion uses the shared chain observation layer | **PROVEN** (component) | A round checks its own and its peers' inputs through `optn_fusion::lookup::InputLookups`, implemented once by `optn_fusion_native::lookups::ChainInputLookups` over `optn-chain-electrum` (`ElectrumBackend::script_unspent_values`), on connections of the round's own and only through the verified Tor proxy for remote servers. The desktop and the CLI both use it; `electrum_input.rs` is deleted. Live on chipnet: six server rounds on the native host from the CLI and the docker runner, one with the desktop as a third player ("a live mixed fleet fuses") | Rounds are driven natively for the CLI and the docker runner, through a server (`optn-fusion-native::server_round`) or peer to peer over Nostr (`optn-fusion-native::p2p_round`, `optn fusion --p2p`). The desktop still drives its rounds from `Fusion*.ts` for wallets whose keys live in the TypeScript key database. The Rust P2P host is proven over a local relay. Live on chipnet, a round mixing Rust and TypeScript peers reached a CoinJoin signed by all seven wallets but has not fused: the Rust host's one-shot connections now use one circuit each and are paced, while blobs a desktop peeler forwards to a Rust peeler still go missing ("one circuit per component, paced") |
 | 15 | Explorer routing independent of consensus | **PROVEN** | `optn-core/src/explorer.rs` owns the presets, the templates and the refusal; `optn-runtime/src/explorer.rs::route_for_overlay` turns a saved `UserNetworkOverlay` into a link or a refusal; the renderer calls through via `explorerPresetUrl`/`explorerCustomUrl` and `src/utils/servers/useExplorerLink.ts`. `a_saved_own_infrastructure_policy_refuses_a_public_explorer`, `the_same_policy_opens_the_holders_own_explorer`, `own_infrastructure_refuses_every_public_preset`, and the renderer-side `explorers.test.ts`; `cargo run -p xtask -- architecture` fails any surface that names a public explorer host | Explorer links were the one path around the policy: the renderer held its own preset table and built URLs itself, so a wallet set to own-infrastructure-only still handed txids to a public site. The decision now has one home, and the refusal is rendered with its reason rather than as a missing button |
 | 16 | No renderer/shell owns networking or chain truth | **PARTIAL** | `cargo run -p xtask -- architecture` proves declared dependency boundaries | Legacy desktop Home/subscriptions still call TypeScript `ElectrumService` through `UTXOService`. Dependency checks do not prove every packaged interface uses the shared Rust runtime. |
 
@@ -2759,11 +2759,12 @@ Why the rounds failed: the Rust host loses anonymous components.
   coordinator missing inputs never assembles, so every round reached its
   timeout.
 - None of the desktop's 12 inputs reached the Rust coordinator in C or D,
-  although its onion blobs did reach Rust peelers (B and E). The
-  desktop's egress isolates per relay host (`egress.rs`
-  `isolation_token(host)`) and so reuses circuits, but in A to D it shared the
-  saturated Tor. The renderer logs no per-relay publish result, so this part
-  is not traced.
+  although its onion blobs did reach Rust peelers (B and E). The desktop's
+  Nostr sockets (`nostr_tor.rs`, `connect_stream`) also take a fresh circuit
+  each, and in A to D the desktop shared the saturated Tor. (Corrected: an
+  earlier version of this entry said the desktop isolates per relay host; that
+  is its HTTP egress, `egress.rs`, not its Nostr sockets.) The renderer logs no
+  per-relay publish result, so this part is not traced.
 
 Relay refusals, from the trace build in B and C: the four CLI peers made 1,367
 publish attempts to six relays.
@@ -2801,8 +2802,116 @@ most three peers, while the CLI peers saw seven. In E one window gave up with
 Not yet:
 
 - The Rust host needs to reuse circuits for one-shot connections: one circuit
-  per component, or per relay host as the desktop does. It also needs to
+  per component, or per relay host. It also needs to
   retry an `inputs` (and `signature`) send that never connected, and to report
   a dropped publish.
 - After that, this round needs to be rerun. The four CLI wallets and the three
   desktop wallets above still hold their funding.
+
+### 2026-10-15: one circuit per component, paced; a mixed round reaches a signed CoinJoin
+
+The Rust host's half of "a live mixed P2P round does not fuse", in
+`crates/optn-fusion-native/src/p2p_round.rs` (`15660a33`, `9e85a086`):
+
+- A one-shot connection gives all of its relay streams one SOCKS credential of
+  its own (`optn_fusion::connect_stream_isolated`). Each component therefore
+  travels on one circuit instead of six, and still shares it with no other
+  component. The shared connection keeps one circuit per relay stream.
+- `inputs` and the last peeler's `outputs` are sent only once, so each gets up
+  to three connections, every one on a fresh circuit. Onion blobs and
+  signatures already have resend timers, so they are not retried here.
+- A message no relay took now appears as a status line, one per wire type:
+  "N inputs message(s) reached no relay: …".
+- At most 16 one-shot connections open at once. Tor keeps at most 32 circuits
+  pending, and the shared connection holds six.
+- A resend is skipped while the same component, to the same recipient, is
+  still queued or connecting. Once that copy settles, resends go out as
+  before.
+- A one-shot connection waits 10 s for its relays and then publishes on the
+  ones it reached.
+- Protocol timers and resend counts are unchanged.
+
+Correction to the entry above: tokio-socks reports "Proxy server unreachable"
+when it cannot open the TCP connection to Tor's SOCKS port at all. It is not a
+circuit failure. In the first rerun below, a Rust peeler's own Tor refused
+those connections while the peeler forwarded thirty blobs every two seconds;
+the pacing above is the answer to that.
+
+Tests (`p2p_round::tests`); each fails with its change reverted:
+
+- A recording SOCKS5 proxy sees one username for all of a component's streams,
+  a different one for the next component, and a fresh one for each
+  shared-connection stream.
+- `inputs` whose first connection is refused reach the relay on the second.
+- A component no relay takes is reported, and only `inputs` and `outputs` are
+  retried.
+- Copies of a blob that is still connecting take one connection, and a resend
+  after it settles takes another.
+- Five components with two turns never have more than two connections open.
+
+Checks run on the branch merged with `dbe3565d`:
+
+- optn-fusion-native: 23 tests plus the ten-peer relay round.
+- optn-fusion: 168 tests.
+- Strict clippy and rustfmt for both crates.
+- The CLI's 156 tests and strict clippy.
+- `cargo check` for `src-tauri`.
+
+The live rerun used the same wallets on the desktop's six relays, with the CLI
+built from these commits and the desktop app from `15660a33`. Its TypeScript is
+unchanged. Each CLI peer had its own Tor (`--network-config-dir` naming its own
+`trusted_socks_ports`). The desktop windows were wallets #7, #8 and #9, then
+#7, #8 and #10 once #9 refused to start.
+
+| Round | CLI | Agreed | Coordinator | Furthest step | Ended with |
+| --- | --- | --- | --- | --- | --- |
+| G | `15660a33` | 7 | desktop | hops 1-3 (Rust, desktop, Rust) | "All 7 peers marked ready but outputs never arrived"; Rust peers reported 231 dropped messages ("Proxy server unreachable") |
+| H | `9e85a086` | 7 | desktop | all six hops (four Rust, two desktop); assembled; all 24 inputs signed; broadcast `653e6c71c7f8c3645b5aac08ebebd727567588ff6021362fcedbedb8b1dc64e3` | the other peers' "fusion round timed out (after assemble/sign …)" 20 s before the broadcast returned; chipnet never had the transaction |
+| I | `9e85a086` | 6 | Rust | hops 1-2 (desktop) | hop 3 (Rust) received nothing: "outputs never arrived (batches=0, peelers=5)" |
+| J | `9e85a086` | 6 of 7 | Rust | onion: hop 1 (Rust) incomplete | "fusion round timed out (coord: inputs signed 0/0, assembled=false)" |
+| K | `9e85a086` and receive trace | 6 of 7 | Rust | coordinator holds all 16 inputs and six of six ready; hop 1 (desktop) done | hop 2 (Rust) received none of the desktop's 20 blobs |
+| L | `9e85a086` | 7 | Rust | hop 1 (desktop) done | the same at hop 2 (Rust) |
+
+What is now fixed live:
+
+- After the pacing change, Rust peers dropped 0, 0, 1 and 0 messages in rounds
+  H to K, against 231 in G.
+- The Rust coordinator received every input. In K it held all 16, six of them
+  the desktop's. In the traced rounds before the fix (C and D) it held 3 of 23
+  and 0 of 23.
+- Hops worked in all three directions: Rust to Rust, Rust to desktop and
+  desktop to Rust (G, H).
+
+Round H, in detail:
+
+- It went from announcement to a CoinJoin signed by all seven wallets.
+- The participants' deadline is 35 s plus 36 s per peeler, so 251 s for six.
+  The onion took about 190 s of it.
+- The desktop coordinator's broadcast took 50 s and ended with "Broadcast was
+  sent over Tor, but independent network visibility is still pending". It
+  goes through `chipnet.bitjson.com:48333`, observed from
+  `seed.cbch.loping.net:48333`. Both answer through Tor.
+- Three chipnet Electrum servers still answer "No such mempool or blockchain
+  transaction".
+- The signed bytes stay sealed in the desktop, which now keeps wallet #9's
+  coins reserved for them. #9 therefore refused later rounds: "A previous
+  Fusion transaction is still awaiting …".
+
+Not yet:
+
+- Blobs a desktop peeler forwarded to a Rust peeler did not arrive in I, K or
+  L, although the same direction worked in G and H.
+  - In K the Rust peers kept receiving `onion_declare` and the coordinator's
+    `abort` throughout, so their subscriptions were alive.
+  - The renderer logs no per-relay publish result, so the desktop side is not
+    traced.
+  - One candidate, not verified: the desktop's one-shot pool returns on its
+    first relay acknowledgement and closes `ONE_SHOT_POOL_LINGER_MS` later.
+    The Rust peers mostly hear through relay.primal.net and relay.snort.social,
+    because damus bans their exits and offchain.pub, oxtr and nos.lol time out.
+- A six-hop onion leaves about 60 s for signing, broadcast and `final`, and a
+  desktop coordinator's broadcast took 50 s.
+- Both sit outside the Rust host (the desktop's transport and the protocol's
+  timing), so they are left for review.
+- Nothing was broadcast that chipnet holds. The four CLI wallets still hold
+  their funding.

@@ -121,6 +121,7 @@ async fn ten_rust_peers_gather_agree_and_fuse_over_a_relay() {
             network: PoolNetwork::Chipnet,
             relays: vec![url.clone()],
             route: RelayRoute::LocalOnly,
+            component_route: None,
             auto: false,
         };
         let (reserved, broadcasts) = (reserved.clone(), broadcasts.clone());

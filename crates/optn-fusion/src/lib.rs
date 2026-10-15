@@ -260,6 +260,24 @@ pub async fn connect_stream(
     use_ssl: bool,
     transport: Transport<'_>,
 ) -> Result<FusionStream, String> {
+    connect_stream_isolated(host, port, use_ssl, transport, &isolation_token()).await
+}
+
+/// A fresh Tor isolation credential for [`connect_stream_isolated`].
+pub fn isolation_token() -> String {
+    format!("optn-{}", fastrand_token())
+}
+
+/// [`connect_stream`] under the SOCKS credentials `isolation`: Tor may carry
+/// every stream that passes the same credentials on one circuit, and never
+/// shares that circuit with other credentials. Ignored on the Direct leg.
+pub async fn connect_stream_isolated(
+    host: &str,
+    port: u16,
+    use_ssl: bool,
+    transport: Transport<'_>,
+    isolation: &str,
+) -> Result<FusionStream, String> {
     // Every caller, including Electrum failover and server-supplied covert
     // endpoints, must pass this check before DNS resolution or a TCP dial.
     if matches!(transport, Transport::Direct) && !is_local_server(host) {
@@ -277,15 +295,12 @@ pub async fn connect_stream(
         Transport::Tor {
             host: proxy_host,
             port: proxy_port,
-        } => {
-            let token = format!("optn-{}", fastrand_token());
-            tokio::time::timeout(
-                CONNECT_TIMEOUT,
-                tor::connect_via_tor(proxy_host, proxy_port, host, port, &token),
-            )
-            .await
-            .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
-        }
+        } => tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            tor::connect_via_tor(proxy_host, proxy_port, host, port, isolation),
+        )
+        .await
+        .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??,
     };
 
     if !use_ssl {
