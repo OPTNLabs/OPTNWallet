@@ -441,6 +441,7 @@ jobs:
 
             run_instrumentation useAppContext
             run_instrumentation mainActivity_launchesInExpectedPackage
+            run_instrumentation capacitorProxy_rejectsDocumentNavigation
             run_instrumentation androidLanding_exposesAndOpensWatchOnlyWallet
             run_instrumentation androidLanding_watchOnlyCreate
 
