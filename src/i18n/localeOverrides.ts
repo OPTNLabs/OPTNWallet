@@ -1198,6 +1198,10 @@ export const localeOverrides = {
     'settingsNetwork.comingSoon': 'قريبًا',
     'settingsNetwork.testnet3': 'Testnet3',
     'settingsNetwork.testnet4': 'Testnet4',
+    'settingsNetwork.testnet3Description':
+      'شبكة اختبار BCH طويلة الأمد — لأموال الاختبار فقط',
+    'settingsNetwork.testnet4Description':
+      'شبكة اختبار BCH الأقصر — لأموال الاختبار فقط',
     'settingsNetwork.regtest': 'Regtest',
     'settingsDerivation.description':
       'يدعم OPTN مسار حساب BIP44 نشطًا واحدًا في كل مرة. تؤدي إعادة الضبط إلى إزالة السجلات القديمة وإعادة اكتشاف عناوين الاستلام والباقي ومزامنتها.',

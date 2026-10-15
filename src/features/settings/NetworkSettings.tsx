@@ -15,25 +15,14 @@ import {
   reconfigureActiveWallet,
 } from '../../services/WalletReconfigurationService';
 import { useI18n } from '../../i18n/useI18n';
+import {
+  networkProfile,
+  SELECTABLE_NETWORKS,
+} from '../../utils/networkProfile';
 
-// To add a new network in future:
-//  1. Add its value to the Network enum in networkSlice.ts
-//  2. Add its Electrum + infra servers in src/utils/servers/InfraUrls.ts
-//  3. Update the network-parsing switch in WalletManager.ts (several spots)
-//  4. Add an entry to SUPPORTED_NETWORKS below — UI handles the rest
-const SUPPORTED_NETWORKS: {
-  id: Network;
-  color: string;
-}[] = [
-  {
-    id: Network.MAINNET,
-    color: '#22c55e',
-  },
-  {
-    id: Network.CHIPNET,
-    color: '#6366f1',
-  },
-];
+// The list, names, descriptions and colours come from `utils/networkProfile.ts`.
+// A new network is a `Network` value plus its profile row and infra pool; the
+// compiler then points at every other place that has to decide about it.
 
 export const NetworkSettings: React.FC = () => {
   const navigate = useNavigate();
@@ -98,13 +87,14 @@ export const NetworkSettings: React.FC = () => {
       </button>
 
       <div className="flex flex-col gap-2">
-        {SUPPORTED_NETWORKS.map((net) => {
-          const isActive = net.id === currentNetwork;
+        {SELECTABLE_NETWORKS.map((network) => {
+          const profile = networkProfile(network);
+          const isActive = network === currentNetwork;
           return (
             <button
-              key={net.id}
+              key={network}
               type="button"
-              onClick={() => void handleSwitch(net.id)}
+              onClick={() => void handleSwitch(network)}
               disabled={isActive || switching}
               className={`w-full rounded-xl border p-4 text-left transition-colors disabled:cursor-default ${
                 isActive
@@ -115,19 +105,15 @@ export const NetworkSettings: React.FC = () => {
               <div className="flex items-center justify-between">
                 <div className="flex flex-col gap-0.5">
                   <div className="flex items-center gap-2">
-                    <span style={{ color: net.color }} aria-hidden>
+                    <span style={{ color: profile.color }} aria-hidden>
                       ●
                     </span>
                     <span className="font-semibold wallet-text-strong">
-                      {net.id === Network.MAINNET
-                        ? t('settingsNetwork.mainnet')
-                        : t('settingsNetwork.chipnet')}
+                      {t(profile.labelKey)}
                     </span>
                   </div>
                   <p className="text-xs wallet-muted pl-5">
-                    {net.id === Network.MAINNET
-                      ? t('settingsNetwork.mainnetDescription')
-                      : t('settingsNetwork.chipnetDescription')}
+                    {t(profile.descriptionKey)}
                   </p>
                 </div>
                 {isActive && (
@@ -145,11 +131,7 @@ export const NetworkSettings: React.FC = () => {
           );
         })}
 
-        {[
-          t('settingsNetwork.testnet3'),
-          t('settingsNetwork.testnet4'),
-          t('settingsNetwork.regtest'),
-        ].map((label) => (
+        {[t('settingsNetwork.regtest')].map((label) => (
           <div
             key={label}
             className="w-full rounded-xl border border-[var(--wallet-border)] wallet-surface p-4 text-left opacity-50 cursor-not-allowed"

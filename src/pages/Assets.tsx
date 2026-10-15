@@ -34,6 +34,7 @@ import {
 } from '../utils/tokenPresentation';
 import { useI18n } from '../i18n/useI18n';
 import { isDesktopPlatform } from '../utils/platform';
+import { isTestNetwork, networkProfile } from '../utils/networkProfile';
 
 type AssetTab = 'BCH' | 'Tokens' | 'NFTs';
 const isDev = import.meta.env.DEV;
@@ -234,7 +235,9 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
         <PageHeader
           title={t('assets.title')}
           subtitle={
-            currentNetwork === Network.CHIPNET ? t('assets.chipnet') : ''
+            isTestNetwork(currentNetwork)
+              ? t(networkProfile(currentNetwork).labelKey)
+              : ''
           }
           compact
         />

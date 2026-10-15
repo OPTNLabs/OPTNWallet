@@ -109,7 +109,7 @@ export const PARYON_LOAN_KEY_PARSE_INFO: NftParseInfo = {
 };
 
 const deploymentFor = (network: Network) =>
-  network === Network.CHIPNET ? null : PARYON_MAINNET_V1_DEPLOYMENT;
+  network === Network.MAINNET ? PARYON_MAINNET_V1_DEPLOYMENT : null;
 
 /** The shared category of every ParyonUSD protocol NFT on this network. */
 export function paryonNftCategory(network: Network): string | null {

@@ -25,6 +25,10 @@ import {
   WATCH_ONLY_WALLET_TYPE,
 } from '../../services/watchOnlyWallet';
 import { deriveWatchOnlyAccountPreview } from '../../services/watchOnlyAccountPreview';
+import {
+  networkProfile,
+  SELECTABLE_NETWORKS,
+} from '../../utils/networkProfile';
 
 const WatchOnlyWalletPage = () => {
   const currentNetwork = useSelector(selectCurrentNetwork);
@@ -159,8 +163,11 @@ const WatchOnlyWalletPage = () => {
               data-testid="watch-only-network"
               className="wallet-input w-full rounded-md px-3 py-2"
             >
-              <option value={Network.MAINNET}>{t('watchOnly.mainnet')}</option>
-              <option value={Network.CHIPNET}>{t('watchOnly.chipnet')}</option>
+              {SELECTABLE_NETWORKS.map((option) => (
+                <option key={option} value={option}>
+                  {t(networkProfile(option).labelKey)}
+                </option>
+              ))}
             </select>
           </label>
 

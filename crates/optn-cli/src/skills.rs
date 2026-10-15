@@ -385,7 +385,7 @@ pub const SKILLS: &[Skill] = &[
         // admit `x402 pay` with it.
         name: "x402",
         capability: Capability::Spend,
-        summary: "Pay for an HTTP resource. `check` only reads; `pay` authorises a debit.",
+        summary: "Pay for an HTTP resource. `check` reads; `pay` prepares a bounded exact payment.",
         needs_wallet: true,
         needs_network: true,
         requires_confirmation: true,

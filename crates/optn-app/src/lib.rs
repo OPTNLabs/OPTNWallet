@@ -453,6 +453,8 @@ pub struct AppState {
     pub wallet: Option<OpenedWallet>,
     /// Public allocation state. Only the authenticated runtime advances it durably.
     pub hd_addresses: Option<HdAddressAllocation>,
+    /// Runtime-owned recovery records; never part of an untrusted guest response.
+    pub payment_outbox: Vec<optn_core::payment::PaymentRecord>,
     /// Runtime-owned chain projection. A missing balance means no complete observation.
     pub wallet_sync: WalletSyncView,
     pub spend: Option<SpendPlan>,
@@ -570,6 +572,7 @@ impl AppState {
             notice: None,
             wallet: None,
             hd_addresses: None,
+            payment_outbox: Vec::new(),
             wallet_sync: WalletSyncView::empty(),
             spend: None,
             fee_preferences: FeePreferences::app_default(),
@@ -923,6 +926,7 @@ impl AppState {
                 // a different wallet, only an unsynced one.
                 self.coins.clear();
                 self.hd_addresses = None;
+                self.payment_outbox.clear();
                 self.wallet_sync = WalletSyncView::empty();
                 self.pledges.clear();
                 self.spend = None;
@@ -1481,6 +1485,7 @@ impl AppState {
         // No balance, approval, or revealed identity belongs to both sessions.
         self.coins.clear();
         self.hd_addresses = None;
+        self.payment_outbox.clear();
         self.wallet_sync = WalletSyncView::empty();
         self.pledges.clear();
         self.spend = None;
@@ -1509,6 +1514,7 @@ impl AppState {
         self.identity_revealed = false;
         self.wallet = None;
         self.hd_addresses = None;
+        self.payment_outbox.clear();
         self.wallet_sync = WalletSyncView::empty();
         self.spend = None;
         self.coins.clear();

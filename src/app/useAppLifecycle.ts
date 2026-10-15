@@ -39,7 +39,7 @@ import {
 } from '../state/slices/serverNotificationsSlice';
 import { reconcileOutboundTransactions } from '../services/OutboundTransactionReconciler';
 import { runOutboundReconcile } from '../services/RefreshCoordinator';
-import { Network, setNetwork } from '../state/slices/networkSlice';
+import { setNetwork } from '../state/slices/networkSlice';
 import {
   setWalletNetwork,
   setWalletType,
@@ -61,6 +61,7 @@ import {
 import { loadStoredWalletSpecialActivities } from '../services/WalletSpecialActivityService';
 import { migrateLegacyMultisigWallet } from '../services/multisig/MultisigStorageService';
 
+import { parseNetwork } from '../utils/networkProfile';
 let bcmrWarmupStarted = false;
 
 export function useWalletConnectInitialization(
@@ -309,12 +310,7 @@ export async function bootstrapWalletNetwork(
     }
   }
   const walletInfo = await dependencies.loadWalletMetadata(walletId);
-  const resolvedNetwork =
-    walletInfo?.networkType === Network.MAINNET
-      ? Network.MAINNET
-      : walletInfo?.networkType === Network.CHIPNET
-        ? Network.CHIPNET
-        : null;
+  const resolvedNetwork = parseNetwork(walletInfo?.networkType) ?? null;
   if (isCancelled() || !resolvedNetwork) return;
 
   dispatch(setWalletNetwork(resolvedNetwork));

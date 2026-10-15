@@ -29,7 +29,6 @@ import {
 } from '../../services/WalletUtxoRefreshService';
 import { logError } from '../../utils/errorHandling';
 import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
-import { Network } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
@@ -50,6 +49,7 @@ import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from '../../features/home/useHomeConnect';
 import { unitFor } from '../../utils/unitLabel';
 import { useI18n } from '../../i18n/useI18n';
+import { isTestNetwork, networkProfile } from '../../utils/networkProfile';
 
 type QuickActionButtonProps = {
   title: string;
@@ -279,7 +279,9 @@ const Home: React.FC = () => {
         <PageHeader
           title={t('home.title')}
           subtitle={
-            currentNetwork === Network.CHIPNET ? t('assets.chipnet') : undefined
+            isTestNetwork(currentNetwork)
+              ? t(networkProfile(currentNetwork).labelKey)
+              : undefined
           }
           compact
         />

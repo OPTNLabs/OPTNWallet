@@ -25,13 +25,14 @@ import {
   AddressTokensCashStarterStop,
 } from './values';
 import { MasterCategoryID } from './values';
+import { parseNetwork } from '../../../utils/networkProfile';
 
 type FundMeActionResult = {
   txid: string | null;
 };
 
 function toNetwork(network: string | null | undefined): Network {
-  return network === 'chipnet' ? Network.CHIPNET : Network.MAINNET;
+  return parseNetwork(network) ?? Network.MAINNET;
 }
 
 function toCashscriptProvider(network: string | null | undefined) {
