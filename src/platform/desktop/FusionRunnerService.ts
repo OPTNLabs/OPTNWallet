@@ -313,6 +313,9 @@ function onEvent(event: NativeFusionEvent): void {
     case 'status':
       progress(walletId, { status: event.message });
       return;
+    case 'phase':
+      progress(walletId, { phase: event.phase });
+      return;
     case 'released':
       releaseOutpoints(walletId, event.outpoints);
       current.held = current.held.filter(
@@ -334,7 +337,7 @@ function onEvent(event: NativeFusionEvent): void {
           message: `Auto: ${message}`,
         });
       } else {
-        progress(walletId, { phase: 5, status: message });
+        progress(walletId, { status: message });
       }
       return;
     }

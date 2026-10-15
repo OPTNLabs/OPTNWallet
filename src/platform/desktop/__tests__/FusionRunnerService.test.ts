@@ -150,6 +150,10 @@ describe('FusionRunnerService — a view of the Rust driver', () => {
     expect([...reservedOutpoints(WALLET)].sort()).toEqual(['aa:0', 'aa:1']);
     emitEvent({ walletId: WALLET, event: 'status', message: 'Signing…' });
     expect(getFusionActivity(WALLET)?.status).toBe('Signing…');
+    // The P2P stepper follows the steps the Rust round reports.
+    expect(getFusionActivity(WALLET)?.phase).toBe(1);
+    emitEvent({ walletId: WALLET, event: 'phase', phase: 3 });
+    expect(getFusionActivity(WALLET)?.phase).toBe(3);
     emitEvent({
       walletId: WALLET,
       event: 'released',

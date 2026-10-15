@@ -79,13 +79,15 @@ pub trait FusionWallet: Sync {
         created: Vec<String>,
         at_ms: u64,
     ) -> HostFuture<'_, Result<(), String>>;
-    /// Run one round at `venue` with `coins`.
+    /// Run one round at `venue` with `coins`. `status` hears short progress
+    /// lines, and `phase` each step a P2P round reaches.
     fn fuse<'a>(
         &'a self,
         venue: &'a Venue,
         coins: &'a [String],
         round_id: &'a str,
         status: &'a (dyn Fn(&str) + Send + Sync),
+        phase: &'a (dyn Fn(u8) + Send + Sync),
     ) -> HostFuture<'a, Result<FusedRound, String>>;
 }
 
@@ -127,6 +129,7 @@ impl FusionWallet for AppRuntime {
         coins: &'a [String],
         round_id: &'a str,
         status: &'a (dyn Fn(&str) + Send + Sync),
+        phase: &'a (dyn Fn(u8) + Send + Sync),
     ) -> HostFuture<'a, Result<FusedRound, String>> {
         Box::pin(async move {
             match venue {
@@ -140,7 +143,7 @@ impl FusionWallet for AppRuntime {
                     run_server_round(self, settings, coins, round_id, status).await
                 }
                 Venue::P2p(settings) => {
-                    run_p2p_round(self, settings, coins, round_id, status).await
+                    run_p2p_round(self, settings, coins, round_id, status, phase).await
                 }
             }
         })
@@ -450,11 +453,14 @@ pub async fn run<H: FusionHost>(
         host.report(event);
         host.round_started(&round_id);
         let status = |line: &str| host.report(json!({"event": "status", "message": line}));
+        let phase = |step: u8| host.report(json!({"event": "phase", "phase": step}));
         let attempt = match wallet.hold(&outpoints).await {
             // Held for exactly as long as the round runs and its result is
             // recorded; released however it ends.
             Ok(hold) => {
-                let attempt = wallet.fuse(venue, &outpoints, &round_id, &status).await;
+                let attempt = wallet
+                    .fuse(venue, &outpoints, &round_id, &status, &phase)
+                    .await;
                 let recorded = match &attempt {
                     // Only a transaction the network holds moves depth; a
                     // round the network never saw leaves its coins where
@@ -561,6 +567,8 @@ mod tests {
         coins: Vec<FusionCoin>,
         rounds: Mutex<Vec<Result<bool, String>>>,
         calls: Arc<Mutex<Vec<Call>>>,
+        /// The steps each round reports reaching.
+        phases: Vec<u8>,
     }
 
     fn coin(n: u8, value_sats: u64) -> FusionCoin {
@@ -581,6 +589,7 @@ mod tests {
                 coins,
                 rounds: Mutex::new(rounds),
                 calls: Arc::default(),
+                phases: Vec::new(),
             }
         }
         fn calls(&self) -> Vec<Call> {
@@ -618,8 +627,12 @@ mod tests {
             coins: &'a [String],
             _round_id: &'a str,
             _status: &'a (dyn Fn(&str) + Send + Sync),
+            phase: &'a (dyn Fn(u8) + Send + Sync),
         ) -> HostFuture<'a, Result<FusedRound, String>> {
             self.calls.lock().unwrap().push(Call::Fuse(coins.to_vec()));
+            for step in &self.phases {
+                phase(*step);
+            }
             let answer = self.rounds.lock().unwrap().remove(0);
             Box::pin(async move {
                 answer.map(|seen| FusedRound {
@@ -728,6 +741,25 @@ mod tests {
         let events = host.events.lock().unwrap().clone();
         assert_eq!(events[0]["outpoints"], json!([coin(1, 0).outpoint]));
         assert_eq!(events[1]["outpoints"], events[0]["outpoints"]);
+    }
+
+    /// The steps a round reaches reach the interface, in order, while the
+    /// round holds its coins.
+    #[tokio::test]
+    async fn a_round_reports_the_steps_it_reaches() {
+        let mut wallet = FakeWallet::new(vec![coin(1, 150_000)], vec![Ok(true)]);
+        wallet.phases = vec![2, 3, 5, 7];
+        let host = FakeHost::new(&wallet, &[], 0);
+        run(&host, &p2p(), ONCE).await.unwrap();
+        assert_eq!(
+            host.kinds(),
+            ["round", "phase", "phase", "phase", "phase", "released", "fused"]
+        );
+        let steps: Vec<Value> = host.events.lock().unwrap()[1..5]
+            .iter()
+            .map(|event| event["phase"].clone())
+            .collect();
+        assert_eq!(steps, [json!(2), json!(3), json!(5), json!(7)]);
     }
 
     /// A round the network never showed moves no depth, and its coins are

@@ -112,6 +112,8 @@ async fn ten_rust_peers_gather_agree_and_fuse_over_a_relay() {
 
     let reserved = Arc::new(Mutex::new(Vec::new()));
     let broadcasts = Arc::new(Mutex::new(Vec::new()));
+    // The steps each peer's round reported reaching.
+    let phases = Arc::new(Mutex::new(vec![Vec::<u8>::new(); 10]));
     let mut all_inputs = Vec::new();
     let mut peers = Vec::new();
     for peer in 0..10 {
@@ -124,7 +126,7 @@ async fn ten_rust_peers_gather_agree_and_fuse_over_a_relay() {
             component_route: None,
             auto: false,
         };
-        let (reserved, broadcasts) = (reserved.clone(), broadcasts.clone());
+        let (reserved, broadcasts, phases) = (reserved.clone(), broadcasts.clone(), phases.clone());
         peers.push(tokio::spawn(async move {
             let id = format!("local-relay-test-{}-{peer}", std::process::id());
             optn_fusion::round_cancel::prepare_round(&id).unwrap();
@@ -136,6 +138,7 @@ async fn ten_rust_peers_gather_agree_and_fuse_over_a_relay() {
                 Arc::new(Network(broadcasts)),
                 &registration.flag(),
                 &move |line: &str| eprintln!("[{peer}] {line}"),
+                &move |step: u8| phases.lock().unwrap()[peer].push(step),
             )
             .await
         }));
@@ -160,6 +163,12 @@ async fn ten_rust_peers_gather_agree_and_fuse_over_a_relay() {
         .map(|fused| fused.result.txid.as_str())
         .collect();
     assert_eq!(txids.len(), 1, "one transaction for everyone");
+    // Every peer heard its round register and finish, for an interface's
+    // progress steps.
+    for (peer, steps) in phases.lock().unwrap().iter().enumerate() {
+        assert!(steps.contains(&2), "[{peer}] registered: {steps:?}");
+        assert!(steps.contains(&7), "[{peer}] finished: {steps:?}");
+    }
     let fused = &results[0].result;
     assert!(
         !broadcasts.lock().unwrap().is_empty(),

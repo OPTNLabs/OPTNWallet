@@ -48,6 +48,8 @@ export type NativeFusionEvent = { walletId: number } & (
       outpoints: string[];
     }
   | { event: 'status'; message: string }
+  /** The step a P2P round reached, as the stepper numbers them. */
+  | { event: 'phase'; phase: number }
   | { event: 'released'; outpoints: string[] }
   | { event: 'fused'; round: NativeFusionRound }
   | { event: 'idle'; reason: string }

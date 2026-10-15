@@ -777,6 +777,7 @@ pub async fn run_p2p(
     broadcaster: Arc<dyn Broadcaster>,
     cancel: &optn_fusion::round_cancel::CancelFlag,
     status: &(dyn Fn(&str) + Send + Sync),
+    phase: &(dyn Fn(u8) + Send + Sync),
 ) -> Result<P2pFused, String> {
     let network = core.network;
     if core.relays.is_empty() {
@@ -969,7 +970,7 @@ pub async fn run_p2p(
             &clocks,
             &broadcaster,
             cancel,
-            status,
+            Progress { status, phase },
         )
         .await?;
         Ok(P2pFused { result, scripts })
@@ -998,13 +999,15 @@ pub async fn run_p2p(
 
 /// Run one P2P round for `coins` (display-order `txid:vout`) of the wallet
 /// open in `runtime`. `round_id` names the round in the cancellation registry;
-/// `status` receives short progress lines.
+/// `status` receives short progress lines, and `phase` each step the round
+/// reaches (the engine's `Action::Phase`).
 pub async fn run_p2p_round(
     runtime: &AppRuntime,
     settings: &P2pRoundSettings,
     coins: &[String],
     round_id: &str,
     status: &(dyn Fn(&str) + Send + Sync),
+    phase: &(dyn Fn(u8) + Send + Sync),
 ) -> Result<FusedRound, String> {
     let network = pool_network(settings.network)?;
     if settings.lookup_servers.is_empty() {
@@ -1069,6 +1072,7 @@ pub async fn run_p2p_round(
         lookups.clone(),
         &registration.flag(),
         status,
+        phase,
     )
     .await;
     drop(registration);
@@ -1262,6 +1266,14 @@ async fn gather_and_agree(
     }
 }
 
+/// Where a round's progress goes: short status lines, and each step the
+/// engine reaches (`Action::Phase`).
+#[derive(Clone, Copy)]
+struct Progress<'a> {
+    status: &'a (dyn Fn(&str) + Send + Sync),
+    phase: &'a (dyn Fn(u8) + Send + Sync),
+}
+
 /// Run the round until it settles, performing its actions.
 async fn drive_round(
     round: &mut Round,
@@ -1270,7 +1282,7 @@ async fn drive_round(
     clocks: &Clocks,
     broadcaster: &Arc<dyn Broadcaster>,
     cancel: &optn_fusion::round_cancel::CancelFlag,
-    status: &(dyn Fn(&str) + Send + Sync),
+    progress: Progress<'_>,
 ) -> Result<optn_fusion::p2p::session::RoundResult, String> {
     loop {
         // Performing an action can queue more: a broadcast's outcome queues
@@ -1283,10 +1295,10 @@ async fn drive_round(
                 break;
             }
             for action in actions {
-                perform(action, round, wire, clocks, broadcaster, status).await;
+                perform(action, round, wire, clocks, broadcaster, progress).await;
             }
         }
-        wire.report_dropped(status);
+        wire.report_dropped(progress.status);
         if let Some(outcome) = round.outcome() {
             return outcome.clone();
         }
@@ -1316,8 +1328,9 @@ async fn perform(
     wire: &Wire,
     clocks: &Clocks,
     broadcaster: &Arc<dyn Broadcaster>,
-    status: &(dyn Fn(&str) + Send + Sync),
+    progress: Progress<'_>,
 ) {
+    let status = progress.status;
     match action {
         Action::Send { to, message } => wire.send(&to, &message),
         Action::Broadcast { tx_hex, .. } => {
@@ -1349,7 +1362,7 @@ async fn perform(
             ));
         }
         Action::Status(line) => status(&line),
-        Action::Phase(_) => {}
+        Action::Phase(step) => (progress.phase)(step),
     }
 }
 
