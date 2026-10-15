@@ -94,7 +94,7 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone)]
 pub struct P2pRoundSettings {
     pub network: Network,
-    /// Nostr relays, `wss://` or a loopback `ws://`.
+    /// Nostr relays: `wss`, or plain `ws` for a loopback relay.
     pub relays: Vec<String>,
     /// The verified Tor proxy's SOCKS port on 127.0.0.1. Required for any
     /// remote relay or lookup server.

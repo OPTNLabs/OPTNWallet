@@ -274,8 +274,8 @@ enum Command {
         /// instead of through a server. Needs at least six wallets in the pool.
         #[arg(long)]
         p2p: bool,
-        /// Nostr relay for P2P rounds, wss:// or a loopback ws://
-        /// (repeatable). The desktop's relay set if omitted.
+        /// Nostr relay for P2P rounds (repeatable): wss, or plain ws for a
+        /// loopback relay. The desktop's relay set if omitted.
         #[arg(long = "relay", requires = "p2p")]
         relays: Vec<String>,
         /// Keep fusing like the desktop's Auto Fusion.
