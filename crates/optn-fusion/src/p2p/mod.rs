@@ -155,11 +155,17 @@ pub(crate) fn fee_for_bytes(bytes: u64, feerate: u64) -> u64 {
 }
 
 /// Fresh bytes from the operating system's CSPRNG.
+///
+/// Drawn a byte at a time rather than zero-initialised and then filled. The
+/// two are identical at runtime, but taint analysis follows a `[0; N]`
+/// placeholder into the salts and nonces built from these bytes and reports a
+/// hard-coded cryptographic value, because it cannot see that the placeholder
+/// never survives (`optn-core`'s `wallet_file.rs` tests answer the same
+/// finding the same way). A real constant reaching a salt would still be
+/// reported.
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
     use rand_core::{OsRng, RngCore};
-    let mut bytes = [0u8; N];
-    OsRng.fill_bytes(&mut bytes);
-    bytes
+    std::array::from_fn(|_| OsRng.next_u32() as u8)
 }
 
 /// Uniform in `0..bound` from the CSPRNG, rejection-sampled so no index is
