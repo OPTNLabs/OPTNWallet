@@ -216,6 +216,65 @@ impl AppRuntime {
         })
     }
 
+    /// The wallet's coins as fusion coin selection sees them, from this
+    /// runtime's own synchronized record. Every interface chooses from the
+    /// same list:
+    /// - mined, by its snapshot's heights;
+    /// - held, by its state, a payment in its outbox, or a round in this
+    ///   process;
+    /// - depth, from its sealed record.
+    ///
+    /// Cash Code coins are left out: their keys are not HD keys, and a round
+    /// asks for HD keys only. Holds a migrated wallet's host keeps are the
+    /// host's to add.
+    pub fn fusion_candidates(
+        &self,
+    ) -> Result<Vec<optn_core::fusion::coin_selection::FusionCoin>, TransportError> {
+        let mut state = self.state();
+        crate::external_payment::apply_holds(&mut state);
+        let confirmed: BTreeSet<String> = {
+            let reconciliation = self.wallet_sync_rx.borrow();
+            let snapshot = reconciliation
+                .authoritative
+                .as_ref()
+                .ok_or_else(|| failure("Sync the wallet first."))?;
+            snapshot
+                .value
+                .transactions
+                .iter()
+                .filter(|transaction| transaction.block_height.is_some())
+                .map(|transaction| display_txid(transaction.txid))
+                .collect()
+        };
+        let in_round: BTreeSet<String> = self
+            .fusion_holds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .0
+            .values()
+            .flatten()
+            .cloned()
+            .collect();
+        let book = state.fusion_depth.clone().unwrap_or_default();
+        Ok(state
+            .coins
+            .iter()
+            .filter(|coin| !coin.is_rpa())
+            .map(|coin| {
+                let outpoint = coin.outpoint().to_string();
+                optn_core::fusion::coin_selection::FusionCoin {
+                    confirmed: confirmed.contains(&coin.outpoint().txid_hex()),
+                    address: coin.address().to_owned(),
+                    value_sats: coin.value_sats(),
+                    token: coin.token().is_some(),
+                    frozen: coin.freeze().is_some() || in_round.contains(&outpoint),
+                    depth: book.depth_of(&outpoint),
+                    outpoint,
+                }
+            })
+            .collect())
+    }
+
     /// The coins rounds in this process hold for the migrated wallet whose
     /// legacy id is `wallet_id`, display-order `txid:vout`.
     pub fn fusion_holds(&self, wallet_id: u32) -> BTreeSet<String> {
@@ -927,6 +986,46 @@ mod tests {
         ] {
             assert!(runtime.hold_for_fusion(&bad).await.is_err(), "{bad:?}");
         }
+    }
+
+    /// Selection chooses from the runtime's own record: a synced coin is a
+    /// candidate, a coin a round holds is frozen, a payment's input is
+    /// frozen, and a recorded round's output carries its depth.
+    #[tokio::test]
+    async fn candidates_come_from_the_runtimes_own_record() {
+        let (runtime, _storage, _checkpoints, _handle) = fixture().await;
+        assert!(
+            runtime.fusion_candidates().is_err(),
+            "nothing before a sync"
+        );
+        sync_fixture(&runtime).await;
+        let outpoint = funded_outpoint(&runtime);
+        let find = |coins: Vec<optn_core::fusion::coin_selection::FusionCoin>| {
+            coins
+                .into_iter()
+                .find(|coin| coin.outpoint == outpoint)
+                .unwrap()
+        };
+        let coin = find(runtime.fusion_candidates().unwrap());
+        assert!(!coin.frozen && !coin.token);
+        assert_eq!((coin.value_sats, coin.depth), (20_000, 0));
+
+        let hold = runtime
+            .hold_for_fusion(std::slice::from_ref(&outpoint))
+            .await
+            .unwrap();
+        assert!(find(runtime.fusion_candidates().unwrap()).frozen);
+        drop(hold);
+        assert!(!find(runtime.fusion_candidates().unwrap()).frozen);
+
+        runtime
+            .record_fusion_round(vec![], vec![outpoint.clone()], 1)
+            .await
+            .unwrap();
+        assert_eq!(find(runtime.fusion_candidates().unwrap()).depth, 1);
+
+        prepare(&runtime, "held").await.unwrap();
+        assert!(find(runtime.fusion_candidates().unwrap()).frozen);
     }
 
     /// A runtime-managed wallet's rounds hold coins too, under no legacy id.

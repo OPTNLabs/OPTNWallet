@@ -5,8 +5,10 @@
 //! (`optn-fusion-native`), the same code the desktop uses: coins chosen by
 //! `optn_core::fusion::coin_selection`, keys and fresh change outputs from the
 //! wallet runtime, tier plans, the Electron Cash protocol or the P2P one, and
-//! a wait for the network to hold the transaction. This file only reads the
-//! holder's settings, keeps the loop, and reports.
+//! a wait for the network to hold the transaction. The loop itself -- coin
+//! choice, holds, the depth record and Auto's timing -- is the shared driver
+//! (`optn_fusion_native::driver`), the one the desktop and the docker lab
+//! run. This file only reads the holder's settings and reports.
 //!
 //! Tor follows the desktop's rule: CashFusion runs only while the holder's
 //! transport keeps public destinations on Tor, and every remote leg goes
@@ -18,25 +20,17 @@
 //! saved there before the next one starts. Earlier builds kept it in a
 //! plaintext file beside the wallet; that file is merged in once and removed.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use optn_app::fusion::{
-    AUTO_FUSION_COOLDOWN_MS, AUTO_FUSION_DEPTH_MET_IDLE_MS, AUTO_FUSION_RETRY_MS,
-};
-use optn_core::fusion::coin_selection::{select_fusion_coins, FusionCoin, FusionTrigger};
-use optn_core::fusion::depth::FusionDepthBook;
-use optn_core::fusion::FusionMode;
 use optn_fusion_native::depth_file::DepthFile;
+use optn_fusion_native::driver::{self, DriverError, DriverOptions, FusionHost, FusionWallet};
 use optn_fusion_native::lookups::LookupEndpoint;
-use optn_fusion_native::p2p_round::{
-    relay_host, run_p2p_round, P2pRoundSettings, FUSION_CORE_RELAYS,
-};
-use optn_fusion_native::server_round::{
-    run_server_round, FusedRound, ServerRoundSettings, ServerTarget,
-};
+use optn_fusion_native::p2p_round::{relay_host, P2pRoundSettings, FUSION_CORE_RELAYS};
+use optn_fusion_native::server_round::{ServerRoundSettings, ServerTarget};
 use optn_runtime::AppRuntime;
 use serde_json::{json, Value};
 
@@ -71,13 +65,6 @@ pub(crate) struct FusionArgs<'a> {
 /// A progress line on stderr, so stdout stays the command's one JSON result.
 fn report(event: Value) {
     eprintln!("{event}");
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// The holder's Electrum servers for checking inputs: an explicit `--host`,
@@ -202,139 +189,69 @@ async fn import_legacy_depth(runtime: &AppRuntime, file: &DepthFile) -> Result<O
     Ok(Some(path))
 }
 
-/// The synchronized wallet's coins, as coin selection sees them. Cash Code
-/// coins are left out: their keys are not HD keys, and the round asks the
-/// runtime for HD keys only.
-fn fusion_coins(synced: &crate::SyncedHdWallet, book: &FusionDepthBook) -> Vec<FusionCoin> {
-    let confirmed: std::collections::BTreeSet<String> = synced
-        .snapshot
-        .value
-        .transactions
-        .iter()
-        .filter(|transaction| transaction.block_height.is_some())
-        .map(|transaction| {
-            let mut display = transaction.txid;
-            display.reverse();
-            optn_core::payment::hex(&display)
-        })
-        .collect();
-    synced
-        .state
-        .coins
-        .iter()
-        .filter(|coin| !coin.is_rpa())
-        .map(|coin| {
-            let outpoint = coin.outpoint().to_string();
-            FusionCoin {
-                confirmed: confirmed.contains(&coin.outpoint().txid_hex()),
-                address: coin.address().to_owned(),
-                value_sats: coin.value_sats(),
-                token: coin.token().is_some(),
-                frozen: coin.freeze().is_some(),
-                depth: book.depth_of(&outpoint),
-                outpoint,
-            }
-        })
-        .collect()
+/// The CLI's side of the shared driver: it syncs the saved wallet before each
+/// round, keeps no holds of its own, prints progress on stderr, and stops on
+/// Ctrl-C -- cancelling a running round through the engine, which still
+/// finishes what it must once components are disclosed.
+struct CliHost<'a> {
+    cli: &'a Cli,
+    gap: u32,
+    max_addresses: u32,
+    interrupted: Arc<AtomicBool>,
+    round: Arc<Mutex<Option<String>>>,
+    wake: Arc<tokio::sync::Notify>,
+    /// The error that stopped a sync, kept whole for the exit status.
+    failure: Mutex<Option<CliError>>,
 }
 
-/// Sleep, unless the holder interrupts. Returns false when interrupted.
-async fn pause(milliseconds: u64) -> bool {
-    tokio::select! {
-        _ = tokio::time::sleep(Duration::from_millis(milliseconds)) => true,
-        _ = tokio::signal::ctrl_c() => false,
-    }
-}
-
-/// Why no choice of `eligible` can fund a tier on the server, or `None` when
-/// one might (or the server could not be asked, which proves nothing).
-async fn unaffordable_reason(
-    settings: &ServerRoundSettings,
-    eligible: &[&FusionCoin],
-) -> Option<String> {
-    let hello = optn_fusion_native::server_round::server_hello(settings)
-        .await
-        .ok()?;
-    let addresses: std::collections::BTreeSet<&str> =
-        eligible.iter().map(|coin| coin.address.as_str()).collect();
-    let values: Vec<u64> = eligible.iter().map(|coin| coin.value_sats).collect();
-    optn_fusion::allocate::never_affordable(&hello, addresses.len(), &values)
-        .ok()?
-        .then(|| {
-            format!(
-                "No choice of this wallet's {} eligible coin(s) ({} sats at {} address(es)) can fund a fusion tier on this server; waiting for the wallet to change.",
-                values.len(),
-                values.iter().sum::<u64>(),
-                addresses.len()
-            )
-        })
-}
-
-/// A round's settings, for the venue the holder chose.
-enum Rounds {
-    Server(ServerRoundSettings),
-    P2p(P2pRoundSettings),
-}
-
-impl Rounds {
-    fn mode(&self) -> FusionMode {
-        match self {
-            Rounds::Server(_) => FusionMode::Server,
-            Rounds::P2p(_) => FusionMode::P2p,
+impl FusionHost for CliHost<'_> {
+    async fn refresh(&self) -> std::result::Result<&dyn FusionWallet, String> {
+        let synced = async {
+            crate::sync_shared_wallet(self.cli, self.gap, self.max_addresses, None, None, None)
+                .await?;
+            wallet_security::open_managed_runtime(self.cli).await
         }
-    }
-
-    fn verified_proxy(&self) -> Option<u16> {
-        match self {
-            Rounds::Server(settings) => settings.verified_proxy,
-            Rounds::P2p(settings) => settings.verified_proxy,
-        }
-    }
-
-    /// Where rounds meet, for the progress lines and the result.
-    fn venue(&self) -> Value {
-        match self {
-            Rounds::Server(settings) => json!({
-                "mode": "server",
-                "server": format!("{}:{}", settings.server.host, settings.server.port),
-            }),
-            Rounds::P2p(settings) => json!({"mode": "p2p", "relays": settings.relays}),
-        }
-    }
-
-    async fn run(
-        &self,
-        runtime: &AppRuntime,
-        coins: &[String],
-        round_id: &str,
-        status: &(dyn Fn(&str) + Send + Sync),
-    ) -> std::result::Result<FusedRound, String> {
-        match self {
-            Rounds::Server(settings) => {
-                run_server_round(runtime, settings, coins, round_id, status).await
-            }
-            Rounds::P2p(settings) => {
-                run_p2p_round(runtime, settings, coins, round_id, status).await
+        .await;
+        match synced {
+            Ok(runtime) => Ok(runtime as &dyn FusionWallet),
+            Err(error) => {
+                let message = error.to_string();
+                *self.failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(error);
+                Err(message)
             }
         }
     }
 
-    /// Why no choice of `eligible` can fund a tier, when a server can say. A
-    /// P2P pool has no server to ask.
-    async fn unaffordable_reason(&self, eligible: &[&FusionCoin]) -> Option<String> {
-        match self {
-            Rounds::Server(settings) => unaffordable_reason(settings, eligible).await,
-            Rounds::P2p(_) => None,
+    async fn held(&self) -> std::result::Result<BTreeSet<String>, String> {
+        Ok(BTreeSet::new())
+    }
+
+    fn report(&self, event: Value) {
+        report(event);
+    }
+
+    async fn pause(&self, ms: u64) -> bool {
+        // Registered before the check, so a Ctrl-C between the two still
+        // wakes this wait.
+        let woken = self.wake.notified();
+        if self.interrupted.load(Ordering::SeqCst) {
+            return false;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(ms)) => {
+                !self.interrupted.load(Ordering::SeqCst)
+            }
+            _ = woken => false,
         }
     }
-}
 
-/// After `streak` rounds in a row that missed every tier by the draw: the
-/// retry wait doubled each time, up to the idle wait.
-fn unaffordable_backoff(streak: u32) -> u64 {
-    AUTO_FUSION_RETRY_MS
-        .saturating_mul(1u64 << streak.min(16))
-        .min(AUTO_FUSION_DEPTH_MET_IDLE_MS)
+    fn round_started(&self, round_id: &str) {
+        *self.round.lock().unwrap_or_else(|p| p.into_inner()) = Some(round_id.to_owned());
+    }
+
+    fn stopped(&self) -> bool {
+        self.interrupted.load(Ordering::SeqCst)
+    }
 }
 
 pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
@@ -343,12 +260,12 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
         .as_deref()
         .ok_or_else(|| CliError::Usage("CashFusion needs a saved wallet: pass --wallet.".into()))?;
     let lookup_servers = lookup_servers(cli)?;
-    let rounds = match args.venue {
+    let venue = match args.venue {
         Venue::Server(server) => {
             let server = ServerTarget::parse(server).map_err(CliError::Usage)?;
             let verified_proxy =
                 verified_proxy(cli, std::slice::from_ref(&server.host), &lookup_servers).await?;
-            Rounds::Server(ServerRoundSettings {
+            driver::Venue::Server(ServerRoundSettings {
                 network: cli.network,
                 server,
                 verified_proxy,
@@ -378,7 +295,7 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
                 })
                 .collect::<Result<Vec<String>>>()?;
             let verified_proxy = verified_proxy(cli, &hosts, &lookup_servers).await?;
-            Rounds::P2p(P2pRoundSettings {
+            driver::Venue::P2p(P2pRoundSettings {
                 network: cli.network,
                 relays,
                 verified_proxy,
@@ -387,193 +304,70 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
             })
         }
     };
+    // An earlier build's plaintext depth record is merged in once, before the
+    // first round chooses coins by depth.
+    let runtime = wallet_security::open_managed_runtime(cli).await?;
     let legacy_depth = DepthFile::new(depth_path(cli, handle)?);
-    let mut depth_imported = false;
-    let trigger = if args.auto {
-        FusionTrigger::Auto
-    } else {
-        FusionTrigger::Manual
-    };
-    // Without --auto, one round unless --rounds asks for more.
-    let wanted = args.rounds.or((!args.auto).then_some(1));
-    let mut fused = Vec::new();
-    let mut attempts = 0u32;
-    let mut stopped = None;
-    // The eligible coins no choice of which can fund a tier, and how many
-    // rounds in a row missed every tier by the draw.
-    let mut never_for: Option<Vec<String>> = None;
-    let mut unaffordable_streak = 0u32;
-
-    loop {
-        let synced =
-            crate::sync_shared_wallet(cli, args.gap, args.max_addresses, None, None, None).await?;
-        let runtime = wallet_security::open_managed_runtime(cli).await?;
-        if !depth_imported {
-            if let Some(path) = import_legacy_depth(runtime, &legacy_depth).await? {
-                report(json!({"event": "depth_imported", "from": path}));
-            }
-            depth_imported = true;
-        }
-        let book = runtime.fusion_depth();
-        let coins = fusion_coins(&synced, &book);
-        let selection = select_fusion_coins(
-            rounds.mode(),
-            trigger,
-            &coins,
-            args.fuse_depth,
-            &mut optn_fusion::allocate::os_uniform(),
-        )
-        .map_err(CliError::Usage)?;
-        let eligible: Vec<&FusionCoin> = selection
-            .classification
-            .iter()
-            .flat_map(|split| split.eligible.iter().flat_map(|bucket| bucket.coins.iter()))
-            .collect();
-        let mut eligible_outpoints: Vec<String> =
-            eligible.iter().map(|coin| coin.outpoint.clone()).collect();
-        eligible_outpoints.sort();
-        if never_for.as_ref() == Some(&eligible_outpoints) {
-            match rounds.unaffordable_reason(&eligible).await {
-                Some(reason) => {
-                    report(json!({"event": "idle", "reason": reason}));
-                    if !pause(AUTO_FUSION_DEPTH_MET_IDLE_MS).await {
-                        stopped = Some("interrupted".into());
-                        break;
-                    }
-                    continue;
-                }
-                None => never_for = None,
-            }
-        } else if never_for.is_some() {
-            // The wallet changed: rounds are worth trying again.
-            never_for = None;
-            unaffordable_streak = 0;
-        }
-        if selection.selected.is_empty() {
-            let outpoints: Vec<String> = coins
-                .iter()
-                .filter(|coin| !coin.token && !coin.frozen)
-                .map(|coin| coin.outpoint.clone())
-                .collect();
-            let reason = selection.empty_reason.clone().unwrap_or_else(|| {
-                optn_core::fusion::depth::depth_met_message(
-                    &book.eligibility(&outpoints, args.fuse_depth),
-                )
-            });
-            if !args.auto {
-                stopped = Some(reason);
-                break;
-            }
-            report(json!({"event": "idle", "reason": reason}));
-            if !pause(AUTO_FUSION_DEPTH_MET_IDLE_MS).await {
-                stopped = Some("interrupted".into());
-                break;
-            }
-            continue;
-        }
-
-        attempts += 1;
-        let round_id = format!("cli-{}-{attempts}", std::process::id());
-        let outpoints: Vec<String> = selection
-            .selected
-            .iter()
-            .map(|coin| coin.outpoint.clone())
-            .collect();
-        let mut event = rounds.venue();
-        event["event"] = json!("round");
-        event["coins"] = json!(outpoints.len());
-        report(event);
-        // Ctrl-C cancels the round through the engine, which still finishes
-        // what it must once components are disclosed.
-        let interrupted = Arc::new(AtomicBool::new(false));
-        let watcher = tokio::spawn({
-            let interrupted = interrupted.clone();
-            let round_id = round_id.clone();
-            async move {
-                if tokio::signal::ctrl_c().await.is_ok() {
-                    interrupted.store(true, Ordering::SeqCst);
-                    optn_fusion::round_cancel::cancel_round(&round_id);
-                }
-            }
-        });
-        let status = |line: &str| report(json!({"event": "status", "message": line}));
-        let attempt = rounds.run(runtime, &outpoints, &round_id, &status).await;
-        watcher.abort();
-        if interrupted.load(Ordering::SeqCst) {
-            stopped = Some("interrupted".into());
-            break;
-        }
-        match attempt {
-            Ok(round) => {
-                unaffordable_streak = 0;
-                // Only a transaction the network holds moves depth; a round
-                // the network never saw leaves its coins where they were.
-                if round.seen {
-                    runtime
-                        .record_fusion_round(round.spent.clone(), round.created.clone(), now_ms())
-                        .await
-                        .map_err(|error| CliError::Usage(wallet_security::message(error)))?;
-                }
-                let result = json!({
-                    "txid": round.txid,
-                    "seen": round.seen,
-                    "spent": round.spent,
-                    "created": round.created,
-                });
-                report(json!({"event": "fused", "round": result}));
-                fused.push(result);
-                if wanted.is_some_and(|wanted| fused.len() as u32 >= wanted) {
-                    break;
-                }
-                if !pause(AUTO_FUSION_COOLDOWN_MS).await {
-                    stopped = Some("interrupted".into());
-                    break;
-                }
-            }
-            Err(error) => {
-                if !args.auto {
-                    return Err(CliError::Network(error));
-                }
-                if optn_fusion::allocate::is_unaffordable(&error) {
-                    if let Some(reason) = rounds.unaffordable_reason(&eligible).await {
-                        never_for = Some(eligible_outpoints.clone());
-                        report(json!({"event": "idle", "reason": reason}));
-                        if !pause(AUTO_FUSION_DEPTH_MET_IDLE_MS).await {
-                            stopped = Some("interrupted".into());
-                            break;
-                        }
-                        continue;
-                    }
-                    // Above the floor, but the random output count missed
-                    // every tier. Try again, less often each time.
-                    unaffordable_streak += 1;
-                    let delay = unaffordable_backoff(unaffordable_streak);
-                    report(
-                        json!({"event": "retry", "error": error, "transient": false, "next_in_ms": delay}),
-                    );
-                    if !pause(delay).await {
-                        stopped = Some("interrupted".into());
-                        break;
-                    }
-                    continue;
-                }
-                let transient = optn_app::fusion::is_auto_transient_failure(&error);
-                report(json!({"event": "retry", "error": error, "transient": transient}));
-                if !pause(AUTO_FUSION_RETRY_MS).await {
-                    stopped = Some("interrupted".into());
-                    break;
-                }
-            }
-        }
+    if let Some(path) = import_legacy_depth(runtime, &legacy_depth).await? {
+        report(json!({"event": "depth_imported", "from": path}));
     }
 
-    let mut result = rounds.venue();
+    let host = CliHost {
+        cli,
+        gap: args.gap,
+        max_addresses: args.max_addresses,
+        interrupted: Arc::default(),
+        round: Arc::default(),
+        wake: Arc::default(),
+        failure: Mutex::default(),
+    };
+    let watcher = tokio::spawn({
+        let (interrupted, round, wake) = (
+            Arc::clone(&host.interrupted),
+            Arc::clone(&host.round),
+            Arc::clone(&host.wake),
+        );
+        async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                interrupted.store(true, Ordering::SeqCst);
+                if let Some(id) = round.lock().unwrap_or_else(|p| p.into_inner()).clone() {
+                    optn_fusion::round_cancel::cancel_round(&id);
+                }
+                wake.notify_waiters();
+            }
+        }
+    });
+    let outcome = driver::run(
+        &host,
+        &venue,
+        DriverOptions {
+            auto: args.auto,
+            rounds: args.rounds,
+            fuse_depth: args.fuse_depth,
+        },
+    )
+    .await;
+    watcher.abort();
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(DriverError::Round(error)) => return Err(CliError::Network(error)),
+        Err(DriverError::Other(error)) => {
+            let synced = host
+                .failure
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take();
+            return Err(synced.unwrap_or(CliError::Usage(error)));
+        }
+    };
+
+    let mut result = venue.describe();
     for (key, value) in [
         ("ok", json!(true)),
         ("network", json!(cli.network.to_string())),
-        ("tor", json!(rounds.verified_proxy())),
-        ("rounds", json!(fused)),
-        ("stopped", json!(stopped)),
+        ("tor", json!(venue.verified_proxy())),
+        ("rounds", json!(outcome.fused)),
+        ("stopped", json!(outcome.stopped)),
         ("depth_record", json!("sealed with the wallet")),
     ] {
         result[key] = value;
@@ -584,6 +378,7 @@ pub(crate) async fn run(cli: &Cli, args: FusionArgs<'_>) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use optn_core::fusion::depth::FusionDepthBook;
 
     #[test]
     fn earlier_builds_kept_the_depth_record_beside_the_wallet_per_network() {

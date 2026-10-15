@@ -10,6 +10,8 @@ description = "Native CashFusion host for OPTN Wallet: chain lookups, the depth 
 # no renderer, shell or platform code.
 [dependencies]
 optn-core = { path = "../optn-core", version = "=1.7.3" }
+# Auto Fusion's policy and timing, shared with every interface.
+optn-app = { path = "../optn-app", version = "=1.7.3" }
 optn-fusion = { path = "../optn-fusion", version = "=1.7.3" }
 optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
 optn-transport = { path = "../optn-transport", version = "=1.7.3" }
