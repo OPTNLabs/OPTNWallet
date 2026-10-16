@@ -144,7 +144,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | PSBT / SeedCash / UR | **INTEGRATION** | `optn-core/src/airgap_spend.rs`, `psbt.rs`; `optn-runtime/src/airgap.rs` reserve HD change durably before export and bind signed imports to the current request. Captured SeedCash Schnorr return and ECDSA finalization pass; runtime actor tests cover reservation, storage failure, cancellation and restart | Fresh GUI/CLI signing and packaged-platform verification are still pending. Single-input Chipnet P2PKH `0x41` path; multisig, advanced sighash and broadcast integration remain separate |
 | RPA / Cash Code | **INTEGRATION** | `optn-core/src/rpa.rs` | Matrix `unit` |
 | Hardware | **PARTIAL** | `optn-ui/src/hardware.rs`, `HardwareVendor` | Vendor-by-surface audit not done; no device evidence |
-| CashFusion | **PARTIAL** | Protocol in `crates/optn-fusion`; coin selection, tier planning and the depth record in Rust (`optn_core::fusion::{coin_selection, depth}`, `optn_fusion::allocate`); one Rust driver (`optn_fusion_native::driver`) runs every round, manual and Auto, server and P2P, for the desktop (`optn_fusion_start`), `optn fusion` and the docker runner | Released; reported working on chipnet and mainnet. The P2P (Nostr) protocol is now also in Rust (`optn_fusion::p2p`), checked against the TypeScript peers in both directions, and the native host carries it over Nostr and Tor for the CLI and docker (`optn-fusion-native::p2p_round`, `optn fusion --p2p`; proven over a local relay, 2026-10-15). The desktop's TypeScript round runners are gone; the renderer only starts, stops and shows a run (2026-10-15). Live on chipnet (2026-10-16): P2P rounds of Rust peers fuse (six CLI peers; the desktop with six CLI peers), and desktop server rounds and Auto fuse through the shared driver. Remaining: a live round mixing Rust and TypeScript peers, the coordinator's relay budget (see 2026-10-15), several desktop instances sharing one Tor (see 2026-10-16), pre-consolidation of crowded addresses in Rust, and a Leptos fusion screen |
+| CashFusion | **PARTIAL** | Protocol in `crates/optn-fusion`; coin selection, tier planning and the depth record in Rust (`optn_core::fusion::{coin_selection, depth}`, `optn_fusion::allocate`); one Rust driver (`optn_fusion_native::driver`) runs every round, manual and Auto, server and P2P, for the desktop (`optn_fusion_start`), `optn fusion` and the docker runner | Released; reported working on chipnet and mainnet. The P2P (Nostr) protocol is now also in Rust (`optn_fusion::p2p`), checked against the TypeScript peers in both directions, and the native host carries it over Nostr and Tor for the CLI and docker (`optn-fusion-native::p2p_round`, `optn fusion --p2p`; proven over a local relay, 2026-10-15). The desktop's TypeScript round runners are gone; the renderer only starts, stops and shows a run (2026-10-15). Live on chipnet (2026-10-16): P2P rounds of Rust peers fuse (six CLI peers; the desktop with six CLI peers), and desktop server rounds and Auto fuse through the shared driver. A live round mixing Rust and TypeScript peers fused on 2026-10-16 (`3e3b2c3f…`). Remaining: the coordinator's relay budget (see 2026-10-15), the onion's time budget with slower TypeScript peelers (see 2026-10-16), several desktop instances sharing one Tor (see 2026-10-16), pre-consolidation of crowded addresses in Rust, and a Leptos fusion screen |
 | 44px targets, safe areas, contrast | **PROVEN** (measured in the stylesheet) | `optn-ui/style.css`, measured by `optn-ui/src/stylesheet.rs`: `interactive_controls_declare_a_44px_minimum_tap_target` requires an explicit `min-height: 44px` on `.primary`, `.secondary`, `.chip`, `.tab-item` and `.settings-row`; `the_shell_respects_the_devices_safe_areas` requires both safe-area insets; `text_meets_wcag_contrast_in_every_mode` (2026-10-10) checks text, muted, danger and warning at WCAG 4.5:1 against the page and the surface in all four modes and the default | Failure and caution text (`.error`, `.field-error`, `.warn`, `.warning`) now use the use-named `--danger` and `--warning` tokens, where before a failure read as body text. 13 layout classes remain in `UNSTYLED_TODAY`, and `no_new_class_is_left_unstyled` stops the list growing |
 | Capacitor/React retained until Leptos is proven | **PROVEN** | Both trees present | — |
 
@@ -3054,3 +3054,30 @@ Checks on `7ee16be1`: `test:core` 1854 tests, `test:ui` 50, `typecheck:core`,
 30 tests and the ten-peer relay round; the CLI 114 and strict clippy;
 `src-tauri` 146 and strict clippy without default features; `xtask
 architecture`; rustfmt; all six lock files with `--locked`.
+
+### 2026-10-16: a live round mixing Rust and TypeScript peers fuses
+
+Five `optn fusion --p2p` peers (the CLI at `bbe7be74`) and one desktop
+window running the TypeScript P2P code (the build of `15660a33`, before the
+desktop moved to Rust) fused
+`3e3b2c3f3c59a29af1c918f2bbd031f64a52c6c9525edd99c8b5ae3daa1936be` on
+chipnet (19 inputs, 28 outputs; the explorer saw it in the mempool). The
+TypeScript peer was the second of five peelers: it took Rust blobs, peeled
+them and forwarded them to the next Rust peeler, and every peer reported the
+same txid.
+
+Larger mixed rounds ran out of time, not into faults. Eight peers (six CLI,
+two TypeScript) went through six of seven hops, Rust to TypeScript and back,
+and stopped before the last: Rust hops took 20-37 s and TypeScript hops 58-62
+s, against 36 s per peeler (`round_timeout_ms`: 35 s plus 36 s a peeler).
+A peeler gets its first blob within a second or two; the last of 34 takes
+30-40 s, as resends find a relay the next peeler hears.
+
+Tried and reverted: forwarding a hop's blobs on fewer one-shot connections.
+The whole batch on one connection never arrived (public relays rate-limit a
+connection after a few events); four to a connection arrived but hops were no
+faster (40-52 s). Circuit setup is not what bounds a hop.
+
+The TypeScript side exists only in builds before `9212c1a7`; a round with
+them is bounded by their timing, which this repository no longer ships. A
+longer onion budget would be a protocol change both sides must share.
