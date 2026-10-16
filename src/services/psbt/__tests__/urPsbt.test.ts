@@ -1,10 +1,10 @@
 import { CryptoPSBT } from '@keystonehq/bc-ur-registry-btc';
-import { URDecoder } from '@ngraveio/bc-ur';
+import { URDecoder, UREncoder } from '@ngraveio/bc-ur';
 import { describe, expect, it } from 'vitest';
+import vectorDocument from '../../../../test-vectors/psbt-ur.json';
 import {
   UrPsbtScanner,
   encodePsbtToQrDisplay,
-  encodePsbtToSingleUr,
   encodePsbtToUrFrames,
   extractPsbtFromUrCbor,
   startsWithPsbtMagic,
@@ -13,6 +13,7 @@ import {
   PSBT_UR_QR_DISPLAY_SIZE,
   PSBT_UR_QR_ERROR_LEVEL,
   PSBT_UR_QR_MARGIN_MODULES,
+  UR_FRAGMENT_LENGTH_OPTIONS,
 } from '../urPsbt';
 import { encodeUnsignedPsbt } from '../psbtBch';
 
@@ -51,21 +52,47 @@ describe('UR crypto-psbt transport', () => {
     expect(PSBT_UR_QR_ERROR_LEVEL).toBe('L');
   });
 
-  it('uses one static QR for an ordinary PSBT', () => {
+  it('animates an ordinary PSBT at the SeedCash-safe density on every surface', () => {
+    // Phones used to get this PSBT as one static QR of about 300 characters
+    // (up to 2,400 for larger sends), which SeedCash's camera cannot read.
     const display = encodePsbtToQrDisplay(psbt());
-    expect(display.mode).toBe('static');
-    expect(display.count).toBe(1);
-    expect(display.frames).toBeNull();
-    expect(display.uri).toBe(encodePsbtToSingleUr(psbt()));
-  });
-
-  it('reserves streaming for payloads above static QR capacity', () => {
-    const large = new Uint8Array(1_600);
-    large.set([0x70, 0x73, 0x62, 0x74, 0xff]);
-    const display = encodePsbtToQrDisplay(large);
     expect(display.mode).toBe('stream');
     expect(display.count).toBeGreaterThan(1);
     expect(display.frames).not.toBeNull();
+    const frames = [display.uri];
+    for (let i = 1; i < display.count * 2; i += 1) {
+      frames.push((display.frames as { next(): string }).next());
+    }
+    for (const frame of frames) {
+      expect(frame).toMatch(/^UR:CRYPTO-PSBT\/\d+-\d+\//);
+      expect(frame.length).toBeLessThan(160);
+    }
+  });
+
+  it('never draws a frame denser than the density control offers', () => {
+    const densest = Math.max(...UR_FRAGMENT_LENGTH_OPTIONS);
+    expect(() => encodePsbtToQrDisplay(psbt(), densest + 1)).toThrow(
+      /fragment length/
+    );
+    expect(() => encodePsbtToQrDisplay(psbt(), 2_400)).toThrow(
+      /fragment length/
+    );
+    expect(encodePsbtToQrDisplay(psbt(), densest).count).toBeGreaterThan(0);
+  });
+
+  it('is static only when the whole PSBT fits in one frame', () => {
+    const display = encodePsbtToQrDisplay(psbt(), 450);
+    expect(display.mode).toBe('static');
+    expect(display.count).toBe(1);
+    expect(display.frames).toBeNull();
+    expect(display.uri).toMatch(/^UR:CRYPTO-PSBT\/[A-Z]+$/);
+  });
+
+  it('refuses bytes that are not a PSBT', () => {
+    const wrapped = Uint8Array.from(
+      new CryptoPSBT(Buffer.from(psbt())).toCBOR()
+    );
+    expect(() => encodePsbtToUrFrames(wrapped)).toThrow(/PSBT magic/);
   });
 
   it('emits ur:crypto-psbt frames', () => {
@@ -74,18 +101,24 @@ describe('UR crypto-psbt transport', () => {
     expect(frames.count).toBeGreaterThan(0);
   });
 
-  it('puts the raw PSBT in the UR CBOR so SeedCash parse_psbt can read it', () => {
-    // Stock SeedCash does `parse_psbt(decoder.result_message().cbor)`.
-    // CryptoPSBT wraps that in a CBOR byte string (59 01 .. 70 73 62 74 ff),
-    // which SeedCash rejects as "invalid PSBT magic". Reproduced live against
-    // seedcash/helpers/ur2/ur_decoder.py + models/psbt_parser.py.
+  it('wraps the PSBT in one CBOR byte string, which SeedCash requires', () => {
+    // SeedCash 30c5ba6 decodes a crypto-psbt message as exactly one CBOR byte
+    // string and drops anything else, so the raw PSBT this used to send
+    // (70 73 62 74 ff …, a CBOR text head) never completed a scan there.
     const original = psbt();
     const decoder = new URDecoder();
-    decoder.receivePart(encodePsbtToSingleUr(original).toLowerCase());
+    decoder.receivePart(
+      encodePsbtToUrFrames(original, 450).next().toLowerCase()
+    );
     expect(decoder.isComplete()).toBe(true);
     const cbor = Uint8Array.from(decoder.resultUR().cbor);
-    expect(startsWithPsbtMagic(cbor)).toBe(true);
-    expect([...cbor]).toEqual([...original]);
+    expect(startsWithPsbtMagic(cbor)).toBe(false);
+    expect([...cbor]).toEqual([
+      ...new CryptoPSBT(Buffer.from(original)).toCBOR(),
+    ]);
+    expect([...CryptoPSBT.fromCBOR(Buffer.from(cbor)).getPSBT()]).toEqual([
+      ...original,
+    ]);
   });
 
   it('still reads a BCR-2020-006 / Keystone wrapped crypto-psbt', () => {
@@ -129,7 +162,9 @@ describe('UR crypto-psbt transport', () => {
   it('round-trips a single-frame UR', () => {
     const original = psbt();
     const scanner = new UrPsbtScanner();
-    const result = scanner.receive(encodePsbtToSingleUr(original));
+    const single = encodePsbtToUrFrames(original, 450);
+    expect(single.count).toBe(1);
+    const result = scanner.receive(single.next());
     expect(result.complete).toBe(true);
     expect([...(result.psbt as Uint8Array)]).toEqual([...original]);
   });
@@ -206,5 +241,68 @@ describe('UrPsbtScanner must outlive a single frame', () => {
 
     expect(first.complete).toBe(false);
     expect(latest.progress).toBeGreaterThan(first.progress);
+  });
+});
+
+describe('Rust UR frames match an independent BC-UR encoder', () => {
+  // The frames come from crates/optn-core through WASM. @ngraveio/bc-ur is a
+  // separate implementation of the same fountain code, so agreeing with it
+  // frame for frame, mixed frames included, is agreement with the format
+  // rather than with ourselves. Keystone's CryptoPSBT does the byte-string
+  // wrap, so the wrap is checked independently too.
+  const reference = (bytes: Uint8Array, fragmentLength: number) =>
+    new UREncoder(new CryptoPSBT(Buffer.from(bytes)).toUR(), fragmentLength);
+
+  function payload(size: number, seed: number): Uint8Array {
+    const bytes = new Uint8Array(size);
+    let state = seed;
+    for (let index = 0; index < size; index += 1) {
+      state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+      bytes[index] = state >>> 24;
+    }
+    bytes.set([0x70, 0x73, 0x62, 0x74, 0xff]);
+    return bytes;
+  }
+
+  it('reproduces the committed vectors', () => {
+    for (const vector of vectorDocument.vectors) {
+      const frames = encodePsbtToUrFrames(
+        Uint8Array.from(Buffer.from(vector.psbtHex, 'hex')),
+        vector.maxFragmentLength
+      );
+      expect(frames.count, vector.description).toBe(vector.frameCount);
+      for (const expected of vector.frames) {
+        expect(frames.next(), vector.description).toBe(expected);
+      }
+    }
+  });
+
+  it('agrees on every density across payload sizes', () => {
+    const sizes = [5, 49, 50, 51, 99, 101, 257, 640, 1_201, 2_399, 4_097];
+    sizes.forEach((size, at) => {
+      for (const fragmentLength of [10, ...UR_FRAGMENT_LENGTH_OPTIONS]) {
+        const bytes = payload(size, at * 977 + fragmentLength);
+        const ours = encodePsbtToUrFrames(bytes, fragmentLength);
+        const theirs = reference(bytes, fragmentLength);
+        expect(ours.count).toBe(theirs.fragmentsLength);
+        for (let i = 0; i < Math.min(ours.count * 2 + 5, 120); i += 1) {
+          expect(ours.next()).toBe(theirs.nextPart().toUpperCase());
+        }
+      }
+    });
+  });
+
+  it('decodes from mixed frames alone when the pure ones were missed', () => {
+    const original = payload(1_200, 7);
+    const frames = encodePsbtToUrFrames(original);
+    const scanner = new UrPsbtScanner();
+    // Drop every pure frame: a camera that saw none of the first pass.
+    for (let i = 0; i < frames.count; i += 1) frames.next();
+    let result = scanner.receive(frames.next());
+    for (let i = 0; i < 2_000 && !result.complete; i += 1) {
+      result = scanner.receive(frames.next());
+    }
+    expect(result.complete).toBe(true);
+    expect([...(result.psbt as Uint8Array)]).toEqual([...original]);
   });
 });

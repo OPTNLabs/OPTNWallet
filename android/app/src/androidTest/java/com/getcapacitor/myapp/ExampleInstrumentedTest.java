@@ -3,12 +3,16 @@ package com.getcapacitor.myapp;
 import static org.junit.Assert.*;
 
 import android.content.Context;
+import android.net.Uri;
+import android.webkit.WebResourceRequest;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.Collections;
+import java.util.Map;
 import optn.wallet.app.MainActivity;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -36,6 +40,41 @@ public class ExampleInstrumentedTest {
             assertEquals("optn.wallet.app", activity.getPackageName())
         );
         scenario.close();
+    }
+
+    @Test
+    public void capacitorProxy_rejectsDocumentNavigation() {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                final com.getcapacitor.Bridge bridge = activity.getBridge();
+                final Uri local = Uri.parse(bridge.getAppUrl());
+                // No remote request is made: both paths must reject before proxy I/O.
+                final Uri proxy = local.buildUpon()
+                    .path("/_capacitor_http_interceptor_")
+                    .appendQueryParameter("u", "https://example.invalid/untrusted.html")
+                    .build();
+                assertFalse("Normal bundled pages must remain navigable", bridge.launchIntent(local));
+                assertTrue("Remote HTML must never load at the wallet origin", bridge.launchIntent(proxy));
+                assertTrue("Proxy subpaths must also be blocked", bridge.launchIntent(
+                    proxy.buildUpon().path("/_capacitor_http_interceptor_/document").build()
+                ));
+                for (boolean mainFrame : new boolean[] { true, false }) {
+                    WebResourceRequest request = new WebResourceRequest() {
+                        @Override public Uri getUrl() { return proxy; }
+                        @Override public boolean isForMainFrame() { return mainFrame; }
+                        @Override public boolean isRedirect() { return false; }
+                        @Override public boolean hasGesture() { return true; }
+                        @Override public String getMethod() { return "GET"; }
+                        @Override public Map<String, String> getRequestHeaders() {
+                            return mainFrame ? Collections.emptyMap()
+                                : Collections.singletonMap("upgrade-insecure-requests", "1");
+                        }
+                    };
+                    assertNull("The proxy must reject main-frame and iframe documents",
+                        bridge.getLocalServer().shouldInterceptRequest(request));
+                }
+            });
+        }
     }
 
     private boolean evaluateBoolean(

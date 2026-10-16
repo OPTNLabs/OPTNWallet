@@ -14,6 +14,7 @@ The mnemonic is the published BIP39 all-`abandon` test vector. It holds no
 funds we care about and nothing here is ever broadcast.
 """
 
+import inspect
 import json
 import sys
 
@@ -50,7 +51,12 @@ ACCOUNT_PATH = "m/44'/145'/0'"
 
 
 def wallet_from(mnemonic: str) -> Wallet:
-    master_key, master_code = Bip39.bip39_protocol(mnemonic, "")
+    # SeedCash now takes the words as a list and joins them itself, as its own
+    # screens pass them. Handing that version a string joins its characters
+    # and derives some other wallet, which then signs nothing.
+    seed = inspect.signature(Bip39.bip39_protocol).parameters["seed"].annotation
+    words = mnemonic.split() if "list" in str(seed) else mnemonic
+    master_key, master_code = Bip39.bip39_protocol(words, "")
     return Wallet(master_key, master_code)
 
 
@@ -85,13 +91,18 @@ def sign_with_wallet(psbt_bytes: bytearray, wallet: Wallet) -> bytearray:
     return signed
 
 
+def _text(value) -> str:
+    """SeedCash now keeps the xpub as bytes; earlier checkouts kept a str."""
+    return value.decode("utf-8") if isinstance(value, (bytes, bytearray)) else value
+
+
 def emit_keys() -> None:
     wallet = build_wallet()
     print(
         json.dumps(
             {
-                "xpub": wallet._xpub,
-                "fingerprint": wallet._fingerprint,
+                "xpub": _text(wallet._xpub),
+                "fingerprint": _text(wallet._fingerprint),
                 "accountPath": ACCOUNT_PATH,
             }
         )
@@ -120,7 +131,7 @@ def sign(unsigned_path: str, signed_path: str) -> None:
     # this check is here to surface loudly.
     parser = parse_for_wallet(psbt_bytes, wallet)
     if hasattr(PSBTParser, "_wallet_pubkeys_in_map"):
-        fingerprint_bytes = bytes.fromhex(wallet._fingerprint)
+        fingerprint_bytes = bytes.fromhex(_text(wallet._fingerprint))
         claimed = [
             index
             for index, input_map in enumerate(parse_psbt(psbt_bytes)["inputs"])
@@ -164,7 +175,9 @@ def emit_cosigner_keys(count: int) -> None:
     out = []
     for index in range(count):
         wallet = wallet_from(cosigner_mnemonic(index))
-        out.append({"xpub": wallet._xpub, "fingerprint": wallet._fingerprint})
+        out.append(
+            {"xpub": _text(wallet._xpub), "fingerprint": _text(wallet._fingerprint)}
+        )
     print(json.dumps(out))
 
 
@@ -184,7 +197,7 @@ def sign_as(index: int, unsigned_path: str, signed_path: str) -> None:
 
     with open(signed_path, "w", encoding="utf-8") as handle:
         handle.write(bytes(signed).hex())
-    print(json.dumps({"fingerprint": wallet._fingerprint}))
+    print(json.dumps({"fingerprint": _text(wallet._fingerprint)}))
 
 
 def decode_ur(frames_path: str, out_path: str) -> None:
@@ -214,14 +227,15 @@ def decode_ur(frames_path: str, out_path: str) -> None:
     message = decoder.result_message()
     raw = bytes(message.cbor)
 
-    # Same path as SeedCash `decode_qr.py:get_data_psbt`: the UR CBOR field is
-    # handed to parse_psbt. OPTN now emits the raw PSBT there (SeedCash's own
-    # encode shape). A leftover Keystone wrap would start with a CBOR bstr
-    # major type, not `psbt\xff`, and this helper must not hide that regression.
+    # Same path as SeedCash `decode_qr.py:get_data_psbt`: what the decoder
+    # returns is handed to parse_psbt. Current SeedCash unwraps the CBOR byte
+    # string OPTN sends (`ur_decoder.py`, `decode_cbor_by_type`) and never
+    # completes on a raw PSBT. A checkout that predates that unwrap returns the
+    # byte string itself, which this refuses rather than hides.
     if not raw.startswith(b"psbt\xff"):
         raise SystemExit(
             "SeedCash recovered UR CBOR that is not a PSBT "
-            f"(prefix {raw[:8].hex()}). Encoder drifted back to a CBOR wrap."
+            f"(prefix {raw[:8].hex()}). This SeedCash does not unwrap crypto-psbt."
         )
 
     with open(out_path, "w", encoding="utf-8") as handle:

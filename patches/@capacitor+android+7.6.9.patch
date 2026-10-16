@@ -1,0 +1,49 @@
+diff --git a/node_modules/@capacitor/android/capacitor/build.gradle b/node_modules/@capacitor/android/capacitor/build.gradle
+index 22e90b1..49f2296 100644
+--- a/node_modules/@capacitor/android/capacitor/build.gradle
++++ b/node_modules/@capacitor/android/capacitor/build.gradle
+@@ -18,7 +18,7 @@ buildscript {
+         google()
+         mavenCentral()
+         maven {
+-            url "https://plugins.gradle.org/m2/"
++            url = uri("https://plugins.gradle.org/m2/")
+         }
+     }
+     dependencies {
+@@ -41,11 +41,11 @@ if (System.getenv("CAP_PUBLISH") == "true") {
+ }
+ 
+ android {
+-    namespace "com.getcapacitor.android"
+-    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 35
++    namespace = "com.getcapacitor.android"
++    compileSdk = project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 35
+     defaultConfig {
+-        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 23
+-        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 35
++        minSdk = project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 23
++        targetSdk = project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 35
+         versionCode 1
+         versionName "1.0"
+         consumerProguardFiles 'proguard-rules.pro'
+@@ -53,15 +53,15 @@ android {
+     }
+     buildTypes {
+         release {
+-            minifyEnabled false
++            minifyEnabled = false
+             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+         }
+     }
+     lintOptions {
+         baseline file("lint-baseline.xml")
+-        abortOnError true
+-        warningsAsErrors true
+-        lintConfig file('lint.xml')
++        abortOnError = true
++        warningsAsErrors = true
++        lintConfig = file('lint.xml')
+     }
+     compileOptions {
+         sourceCompatibility JavaVersion.VERSION_21

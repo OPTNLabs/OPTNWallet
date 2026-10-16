@@ -263,8 +263,14 @@ pub enum NftAggregate {
 const MAX_PRESENTATION_BYTES: usize = 64 * 1024;
 const MAX_DESCRIPTION_BYTES: usize = 4096;
 const MAX_PRESENTATION_NODES: usize = 4096;
+/// Longest identity name a registry may give a category, in bytes.
+pub(crate) const MAX_NAME_BYTES: usize = 512;
+/// Longest token symbol a registry may give a category, in bytes.
+pub(crate) const MAX_TICKER_BYTES: usize = 64;
+/// BCMR's ceiling on `token.decimals`.
+pub(crate) const MAX_DECIMALS: u8 = 18;
 
-fn bounded_text(value: &str, limit: usize) -> bool {
+pub(crate) fn bounded_text(value: &str, limit: usize) -> bool {
     value.len() <= limit
         && value
             .chars()
@@ -487,13 +493,13 @@ pub fn names_for_category(
         return None;
     }
     let name = match snapshot.get("name").and_then(|value| value.as_str()) {
-        Some(name) if !name.is_empty() && bounded_text(name, 512) => name.to_owned(),
+        Some(name) if !name.is_empty() && bounded_text(name, MAX_NAME_BYTES) => name.to_owned(),
         _ => return None,
     };
     let ticker = match token.get("symbol") {
         None => None,
         Some(value) => match value.as_str() {
-            Some(symbol) if !symbol.is_empty() && bounded_text(symbol, 64) => {
+            Some(symbol) if !symbol.is_empty() && bounded_text(symbol, MAX_TICKER_BYTES) => {
                 Some(symbol.to_owned())
             }
             _ => return None,
@@ -502,7 +508,7 @@ pub fn names_for_category(
     let decimals = match token.get("decimals") {
         None => 0,
         Some(value) => match value.as_u64() {
-            Some(decimals) if decimals <= 18 => decimals as u8,
+            Some(decimals) if decimals <= u64::from(MAX_DECIMALS) => decimals as u8,
             _ => return None,
         },
     };

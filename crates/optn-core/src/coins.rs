@@ -9,7 +9,9 @@ use std::fmt;
 
 /// Transaction outpoint. `txid` is the 32-byte transaction hash as stored on
 /// chain (displayed as hex, not reversed for RPC).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Ordered by txid, then output index, so a set of coins has one order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Outpoint {
     txid: [u8; 32],
     vout: u32,
@@ -43,6 +45,21 @@ impl Outpoint {
 impl fmt::Display for Outpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.txid_hex(), self.vout)
+    }
+}
+
+impl std::str::FromStr for Outpoint {
+    type Err = CoinError;
+
+    /// `txid:vout`, the spelling `Display` writes and the hold record keeps.
+    fn from_str(text: &str) -> Result<Self, CoinError> {
+        let (txid, vout) = text.split_once(':').ok_or(CoinError::InvalidOutpoint)?;
+        // Digits only: `u32::from_str` would also take a sign.
+        if vout.is_empty() || !vout.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(CoinError::InvalidOutpoint);
+        }
+        let vout = vout.parse().map_err(|_| CoinError::InvalidOutpoint)?;
+        Self::parse(txid, vout)
     }
 }
 
@@ -519,6 +536,7 @@ pub enum CoinError {
     ZeroValue,
     EmptyAddress,
     InvalidTxid,
+    InvalidOutpoint,
 }
 
 impl fmt::Display for CoinError {
@@ -535,6 +553,7 @@ impl fmt::Display for CoinError {
             Self::ZeroValue => write!(f, "coin value must be greater than zero"),
             Self::EmptyAddress => write!(f, "coin address is empty"),
             Self::InvalidTxid => write!(f, "txid must be 32 bytes of hex"),
+            Self::InvalidOutpoint => write!(f, "a coin is written txid:vout"),
         }
     }
 }
@@ -549,6 +568,19 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
+}
+
+/// Even-length hex in either case, as bytes; `None` for anything else.
+pub(crate) fn hex_decode(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    text.as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| Some((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?))
+        .collect()
 }
 
 fn parse_txid(txid_hex: &str) -> Result<[u8; 32], CoinError> {
@@ -797,6 +829,31 @@ mod tests {
             set.insert(coin(4, 2_000)),
             Err(CoinError::DuplicateOutpoint)
         );
+    }
+
+    #[test]
+    fn an_outpoint_reads_back_the_way_it_is_written() {
+        let outpoint = Outpoint::new(std::array::from_fn(|index| index as u8), 7);
+        let written = outpoint.to_string();
+        assert_eq!(written.parse::<Outpoint>(), Ok(outpoint));
+        assert_eq!(
+            written.to_ascii_uppercase().parse::<Outpoint>(),
+            Ok(outpoint)
+        );
+        let txid = outpoint.txid_hex();
+        for bad in [
+            txid.clone(),
+            format!("{txid}:"),
+            format!("{txid}:+7"),
+            format!("{txid}:-1"),
+            format!("{txid}:4294967296"),
+            format!("{}:7", &txid[2..]),
+            "zz:7".to_owned(),
+        ] {
+            assert!(bad.parse::<Outpoint>().is_err(), "{bad}");
+        }
+        assert!(Outpoint::new([0; 32], 9) < Outpoint::new([0; 32], 10));
+        assert!(Outpoint::new([0; 32], 10) < Outpoint::new([1; 32], 0));
     }
 
     #[test]

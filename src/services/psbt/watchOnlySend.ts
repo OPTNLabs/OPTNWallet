@@ -38,6 +38,7 @@ import {
   type MultisigDerivedCosigner,
   type MultisigPolicy,
 } from './multisigWallet';
+import { labelSpentOutput } from './coinControlLabels';
 
 /**
  * A UTXO chosen by coin control, with the public-key derivation needed for the
@@ -647,6 +648,25 @@ export function buildWatchOnlyPsbt(
         'again once the wallet is connected.'
     );
   }
+  // A server's coin list can omit token data; the parent transaction cannot.
+  // An input whose spent output carries tokens that this build was not told
+  // about would be spent with no token output for its category, destroying
+  // the tokens. Rust reads the parent and decides.
+  params.inputs.forEach((input, index) => {
+    if (input.token) return;
+    const spent = labelSpentOutput(
+      input.previousTransactionHex ?? '',
+      input.txid,
+      input.vout
+    );
+    if (spent.bch_send_refusal) {
+      throw new Error(
+        `Coin ${index + 1} carries CashTokens (${spent.title}` +
+          `${spent.category_short ? ` ${spent.category_short}` : ''}) and ` +
+          `this send has no token output for them: ${spent.bch_send_refusal}.`
+      );
+    }
+  });
 
   const recipientBytecode = addressToLockingBytecode(params.recipient);
   const changeBytecode = addressToLockingBytecode(params.changeAddress);
