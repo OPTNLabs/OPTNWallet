@@ -8,7 +8,7 @@
 // docker lab run (see FusionRunnerService). This panel names where to fuse and
 // shows what the driver reports.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   selectAutoFuseEnabled,
@@ -47,7 +47,6 @@ import {
   type FusionActivity,
   type FusionRunOutcome,
 } from '../../platform/desktop/FusionRunnerService';
-import { fusionCoinAvailability } from '../../platform/desktop/fusionRoundState';
 import { parseFusionServerTarget } from '../../platform/desktop/fusionServerTarget';
 import { resolveFusionTransport } from '../../platform/desktop/FusionTorResolver';
 import {
@@ -158,33 +157,17 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     activeFusion?.mode === 'server' || fuseState === 'fusing';
   const p2pFusing = activeFusion?.mode === 'p2p' || p2pState === 'fusing';
   const anyFusing = serverFusing || p2pFusing || startInFlightRef.current;
-  const utxosByAddress = useSelector((s: RootState) => s.utxos.utxos);
-  const flatUtxos = useMemo(
-    () => Object.values(utxosByAddress).flat(),
-    [utxosByAddress]
-  );
-  // anyFusing re-reads the coins a round holds as it starts and ends.
-  const coinAvailability = useMemo(() => {
-    void anyFusing;
-    return fusionCoinAvailability(walletId, flatUtxos);
-  }, [walletId, flatUtxos, anyFusing]);
-  const noSpendableCoins = coinAvailability.total === 0;
-  const allCoinsReserved =
-    coinAvailability.total > 0 && coinAvailability.free === 0;
-  const coinsBlocked = noSpendableCoins || allCoinsReserved;
+  // Which coins can fuse is the driver's to say, from the runtime's own
+  // record: it answers "nothing to fuse" with the reason. The screen's coin
+  // list lags a fusion's outputs, and greyed Start after every round.
   const startBlockedReason = (() => {
     if (walletId <= 0) return 'Open a wallet to run a P2P round.';
     if (p2pState === 'fusing' || serverFusing) {
       return 'A fusion round is in progress — Start stays disabled until it ends.';
     }
-    if (noSpendableCoins) return 'No spendable (non-token) coins to fuse.';
-    if (allCoinsReserved) {
-      return 'All coins are held by a fusion round — wait for it to finish.';
-    }
     return undefined;
   })();
-  const startDisabled =
-    walletId <= 0 || p2pFusing || serverFusing || coinsBlocked;
+  const startDisabled = walletId <= 0 || p2pFusing || serverFusing;
   const serverMode = getFusionModeAvailability({
     p2pFusionEnabled,
     walletId,
@@ -618,9 +601,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                 Duplicating it per card would let the two copies disagree, and the
                 disagreement would only surface when a round used the wrong bound. */}
                   <div className="border-t border-[var(--wallet-border)] pt-3">
-                    <AutoFusionControls
-                      disabled={walletId <= 0 || anyFusing || coinsBlocked}
-                    />
+                    <AutoFusionControls disabled={walletId <= 0 || anyFusing} />
                   </div>
 
                   {/* Server path — Fuse Now via the configured CashFusion server (Servers card). */}

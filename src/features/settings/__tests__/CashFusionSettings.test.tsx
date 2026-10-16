@@ -81,7 +81,7 @@ describe('CashFusion settings mode enforcement', () => {
     expect(serverCard).toContain('Fuse Now using CashFusion server');
   });
 
-  it('greys Start P2P when a round holds every coin', async () => {
+  it('leaves which coins can fuse to the driver, not the screen list', async () => {
     class MemoryStorage {
       private map = new Map<string, string>();
       getItem(key: string): string | null {
@@ -137,9 +137,11 @@ describe('CashFusion settings mode enforcement', () => {
       </Provider>
     );
 
+    // Every coin on the screen's list held, as a lagging list leaves it after
+    // a round: Start is still open, and the driver says what can fuse.
     expect(html).toContain('Start P2P round');
-    expect(html).toContain('All coins are held by a fusion round');
-    expect(html).toMatch(/disabled=""[^>]*>Start P2P round/);
+    expect(html).not.toMatch(/disabled=""[^>]*>Start P2P round/);
+    expect(html).not.toContain('No spendable (non-token) coins to fuse.');
     clearOutpointReservations(7);
   });
 

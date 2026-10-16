@@ -182,33 +182,3 @@ export function clearOutpointReservations(walletId: number): void {
 
 export const outpointKey = (txid: string, index: number): string =>
   `${txid}:${index}`;
-
-export interface FusionCoinAvailability {
-  /** Non-token UTXOs in the wallet view. */
-  total: number;
-  /** Not reserved by a fusion round. */
-  free: number;
-  /** Held by a (possibly ghost) fusion reservation. */
-  reserved: number;
-}
-
-/**
- * How many non-token coins are free to fuse right now.
- * Used by CashFusion UI to grey Start/Fuse instead of failing after click.
- */
-export function fusionCoinAvailability(
-  walletId: number,
-  utxos: ReadonlyArray<{ tx_hash: string; tx_pos: number; token?: unknown }>
-): FusionCoinAvailability {
-  const nonToken = utxos.filter((utxo) => !utxo.token);
-  const claimed = reservedOutpoints(walletId);
-  let free = 0;
-  for (const utxo of nonToken) {
-    if (!claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))) free += 1;
-  }
-  return {
-    total: nonToken.length,
-    free,
-    reserved: nonToken.length - free,
-  };
-}
