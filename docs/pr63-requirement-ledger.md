@@ -144,7 +144,7 @@ still integration work; model/transport tests do not prove paid rounds run.
 | PSBT / SeedCash / UR | **INTEGRATION** | `optn-core/src/airgap_spend.rs`, `psbt.rs`; `optn-runtime/src/airgap.rs` reserve HD change durably before export and bind signed imports to the current request. Captured SeedCash Schnorr return and ECDSA finalization pass; runtime actor tests cover reservation, storage failure, cancellation and restart | Fresh GUI/CLI signing and packaged-platform verification are still pending. Single-input Chipnet P2PKH `0x41` path; multisig, advanced sighash and broadcast integration remain separate |
 | RPA / Cash Code | **INTEGRATION** | `optn-core/src/rpa.rs` | Matrix `unit` |
 | Hardware | **PARTIAL** | `optn-ui/src/hardware.rs`, `HardwareVendor` | Vendor-by-surface audit not done; no device evidence |
-| CashFusion | **PARTIAL** | Protocol in `crates/optn-fusion`; coin selection, tier planning and the depth record in Rust (`optn_core::fusion::{coin_selection, depth}`, `optn_fusion::allocate`); one Rust driver (`optn_fusion_native::driver`) runs every round, manual and Auto, server and P2P, for the desktop (`optn_fusion_start`), `optn fusion` and the docker runner | Released; reported working on chipnet and mainnet. The P2P (Nostr) protocol is now also in Rust (`optn_fusion::p2p`), checked against the TypeScript peers in both directions, and the native host carries it over Nostr and Tor for the CLI and docker (`optn-fusion-native::p2p_round`, `optn fusion --p2p`; proven over a local relay, 2026-10-15). The desktop's TypeScript round runners are gone; the renderer only starts, stops and shows a run (2026-10-15). Remaining: a live chipnet round mixing Rust and TypeScript peers, the coordinator's relay budget (see 2026-10-15), a desktop round through the shared driver on chipnet, pre-consolidation of crowded addresses in Rust, and a Leptos fusion screen |
+| CashFusion | **PARTIAL** | Protocol in `crates/optn-fusion`; coin selection, tier planning and the depth record in Rust (`optn_core::fusion::{coin_selection, depth}`, `optn_fusion::allocate`); one Rust driver (`optn_fusion_native::driver`) runs every round, manual and Auto, server and P2P, for the desktop (`optn_fusion_start`), `optn fusion` and the docker runner | Released; reported working on chipnet and mainnet. The P2P (Nostr) protocol is now also in Rust (`optn_fusion::p2p`), checked against the TypeScript peers in both directions, and the native host carries it over Nostr and Tor for the CLI and docker (`optn-fusion-native::p2p_round`, `optn fusion --p2p`; proven over a local relay, 2026-10-15). The desktop's TypeScript round runners are gone; the renderer only starts, stops and shows a run (2026-10-15). Live on chipnet (2026-10-16): P2P rounds of Rust peers fuse (six CLI peers; the desktop with six CLI peers), and desktop server rounds and Auto fuse through the shared driver. Remaining: a live round mixing Rust and TypeScript peers, the coordinator's relay budget (see 2026-10-15), several desktop instances sharing one Tor (see 2026-10-16), pre-consolidation of crowded addresses in Rust, and a Leptos fusion screen |
 | 44px targets, safe areas, contrast | **PROVEN** (measured in the stylesheet) | `optn-ui/style.css`, measured by `optn-ui/src/stylesheet.rs`: `interactive_controls_declare_a_44px_minimum_tap_target` requires an explicit `min-height: 44px` on `.primary`, `.secondary`, `.chip`, `.tab-item` and `.settings-row`; `the_shell_respects_the_devices_safe_areas` requires both safe-area insets; `text_meets_wcag_contrast_in_every_mode` (2026-10-10) checks text, muted, danger and warning at WCAG 4.5:1 against the page and the surface in all four modes and the default | Failure and caution text (`.error`, `.field-error`, `.warn`, `.warning`) now use the use-named `--danger` and `--warning` tokens, where before a failure read as body text. 13 layout classes remain in `UNSTYLED_TODAY`, and `no_new_class_is_left_unstyled` stops the list growing |
 | Capacitor/React retained until Leptos is proven | **PROVEN** | Both trees present | — |
 
@@ -2982,4 +2982,75 @@ Checks run on the merge with `fca7ff2c`:
   and strict clippy.
 - `xtask architecture`, rustfmt, and all six lock files with `--locked`.
 
-Not yet run: a desktop round through the new path on chipnet.
+Run live on 2026-10-16: see the next entry.
+
+### 2026-10-16: the desktop on the shared driver, live on chipnet
+
+The desktop build of `4ebcfa23` and later, against a local Electron Cash
+fusion server, Tor daemons of the lab's own, and the CLI built from the same
+commits. Each desktop wallet ran in an app instance of its own, because the
+desktop's engine holds one wallet (below). Driven over the WebView2 DevTools
+port, with the driver's raw events recorded in every window.
+
+| Round | Who | Transaction | Chain |
+| --- | --- | --- | --- |
+| Server, manual | desktop #3, #4, #6 | `5121b20bfb72841f0e5a1690a211fd4b68d6d26c88331f3f41386d56601ecfaa` | block 328096, 29 in / 19 out |
+| P2P, manual | six CLI peers, each on its own Tor | `6d245db58701fe742c766fbe5edf00c021031e62589a0571cfc30d62ef514883` | block 328105, 14 in / 25 out |
+| P2P, manual | desktop #7 and six CLI peers | `ed20ff2dad56966cbcf792ab232cfdec0d06bb401a599785d99e8f6b703c450d` | block 328106, 28 in / 22 out |
+| Server, manual, then Auto | desktop #3, #4 | `e303c566859a66600311866f16597cc8c19362bce5d19c257622cd7456c046d8`, then `1c80a2d2…`, `e41324af…`, `583a67b5…` | the first in the mempool when checked |
+
+The explorer (`bch-explorer-inspect`, chipnet) confirmed the first three
+blocks and saw `e303c566` in the mempool. Every desktop peer reported the
+same txid as the others, and in the P2P round the steps 2, 3, 5, 6 and 7
+(`4ebcfa23`). After the round the panel showed "Fused ✓" with the txid, the
+renderer's depth view held it (`syncRuntimeFusionDepth`), and no coin stayed
+held. Auto, armed by the manual round, kept fusing, rode out "could not
+safely revalidate wallet inputs" and a server clock skew as retries, and
+stopped at once when CashFusion was switched off between rounds.
+
+Found and fixed here (`20cb86fb`, `338fe1e4`, `7ee16be1`), each with a test
+that fails without it:
+
+- Fuse failed at once with "A chain operation is already running" whenever
+  a background sync held the chain. The host now waits that out, a second at
+  a time for up to 90 s; a stop ends the wait and counts as a stop.
+- The panel's leftover-run check ran on Start, before Rust listed the run,
+  and showed every round cancelled while Rust went on fusing. A start Rust
+  has not confirmed is never dropped. `optn_fusion_running` now names the
+  run's wallet, mode and Auto, and the view adopts a lost run of its own
+  wallet on open, so it can be seen and stopped.
+- P2P rounds of Rust peers stalled with "outputs never arrived (batches=0,
+  ...)", six CLI peers on idle Tors included: one `onion_output` whose one
+  circuit reached no relay was lost, because the round's resend timers are
+  coalesced while a copy is still connecting. Every component now gets up to
+  three connections on fresh circuits. Before: five rounds, none fused. After:
+  both rounds above fused.
+- After a fuse the panel greyed Start, "No spendable (non-token) coins", from
+  the renderer's lagging coin list, while the runtime held 1,197,820 sats. The
+  driver decides what can fuse; the panel no longer pre-judges it.
+
+Found, open:
+
+- The desktop's engine holds one wallet. Opening a wallet in another window
+  switches it, and a run of the first wallet ends at its next round (the
+  session check). The renderer-run fusion fused every window's wallet; sends
+  already needed the engine's wallet. One wallet per window needs the runtime
+  to hold several sessions.
+- Several desktop instances on one Tor starve it. Two instances whose sync
+  kept failing held a Tor daemon at 100% of a core; the SOCKS handshake then
+  took 4-10 s, past the fusion proxy check's 5 s, and one-shot relay
+  connections timed out, so the onion missed its deadline (35 s plus 36 s per
+  peeler). With one healthy instance the same daemon idled and the round
+  fused. A holder runs one app; the lab ran nine.
+- The desktop's chain stack did not recover when its Tor restarted: every
+  refresh then answered "no wallet route is available under the current
+  policy" or "Proxy server unreachable" until the app restarted. Two wallets
+  (#10, #11, then #12) answered "no wallet route" from a fresh start too.
+- Electrum's own fusion clock check ("server clock differs by more than 5
+  seconds") failed against the local server now and then; Auto retried.
+
+Checks on `7ee16be1`: `test:core` 1854 tests, `test:ui` 50, `typecheck:core`,
+`lint:core`, `deps:check`, `security:test`, `addons:validate`; optn-fusion-native
+30 tests and the ten-peer relay round; the CLI 114 and strict clippy;
+`src-tauri` 146 and strict clippy without default features; `xtask
+architecture`; rustfmt; all six lock files with `--locked`.
