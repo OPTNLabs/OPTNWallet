@@ -123,6 +123,65 @@ show the exact review, obtain approval (including intentional burns/authority
 changes), and preserve the original bytes. P2PKH inputs, full parents, Chipnet,
 and explicit `SIGHASH_ALL|FORKID` remain the supported finalization scope.
 
+## On the SeedCash emulator (2026-10-16)
+
+SeedCash `main` at `7defc55` (which reworked the token review screens since
+`30c5ba6`) with the official emulator (`SeedCashOrg/seedcash-emulator`,
+`9d789cd`), driven by `scripts/seedcash/emulator/`. Everything below is
+SeedCash's own code; the harness only adds a scriptable camera, buttons and
+screen capture:
+
+- The camera is a virtual one that shows OPTN's frames, as a phone held up to
+  the device would. The frames are exactly what OPTN displays:
+  `encodePsbtToUrFrames` at the default 50-byte fragments, drawn at error level
+  L with an 8-module margin. SeedCash's frame handling and zbar decoding run on
+  them.
+- The signed QR SeedCash shows is recorded frame by frame and read back with
+  OPTN's own `UrPsbtScanner`, then finalized and run on the BCH VM by
+  `seedcash_cashtokens finalize`.
+
+To run it: copy SeedCash's `src`, overlay the emulator's `seedcash/` folder
+on it, then start `python scripts/seedcash/emulator/harness.py <that src>
+<lab folder>`. Put each case's QR frames in `<lab>/cam/<case>/` and, with the
+wallet menu showing, run `SEEDCASH_LAB=<lab> python
+scripts/seedcash/emulator/run_case.py <case>`; `emu.py` sends single
+commands (`press DOWN`, `shot name`, `camera <dir>`).
+
+The seed was loaded the way a holder would: Load seed, SeedQR, a Compact
+SeedQR of the all-`abandon` phrase scanned by the camera. SeedCash showed
+fingerprint `73c5da0a`, the phrase's known master fingerprint.
+
+| Case | What SeedCash showed | Signed | OPTN on return |
+| --- | --- | --- | --- |
+| `bch-control` | 1,000,000 sats; math 0.010000 in, 0.009990 out, 0.000010 fee; the OP_RETURN as undecodable text | yes | verified, 198 bytes |
+| `transfer-None-65536` | "Unknown FT token" warning (no decimals), category `1111…`, 65536 [?] to `zzw2lnr…s80a4vy`; 1,000 and 998,000 sats out, 1,000 fee | yes | verified, 271 bytes |
+| `transfer-Some(Mutable)-1` | the fungible amount, then the mutable NFT with its address | yes | verified, 267 bytes |
+| `mint-2-nfts` | a minting-NFT warning, then each of the three NFTs and its address | yes | verified, 409 bytes |
+| `five-ft-categories` | each of the five categories in turn, then six outputs | yes | verified, 1,107 bytes |
+| `burn-ft-50-remaining` | "PSBT Error, Parsing Failed" | no | — |
+| `reject-ft-inflation` | the review, as for a transfer | yes | refused: "FT inflation" |
+
+Run against all 64 exported cases, SeedCash's parser differs from OPTN's
+review in two ways:
+
+- It refuses every case that burns a token: 8 valid ones ("PSBT burns
+  fungible tokens", "PSBT burns non-fungible tokens"), including destroying or
+  splitting a minting authority. OPTN's watch-only token send never produces a
+  burn (Rust refuses one when it plans the send), so a holder cannot reach
+  this from OPTN.
+- It parses 6 of the 9 consensus-invalid cases (inflation, NFT duplication or
+  mutation, an overflowing genesis supply). It does not enforce CashTokens
+  rules; OPTN refuses those signatures on return, as the network would.
+
+On every review the change output appears as "Will Send", like a recipient,
+though its derivation is on the change path (`…/1/99`). Token amounts carry
+"[?]" because SeedCash knows no token metadata.
+
+Limits: a virtual camera tests decoding of OPTN's frames, not a lens or
+lighting. The Windows zbar wheel (0.10) has no binary mode; every QR here is
+numeric, alphanumeric or plain-byte, where both modes read the same bytes, and
+the harness says so where it adapts the call.
+
 ## Checks
 
 ```text
