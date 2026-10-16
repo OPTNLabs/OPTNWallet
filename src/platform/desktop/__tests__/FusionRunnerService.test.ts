@@ -53,6 +53,7 @@ vi.mock('../../../utils/errorHandling', () => ({ logError: vi.fn() }));
 vi.mock('../logger', () => ({ log: { info: vi.fn(), error: vi.fn() } }));
 
 import {
+  autoFusionRun,
   cancelFusionRound,
   getFusionActivity,
   getFusionLastResult,
@@ -112,7 +113,7 @@ describe('FusionRunnerService — a view of the Rust driver', () => {
     vi.stubGlobal('localStorage', new MemoryStorage());
     startNative.mockReset().mockResolvedValue(undefined);
     stopNative.mockReset().mockResolvedValue(true);
-    nativeRunning.mockReset().mockResolvedValue(false);
+    nativeRunning.mockReset().mockResolvedValue(null);
     findPendingFusion.mockReset().mockResolvedValue(null);
     reconcile.mockReset().mockResolvedValue({});
     recordFusionTxid.mockReset();
@@ -369,13 +370,85 @@ describe('FusionRunnerService — a view of the Rust driver', () => {
       coins: 1,
       outpoints: ['aa:0'],
     });
-    nativeRunning.mockResolvedValue(true);
+    nativeRunning.mockResolvedValue({
+      walletId: WALLET,
+      mode: 'p2p',
+      auto: false,
+    });
     await reconcileIdleFusionState(WALLET);
     expect(isFusionRunning(WALLET)).toBe(true);
-    nativeRunning.mockResolvedValue(false);
+    // Rust not answering changes nothing.
+    nativeRunning.mockRejectedValueOnce(new Error('ipc closed'));
+    await reconcileIdleFusionState(WALLET);
+    expect(isFusionRunning(WALLET)).toBe(true);
+    nativeRunning.mockResolvedValue(null);
     await reconcileIdleFusionState(WALLET);
     expect(isFusionRunning(WALLET)).toBe(false);
     expect(reservedOutpoints(WALLET).size).toBe(0);
+  });
+
+  it('never drops a run whose start Rust has not confirmed yet', async () => {
+    // Found live: the panel re-checked on Start, before Rust listed the run,
+    // and showed every round cancelled while Rust went on fusing.
+    let confirm: () => void = () => undefined;
+    startNative.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          confirm = resolve;
+        })
+    );
+    const outcome = manual();
+    await flush();
+    await reconcileIdleFusionState(WALLET);
+    expect(isFusionRunning(WALLET)).toBe(true);
+    confirm();
+    await flush();
+    emitFinished({
+      walletId: WALLET,
+      mode: 'p2p',
+      auto: false,
+      ok: true,
+      rounds: [round()],
+      stopped: null,
+    });
+    await expect(outcome).resolves.toMatchObject({ status: 'fused' });
+  });
+
+  it('adopts a run of this wallet it lost track of, and none of another', async () => {
+    nativeRunning.mockResolvedValue({
+      walletId: WALLET + 1,
+      mode: 'server',
+      auto: true,
+    });
+    await reconcileIdleFusionState(WALLET);
+    expect(autoFusionRun(WALLET)).toBeNull();
+
+    nativeRunning.mockResolvedValue({
+      walletId: WALLET,
+      mode: 'server',
+      auto: true,
+    });
+    await reconcileIdleFusionState(WALLET);
+    // Shown as an Auto run with settings no hook chose, so the hook
+    // restarts or stops it.
+    expect(autoFusionRun(WALLET)).toEqual({ key: 'adopted' });
+    emitEvent({
+      walletId: WALLET,
+      event: 'round',
+      mode: 'server',
+      coins: 2,
+      outpoints: ['cc:0', 'cc:1'],
+    });
+    expect(getFusionActivity(WALLET)?.mode).toBe('server');
+    expect(cancelFusionRound(WALLET)).toBe(true);
+    emitFinished({
+      walletId: WALLET,
+      mode: 'server',
+      auto: true,
+      ok: true,
+      stopped: 'interrupted',
+    });
+    expect(autoFusionRun(WALLET)).toBeNull();
   });
 });
 

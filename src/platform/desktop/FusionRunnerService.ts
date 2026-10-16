@@ -91,7 +91,12 @@ interface NativeRun {
   /** Resolves once the driver says the run finished. */
   finished: Promise<void>;
   markFinished: () => void;
+  /** Rust has not yet confirmed the start, so it may not report the run. */
+  starting: boolean;
 }
+
+/** The settings of an Auto run this view adopted rather than started. */
+const ADOPTED = 'adopted';
 
 let run: NativeRun | null = null;
 /** A manual start is waiting for Auto to step aside; Auto must not restart. */
@@ -497,6 +502,7 @@ function newRun(
     settle: null,
     finished,
     markFinished,
+    starting: true,
   };
 }
 
@@ -510,6 +516,7 @@ async function begin(
   emitRun();
   try {
     await startNativeFusion(request);
+    next.starting = false;
   } catch (error) {
     if (run === next) run = null;
     emitRun();
@@ -674,8 +681,17 @@ export async function reconcileIdleFusionState(
   walletId: number
 ): Promise<void> {
   if (!Number.isInteger(walletId) || walletId <= 0) return;
+  // A start still on its way to Rust is not a lost run.
+  if (run?.starting) return;
+  let native;
+  try {
+    native = await nativeFusionRunning();
+  } catch {
+    return; // Rust could not say; change nothing.
+  }
+  if (run?.starting) return;
   if (run) {
-    if (await nativeFusionRunning().catch(() => true)) return;
+    if (native?.walletId === run.walletId) return;
     onFinished({
       walletId: run.walletId,
       mode: run.mode,
@@ -685,8 +701,23 @@ export async function reconcileIdleFusionState(
     });
     return;
   }
-  if (activities.has(walletId)) setActivity(walletId, null);
-  if (!(await nativeFusionRunning().catch(() => true))) {
-    clearOutpointReservations(walletId);
+  if (native?.walletId === walletId) {
+    // A run this view lost track of, after a reload while it ran: show it,
+    // and let Stop and the Auto hook reach it. An adopted Auto run is
+    // restarted with the current settings, or stopped if Auto is not armed.
+    await ensureListening();
+    if (run) return;
+    const adopted = newRun(
+      walletId,
+      native.mode,
+      native.auto ? 'auto' : 'manual',
+      native.auto ? ADOPTED : null
+    );
+    adopted.starting = false;
+    run = adopted;
+    emitRun();
+    return;
   }
+  if (activities.has(walletId)) setActivity(walletId, null);
+  if (!native) clearOutpointReservations(walletId);
 }

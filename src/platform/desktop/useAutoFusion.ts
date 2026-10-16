@@ -34,6 +34,7 @@ import {
   cancelFusionRound,
   getFusionActivity,
   isNativeFusionBusy,
+  reconcileIdleFusionState,
   setFusionLastResult,
   startAutoFusion,
   stopFusionRun,
@@ -101,6 +102,12 @@ export function useAutoFusion(policyReady = true): void {
     },
     [walletId, network, cashFusionEnabled, p2pFusionEnabled]
   );
+
+  // On wallet open, find a run this view lost track of (a reload while it
+  // ran), so it is shown and can be stopped.
+  useEffect(() => {
+    if (walletId > 0) void reconcileIdleFusionState(walletId);
+  }, [walletId]);
 
   const mode: FusionMode = p2pFusionEnabled ? 'p2p' : 'server';
   // Keyed on content: the server list is re-serialized on health refreshes,

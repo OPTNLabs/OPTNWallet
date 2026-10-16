@@ -111,8 +111,15 @@ export function stopNativeFusion(): Promise<boolean> {
   return invoke<boolean>('optn_fusion_stop');
 }
 
-export function nativeFusionRunning(): Promise<boolean> {
-  return invoke<boolean>('optn_fusion_running');
+/** The run under way, if any: whose it is and how it fuses. */
+export interface NativeFusionRunInfo {
+  walletId: number;
+  mode: 'server' | 'p2p';
+  auto: boolean;
+}
+
+export function nativeFusionRunning(): Promise<NativeFusionRunInfo | null> {
+  return invoke<NativeFusionRunInfo | null>('optn_fusion_running');
 }
 
 export async function listenNativeFusion(

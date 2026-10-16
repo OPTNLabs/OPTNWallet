@@ -355,6 +355,8 @@ pub async fn run<H: FusionHost>(
         };
         let (wallet, held) = match refreshed {
             Ok(refreshed) => refreshed,
+            // Stopped while the refresh waited: a stop, not a failure.
+            Err(_) if host.stopped() => return stop(fused),
             Err(error) if options.auto => {
                 host.report(json!({"event": "retry", "error": error, "transient": true}));
                 if !host.pause(AUTO_FUSION_RETRY_MS).await {
@@ -892,6 +894,48 @@ mod tests {
         fn stopped(&self) -> bool {
             self.inner.stopped()
         }
+    }
+
+    /// A refresh that ends because the holder stopped the run is a stop.
+    #[tokio::test]
+    async fn a_refresh_ended_by_a_stop_is_a_stop() {
+        let wallet = FakeWallet::new(vec![coin(1, 150_000)], vec![Ok(true)]);
+        let stopping = FlakyHost {
+            inner: FakeHost::new(&wallet, &[], 0),
+            failures_left: Mutex::new(1),
+        };
+        stopping.inner.stopped.store(false, Ordering::SeqCst);
+        // The refresh fails and the run is stopped by the time it returns.
+        struct StoppedOnFailure<'w>(FlakyHost<'w>);
+        impl FusionHost for StoppedOnFailure<'_> {
+            async fn refresh(&self) -> Result<&dyn FusionWallet, String> {
+                let result = self.0.refresh().await;
+                if result.is_err() {
+                    self.0.inner.stopped.store(true, Ordering::SeqCst);
+                }
+                result
+            }
+            async fn held(&self) -> Result<BTreeSet<String>, String> {
+                self.0.held().await
+            }
+            fn report(&self, event: Value) {
+                self.0.report(event);
+            }
+            async fn pause(&self, ms: u64) -> bool {
+                self.0.pause(ms).await
+            }
+            fn round_started(&self, round_id: &str) {
+                self.0.round_started(round_id);
+            }
+            fn stopped(&self) -> bool {
+                self.0.stopped()
+            }
+        }
+        let host = StoppedOnFailure(stopping);
+        let outcome = run(&host, &p2p(), ONCE).await.unwrap();
+        assert!(outcome.fused.is_empty());
+        assert_eq!(outcome.stopped.as_deref(), Some(INTERRUPTED));
+        assert!(wallet.calls().is_empty(), "nothing held or fused");
     }
 
     /// Auto rides out a failed refresh; a single run reports it.

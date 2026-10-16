@@ -25,6 +25,7 @@ use tauri::{Emitter, Manager};
 use crate::chain_runtime::NativeChainRuntime;
 use crate::electrum_selection;
 use crate::network_config::NetworkSettingsStore;
+use optn_runtime::wallet_refresh::RefreshOutcome;
 
 pub const FUSION_EVENT: &str = "optn://fusion-event";
 pub const FUSION_FINISHED: &str = "optn://fusion-finished";
@@ -94,10 +95,58 @@ impl Control {
     }
 }
 
+/// What the renderer may know of a run: whose it is and how it fuses, so a
+/// view that lost track of it (a reload while it ran) can show and stop it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FusionRunInfo {
+    pub wallet_id: u32,
+    pub mode: &'static str,
+    pub auto: bool,
+}
+
+struct Running {
+    info: FusionRunInfo,
+    control: Arc<Control>,
+}
+
 /// The one run allowed at a time.
 #[derive(Default)]
 pub struct FusionDriverState {
-    running: Mutex<Option<Arc<Control>>>,
+    running: Mutex<Option<Running>>,
+}
+
+/// How long a round waits for a refresh or chain operation already running,
+/// counted in retries a second apart.
+const BUSY_WAIT_TRIES: u32 = 90;
+const BUSY_RETRY_MS: u64 = 1_000;
+const CHAIN_BUSY: &str = "A chain operation is already running. Please wait.";
+
+/// Refresh, waiting out another refresh or chain operation -- most often a
+/// background sync -- rather than refusing the round. `pause` waits between
+/// tries and says whether to carry on.
+async fn refresh_waiting<R, RF, P, PF>(
+    mut refresh: R,
+    mut pause: P,
+    tries: u32,
+) -> Result<(), String>
+where
+    R: FnMut() -> RF,
+    RF: std::future::Future<Output = Result<RefreshOutcome, String>>,
+    P: FnMut() -> PF,
+    PF: std::future::Future<Output = bool>,
+{
+    for _ in 0..tries {
+        match refresh().await? {
+            RefreshOutcome::Refreshed => return Ok(()),
+            RefreshOutcome::Busy => {
+                if !pause().await {
+                    return Err("Stopped.".into());
+                }
+            }
+        }
+    }
+    Err(CHAIN_BUSY.into())
 }
 
 /// The desktop's side of the driver: the chain runtime brings the wallet's
@@ -125,7 +174,12 @@ impl FusionHost for DesktopHost {
             self.control.stop();
             return Err(error);
         }
-        self.chain.refresh_wallet().await?;
+        refresh_waiting(
+            || self.chain.try_refresh_wallet(),
+            || self.pause(BUSY_RETRY_MS),
+            BUSY_WAIT_TRIES,
+        )
+        .await?;
         Ok(&self.runtime as &dyn FusionWallet)
     }
 
@@ -344,7 +398,17 @@ pub async fn optn_fusion_start(
         if running.is_some() {
             return Err("CashFusion is already running for this wallet.".into());
         }
-        *running = Some(Arc::clone(&control));
+        *running = Some(Running {
+            info: FusionRunInfo {
+                wallet_id: request.wallet_id,
+                mode: match &venue {
+                    Venue::P2p(_) => "p2p",
+                    Venue::Server(_) | Venue::Failover(_) => "server",
+                },
+                auto: request.auto,
+            },
+            control: Arc::clone(&control),
+        });
     }
     let host = DesktopHost {
         app: app.clone(),
@@ -377,7 +441,7 @@ pub async fn optn_fusion_start(
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if running
             .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, &host.control))
+            .is_some_and(|current| Arc::ptr_eq(&current.control, &host.control))
         {
             *running = None;
         }
@@ -397,22 +461,23 @@ pub fn optn_fusion_stop(state: tauri::State<'_, FusionDriverState>) -> bool {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .as_ref()
     {
-        Some(control) => {
-            control.stop();
+        Some(running) => {
+            running.control.stop();
             true
         }
         None => false,
     }
 }
 
-/// Whether a run is under way.
+/// The run under way, if any: whose it is and how it fuses.
 #[tauri::command]
-pub fn optn_fusion_running(state: tauri::State<'_, FusionDriverState>) -> bool {
+pub fn optn_fusion_running(state: tauri::State<'_, FusionDriverState>) -> Option<FusionRunInfo> {
     state
         .running
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .is_some()
+        .as_ref()
+        .map(|running| running.info.clone())
 }
 
 /// The wallet's fusion depth record as the runtime keeps it, in its stored
@@ -540,6 +605,52 @@ mod tests {
         ] {
             assert!(same_session(&changed, 4, 7).is_err());
         }
+    }
+
+    /// A background sync holding the chain makes a round wait, not fail;
+    /// a stop ends the wait; and the wait is bounded.
+    #[tokio::test]
+    async fn a_busy_chain_is_waited_out() {
+        use std::cell::Cell;
+        let answers = Cell::new(2u32);
+        let pauses = Cell::new(0);
+        let busy_twice = refresh_waiting(
+            || {
+                let busy = answers.get() > 0;
+                answers.set(answers.get().saturating_sub(1));
+                async move {
+                    Ok(if busy {
+                        RefreshOutcome::Busy
+                    } else {
+                        RefreshOutcome::Refreshed
+                    })
+                }
+            },
+            || {
+                pauses.set(pauses.get() + 1);
+                async { true }
+            },
+            BUSY_WAIT_TRIES,
+        )
+        .await;
+        assert_eq!(busy_twice, Ok(()));
+        assert_eq!(pauses.get(), 2);
+
+        let always_busy =
+            refresh_waiting(|| async { Ok(RefreshOutcome::Busy) }, || async { true }, 3).await;
+        assert_eq!(always_busy, Err(CHAIN_BUSY.to_string()));
+
+        let stopped =
+            refresh_waiting(|| async { Ok(RefreshOutcome::Busy) }, || async { false }, 3).await;
+        assert_eq!(stopped, Err("Stopped.".to_string()));
+
+        let failed = refresh_waiting(
+            || async { Err("Chain source is still connecting.".to_string()) },
+            || async { true },
+            3,
+        )
+        .await;
+        assert_eq!(failed, Err("Chain source is still connecting.".to_string()));
     }
 
     #[test]

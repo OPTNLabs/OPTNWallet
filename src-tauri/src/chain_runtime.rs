@@ -955,6 +955,14 @@ impl NativeChainRuntime {
         self.refresh_once(Some(height)).await
     }
 
+    /// One wallet refresh, answering `Busy` rather than failing when another
+    /// refresh or chain operation holds the chain.
+    pub async fn try_refresh_wallet(&self) -> Result<RefreshOutcome, String> {
+        self.wallet_refresh
+            .refresh(|| self.sync_wallet_from(None))
+            .await
+    }
+
     async fn refresh_once(&self, floor: Option<u32>) -> Result<(), String> {
         match self
             .wallet_refresh
