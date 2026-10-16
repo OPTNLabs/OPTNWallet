@@ -1,21 +1,48 @@
 import {
-  encodeCashAddress,
-  encodeHdPrivateKey,
-  decodeHdPublicKey,
-  deriveHdPath,
-  deriveHdPrivateNodeFromSeed,
-  deriveHdPublicNode,
-  deriveHdPublicNodeChild,
-  encodeHdPublicKey,
-  secp256k1,
+  hexToBin,
   sha256,
   validateSecp256k1PrivateKey,
 } from '@bitauth/libauth';
-import { hash160 } from '@cashscript/utils';
-import * as bip39 from 'bip39';
 import { Network } from '../state/slices/networkSlice';
 import { COIN_TYPE } from '../utils/constants';
 import { zeroize } from '../utils/secureMemory';
+// Seeds, BIP32 and addresses are derived by crates/optn-core (src/hd.rs), the
+// same code the CLI and the desktop runtime use. This file keeps the wallet's
+// path conventions and hands the cryptography to it.
+import {
+  bchP2pkhAddresses as coreBchP2pkhAddresses,
+  ensureOptnCore,
+  hdAlignPublicKeyNetwork as coreAlignPublicKeyNetwork,
+  hdExtendedPrivateKeyAtPath as coreExtendedPrivateKeyAtPath,
+  hdKeyPairAtPath as coreKeyPairAtPath,
+  hdMasterFingerprint as coreMasterFingerprint,
+  hdPrivateKeyAtPath as corePrivateKeyAtPath,
+  hdPublicKeyAtPath as corePublicKeyAtPath,
+  hdPublicKeyChild as corePublicKeyChild,
+} from '../wasm/optn-core';
+
+/** The core takes the network as a string; this is the only mapping needed. */
+function coreNetwork(network: Network): string {
+  return network === Network.MAINNET ? 'mainnet' : 'chipnet';
+}
+
+/**
+ * BIP39 hashes the NFKD form of the phrase and the passphrase. bip39.js did
+ * that itself; the core leaves Unicode to JS, which has it built in.
+ */
+function nfkd(text: string | undefined): string {
+  return (text ?? '').normalize('NFKD');
+}
+
+/** Call the core, turning the string it throws into an Error. */
+function callCore<T>(call: () => T): T {
+  ensureOptnCore();
+  try {
+    return call();
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
+  }
+}
 
 export type DerivedBchKeyMaterial = {
   publicKey: Uint8Array;
@@ -173,26 +200,9 @@ export function alignHdPublicKeyNetwork(
   network: Network,
   hdPublicKey: string
 ): string {
-  const raw = hdPublicKey.trim();
-  if (!raw) {
-    throw new Error('Enter a valid BIP32 public key.');
-  }
-  const decoded = decodeHdPublicKey(raw);
-  if (typeof decoded === 'string') {
-    throw new Error('Enter a valid BIP32 public key.');
-  }
-  const target = getHdKeyNetwork(network);
-  if (decoded.network === target) {
-    return raw;
-  }
-  const encoded = encodeHdPublicKey({
-    network: target,
-    node: decoded.node,
-  });
-  if (typeof encoded === 'string') {
-    throw new Error('Could not re-encode the public key for this network.');
-  }
-  return encoded.hdPublicKey;
+  return callCore(() =>
+    coreAlignPublicKeyNetwork(coreNetwork(network), hdPublicKey)
+  );
 }
 
 export function getBchAccountPath(
@@ -250,28 +260,19 @@ export function deriveBchPublicAddress(
   network: Network,
   publicKey: Uint8Array
 ): DerivedBchPublicAddress | null {
-  const publicKeyHash = hash160(publicKey);
-  if (!publicKeyHash) {
+  // Compressed or uncompressed SEC1; anything else has no P2PKH address.
+  if (publicKey.length !== 33 && publicKey.length !== 65) {
     return null;
   }
-
-  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
-  const address = encodeCashAddress({
-    payload: publicKeyHash,
-    prefix,
-    type: 'p2pkh',
-  }).address;
-  const tokenAddress = encodeCashAddress({
-    payload: publicKeyHash,
-    prefix,
-    type: 'p2pkhWithTokens',
-  }).address;
+  const derived = JSON.parse(
+    callCore(() => coreBchP2pkhAddresses(coreNetwork(network), publicKey))
+  ) as { publicKeyHash: string; address: string; tokenAddress: string };
 
   return {
     publicKey: Uint8Array.from(publicKey),
-    publicKeyHash: Uint8Array.from(publicKeyHash),
-    address,
-    tokenAddress,
+    publicKeyHash: hexToBin(derived.publicKeyHash),
+    address: derived.address,
+    tokenAddress: derived.tokenAddress,
   };
 }
 
@@ -301,32 +302,31 @@ export async function deriveBchChild(
     addressIndex,
     source.accountPath
   );
-  const privateKey = await derivePrivateKeyAtPath(
-    source.mnemonic,
-    source.passphrase,
-    path
+  // private(32) || compressed public(33), from one derivation in the core.
+  const keyPair = callCore(() =>
+    coreKeyPairAtPath(nfkd(source.mnemonic), nfkd(source.passphrase), path)
   );
 
   try {
-    const publicKey = secp256k1.derivePublicKeyCompressed(privateKey);
-    if (typeof publicKey === 'string') {
-      return null;
+    if (keyPair.length !== 65) {
+      throw new Error(
+        `optn-core returned ${keyPair.length} bytes of key pair, expected 65`
+      );
     }
-
-    const publicAddress = deriveBchPublicAddress(network, publicKey);
+    const publicAddress = deriveBchPublicAddress(network, keyPair.subarray(32));
     if (!publicAddress) {
       return null;
     }
 
     return {
       publicKey: publicAddress.publicKey,
-      privateKey: Uint8Array.from(privateKey),
+      privateKey: keyPair.slice(0, 32),
       publicKeyHash: publicAddress.publicKeyHash,
       address: publicAddress.address,
       tokenAddress: publicAddress.tokenAddress,
     };
   } finally {
-    zeroize(privateKey);
+    zeroize(keyPair);
   }
 }
 
@@ -413,39 +413,23 @@ export async function deriveBchStandardXpubs(
   };
 }
 
+// These stay async: callers await them, and bip39.js's seed was async.
+
+/** The extended public key at a path: xpub on mainnet, tpub otherwise. */
 export async function deriveHdPublicKeyAtPath(
   mnemonic: string,
   passphrase: string,
   network: Network,
   path: string
 ): Promise<string> {
-  const seed = Uint8Array.from(
-    await bip39.mnemonicToSeed(mnemonic, passphrase)
+  return callCore(() =>
+    corePublicKeyAtPath(
+      nfkd(mnemonic),
+      nfkd(passphrase),
+      coreNetwork(network),
+      path
+    )
   );
-  const rootNode = deriveHdPrivateNodeFromSeed(seed, { assumeValidity: true });
-
-  try {
-    const derived = deriveHdPath(rootNode, path);
-    if (typeof derived === 'string') {
-      throw new Error(`Failed to derive path ${path}: ${derived}`);
-    }
-
-    const publicNode = deriveHdPublicNode(derived);
-    const xpub = encodeHdPublicKey({
-      network: getHdKeyNetwork(network),
-      node: publicNode,
-    });
-
-    if (typeof xpub === 'string') {
-      throw new Error(`Failed to encode HD public key for ${path}: ${xpub}`);
-    }
-
-    zeroize(derived.privateKey);
-    return xpub.hdPublicKey;
-  } finally {
-    zeroize(seed);
-    zeroize(rootNode.privateKey);
-  }
 }
 
 /** Derive the BIP32 master fingerprint without exposing the root key. */
@@ -453,90 +437,53 @@ export async function deriveMasterFingerprint(
   mnemonic: string,
   passphrase: string
 ): Promise<Uint8Array> {
-  const seed = Uint8Array.from(
-    await bip39.mnemonicToSeed(mnemonic, passphrase)
+  return Uint8Array.from(
+    callCore(() => coreMasterFingerprint(nfkd(mnemonic), nfkd(passphrase)))
   );
-  const rootNode = deriveHdPrivateNodeFromSeed(seed, { assumeValidity: true });
-  try {
-    const rootPublicNode = deriveHdPublicNode(rootNode);
-    return Uint8Array.from(hash160(rootPublicNode.publicKey).slice(0, 4));
-  } finally {
-    zeroize(seed);
-    zeroize(rootNode.privateKey);
-  }
 }
 
+/** The extended private key at a path: xprv on mainnet, tprv otherwise. */
 export async function deriveHdPrivateKeyAtPath(
   mnemonic: string,
   passphrase: string,
   network: Network,
   path: string
 ): Promise<string> {
-  const seed = Uint8Array.from(
-    await bip39.mnemonicToSeed(mnemonic, passphrase)
+  return callCore(() =>
+    coreExtendedPrivateKeyAtPath(
+      nfkd(mnemonic),
+      nfkd(passphrase),
+      coreNetwork(network),
+      path
+    )
   );
-  const rootNode = deriveHdPrivateNodeFromSeed(seed, { assumeValidity: true });
-
-  try {
-    const derived = deriveHdPath(rootNode, path);
-    if (typeof derived === 'string') {
-      throw new Error(`Failed to derive HD private key at ${path}: ${derived}`);
-    }
-
-    const xprv = encodeHdPrivateKey({
-      network: getHdKeyNetwork(network),
-      node: derived,
-    });
-    if (typeof xprv === 'string') {
-      throw new Error(`Failed to encode HD private key for ${path}: ${xprv}`);
-    }
-
-    zeroize(derived.privateKey);
-    return xprv.hdPrivateKey;
-  } finally {
-    zeroize(seed);
-    zeroize(rootNode.privateKey);
-  }
 }
 
+/** The 32-byte private key at a path. The caller wipes it after use. */
 export async function derivePrivateKeyAtPath(
   mnemonic: string,
   passphrase: string,
   path: string
 ): Promise<Uint8Array> {
-  const seed = Uint8Array.from(
-    await bip39.mnemonicToSeed(mnemonic, passphrase)
+  return callCore(() =>
+    corePrivateKeyAtPath(nfkd(mnemonic), nfkd(passphrase), path)
   );
-  const rootNode = deriveHdPrivateNodeFromSeed(seed, { assumeValidity: true });
-
-  try {
-    const derived = deriveHdPath(rootNode, path);
-    if (typeof derived === 'string') {
-      throw new Error(`Failed to derive private key at ${path}: ${derived}`);
-    }
-
-    return Uint8Array.from(derived.privateKey);
-  } finally {
-    zeroize(seed);
-    zeroize(rootNode.privateKey);
-  }
 }
 
 export function derivePublicKeyFromHdPublicKey(
   hdPublicKey: string,
   index: bigint
 ): Uint8Array {
-  const decoded = decodeHdPublicKey(hdPublicKey);
-  if (typeof decoded === 'string') {
-    throw new Error(`Invalid HD public key: ${decoded}`);
+  // Checked here because the boundary takes a u32 and would wrap a larger
+  // number rather than refuse it. Hardened children need the private key.
+  if (index < 0n || index > BigInt(MAX_BIP44_INDEX)) {
+    throw new Error(
+      `Failed to derive public key child: index ${index} is not a non-hardened index`
+    );
   }
-
-  const child = deriveHdPublicNodeChild(decoded.node, Number(index));
-  if (typeof child === 'string') {
-    throw new Error(`Failed to derive public key child: ${child}`);
-  }
-
-  return Uint8Array.from(child.publicKey);
+  return Uint8Array.from(
+    callCore(() => corePublicKeyChild(hdPublicKey, Number(index)))
+  );
 }
 
 export function deriveBchAddressFromHdPublicKey(
