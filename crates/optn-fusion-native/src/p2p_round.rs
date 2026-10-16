@@ -45,9 +45,7 @@ use optn_fusion::p2p::rendezvous::{Negotiated, Rendezvous};
 use optn_fusion::p2p::session::{Round, RoundParams};
 use optn_fusion::p2p::signer::{sign_native, SigningRound};
 use optn_fusion::p2p::timing::{round_timeout_ms, COMPONENT_JITTER_MS};
-use optn_fusion::p2p::wire::{
-    parse_round_message, Body, InputRef, OutputRef, PoolNetwork, RoundMessage,
-};
+use optn_fusion::p2p::wire::{parse_round_message, InputRef, OutputRef, PoolNetwork, RoundMessage};
 use optn_fusion::p2p::P2P_FEERATE;
 use optn_nostr::nip17;
 use optn_nostr::nostr::prelude::{
@@ -93,12 +91,16 @@ const PUBLISH_POOL_MIN_ACKS: usize = 2;
 /// How long a settled round waits for its last messages to reach a relay
 /// before the connections close. The coordinator's `final` is among them.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(15);
-/// One-shot connections a component sent only once gets (`inputs`, the last
-/// peeler's `outputs`): no resend timer stands behind it, so one that no
-/// relay took is tried again on a fresh connection, and a fresh circuit.
-const ONCE_SENT_ATTEMPTS: u32 = 3;
+/// One-shot connections a component gets, each on a fresh circuit, until a
+/// relay takes it. Every kind gets them. Onion blobs and signatures also
+/// have the round's resend timers, but resends of a component still
+/// connecting are coalesced, so a copy whose one circuit reaches no relay
+/// spends those timers waiting and is then lost. Found live (2026-10-16): one
+/// `onion_output` whose circuit reached none of the six relays stalled a
+/// six-peer round of CLI peers, each on an idle Tor of its own.
+const COMPONENT_ATTEMPTS: u32 = 3;
 /// The pause before the next connection, times the attempts so far.
-const ONCE_SENT_RETRY_BASE_MS: u64 = 2_000;
+const COMPONENT_RETRY_BASE_MS: u64 = 2_000;
 /// One-shot connections opening at once. Each asks Tor for a circuit and
 /// opens a SOCKS stream per relay; Tor builds at most 32 circuits at a time
 /// and the shared connection holds six, and on chipnet a peeler forwarding
@@ -244,17 +246,6 @@ async fn publish_at_least_once(
     ))
 }
 
-/// One-shot connections `body` gets. `inputs` and the last peeler's
-/// `outputs` are sent once; onion blobs and signatures have resend timers of
-/// their own, which already open fresh connections.
-fn component_attempts(body: &Body) -> u32 {
-    if matches!(body, Body::Inputs { .. } | Body::Outputs { .. }) {
-        ONCE_SENT_ATTEMPTS
-    } else {
-        1
-    }
-}
-
 /// Publish an anonymous component on a one-shot connection of its own, up to
 /// `attempts` connections, each through a fresh route and each waiting for
 /// one of `turns`.
@@ -269,7 +260,7 @@ async fn publish_component(
     for attempt in 1..=attempts {
         if attempt > 1 {
             tokio::time::sleep(Duration::from_millis(
-                ONCE_SENT_RETRY_BASE_MS * u64::from(attempt - 1),
+                COMPONENT_RETRY_BASE_MS * u64::from(attempt - 1),
             ))
             .await;
         }
@@ -379,7 +370,7 @@ impl Wire {
             {
                 return;
             }
-            let attempts = component_attempts(&message.body);
+            let attempts = COMPONENT_ATTEMPTS;
             let (urls, route) = (self.urls.clone(), self.component_route.clone());
             let turns = self.one_shot_turns.clone();
             self.spawn(async move {
@@ -1369,6 +1360,7 @@ async fn perform(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use optn_fusion::p2p::wire::Body;
 
     fn announcement(pubkey: &str, at: u64) -> Announcement {
         Announcement {
@@ -1628,7 +1620,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn what_no_relay_takes_is_reported_and_only_once_sent_components_retry() {
+    async fn what_no_relay_takes_is_reported_after_every_component_retries() {
         use std::sync::atomic::Ordering;
         let relay = nostr_sdk::prelude::LocalRelay::builder().build();
         relay.run().await.unwrap();
@@ -1638,7 +1630,8 @@ mod tests {
         let to = Keys::generate().public_key().to_hex();
 
         wire.send(&to, &inputs());
-        // An onion blob has the round's resend timer behind it.
+        // An onion blob too: its resend timer cannot stand in for a retry
+        // while the first copy is still connecting.
         wire.send(
             &to,
             &message(Body::OnionOutput {
@@ -1648,7 +1641,7 @@ mod tests {
         );
         wire.flush(Duration::from_secs(30)).await;
 
-        assert_eq!(made.load(Ordering::SeqCst), ONCE_SENT_ATTEMPTS as usize + 1);
+        assert_eq!(made.load(Ordering::SeqCst), 2 * COMPONENT_ATTEMPTS as usize);
         let lines = wire.dropped.take_lines();
         assert_eq!(lines.len(), 2, "{lines:?}");
         for kind in ["inputs", "onion_output"] {
@@ -1730,7 +1723,8 @@ mod tests {
         }
         wire.send(&to, &onion("BB"));
         wire.flush(Duration::from_secs(30)).await;
-        assert_eq!(made.load(Ordering::SeqCst), 2);
+        // Each blob's attempts, and none for the coalesced copies.
+        assert_eq!(made.load(Ordering::SeqCst), 2 * COMPONENT_ATTEMPTS as usize);
         let lines = wire.dropped.take_lines();
         assert!(
             lines.len() == 1
@@ -1741,7 +1735,7 @@ mod tests {
         // Once the last copy has settled, a resend goes out again.
         wire.send(&to, &onion("AA"));
         wire.flush(Duration::from_secs(30)).await;
-        assert_eq!(made.load(Ordering::SeqCst), 3);
+        assert_eq!(made.load(Ordering::SeqCst), 3 * COMPONENT_ATTEMPTS as usize);
         wire.relays.shutdown().await;
     }
 
@@ -1758,8 +1752,8 @@ mod tests {
         for payload in ["AA", "BB", "CC", "DD", "EE"] {
             wire.send(&to, &onion(payload));
         }
-        wire.flush(Duration::from_secs(30)).await;
-        assert_eq!(made.load(Ordering::SeqCst), 5);
+        wire.flush(Duration::from_secs(60)).await;
+        assert_eq!(made.load(Ordering::SeqCst), 5 * COMPONENT_ATTEMPTS as usize);
         assert_eq!(most.load(Ordering::SeqCst), 2);
         let lines = wire.dropped.take_lines();
         assert!(
