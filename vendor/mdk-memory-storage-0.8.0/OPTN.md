@@ -26,6 +26,14 @@ GitHub, in a different crate layout.
 - `Cargo.toml`: an empty `[workspace]` table keeps the crate out of OPTN's
   root workspace, as `vendor/glib-0.18.5` does.
 
+## Advisory coverage
+
+Scanners skip a path package, so CI's Rust dependency policy job audits the
+registry crate this replaces, with the repository's `deny.toml`, which ignores
+nothing. `scripts/check-vendored-advisories.py` passes it only if every
+advisory found is in that step's `REPAIRED_IN_VENDOR` list, the ones this copy
+repairs; a new advisory against the crate fails the job.
+
 ## Remove when
 
 `mdk-memory-storage` on crates.io moves to `lru >= 0.18.2`, or optn-chat's tests
