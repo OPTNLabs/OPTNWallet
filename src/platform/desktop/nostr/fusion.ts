@@ -18,6 +18,7 @@ import {
 
 import { isRetiredRoundKey, retireRoundKey } from '../fusionRoundState';
 import { FUSION_KNOB_DEFAULTS } from '../fusionKnobs';
+import { secureRandomInt } from './secureRandom';
 
 // Public ready announcement. A NIP-01 REPLACEABLE kind (10000-19999): the relay
 // keeps only the latest event per throwaway pubkey and REPLAYS it to any new
@@ -37,22 +38,6 @@ export const POOL_EPOCH_GRACE_SECONDS = 8;
 // Keep first announce quick so 4 wallets that click Start together discover
 // each other before any of them lock a smaller set and leave gather.
 export const MAX_ANNOUNCE_DELAY_MS = 800;
-
-/**
- * A delay in [0, maxExclusive) ms from the platform CSPRNG. Fusion's timing
- * is part of its privacy, so it does not come from Math.random, whose state
- * is recoverable from its own output. The modulo bias over an 800 ms range is
- * below 2^-22, which a delay does not notice.
- */
-function secureDelayMs(maxExclusive: number): number {
-  const rng = globalThis.crypto;
-  if (!rng?.getRandomValues) {
-    throw new Error(
-      'Secure randomness is unavailable, so this fusion pool cannot announce privately.'
-    );
-  }
-  return rng.getRandomValues(new Uint32Array(1))[0] % maxExclusive;
-}
 // The announcement is a stored replaceable event, so the relay keeps serving the
 // latest one to new subscribers — frequent re-announcing buys nothing and made
 // relays answer "rate-limited: you are noting too much". Refresh slowly, just
@@ -801,7 +786,7 @@ export function joinPool(
   };
 
   // Head-start Tor WSS before first shout (0–800ms was often too early).
-  const firstAnnounceDelay = 1_200 + secureDelayMs(MAX_ANNOUNCE_DELAY_MS);
+  const firstAnnounceDelay = 1_200 + secureRandomInt(MAX_ANNOUNCE_DELAY_MS);
   announceTimer = setTimeout(() => {
     void announce().catch((error: unknown) =>
       options.onError?.(

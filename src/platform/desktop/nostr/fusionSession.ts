@@ -25,6 +25,7 @@ import {
 } from './fusionSign';
 import { getFusionKnobs } from '../fusionKnobs';
 import { electCoordinator } from './fusion';
+import { requireSecureRandom, secureRandomInt } from './secureRandom';
 import { ROUND_MSG_VERSION } from './fusionRound';
 import {
   P2P_ASSEMBLED_RESEND_MS,
@@ -258,22 +259,6 @@ export interface RoundTransport {
   ) => () => void;
 }
 
-/**
- * The platform CSPRNG, or an error. Never a weaker stand-in: a fallback that
- * quietly takes over when the real source is missing is how Coldcard and the
- * Randstorm wallets shipped predictable randomness, and here it would make
- * the shuffle below reproducible.
- */
-function requireSecureRandom(): Crypto {
-  const rng = globalThis.crypto;
-  if (!rng?.getRandomValues) {
-    throw new Error(
-      'Secure randomness is unavailable, so this fusion round cannot run privately.'
-    );
-  }
-  return rng;
-}
-
 /** Secure random in [0, 1) for jitter calculations. */
 function secureRandomUnit(): number {
   const words = new Uint32Array(2);
@@ -286,24 +271,6 @@ function secureRandomUnit(): number {
 function jitterDelay(minMs: number, maxMs: number): Promise<void> {
   const delay = minMs + secureRandomUnit() * (maxMs - minMs);
   return new Promise((resolve) => setTimeout(resolve, delay));
-}
-
-/**
- * Uniform integer in [0, maxExclusive) from the CSPRNG. Rejection-sampled: the
- * ragged tail past the last whole multiple is discarded rather than folded
- * back with `%`, which would quietly favour the low indices.
- */
-function secureRandomInt(maxExclusive: number): number {
-  if (maxExclusive <= 1) return 0;
-  const rng = requireSecureRandom();
-  const limit = Math.floor(0x1_0000_0000 / maxExclusive) * maxExclusive;
-  const word = new Uint32Array(1);
-  let value = 0;
-  do {
-    rng.getRandomValues(word);
-    value = word[0];
-  } while (value >= limit);
-  return value % maxExclusive;
 }
 
 /**
