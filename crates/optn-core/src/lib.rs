@@ -46,6 +46,7 @@ pub mod network;
 /// module that genuinely spans several NIPs and is named for the subject.
 pub mod nip44;
 pub mod nostr_identity;
+pub mod payment;
 pub mod psbt;
 pub mod release_channel;
 pub mod rpa;

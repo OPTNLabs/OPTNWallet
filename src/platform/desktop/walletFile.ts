@@ -31,11 +31,13 @@ import {
   BaseDirectory,
 } from '@tauri-apps/plugin-fs';
 import { WalletType } from '../../types/wallet';
+import type { Network } from '../../state/slices/networkSlice';
+import { parseNetwork } from '../../utils/networkProfile';
 
 export const WALLETS_DIR = 'wallets';
 export const WALLET_FILE_EXT = 'optn';
 
-export type WalletFileNetwork = 'mainnet' | 'chipnet';
+export type WalletFileNetwork = `${Network}`;
 
 /** Wallet-file v1 only serializes encrypted mnemonic wallet material. */
 export function supportsWalletFileV1Type(walletType: string): boolean {
@@ -71,8 +73,8 @@ export interface WalletFileV1 {
 export function networkFromWalletFile(
   file: Pick<WalletFileV1, 'network'>
 ): WalletFileNetwork | null {
-  if (file.network === 'mainnet' || file.network === 'chipnet') {
-    return file.network;
+  if (parseNetwork(file.network)) {
+    return file.network as WalletFileNetwork;
   }
   return null;
 }
@@ -96,10 +98,9 @@ export function parseWalletFile(text: string): WalletFileV1 {
   ) {
     throw new Error('OPTN wallet file is missing required fields.');
   }
-  const network: WalletFileNetwork | undefined =
-    parsed.network === 'mainnet' || parsed.network === 'chipnet'
-      ? parsed.network
-      : undefined;
+  const network: WalletFileNetwork | undefined = parseNetwork(parsed.network)
+    ? parsed.network
+    : undefined;
 
   return {
     format: 'optn-wallet',

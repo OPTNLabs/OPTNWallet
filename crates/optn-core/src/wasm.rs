@@ -851,3 +851,148 @@ pub fn explorer_custom_url(
     )
     .map_err(|error| JsValue::from_str(&error.to_string()))
 }
+
+/// Choose the coins for one CashFusion round (`fusion::coin_selection`): a JSON
+/// request in, a JSON selection out, coins named by outpoint.
+///
+/// The selection's random draws come from the host's `crypto.getRandomValues`
+/// through getrandom's `js` backend, so no caller supplies them. A host
+/// without secure randomness gets an error, never a selection.
+#[wasm_bindgen(js_name = fusionSelectCoins)]
+pub fn fusion_select_coins(request_json: &str) -> Result<String, JsValue> {
+    use k256::elliptic_curve::rand_core::{OsRng, RngCore};
+    let mut unavailable = false;
+    let mut sample = || {
+        let mut bytes = [0u8; 8];
+        if OsRng.try_fill_bytes(&mut bytes).is_err() {
+            unavailable = true;
+            return 0.0;
+        }
+        (u64::from_le_bytes(bytes) >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let selection =
+        crate::fusion::coin_selection::select_fusion_coins_json(request_json, &mut sample);
+    if unavailable {
+        return Err(JsValue::from_str(
+            "secure randomness is unavailable for CashFusion coin selection",
+        ));
+    }
+    selection.map_err(|error| JsValue::from_str(&error))
+}
+
+// ---------------------------------------------------------------------------
+// CashFusion depth record (`fusion::depth`), held per wallet by the renderer.
+//
+// The renderer keeps the three stored forms where it always has and carries
+// them between windows. Every rule about depth is in the crate.
+// ---------------------------------------------------------------------------
+
+/// A wallet's fusion depth record.
+#[wasm_bindgen(js_name = FusionDepthBook)]
+pub struct WasmFusionDepthBook(crate::fusion::depth::FusionDepthBook);
+
+#[wasm_bindgen(js_class = FusionDepthBook)]
+impl WasmFusionDepthBook {
+    /// Read the stored forms; a missing or unreadable part reads as empty.
+    #[wasm_bindgen(js_name = fromStored)]
+    pub fn from_stored(
+        coins: Option<String>,
+        tx_depth: Option<String>,
+        txids: Option<String>,
+    ) -> WasmFusionDepthBook {
+        Self(crate::fusion::depth::FusionDepthBook::from_stored(
+            coins.as_deref(),
+            tx_depth.as_deref(),
+            txids.as_deref(),
+        ))
+    }
+
+    #[wasm_bindgen(js_name = storedCoins)]
+    pub fn stored_coins(&self) -> String {
+        self.0.stored_coins()
+    }
+
+    #[wasm_bindgen(js_name = storedTxDepth)]
+    pub fn stored_tx_depth(&self) -> String {
+        self.0.stored_tx_depth()
+    }
+
+    #[wasm_bindgen(js_name = storedTxids)]
+    pub fn stored_txids(&self) -> String {
+        self.0.stored_txids()
+    }
+
+    /// Fold in another window's copy; the deeper entry wins.
+    #[wasm_bindgen(js_name = mergeStored)]
+    pub fn merge_stored(&mut self, coins: Option<String>, tx_depth: Option<String>) {
+        self.0.merge_stored(coins.as_deref(), tx_depth.as_deref());
+    }
+
+    /// Add fusion txids from durable storage; returns how many were new.
+    #[wasm_bindgen(js_name = addTxids)]
+    pub fn add_txids(&mut self, txids: Vec<String>) -> u32 {
+        self.0.add_txids(txids.iter().map(String::as_str)) as u32
+    }
+
+    #[wasm_bindgen(js_name = fusionTxids)]
+    pub fn fusion_txids(&self) -> Vec<String> {
+        self.0.fusion_txids().map(str::to_owned).collect()
+    }
+
+    #[wasm_bindgen(js_name = depthOf)]
+    pub fn depth_of(&self, outpoint: &str) -> u32 {
+        self.0.depth_of(outpoint)
+    }
+
+    #[wasm_bindgen(js_name = recordRound)]
+    pub fn record_round(&mut self, spent: Vec<String>, created: Vec<String>, now_ms: f64) {
+        self.0
+            .record_round(&spent, &created, now_ms.max(0.0) as u64);
+    }
+
+    #[wasm_bindgen(js_name = recordFusionTxid)]
+    pub fn record_fusion_txid(&mut self, txid: &str) -> bool {
+        self.0.record_fusion_txid(txid)
+    }
+
+    #[wasm_bindgen(js_name = pruneSpent)]
+    pub fn prune_spent(&mut self, live: Vec<String>) -> bool {
+        self.0.prune_spent(&live)
+    }
+
+    #[wasm_bindgen(js_name = isFusionTransaction)]
+    pub fn is_fusion_transaction(&self, txid: &str) -> bool {
+        self.0.is_fusion_transaction(txid)
+    }
+
+    /// Merge a cold-export record; returns `[coins taken, txids added]`.
+    #[wasm_bindgen(js_name = importState)]
+    pub fn import_state(&mut self, state: &str, now_ms: f64) -> Vec<u32> {
+        let (coins, txids) = self.0.import(state, now_ms.max(0.0) as u64);
+        vec![coins as u32, txids as u32]
+    }
+
+    /// The coins against a depth target, with Auto's two status lines, as
+    /// JSON.
+    #[wasm_bindgen(js_name = eligibility)]
+    pub fn eligibility(&self, outpoints: Vec<String>, target: u32) -> String {
+        let eligibility = self.0.eligibility(&outpoints, target);
+        serde_json::json!({
+            "total": eligibility.total,
+            "eligible": eligibility.eligible,
+            "atOrAbove": eligibility.at_or_above,
+            "target": eligibility.target,
+            "minDepth": eligibility.min_depth,
+            "maxDepth": eligibility.max_depth,
+            "metMessage": crate::fusion::depth::depth_met_message(&eligibility),
+            "gateLog": crate::fusion::depth::depth_gate_log(&eligibility),
+        })
+        .to_string()
+    }
+}
+
+/// `txid:vout` with the txid lower-cased (`fusion::depth::normalize_outpoint`).
+#[wasm_bindgen(js_name = fusionNormalizeOutpoint)]
+pub fn fusion_normalize_outpoint(outpoint: &str) -> String {
+    crate::fusion::depth::normalize_outpoint(outpoint)
+}

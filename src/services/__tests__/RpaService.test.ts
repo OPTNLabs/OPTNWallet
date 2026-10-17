@@ -93,8 +93,13 @@ describe('RpaService', () => {
     const paycode = encodePaycode(keys.scanPubkey, keys.spendPubkey, Network.CHIPNET);
 
     expect(getRpaSendBlockReason('bchtest:qordinary', Network.CHIPNET)).toBeNull();
-    expect(getRpaSendBlockReason(paycode, Network.MAINNET)).toMatch(/Chipnet/i);
+    // A cashcode only says mainnet (cashcode:) or test network (cashcodetest:).
+    expect(getRpaSendBlockReason(paycode, Network.MAINNET)).toMatch(/test network/i);
     expect(getRpaSendBlockReason(paycode, Network.CHIPNET)).toBeNull();
+    expect(getRpaSendBlockReason(paycode, Network.TESTNET4)).toBeNull();
+    const mainnetKeys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
+    const mainnetPaycode = encodePaycode(mainnetKeys.scanPubkey, mainnetKeys.spendPubkey, Network.MAINNET);
+    expect(getRpaSendBlockReason(mainnetPaycode, Network.TESTNET4)).toMatch(/Mainnet/);
     const replacement = paycode.endsWith('q') ? 'p' : 'q';
     expect(getRpaSendBlockReason(`${paycode.slice(0, -1)}${replacement}`, Network.CHIPNET)).toMatch(
       /invalid/i

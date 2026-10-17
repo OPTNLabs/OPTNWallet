@@ -17,8 +17,6 @@
 // "can't find tor port"), with one deliberate exemption: a server on localhost,
 // where there is no network observer to hide from.
 
-use std::time::Duration;
-
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -27,8 +25,6 @@ use tokio::net::TcpStream;
 pub const TOR_PORTS: [u16; 2] = [9050, 9150];
 
 pub const DEFAULT_TOR_HOST: &str = "127.0.0.1";
-
-const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// Does a SOCKS5 proxy answer here?
 ///
@@ -42,14 +38,17 @@ pub async fn socks_answers(host: &str, port: u16) -> bool {
         // Capability check only: external proxies remain explicitly user-trusted.
         // A Tor HTTP-refusal string is not authentication because any local
         // listener can replay it. Exercise the SOCKS5 protocol instead.
-        stream.write_all(&[0x05, 0x01, 0x00]).await.ok()?;
+        stream
+            .write_all(&optn_core::tor::SOCKS5_NO_AUTH_GREETING)
+            .await
+            .ok()?;
         let mut response = [0u8; 2];
         stream.read_exact(&mut response).await.ok()?;
-        Some(response == [0x05, 0x00])
+        Some(response == optn_core::tor::SOCKS5_NO_AUTH_ACCEPTED)
     };
 
     matches!(
-        tokio::time::timeout(PROBE_TIMEOUT, probe).await,
+        tokio::time::timeout(optn_core::tor::SOCKS_PROBE_TIMEOUT, probe).await,
         Ok(Some(true))
     )
 }

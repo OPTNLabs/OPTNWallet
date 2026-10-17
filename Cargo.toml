@@ -8,7 +8,13 @@ members = [
   "crates/optn-chain-native",
   "crates/optn-chain-neutrino",
   "crates/optn-chain-zmq",
+  # Marmot chat through MDK. A member, so the workspace's tests and clippy
+  # cover it, but not a default member: MDK brings OpenMLS and its media
+  # stack, which builds of the wallet crates need not wait for.
+  "crates/optn-chat",
   "crates/optn-fusion",
+  "crates/optn-fusion-native",
+  "crates/optn-nostr",
   # #65's deterministic multisig core. A member rather than an exclusion:
   # it has no lock file of its own and three pure dependencies, so there is
   # nothing to keep it out for -- and being a member is what puts it under
@@ -27,6 +33,7 @@ members = [
   "xtask",
 ]
 exclude = [
+  "crates/optn-x402",
   "crates/optn-cli",
   "crates/optn-ui-egui",
   "crates/optn-ui-dioxus",
@@ -43,6 +50,8 @@ default-members = [
   "crates/optn-chain-neutrino",
   "crates/optn-chain-zmq",
   "crates/optn-fusion",
+  "crates/optn-fusion-native",
+  "crates/optn-nostr",
   "crates/optn-platform",
   "crates/optn-platform-native",
   "crates/optn-platform-apple",
@@ -62,3 +71,12 @@ lto = true
 incremental = false
 opt-level = "s"
 strip = true
+
+# Exact backports of fixed dependencies into the release MDK 0.8 resolves, as
+# MDK's own repository does upstream. Provenance and changes: OPTN.md in each.
+[patch.crates-io]
+# libcrux-sha3 0.0.11 (RUSTSEC-2026-0207/-0208/-0212); unused libcrux backend
+# dropped (RUSTSEC-2026-0124/-0209/-0211/-0330/-0331).
+hpke-rs = { path = "vendor/hpke-rs-0.6.1" }
+# lru 0.18 (RUSTSEC-2026-0253); optn-chat's tests only.
+mdk-memory-storage = { path = "vendor/mdk-memory-storage-0.8.0" }

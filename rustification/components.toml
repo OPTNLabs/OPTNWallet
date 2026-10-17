@@ -151,3 +151,13 @@ target = "optn-platform-then-swift-then-optional-opal"
 layer = "platform-provider"
 status = "started"
 security_weight = 8
+
+[[component]]
+# Native x402 encoding is an adapter; keys, HD change and durable input holds
+# remain in the shared runtime. Other spend protocols still need that lifecycle.
+name = "external-payment-runtime"
+current = "rust"
+target = "rust"
+layer = "runtime"
+status = "started"
+security_weight = 10

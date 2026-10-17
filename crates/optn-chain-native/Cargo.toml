@@ -18,7 +18,7 @@ hex = "0.4"
 serde_json = "1.0"
 getrandom = "0.2"
 rand_core = { version = "0.6", features = ["getrandom"] }
-tokio = { version = "1.53.1", features = ["io-util", "net", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["io-util", "net", "rt", "sync", "time"] }
 # Registry publications are HTTPS documents. This direct declaration reuses the
 # already locked Rustls/SOCKS client used by native adapters; a registry fetch
 # must not fall back to a renderer or platform HTTP stack.
@@ -29,3 +29,5 @@ url = "2.5"
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["macros", "rt", "io-util", "net"] }
+# Frames a fake P2P node's messages in tests; the version the BIP37 adapter uses.
+sha2 = "0.10"

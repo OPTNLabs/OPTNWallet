@@ -10,11 +10,16 @@ mod app_update;
 mod appearance;
 pub mod chain_runtime;
 mod chain_sources;
+mod chat_mdk;
 #[cfg(desktop)]
 pub mod clipboard;
 mod coin_holds;
+mod egress;
+mod electrum_selection;
 pub mod electrum_tcp;
 pub mod fusion;
+mod fusion_depth_store;
+mod fusion_driver;
 #[cfg(desktop)]
 pub mod hw;
 mod network_config;
@@ -24,6 +29,7 @@ pub mod platform;
 #[cfg(mobile)]
 pub mod platform_mobile;
 pub mod spv;
+mod token_images;
 mod wallet_security;
 mod wallet_spend;
 
@@ -61,6 +67,41 @@ async fn verified_native_proxy_for_network(
         .await
         .unwrap_or_default();
     verified_native_proxy(destination_hosts, &trusted_ports).await
+}
+
+const FUSION_NEEDS_TOR: &str = "CashFusion needs Tor, and Tor is off. Turn it on in \
+     Settings > Servers > Privacy & Transport to fuse.";
+
+/// CashFusion is private only over Tor, so it runs only while the holder's
+/// transport keeps public destinations on Tor. The selector never relaxes it:
+/// under "Direct" Fusion does not run at all, rather than running in the clear.
+fn fusion_transport_allows(transport: optn_runtime::chain::TransportPolicy) -> Result<(), String> {
+    if transport.tor_for(false) {
+        Ok(())
+    } else {
+        Err(FUSION_NEEDS_TOR.into())
+    }
+}
+
+/// The proxy for every leg of a Fusion operation: the transport must allow
+/// Fusion, and each remote leg then needs Tor with provenance, exactly as
+/// before. A loopback-only operation has no network hop and needs neither.
+pub(crate) async fn verified_fusion_proxy_for_network(
+    destination_hosts: &[&str],
+    network_settings: &crate::network_config::NetworkSettingsStore,
+    network: optn_core::network::Network,
+) -> Result<Option<u16>, String> {
+    if !destination_hosts
+        .iter()
+        .all(|host| fusion::is_local_server(host))
+    {
+        let settings = network_settings.clone();
+        let transport = tokio::task::spawn_blocking(move || settings.transport(network))
+            .await
+            .map_err(|_| "network settings reader stopped".to_string())??;
+        fusion_transport_allows(transport)?;
+    }
+    verified_native_proxy_for_network(destination_hosts, network_settings, network).await
 }
 
 fn bip37_endpoint_matches(endpoint: &optn_runtime::chain::Endpoint, host: &str, port: u16) -> bool {
@@ -107,7 +148,8 @@ async fn bip37_transport_for_catalog(
     trusted_ports: &[u16],
 ) -> Result<fusion::Transport<'static>, String> {
     let selected_is_own = bip37_selected_endpoint_is_declared_own(catalog, policy, host, port)?;
-    if fusion::is_local_server(host) || selected_is_own {
+    // The holder's transport decides; ownership is only an input to it.
+    if fusion::is_local_server(host) || !policy.transport.tor_for(selected_is_own) {
         return Ok(fusion::Transport::Direct);
     }
     let verified_proxy = verified_native_proxy(&[host], trusted_ports).await?;
@@ -244,6 +286,7 @@ async fn fetch_fusion_server_status(
     port: u16,
     use_ssl: bool,
     verified_proxy: Option<u16>,
+    network: optn_core::network::Network,
 ) -> Result<fusion::FusionServerStatus, String> {
     log::info!(
         "[FusionTrace] status start host={} port={} ssl={}",
@@ -252,7 +295,10 @@ async fn fetch_fusion_server_status(
         use_ssl
     );
     let transport = fusion_transport_for_host(host, verified_proxy)?;
-    let result = fusion::server_status(host, port, use_ssl, transport, None).await;
+    // Declare the chain, as Electron Cash does: a server on another chain
+    // refuses here instead of showing tiers for a pool this wallet cannot use.
+    let genesis = spv::genesis_hash(&network.to_string()).to_vec();
+    let result = fusion::server_status(host, port, use_ssl, transport, Some(genesis)).await;
     match &result {
         Ok(status) => log::info!(
             "[FusionTrace] status ok tiers={} components={}",
@@ -296,7 +342,7 @@ async fn fusion_server_status(
     // Resolve provenance before consulting the cache. A revoked trust entry or
     // exited managed child must fail now rather than reuse a prior success.
     let verified_proxy =
-        verified_native_proxy_for_network(&[host.as_str()], &network_settings, network).await?;
+        verified_fusion_proxy_for_network(&[host.as_str()], &network_settings, network).await?;
 
     let key = FusionStatusCacheKey {
         host: host.trim().trim_end_matches('.').to_ascii_lowercase(),
@@ -309,7 +355,7 @@ async fn fusion_server_status(
     // wallet windows from opening four identical Tor handshakes at once. The
     // short failure TTL still lets a manual retry observe a repaired server.
     shared_fusion_server_status(key, || {
-        fetch_fusion_server_status(&host, port, use_ssl, verified_proxy)
+        fetch_fusion_server_status(&host, port, use_ssl, verified_proxy, network)
     })
     .await
 }
@@ -333,7 +379,7 @@ async fn fusion_join_status(
     if host.trim().is_empty() || port == 0 {
         return Err("CashFusion server endpoint is invalid".into());
     }
-    let verified_proxy = verified_native_proxy_for_network(
+    let verified_proxy = verified_fusion_proxy_for_network(
         &[host.as_str()],
         &network_settings,
         runtime.state().network,
@@ -353,75 +399,6 @@ async fn fusion_join_status(
     .await
 }
 
-/// One Electrum server the renderer offers for peer-input verification.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FusionLookupEndpointReq {
-    host: String,
-    port: u16,
-    use_ssl: bool,
-}
-
-#[derive(serde::Deserialize)]
-struct FusionRunInputReq {
-    prev_txid: String,
-    prev_index: u32,
-    pubkey: String,
-    value: u64,
-    privkey: String,
-}
-
-fn fusion_run_destination_hosts<'a>(
-    host: &'a str,
-    lookup_host: &'a str,
-    lookup_fallbacks: &'a [FusionLookupEndpointReq],
-) -> Vec<&'a str> {
-    std::iter::once(host)
-        .chain(std::iter::once(lookup_host))
-        .chain(
-            lookup_fallbacks
-                .iter()
-                .map(|endpoint| endpoint.host.as_str()),
-        )
-        .collect()
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FusionExecutionStatus {
-    ready: bool,
-    message: Option<&'static str>,
-}
-
-#[tauri::command]
-fn fusion_execution_status() -> FusionExecutionStatus {
-    let ready = fusion::fusion_execution_ready();
-    FusionExecutionStatus {
-        ready,
-        message: (!ready).then_some(fusion::FUSION_EXECUTION_PAUSED_MESSAGE),
-    }
-}
-
-/// Reserve a bounded cancellation ID before the renderer derives signing keys
-/// or persists fresh output scripts.
-#[tauri::command]
-fn fusion_prepare_round(round_id: String) -> Result<(), String> {
-    if !fusion::fusion_execution_ready() {
-        return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
-    }
-    fusion::round_cancel::prepare_round(&round_id)
-}
-
-/// Sign only wallet-owned inputs of an already agreed P2P-v3 template.
-/// The bounded native boundary revalidates the complete template before keys
-/// reach the transaction signer; classic server CashFusion remains separate.
-#[tauri::command]
-fn fusion_p2p_sign(
-    request: fusion::p2p_sign::P2pSignRequest,
-) -> Result<fusion::p2p_sign::P2pSignResponse, String> {
-    fusion::p2p_sign::sign_p2p(request)
-}
-
 /// Encode an Electron Cash `Component` and return `sha256(component)` for P2P v4
 /// blind credentials. Does not change the live round wire version by itself.
 #[tauri::command]
@@ -431,368 +408,18 @@ fn fusion_p2p_encode_component(
     fusion::p2p_component::encode_component_for_p2p(request)
 }
 
-/// Run a full CashFusion round (Phase 1.7): contribute `inputs` (each with the
-/// key to sign it) and fresh `outputs`, join `tier`, and fuse. Returns the
-/// assembled transaction on success. Same Tor requirement as the other fusion
-/// commands. A round only COMPLETES with >=2 players in the tier — run several
-/// wallet instances to fuse with yourself for testing. Private keys are used only
-/// to sign locally and are never logged or sent over the network.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)] // command args map 1:1 to the JS invoke call
-/// `wallet_tag` is a stable per-wallet token (the wallet id is enough). It is
-/// hashed with a per-process salt into the self-fusion pool tag, so the server
-/// can refuse to place this wallet in one fusion twice without learning
-/// anything that survives a restart.
-async fn fusion_run(
-    round_id: String,
-    wallet_tag: String,
-    host: String,
-    port: u16,
-    use_ssl: bool,
-    tier_plans: Vec<fusion::server_plan::FusionTierPlan>,
-    inputs: Vec<FusionRunInputReq>,
-    output_scripts: Vec<String>,
-    lookup_host: String,
-    lookup_port: u16,
-    lookup_use_ssl: bool,
-    lookup_fallbacks: Vec<FusionLookupEndpointReq>,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
-    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
-    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
-    expected_hello: fusion::server_plan::ExpectedHello,
-    join_inactive_timeout_ms: Option<u64>,
-) -> Result<fusion::run::FusionOutcome, String> {
-    let _ = (tor_host, tor_port);
-    log::info!(
-        "[FusionTrace] round start id={} host={} port={} plans={} inputs={}",
-        round_id,
-        host,
-        port,
-        tier_plans.len(),
-        inputs.len()
-    );
-    if !fusion::fusion_execution_ready() {
-        return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
-    }
-
-    if host.trim().is_empty() || port == 0 {
-        return Err("CashFusion server endpoint is invalid".into());
-    }
-    if lookup_host.trim().is_empty() || lookup_port == 0 {
-        return Err("CashFusion peer-input lookup endpoint is invalid".into());
-    }
-    // The lookup transport is reused by each configured fallback. Resolve Tor
-    // against the complete destination set first, so a local primary cannot
-    // make a remote fallback inherit a direct route.
-    let destination_hosts = fusion_run_destination_hosts(&host, &lookup_host, &lookup_fallbacks);
-    let verified_proxy = verified_native_proxy_for_network(
-        &destination_hosts,
-        &network_settings,
-        runtime.state().network,
-    )
-    .await?;
-    let transport = fusion_transport_for_host(&host, verified_proxy)?;
-    let remote_transport = verified_proxy.map(|port| fusion::Transport::Tor {
-        host: fusion::tor::DEFAULT_TOR_HOST,
-        port,
-    });
-
-    let join_inactive_timeout = match join_inactive_timeout_ms {
-        None => None,
-        Some(600_000) => Some(fusion::run::EC_AUTOFUSE_INACTIVE_TIMEOUT),
-        Some(_) => {
-            return Err("automatic server Fusion inactivity timeout must be 600000 ms".into())
-        }
-    };
-    let registration = fusion::round_cancel::acquire_round(&round_id)?;
-    let cancel = registration.flag();
-
-    let mut keyed_inputs = Vec::with_capacity(inputs.len());
-    for i in inputs {
-        let pubkey = decode_hex(&i.pubkey)?;
-        let privkey: [u8; 32] = decode_hex(&i.privkey)?
-            .try_into()
-            .map_err(|_| "privkey must be 32 bytes".to_string())?;
-        keyed_inputs.push(fusion::run::FusionInputKey {
-            prev_txid: i.prev_txid,
-            prev_index: i.prev_index,
-            pubkey,
-            value: i.value,
-            privkey,
-        });
-    }
-    let mut scripts = Vec::with_capacity(output_scripts.len());
-    for s in &output_scripts {
-        scripts.push(decode_hex(s)?);
-    }
-
-    let result = fusion::run::run_fusion(fusion::run::FusionRunParams {
-        host: &host,
-        port,
-        use_ssl,
-        tier_plans,
-        inputs: keyed_inputs,
-        output_scripts: scripts,
-        main_transport: transport,
-        remote_transport,
-        // Every configured Electrum server, primary first, not just one. A
-        // single unreachable host otherwise makes peer inputs unverifiable —
-        // and since missing evidence must never become an accusation, that
-        // aborts every round rather than blaming anyone.
-        lookup_endpoints: std::iter::once(fusion::electrum_input::ElectrumEndpoint {
-            host: lookup_host,
-            port: lookup_port,
-            use_ssl: lookup_use_ssl,
+/// The selected servers, as the shared round host takes them.
+pub(crate) fn lookup_endpoints(
+    servers: &[electrum_selection::SelectedElectrum],
+) -> Vec<optn_fusion_native::lookups::LookupEndpoint> {
+    servers
+        .iter()
+        .map(|server| optn_fusion_native::lookups::LookupEndpoint {
+            host: server.host.clone(),
+            port: server.port,
+            tls: server.tls,
         })
-        .chain(lookup_fallbacks.into_iter().map(|endpoint| {
-            fusion::electrum_input::ElectrumEndpoint {
-                host: endpoint.host,
-                port: endpoint.port,
-                use_ssl: endpoint.use_ssl,
-            }
-        }))
-        .collect(),
-        lookup_remote_transport: remote_transport,
-        timing: fusion::run::FusionTiming::default(),
-        join_inactive_timeout,
-        cancel,
-        expected_hello,
-        wallet_tag_seed: wallet_tag.into_bytes(),
-        // Electron Cash's default (conf.py:51 SelfFusePlayers = 1): never place
-        // this wallet in a fusion with itself.
-        self_fuse_limit: 1,
-    })
-    .await;
-
-    match &result {
-        Ok(outcome) => log::info!(
-            "[FusionTrace] round settled id={} ok={} message={}",
-            round_id,
-            outcome.ok,
-            outcome.message
-        ),
-        Err(error) => log::warn!("[FusionTrace] round failed id={round_id}: {error}"),
-    }
-
-    drop(registration);
-    result
-}
-
-/// Cancel a running fusion round by its round_id. Idempotent — returns true
-/// if the round was found and cancelled, false if it was already gone.
-#[tauri::command]
-fn fusion_cancel_round(round_id: String) -> bool {
-    fusion::round_cancel::cancel_round(&round_id)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FusionRelayRoute {
-    Direct,
-    Tor,
-}
-
-const MAX_FUSION_RELAY_TX_BYTES: usize = 100_000;
-
-fn validate_fusion_relay_request(tx_hex: &str, network: &str) -> Result<(), String> {
-    if !matches!(network, "mainnet" | "chipnet") {
-        return Err("unsupported CashFusion relay network".into());
-    }
-    if tx_hex.is_empty() || tx_hex.len() % 2 != 0 {
-        return Err("transaction hex must be non-empty and even length".into());
-    }
-    if tx_hex.len() / 2 > MAX_FUSION_RELAY_TX_BYTES {
-        return Err("CashFusion relay transaction exceeds the size limit".into());
-    }
-    Ok(())
-}
-
-fn fusion_relay_is_local(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost") || matches!(host, "127.0.0.1" | "::1")
-}
-
-fn fusion_relay_transport_policy(
-    relay_host: &str,
-    observer_host: &str,
-    tor_verified: bool,
-) -> Result<(FusionRelayRoute, FusionRelayRoute), String> {
-    let route = |host: &str| {
-        if fusion_relay_is_local(host) {
-            Ok(FusionRelayRoute::Direct)
-        } else if tor_verified {
-            Ok(FusionRelayRoute::Tor)
-        } else {
-            Err(
-                "CashFusion relay and observation require a verified Tor proxy for every remote peer"
-                    .to_string(),
-            )
-        }
-    };
-    Ok((route(relay_host)?, route(observer_host)?))
-}
-
-fn fusion_relay_endpoint_key(host: &str, port: u16) -> (String, u16) {
-    let normalized_host = if fusion_relay_is_local(host) {
-        "loopback".to_string()
-    } else {
-        host.trim_end_matches('.').to_ascii_lowercase()
-    };
-    (normalized_host, port)
-}
-
-fn fusion_relay_endpoints_are_distinct(
-    relay_host: &str,
-    relay_port: u16,
-    observer_host: &str,
-    observer_port: u16,
-) -> bool {
-    fusion_relay_endpoint_key(relay_host, relay_port)
-        != fusion_relay_endpoint_key(observer_host, observer_port)
-}
-
-/// Broadcast a server-assembled CashFusion transaction to one BCH peer, then
-/// require a separate peer to return the exact raw transaction by txid.
-///
-/// Does the network already have this transaction?
-///
-/// Relay-and-observe proves a broadcast by watching a SECOND node echo the
-/// transaction back, which only works when we are the first to announce it. In
-/// a server-coordinated fusion the CashFusion server broadcasts first, so by the
-/// time we relay, nodes already hold the transaction and do not re-announce it —
-/// and a good, already-accepted fusion looks like a failure.
-///
-/// Asking an Electrum server whether the transaction exists tests what actually
-/// matters, regardless of who announced it. Every configured server is tried,
-/// and only "no server could answer" is an error — an unreachable Electrum must
-/// never be mistaken for a missing transaction.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-async fn fusion_transaction_is_known(
-    txid: String,
-    lookup_host: String,
-    lookup_port: u16,
-    lookup_use_ssl: bool,
-    lookup_fallbacks: Vec<FusionLookupEndpointReq>,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
-    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
-    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
-) -> Result<bool, String> {
-    let _ = (tor_host, tor_port);
-    let endpoints: Vec<fusion::electrum_input::ElectrumEndpoint> =
-        std::iter::once(fusion::electrum_input::ElectrumEndpoint {
-            host: lookup_host,
-            port: lookup_port,
-            use_ssl: lookup_use_ssl,
-        })
-        .chain(lookup_fallbacks.into_iter().map(|endpoint| {
-            fusion::electrum_input::ElectrumEndpoint {
-                host: endpoint.host,
-                port: endpoint.port,
-                use_ssl: endpoint.use_ssl,
-            }
-        }))
-        .collect();
-
-    let hosts: Vec<&str> = endpoints.iter().map(|e| e.host.as_str()).collect();
-    let verified_proxy =
-        verified_native_proxy_for_network(&hosts, &network_settings, runtime.state().network)
-            .await?;
-
-    let mut last_error = String::from("no Electrum server could answer");
-    for endpoint in &endpoints {
-        let transport = match fusion_transport_for_host(&endpoint.host, verified_proxy) {
-            Ok(transport) => transport,
-            Err(error) => {
-                last_error = error;
-                continue;
-            }
-        };
-        match fusion::electrum_input::transaction_is_known(endpoint, transport, &txid).await {
-            // A server that HAS it settles the question. A server that does not
-            // may simply be behind, so keep asking the others.
-            Ok(true) => return Ok(true),
-            Ok(false) => {
-                last_error = format!("{}:{} does not have it", endpoint.host, endpoint.port)
-            }
-            Err(error) => last_error = format!("{}:{}: {error}", endpoint.host, endpoint.port),
-        }
-    }
-    Err(last_error)
-}
-
-/// Remote peers are routed only through a proxy freshly verified as Tor at this
-/// API boundary. Loopback peers are the sole direct-connection exemption.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-async fn fusion_relay_broadcast_and_observe(
-    tx_hex: String,
-    network: String,
-    relay_host: String,
-    relay_port: u16,
-    observer_host: String,
-    observer_port: u16,
-    tor_host: Option<String>,
-    tor_port: Option<u16>,
-    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
-    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
-) -> Result<spv::FusionRelayObservation, String> {
-    let _ = (tor_host, tor_port);
-    if !fusion::fusion_execution_ready() {
-        return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
-    }
-    if !fusion_relay_endpoints_are_distinct(&relay_host, relay_port, &observer_host, observer_port)
-    {
-        return Err("relay and observer endpoints must be distinct".into());
-    }
-
-    validate_fusion_relay_request(&tx_hex, &network)?;
-    let tx_bytes = decode_hex(&tx_hex).map_err(|_| "invalid transaction hex".to_string())?;
-
-    let verified_proxy = verified_native_proxy_for_network(
-        &[relay_host.as_str(), observer_host.as_str()],
-        &network_settings,
-        runtime.state().network,
-    )
-    .await?;
-    let tor_verified = verified_proxy.is_some();
-    let (relay_route, observer_route) =
-        fusion_relay_transport_policy(&relay_host, &observer_host, tor_verified)?;
-
-    let relay_transport = match relay_route {
-        FusionRelayRoute::Direct => fusion::Transport::Direct,
-        FusionRelayRoute::Tor => {
-            let port =
-                verified_proxy.ok_or("verified Tor proxy details unavailable for remote relay")?;
-            fusion::Transport::Tor {
-                host: fusion::tor::DEFAULT_TOR_HOST,
-                port,
-            }
-        }
-    };
-    let observer_transport = match observer_route {
-        FusionRelayRoute::Direct => fusion::Transport::Direct,
-        FusionRelayRoute::Tor => {
-            let port = verified_proxy
-                .ok_or("verified Tor proxy details unavailable for remote observer")?;
-            fusion::Transport::Tor {
-                host: fusion::tor::DEFAULT_TOR_HOST,
-                port,
-            }
-        }
-    };
-
-    spv::relay_broadcast_and_observe(
-        &relay_host,
-        relay_port,
-        relay_transport,
-        &observer_host,
-        observer_port,
-        observer_transport,
-        &network,
-        tx_bytes,
-    )
-    .await
+        .collect()
 }
 
 /// Find a running Tor SOCKS proxy, mirroring Electron Cash's auto-detection
@@ -1088,38 +715,6 @@ fn tor_status() -> fusion::tor_manager::TorStatus {
     fusion::tor_manager::status()
 }
 
-// Desktop-only price fetch.
-//
-// The OPTN price server rejects (HTTP 500) any browser `Origin` header, and
-// @tauri-apps/plugin-http force-sets Origin to the webview origin
-// (`tauri.localhost`) in production, which cannot be overridden from JS. The
-// mobile app avoids this by using Capacitor's native HTTP (no browser Origin).
-// This command is the desktop equivalent: a server-side reqwest call (no Origin),
-// hardcoded to the single trusted price host so it can never be used for SSRF.
-#[tauri::command]
-async fn optn_price_fetch(url: String) -> Result<String, String> {
-    if !url.starts_with("https://price.optnlabs.com/") {
-        return Err("host not allowed".into());
-    }
-    // A server that accepts the TCP/TLS connection and then never answers
-    // (observed in practice against this exact host) would otherwise hang
-    // this request indefinitely — reqwest has no default timeout. The JS
-    // side (http-bridge.ts) also races this call against its own timeout,
-    // but bounding it here too means a slow/dead server doesn't leave the
-    // Rust-side request running forever regardless of what the JS caller does.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
-    let status = resp.status().as_u16();
-    let body = resp.text().await.map_err(|e| e.to_string())?;
-    if status != 200 {
-        return Err(format!("HTTP {status}"));
-    }
-    Ok(body)
-}
-
 // Read/write a wallet file at a path the user explicitly picked via the OS
 // dialog. Done in Rust (unrestricted fs) so opening/exporting a .optn file from
 // anywhere on disk doesn't require a broad JS fs-capability scope. Constrained
@@ -1158,19 +753,56 @@ fn ensure_optn_cold_path(path: &str) -> Result<(), String> {
 // Open an external URL in the user's default browser. A Tauri webview silently
 // blocks `target="_blank"` links, so faucet/explorer/etc. links never open; the
 // frontend intercepts those clicks and routes them here. Restricted to http(s).
+/// Returned when a link would leave a Tor-routed wallet for the system browser
+/// and the holder has not confirmed it yet.
+const EXTERNAL_NEEDS_CONFIRMATION: &str = "external-link-outside-tor";
+
+/// Open an http(s) link in the system browser.
+///
+/// The browser is outside every route this app controls: the site sees the
+/// holder's IP, and an explorer link names their transaction or address. With
+/// the Tor switch on that is refused until the holder confirms it
+/// (`confirmed`), so it never happens as a side effect of a click.
 #[tauri::command]
-fn open_external(url: String) -> Result<(), String> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
+async fn open_external(
+    url: String,
+    confirmed: Option<bool>,
+    network: Option<String>,
+    runtime: tauri::State<'_, optn_runtime::AppRuntime>,
+    network_settings: tauri::State<'_, crate::network_config::NetworkSettingsStore>,
+) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "invalid URL".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
         return Err("only http(s) URLs may be opened externally".into());
     }
+    if confirmed != Some(true) {
+        let host = parsed.host_str().unwrap_or_default();
+        let networks = egress::networks_for(runtime.state().network, network.as_deref());
+        let direct = matches!(
+            egress::decide(host, &network_settings, &networks).await,
+            Ok(egress::EgressDecision {
+                route: egress::EgressRoute::Direct,
+                ..
+            })
+        );
+        if !direct {
+            return Err(EXTERNAL_NEEDS_CONFIRMATION.into());
+        }
+    }
+    // The URL is one argument to a program, never a command line: `cmd /C
+    // start` would read `&` in a query string as a second command.
     #[cfg(target_os = "windows")]
-    let spawn = std::process::Command::new("cmd")
-        .args(["/C", "start", "", &url])
+    let spawn = std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", parsed.as_str()])
         .spawn();
     #[cfg(target_os = "macos")]
-    let spawn = std::process::Command::new("open").arg(&url).spawn();
+    let spawn = std::process::Command::new("open")
+        .arg(parsed.as_str())
+        .spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
-    let spawn = std::process::Command::new("xdg-open").arg(&url).spawn();
+    let spawn = std::process::Command::new("xdg-open")
+        .arg(parsed.as_str())
+        .spawn();
     spawn
         .map(|_| ())
         .map_err(|e| format!("could not open browser: {e}"))
@@ -1308,12 +940,37 @@ pub fn run() {
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
 
+    // Sockets the renderer opened through Rust belong to its page: they close
+    // when the page reloads or its window goes, as a browser socket would.
     builder
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                let owner = webview.label().to_owned();
+                tauri::async_runtime::spawn(async move {
+                    nostr_tor::close_owned_by(&owner).await;
+                    electrum_tcp::close_owned_by(&owner).await;
+                    chat_mdk::close_owned_by(&owner).await;
+                });
+            }
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let owner = window.label().to_owned();
+                tauri::async_runtime::spawn(async move {
+                    nostr_tor::close_owned_by(&owner).await;
+                    electrum_tcp::close_owned_by(&owner).await;
+                    chat_mdk::close_owned_by(&owner).await;
+                });
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             app_transport::optn_app_dispatch,
             chain_sources::optn_chain_sources,
+            electrum_selection::optn_chain_electrum_pool,
             chain_sources::optn_chain_rpc_credentials,
             chain_sources::optn_chain_set_policy,
+            chain_sources::optn_chain_transport,
+            chain_sources::optn_chain_set_transport,
             chain_sources::optn_chain_set_selection,
             chain_sources::optn_chain_export_configuration,
             chain_sources::optn_chain_import_configuration,
@@ -1330,13 +987,20 @@ pub fn run() {
             coin_holds::optn_coin_holds,
             coin_holds::optn_coin_freeze,
             coin_holds::optn_coin_unfreeze,
+            fusion_driver::optn_fusion_start,
+            fusion_driver::optn_fusion_stop,
+            fusion_driver::optn_fusion_running,
+            fusion_driver::optn_fusion_depth,
+            fusion_driver::optn_fusion_depth_import,
             wallet_spend::optn_wallet_prepare_spend,
             wallet_spend::optn_wallet_send,
             wallet_spend::optn_wallet_broadcast,
             app_transport::optn_app_snapshot,
+            token_images::optn_token_image,
             app_transport::optn_wallet_refresh,
             app_transport::optn_wallet_rescan,
             app_transport::optn_wallet_security,
+            app_transport::optn_wallet_seed_draft,
             app_transport::optn_airgap,
             #[cfg(desktop)]
             clipboard::clipboard_write_text,
@@ -1346,7 +1010,8 @@ pub fn run() {
             platform_mobile::clipboard_write_text,
             #[cfg(mobile)]
             platform_mobile::clipboard_read_text,
-            optn_price_fetch,
+            egress::optn_http_fetch,
+            egress::optn_remote_image,
             open_external,
             read_wallet_file,
             write_wallet_file,
@@ -1356,14 +1021,7 @@ pub fn run() {
             multisig_inspect,
             fusion_server_status,
             fusion_join_status,
-            fusion_execution_status,
-            fusion_prepare_round,
-            fusion_p2p_sign,
             fusion_p2p_encode_component,
-            fusion_run,
-            fusion_cancel_round,
-            fusion_relay_broadcast_and_observe,
-            fusion_transaction_is_known,
             fusion_tor_detect,
             fusion_tor_check,
             bip37_node_probe,
@@ -1378,9 +1036,16 @@ pub fn run() {
             electrum_tcp::electrum_tcp_send,
             electrum_tcp::electrum_tcp_close,
             nostr_tor::nostr_tor_open,
+            nostr_tor::optn_ws_open,
             nostr_tor::nostr_tor_send,
             nostr_tor::nostr_tor_close,
             nostr_tor::nostr_relay_health,
+            chat_mdk::chat_mdk_available,
+            chat_mdk::chat_mdk_open,
+            chat_mdk::chat_mdk_close,
+            chat_mdk::chat_mdk_call,
+            fusion_depth_store::optn_fusion_depth_load,
+            fusion_depth_store::optn_fusion_depth_store,
             #[cfg(desktop)]
             hw::session::hw_enumerate,
             #[cfg(desktop)]
@@ -1490,10 +1155,33 @@ pub fn run() {
                 app_runtime.clone(),
                 network_settings.clone(),
             );
+            // A settings change reaches the renderer's Electrum client: its
+            // pool is fetched again, and sockets to servers the selection no
+            // longer includes close now rather than at the next reload.
+            {
+                let handle = app.handle().clone();
+                let runtime = app_runtime.clone();
+                let settings = network_settings.clone();
+                network_settings.on_change(move |network| {
+                    let handle = handle.clone();
+                    let runtime = runtime.clone();
+                    let settings = settings.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = tauri::Emitter::emit(
+                            &handle,
+                            electrum_selection::POOL_CHANGED,
+                            network.to_string(),
+                        );
+                        electrum_tcp::revoke_unselected(&handle, &runtime, &settings, network)
+                            .await;
+                    });
+                });
+            }
             app.manage(appearance);
             app.manage(network_settings);
             app.manage(native_chain);
             app.manage(app_runtime);
+            app.manage(fusion_driver::FusionDriverState::default());
             // Menu bar is built on the frontend in TypeScript
             // (src/platform/desktop/useMenuBar.ts) so File → Open Wallet can list
             // the actual saved wallets from the webview's WASM SQLite DB. The old
@@ -1651,7 +1339,82 @@ mod tests {
                 .unwrap(),
             fusion::Transport::Direct
         ));
+
+        // With Tor off nothing is proxied.
+        let direct = optn_runtime::chain::ConnectionPolicy {
+            transport: optn_runtime::chain::TransportPolicy::Direct,
+            ..remote_policy
+        };
+        assert!(matches!(
+            bip37_transport_for_catalog(
+                "remote-bip37.example",
+                8333,
+                &remote_catalog,
+                &direct,
+                &[]
+            )
+            .await
+            .unwrap(),
+            fusion::Transport::Direct
+        ));
         server.abort();
+    }
+
+    /// Fusion is Tor-mandatory: with Tor on it needs a verified proxy, and
+    /// with Tor off it does not run at all.
+    #[tokio::test]
+    async fn fusion_runs_only_while_the_transport_keeps_it_on_tor() {
+        use optn_runtime::chain::TransportPolicy;
+        assert!(fusion_transport_allows(TransportPolicy::Tor).is_ok());
+        assert_eq!(
+            fusion_transport_allows(TransportPolicy::Direct),
+            Err(FUSION_NEEDS_TOR.to_string())
+        );
+
+        let directory = std::env::temp_dir().join(format!(
+            "optn-fusion-transport-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let store = crate::network_config::NetworkSettingsStore::new(directory.clone());
+        let network = optn_core::network::Network::Chipnet;
+        store
+            .update_overlay(network, |overlay| {
+                overlay.connection_policy.transport = TransportPolicy::Direct;
+                Ok(())
+            })
+            .unwrap();
+        // Refused before any proxy is consulted, whatever is listening.
+        assert_eq!(
+            verified_fusion_proxy_for_network(&["fusion.example"], &store, network).await,
+            Err(FUSION_NEEDS_TOR.to_string())
+        );
+        assert_eq!(
+            verified_fusion_proxy_for_network(&["127.0.0.1", "fusion.example"], &store, network)
+                .await,
+            Err(FUSION_NEEDS_TOR.to_string())
+        );
+        // A loopback-only round has no hop to hide.
+        assert_eq!(
+            verified_fusion_proxy_for_network(&["127.0.0.1"], &store, network).await,
+            Ok(None)
+        );
+        // With a Tor transport the old rule stands: no verified Tor, no Fusion.
+        store
+            .update_overlay(network, |overlay| {
+                overlay.connection_policy.transport = TransportPolicy::default();
+                Ok(())
+            })
+            .unwrap();
+        let refused = verified_fusion_proxy_for_network(&["fusion.example"], &store, network)
+            .await
+            .unwrap_err();
+        assert_ne!(refused, FUSION_NEEDS_TOR);
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -1681,6 +1444,7 @@ mod tests {
             primary_scope: SourceScope::Explicit(std::collections::BTreeSet::from([id.clone()])),
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: Default::default(),
         };
         assert!(bip37_selected_endpoint_is_declared_own(
             &catalog,
@@ -1854,103 +1618,5 @@ mod tests {
             Ok(Some(port))
         );
         server.abort();
-    }
-
-    #[test]
-    fn fusion_run_includes_every_lookup_fallback_in_proxy_decision() {
-        let fallbacks = vec![
-            FusionLookupEndpointReq {
-                host: "remote-fallback.example".into(),
-                port: 50002,
-                use_ssl: true,
-            },
-            FusionLookupEndpointReq {
-                host: "127.0.0.1".into(),
-                port: 50001,
-                use_ssl: false,
-            },
-        ];
-        assert_eq!(
-            fusion_run_destination_hosts("fusion.example", "localhost", &fallbacks),
-            vec![
-                "fusion.example",
-                "localhost",
-                "remote-fallback.example",
-                "127.0.0.1"
-            ]
-        );
-    }
-
-    #[test]
-    fn fusion_relay_policy_allows_every_loopback_form_direct() {
-        let loopbacks = ["localhost", "127.0.0.1", "::1"];
-        for relay_host in loopbacks {
-            for observer_host in loopbacks {
-                assert_eq!(
-                    fusion_relay_transport_policy(relay_host, observer_host, false).unwrap(),
-                    (FusionRelayRoute::Direct, FusionRelayRoute::Direct)
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn fusion_relay_policy_rejects_any_remote_peer_without_verified_tor() {
-        for (relay_host, observer_host) in [
-            ("relay.example", "observer.example"),
-            ("localhost", "observer.example"),
-            ("relay.example", "::1"),
-        ] {
-            let err = fusion_relay_transport_policy(relay_host, observer_host, false).unwrap_err();
-            assert!(err.contains("verified Tor"), "unexpected error: {err}");
-        }
-    }
-
-    #[test]
-    fn fusion_relay_policy_routes_each_remote_peer_through_verified_tor() {
-        assert_eq!(
-            fusion_relay_transport_policy("localhost", "observer.example", true).unwrap(),
-            (FusionRelayRoute::Direct, FusionRelayRoute::Tor)
-        );
-        assert_eq!(
-            fusion_relay_transport_policy("relay.example", "observer.example", true).unwrap(),
-            (FusionRelayRoute::Tor, FusionRelayRoute::Tor)
-        );
-    }
-
-    #[test]
-    fn fusion_relay_endpoints_must_be_distinct() {
-        assert!(!fusion_relay_endpoints_are_distinct(
-            "relay.example",
-            8333,
-            "RELAY.EXAMPLE.",
-            8333
-        ));
-        assert!(!fusion_relay_endpoints_are_distinct(
-            "localhost",
-            8333,
-            "127.0.0.1",
-            8333
-        ));
-        assert!(fusion_relay_endpoints_are_distinct(
-            "relay.example",
-            8333,
-            "observer.example",
-            8333
-        ));
-    }
-
-    #[test]
-    fn fusion_relay_request_is_bounded_and_network_explicit() {
-        assert!(validate_fusion_relay_request("00", "mainnet").is_ok());
-        assert!(validate_fusion_relay_request("00", "chipnet").is_ok());
-        assert!(validate_fusion_relay_request("00", "unknown").is_err());
-        assert!(validate_fusion_relay_request("", "mainnet").is_err());
-        assert!(validate_fusion_relay_request("0", "mainnet").is_err());
-        assert!(validate_fusion_relay_request(
-            &"00".repeat(MAX_FUSION_RELAY_TX_BYTES + 1),
-            "mainnet"
-        )
-        .is_err());
     }
 }

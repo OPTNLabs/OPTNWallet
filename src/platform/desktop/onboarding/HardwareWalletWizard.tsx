@@ -36,6 +36,7 @@ import {
 } from './hardwareWallet';
 import { protectHardwareWalletWithPassword } from '../DesktopWalletManager';
 
+import { isTestNetwork, networkProfile } from '../../../utils/networkProfile';
 export type HardwareWizardResult = {
   walletId: number;
   created: boolean;
@@ -60,8 +61,7 @@ const FAMILY_LABEL: Record<HwFamily, string> = {
 
 export function HardwareWalletWizard({ onBack, onOpened }: Props) {
   const currentNetwork = useSelector(selectCurrentNetwork);
-  const network =
-    currentNetwork === Network.CHIPNET ? Network.CHIPNET : Network.MAINNET;
+  const network = currentNetwork;
 
   const [step, setStep] = useState<Step>('intro');
   const [devices, setDevices] = useState<HwDeviceInfo[]>([]);
@@ -205,7 +205,7 @@ export function HardwareWalletWizard({ onBack, onOpened }: Props) {
     setWalletName(
       selected.product
         ? `${label} ${selected.product}`
-        : `${label} ${network === Network.CHIPNET ? 'Chipnet' : 'Mainnet'}`
+        : `${label} ${networkProfile(network).label}`
     );
     setStep('path');
   };
@@ -250,7 +250,8 @@ export function HardwareWalletWizard({ onBack, onOpened }: Props) {
         setStatusLine(
           'Talking to Trezor via Bridge (Suite) or HID — confirm on device if asked…'
         );
-        const net = network === Network.CHIPNET ? 'chipnet' : 'mainnet';
+        // Trezor's BCH testnet coin covers every test network.
+        const net = isTestNetwork(network) ? 'chipnet' : 'mainnet';
         const exported = await trezorExportAccountXpub(
           net,
           path,
@@ -337,10 +338,7 @@ export function HardwareWalletWizard({ onBack, onOpened }: Props) {
               <li>Scan → pick device → path → password → Home</li>
             </ol>
             <p className="text-xs wallet-muted">
-              Network:{' '}
-              <strong>
-                {network === Network.CHIPNET ? 'Chipnet' : 'Mainnet'}
-              </strong>
+              Network: <strong>{networkProfile(network).label}</strong>
             </p>
             <button
               type="button"

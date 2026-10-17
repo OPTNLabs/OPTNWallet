@@ -13,6 +13,7 @@ import {
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ChainSourcesView } from '../../chainSourcesBridge';
 import { ChainSourcesSettings } from '../../../../features/settings/ChainSourcesSettings';
+import { setTorEnabled } from '../../../../state/slices/experimentalSlice';
 
 const mock = vi.hoisted(() => ({ invoke: vi.fn(), dispatch: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mock.invoke }));
@@ -372,4 +373,71 @@ it('browses without probes and sends explicit selection through the old UI', asy
   expect(
     screen.getByRole('navigation', { name: 'Network source settings' })
   ).toBeInTheDocument();
+});
+
+it('switches Tor on and off through the Rust network policy', async () => {
+  const view: ChainSourcesView = {
+    unavailable_services: [],
+    network: 'chipnet',
+    policy: 'auto',
+    protocols: ['electrum'],
+    scope: 'all',
+    configuration_error: null,
+    wallet_routes: 0,
+    verified_tip: null,
+    tor: { status: 'absent', socks_port: null, trusted_ports: [] },
+    sources: [],
+  };
+  let transport = 'tor';
+  mock.invoke.mockReset();
+  mock.dispatch.mockReset();
+  mock.invoke.mockImplementation(
+    async (command: string, args?: { transport?: string }) => {
+      if (command === 'optn_chain_sources') return view;
+      if (command === 'optn_chain_transport') return transport;
+      if (command === 'optn_chain_set_transport' && args?.transport) {
+        transport = args.transport;
+      }
+      return undefined;
+    }
+  );
+  render(<ChainSourcesSettings />);
+  fireEvent.click(
+    await screen.findByRole('button', { name: /Privacy & Transport/ })
+  );
+  const torSwitch = await screen.findByRole('switch', { name: 'Tor' });
+  await waitFor(() =>
+    expect(torSwitch).toHaveAttribute('aria-checked', 'true')
+  );
+  expect(mock.dispatch).toHaveBeenCalledWith(setTorEnabled(true));
+
+  // On/off is the whole control.
+  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+
+  // Tor off: everything direct, said plainly, and Fusion's flag follows.
+  fireEvent.click(torSwitch);
+  expect(await screen.findByText(/Tor is off/)).toBeInTheDocument();
+  expect(mock.invoke).toHaveBeenCalledWith('optn_chain_set_transport', {
+    transport: 'direct',
+    network: 'chipnet',
+  });
+  expect(mock.invoke).toHaveBeenCalledWith('optn_chain_rebuild');
+  expect(screen.getByRole('switch', { name: 'Tor' })).toHaveAttribute(
+    'aria-checked',
+    'false'
+  );
+  expect(mock.dispatch).toHaveBeenCalledWith(setTorEnabled(false));
+
+  // And back on.
+  fireEvent.click(screen.getByRole('switch', { name: 'Tor' }));
+  await waitFor(() =>
+    expect(screen.getByRole('switch', { name: 'Tor' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+  );
+  expect(mock.invoke).toHaveBeenCalledWith('optn_chain_set_transport', {
+    transport: 'tor',
+    network: 'chipnet',
+  });
 });

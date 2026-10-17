@@ -42,6 +42,22 @@ pub const TOR_BROWSER_SOCKS_PORT: u16 = 9150;
 /// The ports auto-detection tries, in order.
 pub const AUTODETECT_SOCKS_PORTS: &[u16] = &[TOR_DAEMON_SOCKS_PORT, TOR_BROWSER_SOCKS_PORT];
 
+/// How long a local SOCKS proxy may take to answer a no-auth greeting.
+///
+/// Generous on purpose. A busy Tor (several wallet windows fusing at once,
+/// each with relay sockets, lookups and covert connections) answers its own
+/// SOCKS port slowly: past 1.4 s in a ten-wallet chipnet run. A probe that
+/// gives up first turns a working, trusted Tor into "unverified", and every
+/// remote fusion leg is refused. A port with nothing listening refuses at
+/// once, so scanning for Tor stays fast. Every probe uses this one value.
+pub const SOCKS_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// SOCKS5, offering one method: no authentication.
+pub const SOCKS5_NO_AUTH_GREETING: [u8; 3] = [0x05, 0x01, 0x00];
+
+/// The reply that accepts [`SOCKS5_NO_AUTH_GREETING`].
+pub const SOCKS5_NO_AUTH_ACCEPTED: [u8; 2] = [0x05, 0x00];
+
 /// What the runtime found when it went looking for Tor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TorStatus {

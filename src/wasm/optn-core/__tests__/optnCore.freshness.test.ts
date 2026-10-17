@@ -28,12 +28,15 @@ function declaredInRust(): string[] {
     .sort();
 }
 
-/** Every function the generated bindings actually expose. */
+/** Every function, class and class member the generated bindings expose. */
 function presentInArtifact(): string[] {
   const types = readFileSync(GENERATED_TYPES, 'utf8');
-  return [...types.matchAll(/^export function ([A-Za-z_][A-Za-z0-9_]*)/gm)]
-    .map((match) => match[1])
-    .sort();
+  const names = [
+    ...types.matchAll(/^export (?:function|class) ([A-Za-z_][A-Za-z0-9_]*)/gm),
+    // Members of an exported class (`js_class`), static or not.
+    ...types.matchAll(/^\s+(?:static\s+)?([A-Za-z_][A-Za-z0-9_]*)\(/gm),
+  ];
+  return names.map((match) => match[1]).sort();
 }
 
 describe('generated optn-core wasm bindings', () => {

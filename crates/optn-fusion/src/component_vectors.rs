@@ -11,7 +11,7 @@
 //
 // Regenerate with:
 //
-//   WRITE_FUSION_COMPONENT_VECTORS=1 cargo test -p optn-wallet-desktop component_vectors
+//   WRITE_FUSION_COMPONENT_VECTORS=1 cargo test -p optn-fusion component_vectors
 //
 // A diff in that file is a change to the wire format, and should be read as one.
 use crate::p2p_component::{
@@ -148,9 +148,9 @@ fn build() -> serde_json::Value {
 
     serde_json::json!({
         "note": concat!(
-            "CashFusion component wire format, shared by src-tauri/src/fusion/p2p_component.rs ",
+            "CashFusion component wire format, shared by crates/optn-fusion/src/p2p_component.rs ",
             "and src/platform/desktop/nostr/fusionComponentV4.ts. Regenerate with ",
-            "WRITE_FUSION_COMPONENT_VECTORS=1 cargo test -p optn-wallet-desktop component_vectors. ",
+            "WRITE_FUSION_COMPONENT_VECTORS=1 cargo test -p optn-fusion component_vectors. ",
             "A diff here is a wire-format change."
         ),
         "electronCashGolden": {

@@ -121,6 +121,8 @@ import {
 } from './cauldronHelpers';
 import { toTokenAwareCashAddress } from '../../../utils/cashAddress';
 import ExplorerLink from '../../../components/ExplorerLink';
+import { networkProfile } from '../../../utils/networkProfile';
+import RemoteImg from '../../../components/RemoteImg';
 
 type CauldronSwapAppProps = {
   sdk: AddonSDK;
@@ -2956,10 +2958,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     : activeView === 'merchant'
       ? 'Choose what customers pay and how much to convert.'
       : 'Swap BCH and CashTokens through Cauldron.';
-  const merchantNetworkLabel =
-    currentNetwork === 'chipnet'
-      ? 'Chipnet proof of concept'
-      : 'Mainnet proof of concept';
+  const merchantNetworkLabel = `${networkProfile(currentNetwork).label} proof of concept`;
   const merchantExpiryLabel = merchantPaymentProposal
     ? new Date(merchantPaymentProposal.expiresAt).toLocaleTimeString([], {
         hour: 'numeric',
@@ -3566,7 +3565,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           }}
         >
           {iconUri ? (
-            <img
+            <RemoteImg
               src={iconUri}
               alt={primaryLabel}
               className="h-full w-full object-cover"

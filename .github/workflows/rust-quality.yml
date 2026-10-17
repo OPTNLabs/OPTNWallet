@@ -106,9 +106,13 @@ jobs:
         run: cargo deny --manifest-path src-tauri/Cargo.toml check advisories bans licenses sources
 
       # Cargo advisory matching can skip path dependencies. Audit the original
-      # registry identity as well, using the existing policy and exception list.
-      # The optimized test above verifies the separately documented source repair.
+      # registry identity as well, with the repository's policy, which ignores
+      # nothing. Every advisory found must be one vendor/glib-0.18.5 repairs (its
+      # OPTN.md names each, and the optimized test above exercises the repair);
+      # any other, or a scan that fails without naming one, fails this step.
       - name: Preserve vendored GLib advisory coverage
+        env:
+          REPAIRED_IN_VENDOR: RUSTSEC-2024-0429
         run: |
           audit_dir="$RUNNER_TEMP/optn-glib-advisory"
           mkdir -p "$audit_dir/src"
@@ -121,7 +125,49 @@ jobs:
           [dependencies]
           glib = "=0.18.5"
           EOF
-          cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" check advisories
+          status=0
+          cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" --format json check advisories 2> "$audit_dir/report.jsonl" || status=$?
+          python3 scripts/check-vendored-advisories.py "$audit_dir/report.jsonl" "$status" $REPAIRED_IN_VENDOR
+
+      # vendor/hpke-rs-0.6.1 (MDK 0.8's HPKE) raises libcrux-sha3 to 0.0.11; see its OPTN.md.
+      - name: Preserve vendored hpke-rs advisory coverage
+        env:
+          REPAIRED_IN_VENDOR: RUSTSEC-2026-0207 RUSTSEC-2026-0208 RUSTSEC-2026-0212
+        run: |
+          audit_dir="$RUNNER_TEMP/optn-hpke-rs-advisory"
+          mkdir -p "$audit_dir/src"
+          touch "$audit_dir/src/lib.rs"
+          cat > "$audit_dir/Cargo.toml" <<'EOF'
+          [package]
+          name = "optn-hpke-rs-advisory"
+          version = "0.0.0"
+          edition = "2021"
+          [dependencies]
+          hpke-rs = "=0.6.1"
+          EOF
+          status=0
+          cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" --format json check advisories 2> "$audit_dir/report.jsonl" || status=$?
+          python3 scripts/check-vendored-advisories.py "$audit_dir/report.jsonl" "$status" $REPAIRED_IN_VENDOR
+
+      # vendor/mdk-memory-storage-0.8.0 (optn-chat's test store) takes lru 0.18; see its OPTN.md.
+      - name: Preserve vendored mdk-memory-storage advisory coverage
+        env:
+          REPAIRED_IN_VENDOR: RUSTSEC-2026-0253
+        run: |
+          audit_dir="$RUNNER_TEMP/optn-mdk-memory-storage-advisory"
+          mkdir -p "$audit_dir/src"
+          touch "$audit_dir/src/lib.rs"
+          cat > "$audit_dir/Cargo.toml" <<'EOF'
+          [package]
+          name = "optn-mdk-memory-storage-advisory"
+          version = "0.0.0"
+          edition = "2021"
+          [dependencies]
+          mdk-memory-storage = "=0.8.0"
+          EOF
+          status=0
+          cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" --format json check advisories 2> "$audit_dir/report.jsonl" || status=$?
+          python3 scripts/check-vendored-advisories.py "$audit_dir/report.jsonl" "$status" $REPAIRED_IN_VENDOR
 
   feature-matrix:
     name: Rust feature and fuzz compile

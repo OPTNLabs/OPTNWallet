@@ -7,7 +7,8 @@
 // Scope (see docs/cashfusion-implementation-scope.md): handshake + pool/round
 // participation — Pedersen, blind Schnorr, covert circuits, Tor, blame, plan
 // validation (`pedersen`, `schnorr`, `covert`, `run`, `session`, `tor`, …).
-// P2P CashFusion (Nostr) is a separate TS path under platform/desktop/nostr/.
+// P2P CashFusion (Nostr) is `p2p`, the same protocol as the TypeScript path
+// under platform/desktop/nostr/.
 //
 // Every wire-level constant here is taken from the reference implementation
 // (Electron Cash, electroncash_plugins/fusion/), not inferred:
@@ -26,13 +27,15 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
+pub mod allocate;
 pub mod blame;
 #[cfg(test)]
 mod component_vectors;
 pub mod components;
 pub mod covert;
-pub mod electrum_input;
 pub mod encrypt;
+pub mod lookup;
+pub mod p2p;
 pub mod p2p_component;
 pub mod p2p_sign;
 pub mod pedersen;
@@ -203,14 +206,19 @@ where
         .map_err(|e| format!("could not decode server message: {e}"))?;
 
     match reply.msg {
-        Some(pb::server_message::Msg::Serverhello(h)) => Ok(FusionServerStatus {
-            tiers: h.tiers,
-            num_components: h.num_components,
-            component_feerate: h.component_feerate,
-            min_excess_fee: h.min_excess_fee,
-            max_excess_fee: h.max_excess_fee,
-            donation_address: h.donation_address,
-        }),
+        Some(pb::server_message::Msg::Serverhello(h)) => {
+            // Refused here, where it is read, so no caller ever shows or plans
+            // against a server outside Electron Cash's limits.
+            server_plan::validate_server_hello(&h)?;
+            Ok(FusionServerStatus {
+                tiers: h.tiers,
+                num_components: h.num_components,
+                component_feerate: h.component_feerate,
+                min_excess_fee: h.min_excess_fee,
+                max_excess_fee: h.max_excess_fee,
+                donation_address: h.donation_address,
+            })
+        }
         // The server reports version mismatches and the like through this.
         Some(pb::server_message::Msg::Error(e)) => Err(format!(
             "server rejected us: {}",
@@ -252,6 +260,24 @@ pub async fn connect_stream(
     use_ssl: bool,
     transport: Transport<'_>,
 ) -> Result<FusionStream, String> {
+    connect_stream_isolated(host, port, use_ssl, transport, &isolation_token()).await
+}
+
+/// A fresh Tor isolation credential for [`connect_stream_isolated`].
+pub fn isolation_token() -> String {
+    format!("optn-{}", fastrand_token())
+}
+
+/// [`connect_stream`] under the SOCKS credentials `isolation`: Tor may carry
+/// every stream that passes the same credentials on one circuit, and never
+/// shares that circuit with other credentials. Ignored on the Direct leg.
+pub async fn connect_stream_isolated(
+    host: &str,
+    port: u16,
+    use_ssl: bool,
+    transport: Transport<'_>,
+    isolation: &str,
+) -> Result<FusionStream, String> {
     // Every caller, including Electrum failover and server-supplied covert
     // endpoints, must pass this check before DNS resolution or a TCP dial.
     if matches!(transport, Transport::Direct) && !is_local_server(host) {
@@ -269,15 +295,12 @@ pub async fn connect_stream(
         Transport::Tor {
             host: proxy_host,
             port: proxy_port,
-        } => {
-            let token = format!("optn-{}", fastrand_token());
-            tokio::time::timeout(
-                CONNECT_TIMEOUT,
-                tor::connect_via_tor(proxy_host, proxy_port, host, port, &token),
-            )
-            .await
-            .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
-        }
+        } => tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            tor::connect_via_tor(proxy_host, proxy_port, host, port, isolation),
+        )
+        .await
+        .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??,
     };
 
     if !use_ssl {
@@ -457,6 +480,36 @@ mod tests {
             assert_eq!(status.tiers, vec![10_000, 100_000]);
             assert_eq!(status.num_components, 23);
             assert_eq!(status.component_feerate, 1_000);
+        });
+    }
+
+    #[test]
+    fn refuses_a_server_hello_outside_the_limits() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let server_task = tokio::spawn(async move {
+                let _ = recv_frame(&mut server).await.unwrap();
+                let hello = pb::ServerMessage {
+                    msg: Some(pb::server_message::Msg::Serverhello(pb::ServerHello {
+                        tiers: vec![10_000, 100_000],
+                        num_components: 23,
+                        component_feerate: server_plan::MAX_COMPONENT_FEERATE + 1,
+                        min_excess_fee: 10,
+                        max_excess_fee: 10_000,
+                        donation_address: None,
+                    })),
+                };
+                send_frame(&mut server, &hello.encode_to_vec())
+                    .await
+                    .unwrap();
+            });
+            let error = handshake(&mut client, None).await.unwrap_err();
+            server_task.await.unwrap();
+            assert!(error.contains("excessive component feerate"), "{error}");
         });
     }
 

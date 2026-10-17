@@ -1,5 +1,5 @@
 import { isInlineChatMedia, type ChatMessage } from '../../platform/desktop/nostr/chat';
-import type { MlsGroupRecord } from '../../platform/desktop/nostr/mls';
+import type { MlsGroupRecord } from '../../platform/desktop/nostr/mlsEngine';
 
 export type ChatInboxKind = 'dm' | 'private-group' | 'open-group';
 
@@ -9,8 +9,11 @@ export type ChatInboxItem = {
   last: ChatMessage | null;
 };
 
+/** Chat text: a DM (kind 14), a file (15), or a group message (9, the kind
+ *  ts-mls and Marmot clients put inside MLS). */
 export function isInboxMessage(message: ChatMessage): boolean {
-  return (message.kind ?? 14) === 14 || message.kind === 15 || isInlineChatMedia(message.text);
+  const kind = message.kind ?? 14;
+  return kind === 14 || kind === 9 || kind === 15 || isInlineChatMedia(message.text);
 }
 
 export function groupRecordForPeer(

@@ -10,6 +10,7 @@ import type { RootState, AppDispatch } from '../state/store';
 import { useI18n } from '../i18n/useI18n';
 import type { TranslationKey } from '../i18n/resources';
 
+import { networkProfile } from '../utils/networkProfile';
 const STAGE_ORDER: WalletOperationStage[] = [
   'preparing',
   'clearing',
@@ -75,8 +76,9 @@ const WalletReconfigurationOverlay: React.FC = () => {
     ? visibleStages.indexOf(operation.stage)
     : -1;
   const currentStage = operation.stage ? STAGE_COPY[operation.stage] : null;
-  const targetNetwork =
-    operation.targetNetwork === Network.CHIPNET ? 'Chipnet' : 'Mainnet';
+  const targetNetwork = networkProfile(
+    operation.targetNetwork ?? Network.MAINNET
+  ).label;
 
   return (
     <div

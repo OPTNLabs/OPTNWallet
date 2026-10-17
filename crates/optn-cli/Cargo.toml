@@ -6,7 +6,7 @@ authors = ["OPTNLabs"]
 license = "GPL-3.0-only"
 repository = "https://github.com/OPTNLabs/OPTNWallet"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.93"
 
 [[bin]]
 name = "optn"
@@ -20,6 +20,7 @@ path = "src/main.rs"
 # Versions are pinned to match src-tauri/Cargo.toml so the two trees resolve to
 # the same dependency versions and the audit baseline stays meaningful.
 [dependencies]
+optn-x402 = { path = "../optn-x402", version = "=1.7.3" }
 optn-core = { path = "../optn-core", version = "=1.7.3" }
 optn-app = { path = "../optn-app", version = "=1.7.3" }
 optn-ui-text = { path = "../optn-ui-text", version = "=1.7.3" }
@@ -29,6 +30,9 @@ optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
 # The same Tauri-free native adapter composition used by desktop. This keeps
 # CLI source selection, Tor policy, and protocol capability routing aligned.
 optn-chain-native = { path = "../optn-chain-native", version = "=1.7.3" }
+# CashFusion rounds run through the same native host as the desktop.
+optn-fusion = { path = "../optn-fusion", version = "=1.7.3" }
+optn-fusion-native = { path = "../optn-fusion-native", version = "=1.7.3" }
 optn-platform-native = { path = "../optn-platform-native", version = "=1.7.3", features = ["wallet-storage", "secure-storage"] }
 optn-transport = { path = "../optn-transport", version = "=1.7.3" }
 # Native terminal echo control; passwords must never be normal command arguments.
@@ -45,15 +49,16 @@ ripemd = "0.1"
 hmac = "0.12"
 # Same version src-tauri pins. ECDSA over secp256k1 in pure Rust, so it crosses.
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
-# BIP32 with the pure-Rust k256 backend — the same curve crate src-tauri
-# already uses. A C-backed secp256k1 would not cross-compile to riscv64.
+# BIP32 with the pure-Rust k256 backend — the same curve crate src-tauri uses.
+# The separate x402 SDK also brings libsecp256k1; CI's target C toolchains
+# compile it alongside ring for the RISC-V and ARM cross-builds.
 bip32 = { version = "0.5", default-features = false, features = ["alloc", "secp256k1", "std"] }
 # Mnemonics come from rust-bitcoin's bip39, not bip32's built-in one. bip32
 # checks `entropy.len() != KEY_SIZE + 1`, which accepts 24-word phrases and
 # rejects everything shorter — but this wallet imports 12-, 15-, 18-, 21- and
 # 24-word phrases, so bip32's would have silently refused most real seeds.
 bip39 = { version = "2", default-features = false, features = ["std", "rand"] }
-tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "rt-multi-thread", "sync", "signal"] }
 # Same pure-Rust SOCKS client as the native chain adapters. Remote Electrum
 # routes fail closed unless this reaches a verified local Tor SOCKS proxy.
 tokio-socks = "0.5"
@@ -80,7 +85,7 @@ keyring = { version = "3", default-features = false, features = [
   "linux-native",
 ] }
 
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset", "json", "socks"] }
 
 [dev-dependencies]
 optn-platform = { path = "../optn-platform", version = "=1.7.3" }

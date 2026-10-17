@@ -14,9 +14,9 @@ import {
 import { hash160 } from '@cashscript/utils';
 import * as bip39 from 'bip39';
 import { Network } from '../state/slices/networkSlice';
-import { COIN_TYPE } from '../utils/constants';
 import { zeroize } from '../utils/secureMemory';
 
+import { cashAddressPrefix, networkProfile } from '../utils/networkProfile';
 export type DerivedBchKeyMaterial = {
   publicKey: Uint8Array;
   privateKey: Uint8Array;
@@ -89,9 +89,7 @@ export const BCH_WALLET_SCAN_BRANCH_NAMES: readonly BchStandardBranchName[] = [
  * later cannot inherit 145 here while being probed as a test net there.
  */
 export function getBchCoinType(network: Network = Network.MAINNET): number {
-  return network === Network.MAINNET
-    ? COIN_TYPE.bitcoincash
-    : COIN_TYPE.testnet;
+  return networkProfile(network).coinType;
 }
 
 export const MAX_BIP44_INDEX = 0x7fffffff;
@@ -154,7 +152,7 @@ export function buildBchAccountPath(parts: BchAccountPathParts): string {
 }
 
 export function getHdKeyNetwork(network: Network): 'mainnet' | 'testnet' {
-  return network === Network.MAINNET ? 'mainnet' : 'testnet';
+  return networkProfile(network).hdNetwork;
 }
 
 /**
@@ -255,7 +253,7 @@ export function deriveBchPublicAddress(
     return null;
   }
 
-  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const prefix = cashAddressPrefix(network);
   const address = encodeCashAddress({
     payload: publicKeyHash,
     prefix,

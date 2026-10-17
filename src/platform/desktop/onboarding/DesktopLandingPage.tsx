@@ -43,6 +43,7 @@ import { DesktopWalletPickerActions } from './DesktopWalletPickerActions';
 import { WatchOnlyWalletPreview } from './WatchOnlyWalletPreview';
 import { HardwareWalletWizard } from './HardwareWalletWizard';
 import { useI18n } from '../../../i18n/useI18n';
+import { networkProfile, parseNetwork } from '../../../utils/networkProfile';
 
 interface WalletRow {
   id: number;
@@ -389,18 +390,15 @@ const DesktopLandingPage = () => {
       let preferredNetwork = currentNetwork;
       const { networkFromWalletFile } = await import('../walletFile');
       const fileNet = networkFromWalletFile(importFile);
-      if (fileNet === 'chipnet') preferredNetwork = Network.CHIPNET;
-      else if (fileNet === 'mainnet') preferredNetwork = Network.MAINNET;
+      const fileNetwork = parseNetwork(fileNet);
+      if (fileNetwork) preferredNetwork = fileNetwork;
       else if (importColdText) {
         try {
           const { parseEncryptedColdArchive, decryptColdArchive } =
             await import('../WalletColdExportService');
           const enc = parseEncryptedColdArchive(importColdText);
           const archive = await decryptColdArchive(enc, password);
-          if (archive.network === 'chipnet') preferredNetwork = Network.CHIPNET;
-          else if (archive.network === 'mainnet') {
-            preferredNetwork = Network.MAINNET;
-          }
+          preferredNetwork = parseNetwork(archive.network) ?? preferredNetwork;
         } catch {
           /* cold optional for network peek; import may still succeed later */
         }
@@ -622,7 +620,7 @@ const DesktopLandingPage = () => {
               <p className="text-sm wallet-muted">
                 Enter this wallet file's password
                 {importFile.network
-                  ? ` · ${importFile.network === 'chipnet' ? 'Chipnet' : 'Mainnet'}`
+                  ? ` · ${networkProfile(parseNetwork(importFile.network) ?? Network.MAINNET).label}`
                   : ''}
                 . If this wallet is already saved, it will be opened — not
                 duplicated.
@@ -690,9 +688,7 @@ const DesktopLandingPage = () => {
                     <p className="text-[10px] wallet-muted">
                       #{w.id}
                       {' · '}
-                      {w.networkType === Network.CHIPNET
-                        ? t('settingsNetwork.chipnet')
-                        : t('settingsNetwork.mainnet')}
+                      {t(networkProfile(w.networkType).labelKey)}
                       {w.walletType === 'watch-only' && (
                         <span className="ml-1.5 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide">
                           Watch-only
@@ -741,10 +737,7 @@ const DesktopLandingPage = () => {
                         name:
                           w.wallet_name ||
                           t('desktopWallet.walletNumber', { id: w.id }),
-                        network:
-                          w.networkType === Network.CHIPNET
-                            ? t('settingsNetwork.chipnet')
-                            : t('settingsNetwork.mainnet'),
+                        network: t(networkProfile(w.networkType).labelKey),
                         id: w.id,
                       })}
                     </p>

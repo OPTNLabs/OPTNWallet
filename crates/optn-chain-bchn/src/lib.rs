@@ -16,6 +16,7 @@ use optn_runtime::chain_service::{
     BackendObservation, ChainBackend, ChainBackendError, ChainFuture, ChainOperation, ChainPayload,
     ChainRequest, ObservedTransaction, OutpointSpentness,
 };
+use optn_runtime::tx_broadcast::{classify_node_message, NodeBroadcastReply, MEMPOOL_CONFLICT};
 use reqwest::{Client, Url};
 use serde_json::{json, Value};
 use std::fmt;
@@ -185,6 +186,13 @@ impl BchnRpcBackend {
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, ChainBackendError> {
+        self.rpc_reply(method, params)
+            .await
+            .map_err(RpcFailure::into_backend_error)
+    }
+
+    /// As [`Self::rpc`], keeping the node's own error code and message.
+    async fn rpc_reply(&self, method: &str, params: Value) -> Result<Value, RpcFailure> {
         let body = json!({
             "jsonrpc": "1.0",
             "id": "optn",
@@ -196,20 +204,33 @@ impl BchnRpcBackend {
             request = request.basic_auth(username, Some(password));
         }
         let response = request.send().await.map_err(map_reqwest)?;
-        if !response.status().is_success() {
-            return Err(ChainBackendError::Protocol(format!(
-                "BCHN RPC HTTP status {}",
-                response.status()
-            )));
+        let status = response.status();
+        // BCHN answers a JSON-RPC error with HTTP 500 and the error in the
+        // body (`JSONErrorReply` in httprpc.cpp). Any other failure status
+        // has no reply worth reading.
+        if !status.is_success() && status != reqwest::StatusCode::INTERNAL_SERVER_ERROR {
+            return Err(http_status_error(status).into());
         }
-        let value = read_rpc_value(response).await?;
-        if let Some(error) = value.get("error") {
-            if !error.is_null() {
-                return Err(ChainBackendError::Protocol(error.to_string()));
-            }
+        let value = match read_rpc_value(response).await {
+            Ok(value) => value,
+            Err(_) if !status.is_success() => return Err(http_status_error(status).into()),
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+            return Err(RpcFailure::Node {
+                code: error.get("code").and_then(Value::as_i64),
+                message: error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                raw: error.to_string(),
+            });
+        }
+        if !status.is_success() {
+            return Err(http_status_error(status).into());
         }
         value.get("result").cloned().ok_or_else(|| {
-            ChainBackendError::InvalidResponse("BCHN RPC response lacks result".into())
+            ChainBackendError::InvalidResponse("BCHN RPC response lacks result".into()).into()
         })
     }
 
@@ -278,9 +299,28 @@ impl BchnRpcBackend {
                 "locally supplied txid does not match transaction bytes".into(),
             ));
         }
-        let result = self
-            .rpc("sendrawtransaction", json!([hex::encode(raw_tx)]))
-            .await?;
+        let result = match self
+            .rpc_reply("sendrawtransaction", json!([hex::encode(raw_tx)]))
+            .await
+        {
+            Ok(result) => result,
+            Err(RpcFailure::Node { code, message, raw }) => {
+                // RPC_VERIFY_ALREADY_IN_CHAIN (-27) and RPC_VERIFY_REJECTED (-26).
+                let reply = match (code, message.as_deref()) {
+                    (Some(-27 | -26), Some(message)) => classify_node_message(message),
+                    _ => NodeBroadcastReply::Other,
+                };
+                return match reply {
+                    // The node has this exact transaction: observed, not rejected.
+                    NodeBroadcastReply::AlreadyHas => Ok(self.broadcast_observed(txid)),
+                    NodeBroadcastReply::Conflict => Err(ChainBackendError::Rejected(format!(
+                        "another transaction already spends these coins ({MEMPOOL_CONFLICT})"
+                    ))),
+                    NodeBroadcastReply::Other => Err(ChainBackendError::Protocol(raw)),
+                };
+            }
+            Err(RpcFailure::Backend(error)) => return Err(error),
+        };
         let returned = result.as_str().ok_or_else(|| {
             ChainBackendError::InvalidResponse("sendrawtransaction did not return txid".into())
         })?;
@@ -289,13 +329,17 @@ impl BchnRpcBackend {
                 "BCHN returned a different transaction id".into(),
             ));
         }
-        Ok(BackendObservation {
+        Ok(self.broadcast_observed(txid))
+    }
+
+    fn broadcast_observed(&self, txid: [u8; 32]) -> BackendObservation {
+        BackendObservation {
             payload: ChainPayload::BroadcastObserved { txid },
             evidence: Evidence::FullNodeValidated {
                 source: self.config.source_id.clone(),
             },
             chain_tip: Some((self.info.blocks, self.info.best_block_hash)),
-        })
+        }
     }
 
     async fn header_sync(
@@ -345,6 +389,37 @@ fn rpc_client(request_timeout: Duration) -> Result<Client, ChainBackendError> {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| ChainBackendError::Protocol(error.to_string()))
+}
+
+/// Why a BCHN RPC call failed: the node's own JSON-RPC error, or no answer
+/// to read.
+enum RpcFailure {
+    Node {
+        code: Option<i64>,
+        message: Option<String>,
+        /// The error object as the node sent it.
+        raw: String,
+    },
+    Backend(ChainBackendError),
+}
+
+impl From<ChainBackendError> for RpcFailure {
+    fn from(error: ChainBackendError) -> Self {
+        Self::Backend(error)
+    }
+}
+
+impl RpcFailure {
+    fn into_backend_error(self) -> ChainBackendError {
+        match self {
+            Self::Node { raw, .. } => ChainBackendError::Protocol(raw),
+            Self::Backend(error) => error,
+        }
+    }
+}
+
+fn http_status_error(status: reqwest::StatusCode) -> ChainBackendError {
+    ChainBackendError::Protocol(format!("BCHN RPC HTTP status {status}"))
 }
 
 async fn read_rpc_value(mut response: reqwest::Response) -> Result<Value, ChainBackendError> {
@@ -736,6 +811,109 @@ mod tests {
             },
             requests_rx,
         )
+    }
+
+    /// Connect, then broadcast against a node whose `sendrawtransaction`
+    /// fails as BCHN fails a call: HTTP 500, the error in the JSON body.
+    async fn broadcast_meeting(
+        code: i64,
+        message: &str,
+    ) -> Result<BackendObservation, ChainBackendError> {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let replies = vec![
+            (
+                "200 OK",
+                json!({"result": blockchain_info_result(), "error": null, "id": "optn"}),
+            ),
+            (
+                "200 OK",
+                json!({"result": {"txindex": {"synced": true, "best_block_height": 100}},
+                    "error": null, "id": "optn"}),
+            ),
+            (
+                "500 Internal Server Error",
+                json!({"result": null, "error": {"code": code, "message": message}, "id": "optn"}),
+            ),
+        ];
+        let server = thread::spawn(move || {
+            for (status, reply) in replies {
+                let (mut socket, _) = listener.accept().unwrap();
+                read_json_request(&mut socket);
+                let body = serde_json::to_vec(&reply).unwrap();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                socket.write_all(&body).unwrap();
+            }
+        });
+        let source = SourceId::new("owned-bchn");
+        let backend = BchnRpcBackend::connect(BchnRpcConfig::new(
+            source,
+            Endpoint {
+                kind: EndpointKind::BchnRpc,
+                host: "127.0.0.1".into(),
+                port: Some(address.port()),
+            },
+            RpcAuth::None,
+        ))
+        .await
+        .unwrap();
+        let raw = vec![1, 2, 3];
+        let txid = sha256d(&raw);
+        let result = backend
+            .execute(&ChainRequest::Broadcast { raw_tx: raw, txid })
+            .await;
+        server.join().unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn a_transaction_the_node_already_has_was_broadcast_not_rejected() {
+        for (code, message) in [
+            (-26, "txn-already-in-mempool (code 18)"),
+            (-26, "txn-already-known (code 18)"),
+            (-27, "transaction already in block chain"),
+        ] {
+            let observation = broadcast_meeting(code, message)
+                .await
+                .unwrap_or_else(|error| panic!("{message}: {error:?}"));
+            assert!(
+                matches!(observation.payload, ChainPayload::BroadcastObserved { .. }),
+                "{message}"
+            );
+            assert!(matches!(
+                observation.evidence,
+                Evidence::FullNodeValidated { .. }
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_conflicting_spend_is_rejected_and_other_refusals_keep_the_node_error() {
+        assert!(matches!(
+            broadcast_meeting(-26, "txn-mempool-conflict (code 18)").await,
+            Err(ChainBackendError::Rejected(reason)) if reason.contains("txn-mempool-conflict")
+        ));
+        // Not a duplicate: reported as before, but now with the node's words
+        // rather than "HTTP status 500".
+        let other = broadcast_meeting(-26, "bad-txns-inputs-missingorspent (code 16)").await;
+        assert!(
+            matches!(&other, Err(ChainBackendError::Protocol(raw))
+                if raw.contains("bad-txns-inputs-missingorspent") && raw.contains("-26")),
+            "{other:?}"
+        );
+        // The same words under another code are not read as a duplicate.
+        assert!(matches!(
+            broadcast_meeting(-25, "txn-already-in-mempool (code 18)").await,
+            Err(ChainBackendError::Protocol(_))
+        ));
     }
 
     fn blockchain_info_result() -> Value {

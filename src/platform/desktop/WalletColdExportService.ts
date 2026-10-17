@@ -29,6 +29,7 @@ import {
   deriveKey,
 } from './WalletCrypto';
 import { SECRET_ENC_PREFIX } from './SecretCryptoService';
+import { parseNetwork } from '../../utils/networkProfile';
 
 export const COLD_EXPORT_FORMAT = 'optn-cold-archive-v1' as const;
 export const COLD_EXPORT_ENC_FORMAT = 'optn-cold-archive-enc-v1' as const;
@@ -85,7 +86,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isArchiveNetwork(value: unknown): value is Network {
-  return value === Network.MAINNET || value === Network.CHIPNET;
+  return parseNetwork(value) !== undefined;
 }
 
 function isSafePositiveInteger(value: unknown): value is number {

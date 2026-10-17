@@ -1412,6 +1412,7 @@ mod tests {
             height: 1,
             bits: 0x207f_ffff,
             prev_time: 0,
+            successor_hash: None,
         };
         let prev = [7u8; 32];
         let expected = next_bits(params, anchor, 10, 10).unwrap();

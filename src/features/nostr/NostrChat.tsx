@@ -28,7 +28,10 @@ import {
 
 import WalletScreen from '../../components/ui/WalletScreen';
 import type { RootState } from '../../state/store';
-import { selectNostrRelays } from '../../state/slices/experimentalSlice';
+import {
+  selectMdkChatEnabled,
+  selectNostrRelays,
+} from '../../state/slices/experimentalSlice';
 import { useI18n } from '../../i18n/useI18n';
 import {
   myIdentity,
@@ -76,15 +79,19 @@ import {
   sendMlsFile,
   sendMlsMessage,
   subscribeMls,
+  mdkAvailable,
   type MlsGroupRecord,
-} from '../../platform/desktop/nostr/mls';
+} from '../../platform/desktop/nostr/mlsEngine';
 import {
   buildChatInbox,
   classifyChatPeer,
   groupRecordForPeer,
+  isInboxMessage,
   type ChatInboxKind,
 } from './chatInbox';
 import { useWalletConfirm } from '../../components/WalletConfirmDialog';
+
+const isMdkRoom = (peer: string) => peer.startsWith('mdk:');
 
 const short = (s: string) =>
   s.length > 16 ? `${s.slice(0, 10)}…${s.slice(-6)}` : s;
@@ -97,8 +104,7 @@ const mergeById = (a: ChatMessage[], b: ChatMessage[]): ChatMessage[] => {
   );
 };
 
-const isChatText = (m: ChatMessage) =>
-  (m.kind ?? 14) === 14 || m.kind === 15 || isInlineChatMedia(m.text);
+const isChatText = isInboxMessage;
 
 const relativeTime = (at: number): string => {
   const s = Math.max(0, Math.floor(Date.now() / 1000) - at);
@@ -201,6 +207,9 @@ const NostrChat: React.FC = () => {
   const { t } = useI18n();
   const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
   const relays = useSelector(selectNostrRelays);
+  const mdkChatEnabled = useSelector(selectMdkChatEnabled);
+  const [mdkBuilt, setMdkBuilt] = useState(false);
+  const useMdk = mdkChatEnabled && mdkBuilt;
 
   const [me, setMe] = useState<{ pubkey: string; npub: string } | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -230,6 +239,14 @@ const NostrChat: React.FC = () => {
   const [tipCategory, setTipCategory] = useState('');
   const [refetching, setRefetching] = useState(false);
   const [recording, setRecording] = useState(false);
+
+  const meRef = useRef<{ pubkey: string } | null>(null);
+  useEffect(() => {
+    meRef.current = me;
+  }, [me]);
+  useEffect(() => {
+    void mdkAvailable().then(setMdkBuilt);
+  }, []);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const chatPhotoRef = useRef<HTMLInputElement>(null);
@@ -288,12 +305,16 @@ const NostrChat: React.FC = () => {
         return [...prev, m].sort((a, b) => a.at - b.at);
       });
     const unsubDm = subscribeMessages(walletId, onMessage, relays);
-    const unsubMls = subscribeMls(walletId, onMessage, relays);
+    const unsubMls = subscribeMls(walletId, onMessage, relays, {
+      mdk: useMdk,
+      onGroups: () => setMlsGroups(listMlsGroups(meRef.current?.pubkey)),
+      onError: (e) => setErr(e instanceof Error ? e.message : String(e)),
+    });
     return () => {
       unsubDm();
       unsubMls();
     };
-  }, [walletId, relays]);
+  }, [walletId, relays, useMdk]);
 
   const inbox = useMemo(
     () =>
@@ -410,7 +431,7 @@ const NostrChat: React.FC = () => {
           walletId,
           groupName.trim() || 'Open MLS group',
           me.pubkey,
-          { visibility: 'open', relays }
+          { visibility: 'open', relays, engine: useMdk ? 'mdk' : 'ts-mls' }
         );
         setMlsGroups(listMlsGroups(me.pubkey));
         setActivePeer(created.roomId);
@@ -481,7 +502,17 @@ const NostrChat: React.FC = () => {
           : raw
       );
     }
-  }, [composeKind, recipient, relays, profiles, me, groupName, walletId, t]);
+  }, [
+    composeKind,
+    recipient,
+    relays,
+    profiles,
+    me,
+    groupName,
+    walletId,
+    t,
+    useMdk,
+  ]);
 
   const send = useCallback(async () => {
     if (!activePeer || !draft.trim() || walletId <= 0 || !me) return;
@@ -493,15 +524,22 @@ const NostrChat: React.FC = () => {
         replyTo: replyTo?.id,
         editOf: editOf?.id,
       };
+      let sentId: string | undefined;
       if (mlsGroupId) {
-        await sendMlsMessage(walletId, mlsGroupId, activePeer, text, relays);
+        sentId = (
+          await sendMlsMessage(walletId, mlsGroupId, activePeer, text, relays)
+        ).id;
       } else {
         await sendDirectMessage(walletId, activePeer, text, relays, extra);
       }
       // Show + persist my message immediately — don't wait for it to round-trip
-      // through a relay (which may not even echo a self-copy back).
+      // through a relay (which may not even echo a self-copy back). An MDK
+      // group's id is the message's own, so its stored history matches.
       const mine: ChatMessage = {
-        id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        id:
+          sentId && isMdkRoom(activePeer)
+            ? sentId
+            : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         from: me.pubkey,
         to: activeMembers ?? [activePeer],
         text,
@@ -563,20 +601,26 @@ const NostrChat: React.FC = () => {
           fileName: file.name,
           mimeType: parsed?.mime || file.type || 'application/octet-stream',
         };
+        let sentId: string | undefined;
         if (mlsGroupId) {
-          await sendMlsFile(
-            walletId,
-            mlsGroupId,
-            activePeer,
-            dataUrl,
-            relays,
-            extra
-          );
+          sentId = (
+            await sendMlsFile(
+              walletId,
+              mlsGroupId,
+              activePeer,
+              dataUrl,
+              relays,
+              extra
+            )
+          ).id;
         } else {
           await sendDirectFile(walletId, activePeer, dataUrl, relays, extra);
         }
         const mine: ChatMessage = {
-          id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          id:
+            sentId && isMdkRoom(activePeer)
+              ? sentId
+              : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
           from: me.pubkey,
           to: activeMembers ?? [activePeer],
           text: dataUrl,

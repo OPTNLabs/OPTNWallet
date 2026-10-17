@@ -127,9 +127,10 @@ pub async fn optn_check_for_update(
     let channel = ReleaseChannel::from_opt_ins(beta, alpha);
 
     // Tor whenever it is usable; without it, whether this may go direct is the
-    // holder's connection policy, not a guess from the shape of their sources.
+    // holder's connection policy, not a guess from the shape of their sources,
+    // and never while their Tor switch is on.
     let (public_allowed, tor) = native.tor_status_for_update_check().await;
-    let route = outbound_route(public_allowed, tor);
+    let route = outbound_route(public_allowed && !native.tor_switch_on().await, tor);
     if route.is_refused() {
         return Ok(UpdateCheck::unavailable(
             channel,
@@ -201,7 +202,7 @@ pub async fn optn_install_update(
     }
     let (public_allowed, tor) = native.tor_status_for_update_check().await;
     let builder = app.updater_builder();
-    let builder = match outbound_route(public_allowed, tor) {
+    let builder = match outbound_route(public_allowed && !native.tor_switch_on().await, tor) {
         TorRoute::Direct => builder.no_proxy(),
         TorRoute::Through { socks_port } => builder.proxy(
             format!("socks5h://127.0.0.1:{socks_port}")

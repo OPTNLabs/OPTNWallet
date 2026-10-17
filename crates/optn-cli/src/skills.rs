@@ -364,6 +364,15 @@ pub const SKILLS: &[Skill] = &[
         requires_confirmation: true,
     },
     Skill {
+        // Signs and spends the wallet's coins into a CoinJoin, paying fees.
+        name: "fusion",
+        capability: Capability::Spend,
+        summary: "Fuse the wallet's coins in CashFusion rounds, through a server or peer to peer.",
+        needs_wallet: true,
+        needs_network: true,
+        requires_confirmation: true,
+    },
+    Skill {
         name: "token-send",
         capability: Capability::Spend,
         summary: "Send fungible CashTokens to a token-aware address.",
@@ -385,7 +394,7 @@ pub const SKILLS: &[Skill] = &[
         // admit `x402 pay` with it.
         name: "x402",
         capability: Capability::Spend,
-        summary: "Pay for an HTTP resource. `check` only reads; `pay` authorises a debit.",
+        summary: "Pay for an HTTP resource. `check` reads; `pay` prepares a bounded exact payment.",
         needs_wallet: true,
         needs_network: true,
         requires_confirmation: true,

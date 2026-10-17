@@ -14,10 +14,10 @@ import {
   RPA_PREFIX_BITS,
 } from '../../services/RpaService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
-import { Network } from '../../state/slices/networkSlice';
 import { selectWalletDerivationPath } from '../../state/slices/walletSlice';
 import { useI18n } from '../../i18n/useI18n';
 import { copyToClipboard } from '../../utils/clipboard';
+import { networkProfile } from '../../utils/networkProfile';
 
 type RpaReceiveCardProps = {
   walletId: number;
@@ -80,8 +80,7 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
     }
   };
 
-  const networkLabel =
-    network === Network.MAINNET ? t('network.mainnet') : t('network.chipnet');
+  const networkLabel = t(networkProfile(network).labelKey);
   const rpaKeyPaths = getRpaKeyPaths(network, derivationPath || undefined);
 
   return (

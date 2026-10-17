@@ -193,6 +193,19 @@ mod wasm {
             })
         }
 
+        fn seed_draft<'a>(
+            &'a self,
+            word_count: usize,
+        ) -> TransportFuture<'a, optn_transport::SeedDraft> {
+            Box::pin(async move {
+                let value = JsValue::from_f64(word_count as f64);
+                let result =
+                    invoke("optn_wallet_seed_draft", command_args("wordCount", &value)?).await?;
+                serde_wasm_bindgen::from_value(result)
+                    .map_err(|_| TransportError::InvalidData("Invalid recovery phrase.".into()))
+            })
+        }
+
         fn wallet_security<'a>(
             &'a self,
             request: optn_transport::WalletSecurityRequest,

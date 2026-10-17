@@ -15,7 +15,7 @@
 // running app, where three contending windows serialised with no overlap.
 
 import { getLocalStorage } from '../../utils/browserStorage';
-import { withWalletLock } from './fusionWalletLease';
+import { withWalletLock } from './walletLock';
 
 const OPEN_CLAIM_KEY = 'optn-wallet-open-claims';
 

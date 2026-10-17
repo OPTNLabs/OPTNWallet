@@ -97,7 +97,7 @@ packages/docker-dev/
 | GHCR pull denied | Package visibility / `docker login ghcr.io` |
 | fusion-lab exits immediately | Tor not ready / SOCKS wrong — check `logs:tor` |
 | Want consumer wallet | Use AppImage/DMG/MSI/APK — not this image |
-| Want live Auto CoinJoin on VPS | Needs headless wallet binary via `OPTN_HEADLESS_CMD` (see VPS.md) |
+| Want live Auto CoinJoin on VPS | Server mode: `OPTN_HEADLESS_CMD=/optn/packages/docker-dev/scripts/fusion-lab-headless.sh` (see VPS.md); P2P has no headless driver yet |
 
 ## License
 

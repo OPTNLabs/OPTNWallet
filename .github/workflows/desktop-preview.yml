@@ -38,8 +38,16 @@ jobs:
     #
     # A timeout here is self-perpetuating: the run dies before "Post Rust cache",
     # so nothing is saved and the next run is uncached and slow for the same
-    # reason. 90 leaves the slowest observed leg about 35 minutes of headroom.
-    timeout-minutes: 90
+    # reason. 90 left the slowest observed leg about 35 minutes of headroom
+    # until MDK chat was built in: SQLCipher's vendored OpenSSL and the
+    # OpenMLS stack took an uncached linux-x64 build to 77 minutes, and
+    # linux-arm64 past 90. 120 restores the headroom.
+    #
+    # On Linux the compile is not what fills it. In run 38038915265 the
+    # linux-x64 RPM bundle took 105 minutes (08:48 to 10:33) and linux-arm64
+    # was cancelled inside it: the RPM bundler's time grows with the debug
+    # binary, which MDK made larger. See "Line-table debug info" below.
+    timeout-minutes: 120
     env:
       # macOS runners have less memory; the Vite frontend build (Tauri beforeBuildCommand)
       # OOMs at Node's default heap. Raise it for all platforms (harmless on Windows/Linux).
@@ -114,6 +122,21 @@ jobs:
           toolchain: 1.98.1
           targets: ${{ matrix.rust-targets || matrix.target }}
 
+      # MDK chat's store is SQLCipher on OpenSSL built from source, whose
+      # configure needs a full Perl. Git Bash's Perl lacks modules it uses.
+      - name: Use Strawberry Perl for OpenSSL
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl.exe" >> "$GITHUB_ENV"
+
+      # Linux previews keep only line tables of debug info, so a panic still
+      # names its file and line, and the binary the RPM bundler compresses is
+      # far smaller. Set before "Rust cache" so the cache key includes it.
+      # Every bundle, upload and check below is unchanged.
+      - name: Line-table debug info for Linux packages
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: echo "CARGO_PROFILE_DEV_DEBUG=line-tables-only" >> "$GITHUB_ENV"
+
       - name: Rust cache
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -135,6 +158,9 @@ jobs:
         # first so a transient CDN disconnect does not waste the full build.
         # Asset URLs are checked against fixed digests; a changed upstream
         # asset fails closed instead of executing an unreviewed replacement.
+        # The AppImage plugin comes from its tagged release 1-alpha-20250213-1,
+        # not `continuous`: upstream rebuilds `continuous` in place, which
+        # deletes the pinned asset ids and turned every Linux preview red.
         if: startsWith(matrix.platform, 'ubuntu')
         shell: bash
         env:
@@ -150,20 +176,23 @@ jobs:
           cache="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
           mkdir -p "$cache"
 
+          # Plugin assets: linuxdeploy/linuxdeploy-plugin-appimage release
+          # 1-alpha-20250213-1, commit a96502d15ce19ec1df3d46e6cbe87ddf38589a71.
+          # Use versioned assets: continuous builds replace/delete their assets.
           case "$tools_arch" in
             aarch64)
               apprun_sha='072f17c0895a85c490282fe5395c5007e5fc75da727e553b3b8fb680feb11578'
               linuxdeploy_sha='b12b5cc57bd0921e1f98d73f58aa364503bc1a27f54b7a69fd2870bce7fa2f55'
-              appimage_plugin_sha='ce574719bcf9cc1fb12728d60b17e48cc87d9b6c40f6f48b04cff7d273b5eb24'
-              appimage_plugin_asset_id='538914264'
+              appimage_plugin_sha='83c292149274965a865dcd44c135cfca8ba28c6b7de3eb628d4b8b5f248af17c'
+              appimage_plugin_asset_id='228937549'
               apprun_asset='AppRun-aarch64'
               linuxdeploy_asset='linuxdeploy-aarch64.AppImage'
               ;;
             x86_64)
               apprun_sha='f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f'
               linuxdeploy_sha='e762bea85c8eb0d4b3508d46e5c1f037f717d0f9303ae3b4aafc8b04991fa1ef'
-              appimage_plugin_sha='0441769ab38009504d2678c38cd7e526955388dd30a215b4a20afaa5471652f2'
-              appimage_plugin_asset_id='538914683'
+              appimage_plugin_sha='992d502a248e14ab185448ddf6f6e7d25558cb84d4623c354c3af350c25fccb3'
+              appimage_plugin_asset_id='228937581'
               apprun_asset='AppRun-x86_64'
               linuxdeploy_asset='linuxdeploy-x86_64.AppImage'
               ;;
