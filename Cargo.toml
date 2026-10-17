@@ -71,3 +71,12 @@ lto = true
 incremental = false
 opt-level = "s"
 strip = true
+
+# Exact backports of fixed dependencies into the release MDK 0.8 resolves, as
+# MDK's own repository does upstream. Provenance and changes: OPTN.md in each.
+[patch.crates-io]
+# libcrux-sha3 0.0.11 (RUSTSEC-2026-0207/-0208/-0212); unused libcrux backend
+# dropped (RUSTSEC-2026-0124/-0209/-0211/-0330/-0331).
+hpke-rs = { path = "vendor/hpke-rs-0.6.1" }
+# lru 0.18 (RUSTSEC-2026-0253); optn-chat's tests only.
+mdk-memory-storage = { path = "vendor/mdk-memory-storage-0.8.0" }

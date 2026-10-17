@@ -159,3 +159,6 @@ rusb = { version = "0.9", features = ["vendored"] }
 [patch.crates-io]
 # Exact RUSTSEC-2024-0429 backport; retains the GTK-compatible glib 0.18.5 API.
 glib = { path = "../vendor/glib-0.18.5" }
+# libcrux-sha3 0.0.11 and no unused libcrux backend under MDK 0.8's HPKE
+# (RUSTSEC-2026-0124/-0207/-0208/-0209/-0211/-0212/-0330/-0331); see its OPTN.md.
+hpke-rs = { path = "../vendor/hpke-rs-0.6.1" }
