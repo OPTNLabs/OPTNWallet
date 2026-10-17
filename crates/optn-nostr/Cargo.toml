@@ -13,7 +13,9 @@ description = "Nostr relays for OPTN Wallet over the holder's verified Tor proxy
 nostr = { version = "0.45.5", default-features = false, features = ["std", "nip44", "nip59", "os-rng"] }
 nostr-sdk = { version = "0.45.4", default-features = false, features = ["ring", "rustls-tls-webpki-roots"] }
 futures = "0.3"
-tokio = { version = "1", features = ["sync", "time"] }
+# "rt": a subscription a relay closes is asked for again from a task of its
+# own, so waiting to do it does not hold up the events still arriving.
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 # A host's own dialer (the desktop's egress) hands over the stream and the
 # WebSocket runs over it: the socket message type rust-nostr's transport
 # speaks, and the handshake from the same tungstenite release.

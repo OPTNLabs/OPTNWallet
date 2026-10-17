@@ -19,13 +19,13 @@
 //!
 //! Built on rust-nostr (`nostr`, `nostr-sdk` 0.45).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::{Stream, StreamExt};
-use nostr::prelude::{Event, Filter, RelayUrl, SubscriptionId};
+use nostr::prelude::{Event, Filter, RelayMessage, RelayUrl, SubscriptionId};
 use nostr_sdk::prelude::{Client, ClientNotification, Proxy};
 
 pub mod dialer;
@@ -166,7 +166,32 @@ pub struct Published {
 pub struct Relays {
     client: Client,
     route: RelayRoute,
+    /// The long-lived subscriptions this set holds, so one a relay closes
+    /// can be asked for again (see [`Relays::events`]).
+    held: Held,
 }
+
+/// Held subscriptions by id: the filter, and how often each relay has closed
+/// it.
+type Held = Arc<Mutex<HashMap<SubscriptionId, (Filter, HashMap<RelayUrl, u32>)>>>;
+
+/// The wait before asking a relay again for a subscription it closed, doubled
+/// for each further close of the same one by the same relay, up to the cap.
+const RESUBSCRIBE_FIRST_DELAY: Duration = Duration::from_millis(250);
+const RESUBSCRIBE_MAX_DELAY: Duration = Duration::from_secs(8);
+
+/// NIP-01 CLOSED prefixes a fresh REQ cannot change. `auth-required` is
+/// nostr-sdk's to answer when the client can authenticate, which this one
+/// cannot.
+const CLOSED_FOR_GOOD: [&str; 7] = [
+    "blocked:",
+    "restricted:",
+    "unsupported:",
+    "invalid:",
+    "pow:",
+    "duplicate:",
+    "auth-required:",
+];
 
 impl Relays {
     /// Reach `urls` through `route`, waiting up to `timeout` for at least one
@@ -180,6 +205,7 @@ impl Relays {
         let relays = Self {
             client: route.client(),
             route,
+            held: Held::default(),
         };
         if let Err(error) = relays.reach(&parsed, timeout).await {
             relays.client.shutdown().await;
@@ -299,13 +325,25 @@ impl Relays {
     /// Ask the relays for events matching `filter`, stored and new. They
     /// arrive on [`Relays::events`] under the returned id.
     pub async fn subscribe(&self, filter: Filter) -> Result<SubscriptionId, RelayError> {
-        let output = self.client.subscribe(filter).await.map_err(client_error)?;
+        let output = self
+            .client
+            .subscribe(filter.clone())
+            .await
+            .map_err(client_error)?;
         if output.success.is_empty() {
             return Err(RelayError::NotAccepted {
                 failed: failures(output.failed),
             });
         }
+        self.hold(&output.value, filter);
         Ok(output.value)
+    }
+
+    fn hold(&self, id: &SubscriptionId, filter: Filter) {
+        self.held
+            .lock()
+            .expect("held subscriptions")
+            .insert(id.clone(), (filter, HashMap::new()));
     }
 
     /// [`Relays::subscribe`] on `urls`, reaching them first if need be.
@@ -327,6 +365,7 @@ impl Relays {
                 failed: failures(output.failed),
             });
         }
+        self.hold(&output.value, filter);
         Ok(output.value)
     }
 
@@ -348,6 +387,7 @@ impl Relays {
     /// Stop a subscription. Relays that cannot be told keep it until they
     /// drop the connection, which [`Relays::shutdown`] does.
     pub async fn unsubscribe(&self, id: &SubscriptionId) -> Result<(), RelayError> {
+        self.held.lock().expect("held subscriptions").remove(id);
         self.client
             .unsubscribe(id)
             .await
@@ -357,19 +397,45 @@ impl Relays {
 
     /// Every subscribed event, once, as relays deliver it. Events this set
     /// published itself are not repeated back.
+    ///
+    /// While this is read, a subscription a relay ends with CLOSED is asked
+    /// for again on that relay, under the same id. Relays do this with the
+    /// connection still up: nostr-sdk's own relay closes a slow reader's live
+    /// subscriptions when it falls behind its buffer ("resubscribe to recover
+    /// stored events"), and public relays close them when rate-limiting.
+    /// nostr-sdk resubscribes only after `auth-required`, so without this a
+    /// peer stops hearing its round and waits out the whole budget. Stored
+    /// events the relay replays are not repeated, because the client reports
+    /// each event once. Refusals a retry cannot change stay closed.
     pub fn events(&self) -> impl Stream<Item = (SubscriptionId, Event)> + Send + 'static {
-        self.client
-            .notifications()
-            .filter_map(|notification| async move {
-                match notification {
-                    ClientNotification::Event {
+        let (client, held) = (self.client.clone(), self.held.clone());
+        self.client.notifications().filter_map(move |notification| {
+            let event = match notification {
+                ClientNotification::Event {
+                    subscription_id,
+                    event,
+                    ..
+                } => Some((subscription_id, *event)),
+                ClientNotification::Message { relay_url, message } => {
+                    if let RelayMessage::Closed {
                         subscription_id,
-                        event,
-                        ..
-                    } => Some((subscription_id, *event)),
-                    _ => None,
+                        message,
+                    } = *message
+                    {
+                        resubscribe(
+                            &client,
+                            &held,
+                            relay_url,
+                            subscription_id.into_owned(),
+                            &message,
+                        );
+                    }
+                    None
                 }
-            })
+                _ => None,
+            };
+            async move { event }
+        })
     }
 
     /// Close every connection.
@@ -381,6 +447,43 @@ impl Relays {
 struct Reached {
     connected: Vec<RelayUrl>,
     failed: BTreeMap<String, String>,
+}
+
+/// Ask `relay` again for a held subscription it closed, after a wait that
+/// grows with each close. A subscription this set does not hold (a fetch's,
+/// or one unsubscribed) and a refusal a retry cannot change are left closed.
+fn resubscribe(client: &Client, held: &Held, relay: RelayUrl, id: SubscriptionId, reason: &str) {
+    if CLOSED_FOR_GOOD
+        .iter()
+        .any(|prefix| reason.starts_with(prefix))
+    {
+        return;
+    }
+    let (filter, closes) = {
+        let mut held = held.lock().expect("held subscriptions");
+        let Some((filter, closes)) = held.get_mut(&id) else {
+            return;
+        };
+        let closes = closes.entry(relay.clone()).or_insert(0);
+        *closes += 1;
+        (filter.clone(), *closes)
+    };
+    let delay = RESUBSCRIBE_FIRST_DELAY
+        .saturating_mul(1 << (closes - 1).min(5))
+        .min(RESUBSCRIBE_MAX_DELAY);
+    let (client, held) = (client.clone(), held.clone());
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        if !held.lock().expect("held subscriptions").contains_key(&id) {
+            return;
+        }
+        // Nothing to report if this fails: the connection is gone, and
+        // nostr-sdk resubscribes when it reconnects.
+        let _ = client
+            .subscribe(vec![(relay, vec![filter])])
+            .with_id(id)
+            .await;
+    });
 }
 
 fn published(
@@ -505,6 +608,111 @@ mod tests {
         writer.shutdown().await;
         reader.shutdown().await;
         relay.shutdown();
+    }
+
+    /// A relay that answers the first REQ with CLOSED `reason` and any later
+    /// one with `event` under the same subscription id, counting the REQs.
+    async fn closing_relay(reason: &'static str, event: Event) -> (String, Arc<AtomicUsize>) {
+        use futures::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let reqs = Arc::new(AtomicUsize::new(0));
+        let counted = reqs.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (counted, event) = (counted.clone(), event.clone());
+                tokio::spawn(async move {
+                    let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else {
+                        return;
+                    };
+                    while let Some(Ok(message)) = socket.next().await {
+                        let Ok(text) = message.into_text() else {
+                            continue;
+                        };
+                        let Ok(serde_json::Value::Array(parts)) =
+                            serde_json::from_str::<serde_json::Value>(text.as_str())
+                        else {
+                            continue;
+                        };
+                        if parts.first().and_then(|kind| kind.as_str()) != Some("REQ") {
+                            continue;
+                        }
+                        let id = parts[1].clone();
+                        let reply = if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                            serde_json::json!(["CLOSED", id, reason])
+                        } else {
+                            serde_json::json!(["EVENT", id, event])
+                        };
+                        if socket.send(Message::text(reply.to_string())).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (url, reqs)
+    }
+
+    fn note() -> (Keys, Event) {
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::TextNote, "round message")
+            .finalize(&keys)
+            .unwrap();
+        (keys, event)
+    }
+
+    #[tokio::test]
+    async fn a_subscription_a_relay_closes_is_asked_for_again() {
+        // What nostr-sdk's own relay sends a reader that fell behind, which
+        // left a peer of the ten-wallet relay test deaf for the whole round.
+        let (keys, event) = note();
+        let (url, reqs) = closing_relay(
+            "error: live event buffer overflow; resubscribe to recover stored events",
+            event.clone(),
+        )
+        .await;
+        let reader = Relays::connect(&[&url], RelayRoute::LocalOnly, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let mut events = Box::pin(reader.events());
+        let id = reader
+            .subscribe(Filter::new().kind(Kind::TextNote).author(keys.public_key()))
+            .await
+            .unwrap();
+
+        let (got_id, got) = tokio::time::timeout(Duration::from_secs(10), events.next())
+            .await
+            .expect("the event arrives on the second subscription")
+            .unwrap();
+        assert_eq!(got_id, id, "asked for again under the same id");
+        assert_eq!(got.id, event.id);
+        assert_eq!(reqs.load(Ordering::SeqCst), 2);
+        reader.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_refusal_a_retry_cannot_change_stays_closed() {
+        let (keys, event) = note();
+        let (url, reqs) = closing_relay("blocked: not on the allow list", event).await;
+        let reader = Relays::connect(&[&url], RelayRoute::LocalOnly, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let mut events = Box::pin(reader.events());
+        reader
+            .subscribe(Filter::new().kind(Kind::TextNote).author(keys.public_key()))
+            .await
+            .unwrap();
+
+        // Several first-retry waits pass with nothing delivered or re-sent.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1_500), events.next())
+                .await
+                .is_err()
+        );
+        assert_eq!(reqs.load(Ordering::SeqCst), 1);
+        reader.shutdown().await;
     }
 
     #[tokio::test]
