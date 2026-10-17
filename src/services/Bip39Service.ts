@@ -1,10 +1,11 @@
 import type { SupportedLocale } from '../i18n/types';
 // Mnemonics are made, checked and hashed by crates/optn-core (src/hd.rs), the
-// same code the CLI and the desktop runtime use. Only the randomness and the
-// Unicode normalization stay here, because JS has both built in.
+// same code the CLI and the desktop runtime use. Only Unicode normalization
+// stays here, because JS has it built in. The core draws a new phrase's
+// randomness itself, so JS never supplies or holds the entropy.
 import {
+  bip39GenerateMnemonic,
   bip39IsCanonicalMnemonic,
-  bip39MnemonicFromEntropy,
   bip39Seed,
   ensureOptnCore,
 } from '../wasm/optn-core';
@@ -31,19 +32,20 @@ export function normalizeBip39Mnemonic(mnemonic: string): string {
   return mnemonic.normalize('NFKD').trim().toLowerCase().split(/\s+/).join(' ');
 }
 
-/** 128 bits of entropy: the wallet's default 12-word phrase. */
-const DEFAULT_ENTROPY_BYTES = 16;
-
+/**
+ * A new 12-word phrase from the core's generator (hd::generate_mnemonic): the
+ * bip39 crate's own generator fed by rand_core's OsRng, which in a browser
+ * reads crypto.getRandomValues directly, with no fallback.
+ */
 export function generateBip39Mnemonic(
   language: Bip39Language = 'english'
 ): string {
   void language; // English is the only list; see getBip39LanguageForLocale.
-  const entropy = crypto.getRandomValues(new Uint8Array(DEFAULT_ENTROPY_BYTES));
+  ensureOptnCore();
   try {
-    ensureOptnCore();
-    return bip39MnemonicFromEntropy(entropy);
-  } finally {
-    entropy.fill(0);
+    return bip39GenerateMnemonic(DEFAULT_BIP39_WORD_COUNT);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
   }
 }
 

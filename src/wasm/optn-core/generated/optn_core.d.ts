@@ -16,14 +16,16 @@ export function addonLegacyGuestCallAllowed(module: string, method: string): boo
 export function bchP2pkhAddresses(network: string, public_key: Uint8Array): string;
 
 /**
+ * A new recovery phrase, drawn by the core from the browser's own
+ * `crypto.getRandomValues` (see `hd::generate_mnemonic`). JavaScript never
+ * supplies or sees the entropy, only the finished phrase.
+ */
+export function bip39GenerateMnemonic(word_count: number): string;
+
+/**
  * Whether a phrase is valid English BIP39, written exactly as BIP39 writes it.
  */
 export function bip39IsCanonicalMnemonic(phrase: string): boolean;
-
-/**
- * A BIP39 phrase from caller-gathered entropy (16 to 32 bytes).
- */
-export function bip39MnemonicFromEntropy(entropy: Uint8Array): string;
 
 /**
  * The 64-byte BIP39 seed, for keys that are not BIP32 (MLS's HPKE inputs).
@@ -336,8 +338,8 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
     readonly bchP2pkhAddresses: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly bip39GenerateMnemonic: (a: number) => [number, number, number, number];
     readonly bip39IsCanonicalMnemonic: (a: number, b: number) => number;
-    readonly bip39MnemonicFromEntropy: (a: number, b: number) => [number, number, number, number];
     readonly bip39Seed: (a: number, b: number, c: number, d: number) => any;
     readonly connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
     readonly connectPublicKey: (a: number, b: number) => [number, number, number, number];
@@ -390,6 +392,8 @@ export interface InitOutput {
     readonly sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly transactionOutpoints: (a: number, b: number) => [number, number, number, number];
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

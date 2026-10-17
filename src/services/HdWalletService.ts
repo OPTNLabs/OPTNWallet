@@ -1,8 +1,4 @@
-import {
-  hexToBin,
-  sha256,
-  validateSecp256k1PrivateKey,
-} from '@bitauth/libauth';
+import { hexToBin } from '@bitauth/libauth';
 import { Network } from '../state/slices/networkSlice';
 import { COIN_TYPE } from '../utils/constants';
 import { zeroize } from '../utils/secureMemory';
@@ -493,29 +489,4 @@ export function deriveBchAddressFromHdPublicKey(
 ): DerivedBchPublicAddress | null {
   const publicKey = derivePublicKeyFromHdPublicKey(hdPublicKey, index);
   return deriveBchPublicAddress(network, publicKey);
-}
-
-export function createDeterministicRuntimePrivateKey(
-  scope: string,
-  id: string,
-  extra: string
-): Uint8Array {
-  const encoder = new TextEncoder();
-
-  for (let counter = 0; counter < 1024; counter += 1) {
-    const material = encoder.encode(`${scope}:${id}:${extra}:${counter}`);
-    const candidate = sha256.hash(material);
-    if (validateSecp256k1PrivateKey(candidate)) {
-      return Uint8Array.from(candidate);
-    }
-  }
-
-  for (let counter = 0; counter < 1024; counter += 1) {
-    const candidate = crypto.getRandomValues(new Uint8Array(32));
-    if (validateSecp256k1PrivateKey(candidate)) {
-      return candidate;
-    }
-  }
-
-  throw new Error(`Failed to generate deterministic private key for ${scope}`);
 }

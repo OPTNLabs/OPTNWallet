@@ -74,10 +74,13 @@ fn hand_over(secret: &mut [u8]) -> js_sys::Uint8Array {
     output
 }
 
-/// A BIP39 phrase from caller-gathered entropy (16 to 32 bytes).
-#[wasm_bindgen(js_name = bip39MnemonicFromEntropy)]
-pub fn bip39_mnemonic_from_entropy(entropy: &[u8]) -> Result<String, JsValue> {
-    crate::hd::mnemonic_from_entropy(entropy).map_err(err)
+/// A new recovery phrase, drawn by the core from the browser's own
+/// `crypto.getRandomValues` (see `hd::generate_mnemonic`). JavaScript never
+/// supplies or sees the entropy, only the finished phrase.
+#[wasm_bindgen(js_name = bip39GenerateMnemonic)]
+pub fn bip39_generate_mnemonic(word_count: usize) -> Result<String, JsValue> {
+    let phrase = crate::hd::generate_mnemonic(word_count).map_err(err)?;
+    Ok(phrase.as_str().to_owned())
 }
 
 /// Whether a phrase is valid English BIP39, written exactly as BIP39 writes it.

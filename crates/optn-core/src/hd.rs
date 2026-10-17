@@ -14,6 +14,7 @@ use std::fmt;
 
 use bip32::{ChildNumber, DerivationPath, ExtendedKey, Prefix, XPrv, XPub};
 use bip39::{Language, Mnemonic};
+use k256::elliptic_curve::rand_core::OsRng;
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256, Sha512};
 use zeroize::{ZeroizeOnDrop, Zeroizing};
@@ -253,13 +254,38 @@ pub fn entropy_len_for_word_count(words: usize) -> Result<usize> {
 
 /// Build a mnemonic from caller-supplied entropy.
 ///
-/// Valid lengths are 16, 20, 24, 28, and 32 bytes (12–24 words). The caller
-/// gathers the bytes (Web Crypto, OS RNG); this function does not.
+/// Valid lengths are 16, 20, 24, 28, and 32 bytes (12–24 words). This only
+/// encodes: it is for known vectors and for re-encoding entropy that already
+/// exists. A new wallet's phrase comes from [`generate_mnemonic`], which owns
+/// where its randomness comes from.
 pub fn mnemonic_from_entropy(entropy: &[u8]) -> Result<String> {
     let mnemonic = Mnemonic::from_entropy(entropy).map_err(|error| {
         CliError::Usage(format!("entropy must be a valid BIP39 length ({error})"))
     })?;
     Ok(mnemonic.to_string())
+}
+
+/// A new recovery phrase of `word_count` words: the bip39 crate's own
+/// generator, fed by rand_core's `OsRng`, which is getrandom: getrandom(2),
+/// BCryptGenRandom or SecRandomCopyBytes natively, and the browser's
+/// `crypto.getRandomValues` in WASM.
+///
+/// Every surface creates its phrase here, so there is one generator to audit,
+/// and it is established libraries end to end rather than code of ours.
+/// `OsRng` reads the OS source directly, with no userspace PRNG seeded from it
+/// and no fallback: if the platform cannot supply randomness it panics, and
+/// the call fails without producing a phrase.
+///
+/// The wallets that lost funds to weak seeds all encoded their phrases
+/// correctly; what failed was the randomness fed in. Coldcard (2026) silently
+/// routed generation to a fallback generator; Trust Wallet's WASM core
+/// (CVE-2023-31290) used a Mersenne Twister with a 32-bit seed; the
+/// Randstorm browser wallets got `Math.random` where Web Crypto was missing.
+pub fn generate_mnemonic(word_count: usize) -> Result<Zeroizing<String>> {
+    entropy_len_for_word_count(word_count)?;
+    let mnemonic = Mnemonic::generate_in_with(&mut OsRng, Language::English, word_count)
+        .map_err(|error| CliError::Internal(format!("could not generate a phrase ({error})")))?;
+    Ok(Zeroizing::new(mnemonic.to_string()))
 }
 
 /// Whether `phrase` is an English BIP39 mnemonic written exactly as BIP39
@@ -678,6 +704,34 @@ mod tests {
         }
         assert!(entropy_len_for_word_count(13).is_err());
         assert_eq!(BIP39_DEFAULT_WORD_COUNT, 12);
+    }
+
+    #[test]
+    fn generated_phrases_are_canonical_fresh_and_full_length() {
+        for words in BIP39_WORD_COUNTS {
+            let first = generate_mnemonic(words).expect("the OS CSPRNG works here");
+            let second = generate_mnemonic(words).expect("and again");
+            assert_eq!(first.split(' ').count(), words);
+            assert!(is_canonical_mnemonic(&first));
+            assert_ne!(*first, *second, "two {words}-word phrases must differ");
+        }
+        assert!(generate_mnemonic(13).is_err());
+    }
+
+    #[test]
+    fn a_thousand_new_phrases_never_repeat() {
+        // A stuck or constant source (the failure a stubbed RNG produces)
+        // repeats at once; 128-bit phrases from a working one never do.
+        let mut phrases: Vec<String> = (0..1000)
+            .map(|_| {
+                generate_mnemonic(12)
+                    .expect("the OS CSPRNG works here")
+                    .to_string()
+            })
+            .collect();
+        phrases.sort_unstable();
+        phrases.dedup();
+        assert_eq!(phrases.len(), 1000);
     }
 
     #[test]

@@ -258,11 +258,26 @@ export interface RoundTransport {
   ) => () => void;
 }
 
+/**
+ * The platform CSPRNG, or an error. Never a weaker stand-in: a fallback that
+ * quietly takes over when the real source is missing is how Coldcard and the
+ * Randstorm wallets shipped predictable randomness, and here it would make
+ * the shuffle below reproducible.
+ */
+function requireSecureRandom(): Crypto {
+  const rng = globalThis.crypto;
+  if (!rng?.getRandomValues) {
+    throw new Error(
+      'Secure randomness is unavailable, so this fusion round cannot run privately.'
+    );
+  }
+  return rng;
+}
+
 /** Secure random in [0, 1) for jitter calculations. */
 function secureRandomUnit(): number {
-  if (!globalThis.crypto?.getRandomValues) return Math.random();
   const words = new Uint32Array(2);
-  globalThis.crypto.getRandomValues(words);
+  requireSecureRandom().getRandomValues(words);
   const high21 = words[0] & 0x1fffff;
   return (high21 * 0x1_0000_0000 + words[1]) / 0x20_0000_0000_0000;
 }
@@ -280,8 +295,7 @@ function jitterDelay(minMs: number, maxMs: number): Promise<void> {
  */
 function secureRandomInt(maxExclusive: number): number {
   if (maxExclusive <= 1) return 0;
-  const rng = globalThis.crypto;
-  if (!rng?.getRandomValues) return Math.floor(Math.random() * maxExclusive);
+  const rng = requireSecureRandom();
   const limit = Math.floor(0x1_0000_0000 / maxExclusive) * maxExclusive;
   const word = new Uint32Array(1);
   let value = 0;
@@ -846,7 +860,10 @@ export function parseRoundMessage(content: string): RoundMessage | null {
         }
         break;
       case 'credential_request': {
-        const requests = message.requests as Array<{ index: number; e: string }>;
+        const requests = message.requests as Array<{
+          index: number;
+          e: string;
+        }>;
         const amountCommitments = message.amountCommitments as string[];
         const componentCommitments = message.componentCommitments as Array<{
           index: number;
@@ -879,8 +896,7 @@ export function parseRoundMessage(content: string): RoundMessage | null {
             1,
             MAX_OUTPUT_CREDENTIALS_PER_PEER
           ) ||
-          requests.length !==
-            message.inputCount + message.outputCount ||
+          requests.length !== message.inputCount + message.outputCount ||
           amountCommitments.length !== requests.length ||
           requests.length > CREDENTIAL_SLOTS_PER_PEER ||
           new Set(requests.map((request) => request.index)).size !==
