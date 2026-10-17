@@ -158,6 +158,9 @@ jobs:
         # first so a transient CDN disconnect does not waste the full build.
         # Asset URLs are checked against fixed digests; a changed upstream
         # asset fails closed instead of executing an unreviewed replacement.
+        # The AppImage plugin comes from its tagged release 1-alpha-20250213-1,
+        # not `continuous`: upstream rebuilds `continuous` in place, which
+        # deletes the pinned asset ids and turned every Linux preview red.
         if: startsWith(matrix.platform, 'ubuntu')
         shell: bash
         env:
