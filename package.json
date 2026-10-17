@@ -87,15 +87,15 @@
   },
   "dependencies": {
     "@bitauth/libauth": "3.1.0-next.8",
-    "@capacitor/android": "^7.0.0",
+    "@capacitor/android": "^7.6.9",
     "@capacitor/app": "^7.1.2",
     "@capacitor/barcode-scanner": "^2.0.3",
     "@capacitor/camera": "^7.0.0",
     "@capacitor/clipboard": "^7.0.0",
-    "@capacitor/core": "^7.0.0",
+    "@capacitor/core": "^7.6.9",
     "@capacitor/dialog": "^7.0.0",
     "@capacitor/filesystem": "^7.0.0",
-    "@capacitor/ios": "^7.0.0",
+    "@capacitor/ios": "^7.6.9",
     "@capacitor/local-notifications": "^7.0.2",
     "@capacitor/splash-screen": "^7.0.0",
     "@capacitor/status-bar": "^7.0.3",
@@ -199,7 +199,7 @@
     "js-yaml": "4.3.2"
   },
   "devDependencies": {
-    "@capacitor/cli": "^7.6.8",
+    "@capacitor/cli": "^7.6.9",
     "@tauri-apps/cli": "2.11.4",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
