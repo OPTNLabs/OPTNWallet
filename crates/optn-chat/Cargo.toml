@@ -38,6 +38,9 @@ zeroize = "1"
 libsqlite3-sys = { version = "0.35", optional = true, features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [dev-dependencies]
+# RFC 9180 known answers for the HPKE under MDK (tests/hpke_rfc9180.rs): the
+# same hpke-rs 0.6.1 openmls_rust_crypto resolves, with its RustCrypto provider.
+hpke-rs = { version = "0.6.1", features = ["rustcrypto"] }
 mdk-memory-storage = "0.8.0"
 nostr-sdk = { version = "0.45.4", default-features = false, features = ["ring", "rustls-tls-webpki-roots", "local-relay"] }
 tempfile = "3"

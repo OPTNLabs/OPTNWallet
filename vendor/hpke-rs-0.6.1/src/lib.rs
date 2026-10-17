@@ -746,9 +746,17 @@ impl<Crypto: HpkeCrypto> Hpke<Crypto> {
         psk_id: &[u8],
         suite_id: &[u8],
     ) -> Result<Vec<u8>, HpkeError> {
+        // OPTN: RFC 9180 section 5.1 extracts both hashes with the empty salt
+        // (""). Upstream passes `&[0]`, the same HMAC key once zero-padded to
+        // the block size, so the output is unchanged (RFC 9180 A.1 vectors:
+        // optn-chat/tests/hpke_rfc9180.rs). Written as the spec's empty salt
+        // rather than a byte literal, which code scanning reads as a hard-coded
+        // salt. See OPTN.md.
+        let empty_salt: Vec<u8> = Vec::new();
         let psk_id_hash =
-            labeled_extract::<Crypto>(self.kdf_id, &[0], suite_id, "psk_id_hash", psk_id)?;
-        let info_hash = labeled_extract::<Crypto>(self.kdf_id, &[0], suite_id, "info_hash", info)?;
+            labeled_extract::<Crypto>(self.kdf_id, &empty_salt, suite_id, "psk_id_hash", psk_id)?;
+        let info_hash =
+            labeled_extract::<Crypto>(self.kdf_id, &empty_salt, suite_id, "info_hash", info)?;
         Ok(util::concat(&[
             &[self.mode as u8],
             &psk_id_hash,

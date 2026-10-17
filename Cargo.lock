@@ -3300,6 +3300,7 @@ dependencies = [
  "futures",
  "hex",
  "hkdf",
+ "hpke-rs",
  "libsqlite3-sys",
  "mdk-core",
  "mdk-memory-storage",

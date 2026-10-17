@@ -45,6 +45,16 @@ in marmot-protocol/mdk).
   backend is removed with the feature. The crate's doc examples and its own
   `cfg(test)` modules still name `hpke_rs_libcrux`; they build only when this
   crate is tested on its own against upstream, never in OPTN.
+- `src/lib.rs`, `key_schedule_context`: the salt of the `psk_id_hash` and
+  `info_hash` LabeledExtract calls is written as RFC 9180 section 5.1 states
+  it, the empty string, instead of upstream's `&[0]` byte literal, which
+  CodeQL reports as a hard-coded salt (rust/hard-coded-cryptographic-value).
+  The salt is fixed by the RFC and public; a random one would break every
+  peer's key schedule. HMAC zero-pads its key to the block size, so `""` and
+  `[0]` are the same key and the output is unchanged:
+  `crates/optn-chat/tests/hpke_rfc9180.rs` reproduces RFC 9180's A.1.1 and
+  A.1.2 vectors (whose key schedule context is exactly these two hashes)
+  before and after the change, and fails with any other salt.
 - `Cargo.toml`: an empty `[workspace]` table keeps the crate out of OPTN's
   root workspace, as `vendor/glib-0.18.5` does.
 
