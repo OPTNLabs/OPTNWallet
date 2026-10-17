@@ -616,7 +616,7 @@ mod tests {
         use futures::SinkExt;
         use tokio_tungstenite::tungstenite::Message;
 
-        // Loopback only, so plain ws:// (there is no certificate to present).
+        // Loopback only, so a plain WebSocket: there is no certificate to present.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let url = format!("ws://127.0.0.1:{port}");
