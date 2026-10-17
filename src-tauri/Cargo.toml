@@ -121,11 +121,15 @@ optn-platform-native = { path = "../crates/optn-platform-native", version = "=1.
 hidapi = "2.6"
 tauri-plugin-keyring = "=0.1.0"
 # Signature-verified desktop updates. rustls rather than the platform TLS
-# stack, to match every other outbound path in this shell; `zip` is what the
-# Windows and macOS update archives are.
+# stack, to match every other outbound path in this shell. No "zip" feature:
+# the update artifacts are a raw NSIS `.exe` (Windows), `.app.tar.gz` (macOS,
+# whose tar and gzip the plugin always builds in) and a raw `.AppImage`
+# (Linux), as docs/desktop-update-signing.md and build-update-manifest.mjs
+# list them. The feature only adds zipped installers and `.AppImage.tar.gz`,
+# and it pulls in zip 4, whose extractor has RUSTSEC-2026-0367/0368/0369 with
+# no 4.x fix and no updater release on zip 9 yet.
 tauri-plugin-updater = { version = "=2.11.0", default-features = false, features = [
   "rustls-tls",
-  "zip",
 ] }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]

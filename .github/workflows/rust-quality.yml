@@ -106,9 +106,13 @@ jobs:
         run: cargo deny --manifest-path src-tauri/Cargo.toml check advisories bans licenses sources
 
       # Cargo advisory matching can skip path dependencies. Audit the original
-      # registry identity as well, using the existing policy and exception list.
-      # The optimized test above verifies the separately documented source repair.
+      # registry identity as well, with the repository's policy, which ignores
+      # nothing. Every advisory found must be one vendor/glib-0.18.5 repairs (its
+      # OPTN.md names each, and the optimized test above exercises the repair);
+      # any other, or a scan that fails without naming one, fails this step.
       - name: Preserve vendored GLib advisory coverage
+        env:
+          REPAIRED_IN_VENDOR: RUSTSEC-2024-0429
         run: |
           audit_dir="$RUNNER_TEMP/optn-glib-advisory"
           mkdir -p "$audit_dir/src"
@@ -121,7 +125,9 @@ jobs:
           [dependencies]
           glib = "=0.18.5"
           EOF
-          cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" check advisories
+          status=0
+          cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" --format json check advisories 2> "$audit_dir/report.jsonl" || status=$?
+          python3 scripts/check-vendored-advisories.py "$audit_dir/report.jsonl" "$status" $REPAIRED_IN_VENDOR
 
   feature-matrix:
     name: Rust feature and fuzz compile

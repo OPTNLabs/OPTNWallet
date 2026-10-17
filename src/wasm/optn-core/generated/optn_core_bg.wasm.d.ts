@@ -2,6 +2,10 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
+export const bchP2pkhAddresses: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const bip39GenerateMnemonic: (a: number) => [number, number, number, number];
+export const bip39IsCanonicalMnemonic: (a: number, b: number) => number;
+export const bip39Seed: (a: number, b: number, c: number, d: number) => any;
 export const connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
 export const connectPublicKey: (a: number, b: number) => [number, number, number, number];
 export const connectSignInput: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
@@ -31,6 +35,13 @@ export const grindBudget: (a: number) => [number, number, number];
 export const grindRpaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
 export const grindSequence: (a: number) => [number, number, number];
 export const grindString: (a: number, b: number, c: number) => [number, number, number, number];
+export const hdAlignPublicKeyNetwork: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const hdExtendedPrivateKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+export const hdKeyPairAtPath: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+export const hdMasterFingerprint: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const hdPrivateKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+export const hdPublicKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+export const hdPublicKeyChild: (a: number, b: number, c: number) => [number, number, number, number];
 export const isLegacyPaycode: (a: number, b: number) => number;
 export const ledgerAddressFormat: (a: number, b: number) => [number, number, number];
 export const ledgerEncodeBip32Path: (a: number, b: number) => [number, number, number, number];
@@ -46,6 +57,8 @@ export const sendBlockReason: (a: number, b: number) => [number, number, number,
 export const sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const transactionOutpoints: (a: number, b: number) => [number, number, number, number];
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

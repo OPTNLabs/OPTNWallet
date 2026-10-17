@@ -6,6 +6,32 @@
  */
 export function addonLegacyGuestCallAllowed(module: string, method: string): boolean;
 
+/**
+ * A public key's P2PKH and token-aware P2PKH CashAddrs, as JSON
+ * `{publicKeyHash, address, tokenAddress}` with the hash in hex.
+ *
+ * Either SEC1 length is accepted, compressed or not, since both hash to a
+ * valid script; any other length is refused rather than hashed.
+ */
+export function bchP2pkhAddresses(network: string, public_key: Uint8Array): string;
+
+/**
+ * A new recovery phrase, drawn by the core from the browser's own
+ * `crypto.getRandomValues` (see `hd::generate_mnemonic`). JavaScript never
+ * supplies or sees the entropy, only the finished phrase.
+ */
+export function bip39GenerateMnemonic(word_count: number): string;
+
+/**
+ * Whether a phrase is valid English BIP39, written exactly as BIP39 writes it.
+ */
+export function bip39IsCanonicalMnemonic(phrase: string): boolean;
+
+/**
+ * The 64-byte BIP39 seed, for keys that are not BIP32 (MLS's HPKE inputs).
+ */
+export function bip39Seed(mnemonic: string, passphrase: string): Uint8Array;
+
 export function connectP2pkhLock(public_key: Uint8Array): Uint8Array;
 
 export function connectPublicKey(private_key: Uint8Array): Uint8Array;
@@ -183,6 +209,41 @@ export function grindSequence(offset: number): number;
  */
 export function grindString(scan_pubkey: Uint8Array, prefix_bits: number): string;
 
+/**
+ * An xpub/tpub re-serialized with `network`'s version bytes.
+ */
+export function hdAlignPublicKeyNetwork(network: string, hd_public_key: string): string;
+
+/**
+ * The extended private key at a path: `xprv` on mainnet, `tprv` otherwise.
+ */
+export function hdExtendedPrivateKeyAtPath(mnemonic: string, passphrase: string, network: string, path: string): string;
+
+/**
+ * `private(32) || compressed public(33)` at a path, from one derivation.
+ */
+export function hdKeyPairAtPath(mnemonic: string, passphrase: string, path: string): Uint8Array;
+
+/**
+ * The 4-byte BIP32 master fingerprint.
+ */
+export function hdMasterFingerprint(mnemonic: string, passphrase: string): Uint8Array;
+
+/**
+ * The 32-byte private key at a path.
+ */
+export function hdPrivateKeyAtPath(mnemonic: string, passphrase: string, path: string): Uint8Array;
+
+/**
+ * The extended public key at a path: `xpub` on mainnet, `tpub` otherwise.
+ */
+export function hdPublicKeyAtPath(mnemonic: string, passphrase: string, network: string, path: string): string;
+
+/**
+ * The compressed public key at non-hardened child `index` of an xpub/tpub.
+ */
+export function hdPublicKeyChild(hd_public_key: string, index: number): Uint8Array;
+
 export function isLegacyPaycode(candidate: string): boolean;
 
 /**
@@ -276,6 +337,10 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
+    readonly bchP2pkhAddresses: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly bip39GenerateMnemonic: (a: number) => [number, number, number, number];
+    readonly bip39IsCanonicalMnemonic: (a: number, b: number) => number;
+    readonly bip39Seed: (a: number, b: number, c: number, d: number) => any;
     readonly connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
     readonly connectPublicKey: (a: number, b: number) => [number, number, number, number];
     readonly connectSignInput: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
@@ -305,6 +370,13 @@ export interface InitOutput {
     readonly grindRpaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly grindSequence: (a: number) => [number, number, number];
     readonly grindString: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly hdAlignPublicKeyNetwork: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly hdExtendedPrivateKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly hdKeyPairAtPath: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly hdMasterFingerprint: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly hdPrivateKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly hdPublicKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly hdPublicKeyChild: (a: number, b: number, c: number) => [number, number, number, number];
     readonly isLegacyPaycode: (a: number, b: number) => number;
     readonly ledgerAddressFormat: (a: number, b: number) => [number, number, number];
     readonly ledgerEncodeBip32Path: (a: number, b: number) => [number, number, number, number];
@@ -320,6 +392,8 @@ export interface InitOutput {
     readonly sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly transactionOutpoints: (a: number, b: number) => [number, number, number, number];
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
