@@ -6,7 +6,10 @@ Archive SHA-256:
 `66cf685d2eefc45e37b2fd739beb0419fcc58a229a53c096090010f86bc66c12`
 (the checksum OPTN's Cargo.lock already recorded for the registry crate).
 
-All files from the published crate are kept, with name and version unchanged.
+All files from the published crate are kept, with name and version unchanged,
+except its `Cargo.lock`: upstream's own development lockfile, which OPTN's
+builds never read and which still names lru 0.16, so GitHub's dependency
+scanning would keep reporting the advisory this patch removes.
 This is a path patch from `[patch.crates-io]` in the root manifest. optn-chat
 uses it only as a dev-dependency: its tests' in-memory MDK store.
 
