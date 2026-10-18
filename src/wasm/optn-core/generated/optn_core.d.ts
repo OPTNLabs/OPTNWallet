@@ -6,6 +6,22 @@
  */
 export function addonLegacyGuestCallAllowed(module: string, method: string): boolean;
 
+export function bcmrAuthorRegistry(request_json: string): string;
+
+export function bcmrDefaultParseBytecode(): string;
+
+export function bcmrIpfsCid(content: Uint8Array): string;
+
+export function bcmrParsableCommitment(type_byte: number, serial: number): string;
+
+export function bcmrReadPublication(locking_bytecode: Uint8Array): string | undefined;
+
+export function bcmrSequentialCommitment(number: number): string;
+
+export function bcmrSuggestIdentity(category: string, has_nfts: boolean): string;
+
+export function bcmrSymbolError(symbol: string): string | undefined;
+
 /**
  * The coin-control label of one reported coin, as JSON; see
  * `coin_control::ReportedCoin`. Flat arguments keep a JSON parser out of
@@ -331,6 +347,14 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
+    readonly bcmrAuthorRegistry: (a: number, b: number) => [number, number, number, number];
+    readonly bcmrDefaultParseBytecode: () => [number, number];
+    readonly bcmrIpfsCid: (a: number, b: number) => [number, number];
+    readonly bcmrParsableCommitment: (a: number, b: number) => [number, number, number, number];
+    readonly bcmrReadPublication: (a: number, b: number) => [number, number];
+    readonly bcmrSequentialCommitment: (a: number) => [number, number, number, number];
+    readonly bcmrSuggestIdentity: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly bcmrSymbolError: (a: number, b: number) => [number, number];
     readonly coinControlLabel: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
     readonly connectPublicKey: (a: number, b: number) => [number, number, number, number];
