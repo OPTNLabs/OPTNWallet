@@ -4,8 +4,8 @@
   "files": {
     "optn_core.js": "25a610ac224c615fb80167498da148dc22a2f7559356e8da93fb7688efa980f4",
     "optn_core.d.ts": "ef85bda66bd865ee8d4c24a8d06dfbd56dba1df2e71c9e33d6e860c2ac0526f6",
-    "optn_core_bg.wasm": "71ba4e11be1fb0bcbbce35b781072d82f27183a14f5ab8e97f3a4dedeafcfcf2",
+    "optn_core_bg.wasm": "7cac49a5bd5b3dd1ed28968c19274b947d99e71b17d05bb84bc23056c8e6d45e",
     "optn_core_bg.wasm.d.ts": "5fe7a420e26e825b89cde38d9bee6e7ea12cb75e72b788506b62a0ae9d3d14af",
-    "optnCoreWasmBase64.generated.ts": "9a634d24b4b8fb22a1c20c435e20655d0c274dba35a89b328a279bc5e94a340c"
+    "optnCoreWasmBase64.generated.ts": "340d783f628e4115bd389f64321f64728801ea1360c2740bedf0e093843ce8d5"
   }
 }
