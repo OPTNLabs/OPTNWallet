@@ -3,6 +3,14 @@
 export const memory: WebAssembly.Memory;
 export const __wbg_fusiondepthbook_free: (a: number, b: number) => void;
 export const addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
+export const bcmrAuthorRegistry: (a: number, b: number) => [number, number, number, number];
+export const bcmrDefaultParseBytecode: () => [number, number];
+export const bcmrIpfsCid: (a: number, b: number) => [number, number];
+export const bcmrParsableCommitment: (a: number, b: number) => [number, number, number, number];
+export const bcmrReadPublication: (a: number, b: number) => [number, number];
+export const bcmrSequentialCommitment: (a: number) => [number, number, number, number];
+export const bcmrSuggestIdentity: (a: number, b: number, c: number) => [number, number, number, number];
+export const bcmrSymbolError: (a: number, b: number) => [number, number];
 export const connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
 export const connectPublicKey: (a: number, b: number) => [number, number, number, number];
 export const connectSignInput: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
