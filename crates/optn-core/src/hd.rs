@@ -12,10 +12,11 @@
 
 use std::fmt;
 
-use bip32::{DerivationPath, Prefix, XPrv};
+use bip32::{ChildNumber, DerivationPath, ExtendedKey, Prefix, XPrv, XPub};
 use bip39::{Language, Mnemonic};
+use k256::elliptic_curve::rand_core::OsRng;
 use ripemd::Ripemd160;
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::cashaddr::{Address, AddressKind};
@@ -253,13 +254,141 @@ pub fn entropy_len_for_word_count(words: usize) -> Result<usize> {
 
 /// Build a mnemonic from caller-supplied entropy.
 ///
-/// Valid lengths are 16, 20, 24, 28, and 32 bytes (12–24 words). The caller
-/// gathers the bytes (Web Crypto, OS RNG); this function does not.
+/// Valid lengths are 16, 20, 24, 28, and 32 bytes (12–24 words). This only
+/// encodes: it is for known vectors and for re-encoding entropy that already
+/// exists. A new wallet's phrase comes from [`generate_mnemonic`], which owns
+/// where its randomness comes from.
 pub fn mnemonic_from_entropy(entropy: &[u8]) -> Result<String> {
     let mnemonic = Mnemonic::from_entropy(entropy).map_err(|error| {
         CliError::Usage(format!("entropy must be a valid BIP39 length ({error})"))
     })?;
     Ok(mnemonic.to_string())
+}
+
+/// A new recovery phrase of `word_count` words: the bip39 crate's own
+/// generator, fed by rand_core's `OsRng`, which is getrandom: getrandom(2),
+/// BCryptGenRandom or SecRandomCopyBytes natively, and the browser's
+/// `crypto.getRandomValues` in WASM.
+///
+/// Every surface creates its phrase here, so there is one generator to audit,
+/// and it is established libraries end to end rather than code of ours.
+/// `OsRng` reads the OS source directly, with no userspace PRNG seeded from it
+/// and no fallback: if the platform cannot supply randomness it panics, and
+/// the call fails without producing a phrase.
+///
+/// The wallets that lost funds to weak seeds all encoded their phrases
+/// correctly; what failed was the randomness fed in. Coldcard (2026) silently
+/// routed generation to a fallback generator; Trust Wallet's WASM core
+/// (CVE-2023-31290) used a Mersenne Twister with a 32-bit seed; the
+/// Randstorm browser wallets got `Math.random` where Web Crypto was missing.
+pub fn generate_mnemonic(word_count: usize) -> Result<Zeroizing<String>> {
+    entropy_len_for_word_count(word_count)?;
+    let mnemonic = Mnemonic::generate_in_with(&mut OsRng, Language::English, word_count)
+        .map_err(|error| CliError::Internal(format!("could not generate a phrase ({error})")))?;
+    Ok(Zeroizing::new(mnemonic.to_string()))
+}
+
+/// Whether `phrase` is an English BIP39 mnemonic written exactly as BIP39
+/// writes one: lowercase words from the list, single spaces, no padding, a
+/// valid checksum, 12 to 24 words.
+///
+/// Exact rather than forgiving, like bip39.js's `validateMnemonic`: the text
+/// that passes is the text the seed is computed from (see [`bip39_seed`]), so
+/// a phrase with stray capitals or spaces must be normalized by the caller
+/// first, not accepted here and then hashed as typed.
+pub fn is_canonical_mnemonic(phrase: &str) -> bool {
+    Mnemonic::parse_in_normalized(Language::English, phrase)
+        .is_ok_and(|mnemonic| mnemonic.to_string() == phrase)
+}
+
+/// PBKDF2 rounds BIP39 fixes for mnemonic-to-seed.
+const BIP39_SEED_ROUNDS: u32 = 2048;
+
+/// BIP39's mnemonic-to-seed over the phrase exactly as given.
+///
+/// BIP39 defines the seed for any sentence, valid or not, and bip39.js's
+/// `mnemonicToSeed` computes it that way, without trimming or collapsing
+/// spaces. Every wallet the TypeScript side ever stored derives from that
+/// seed, so this reproduces it byte for byte rather than refusing or
+/// reshaping a phrase that may already hold funds. [`Wallet::from_mnemonic`]
+/// stays the checked entry point for a phrase being typed in.
+///
+/// Both strings must already be NFKD-normalized, as BIP39 requires; this
+/// crate leaves Unicode normalization to the caller, as `from_mnemonic` does.
+pub fn bip39_seed(phrase: &str, passphrase: &str) -> Zeroizing<[u8; 64]> {
+    let salt = Zeroizing::new(format!("mnemonic{passphrase}"));
+    let mut seed = Zeroizing::new([0u8; 64]);
+    pbkdf2::pbkdf2_hmac::<Sha512>(
+        phrase.as_bytes(),
+        salt.as_bytes(),
+        BIP39_SEED_ROUNDS,
+        seed.as_mut(),
+    );
+    seed
+}
+
+/// Extended public keys are `xpub` on mainnet and `tpub` on every test
+/// network, the version bytes libauth, Electron Cash and hardware wallets use.
+fn public_prefix(network: Network) -> Prefix {
+    match network {
+        Network::Mainnet => Prefix::XPUB,
+        _ => Prefix::TPUB,
+    }
+}
+
+/// `xprv` on mainnet, `tprv` on every test network.
+fn private_prefix(network: Network) -> Prefix {
+    match network {
+        Network::Mainnet => Prefix::XPRV,
+        _ => Prefix::TPRV,
+    }
+}
+
+fn not_an_hd_public_key() -> CliError {
+    CliError::Usage("Enter a valid BIP32 public key.".into())
+}
+
+/// Parse an `xpub` or `tpub`. Other version bytes are refused: `ypub` and
+/// `zpub` name script types this wallet does not derive, and a private key
+/// is not something a watch-only path should be handed.
+fn parse_hd_public_key(text: &str) -> Result<(ExtendedKey, XPub)> {
+    let key: ExtendedKey = text.parse().map_err(|_| not_an_hd_public_key())?;
+    if key.prefix != Prefix::XPUB && key.prefix != Prefix::TPUB {
+        return Err(not_an_hd_public_key());
+    }
+    let xpub = XPub::try_from(key.clone()).map_err(|_| not_an_hd_public_key())?;
+    Ok((key, xpub))
+}
+
+/// The compressed public key at non-hardened child `index` of an extended
+/// public key. A hardened index cannot be derived from public material, so it
+/// is refused rather than wrapped.
+pub fn hd_public_key_child(hd_public_key: &str, index: u32) -> Result<[u8; 33]> {
+    let (_, xpub) = parse_hd_public_key(hd_public_key.trim())?;
+    let child_number = ChildNumber::new(index, false)
+        .map_err(|_| CliError::Usage(format!("child index {index} must be below 2^31")))?;
+    let child = xpub
+        .derive_child(child_number)
+        .map_err(|error| CliError::Internal(format!("public derivation failed: {error}")))?;
+    Ok(child.to_bytes())
+}
+
+/// Re-serialize an extended public key with `network`'s version bytes.
+///
+/// The node (depth, parent, index, chain code, key) is unchanged; only the
+/// `xpub`/`tpub` prefix moves. A Trezor asked for "Bcash Testnet" hands back
+/// a `tpub`, and a chipnet export may later be opened on mainnet, while the
+/// on-chain keys are the same either way. A key already in the right form is
+/// returned as given, trimmed.
+pub fn align_hd_public_key_network(network: Network, hd_public_key: &str) -> Result<String> {
+    let raw = hd_public_key.trim();
+    let (mut key, _) = parse_hd_public_key(raw)?;
+    let target = public_prefix(network);
+    if key.prefix == target {
+        return Ok(raw.to_owned());
+    }
+    key.prefix = target;
+    Ok(key.to_string())
 }
 
 #[derive(ZeroizeOnDrop)]
@@ -303,27 +432,72 @@ impl Wallet {
         })
     }
 
-    /// Derive the compressed public key at a path.
-    pub fn public_key(&self, path: &str) -> Result<[u8; 33]> {
+    /// Build from a seed already computed, e.g. by [`bip39_seed`].
+    pub fn from_seed(seed: &[u8; 64]) -> Self {
+        Wallet { seed: *seed }
+    }
+
+    /// The extended private key at a path.
+    fn xprv_at(&self, path: &str) -> Result<XPrv> {
         let parsed: DerivationPath = path
             .parse()
             .map_err(|_| CliError::Usage(format!("'{path}' is not a valid derivation path")))?;
-        let xprv = XPrv::derive_from_path(self.seed, &parsed)
-            .map_err(|e| CliError::Internal(format!("derivation failed: {e}")))?;
-        Ok(xprv.public_key().to_bytes())
+        XPrv::derive_from_path(self.seed, &parsed)
+            .map_err(|e| CliError::Internal(format!("derivation failed: {e}")))
+    }
+
+    /// Derive the compressed public key at a path.
+    pub fn public_key(&self, path: &str) -> Result<[u8; 33]> {
+        Ok(self.xprv_at(path)?.public_key().to_bytes())
     }
 
     /// Derive the signing key at a path.
     ///
     /// Returned by value and never stored: the caller signs and drops it.
     pub fn signing_key(&self, path: &str) -> Result<k256::ecdsa::SigningKey> {
-        let parsed: DerivationPath = path
-            .parse()
-            .map_err(|_| CliError::Usage(format!("'{path}' is not a valid derivation path")))?;
-        let xprv = XPrv::derive_from_path(self.seed, &parsed)
-            .map_err(|e| CliError::Internal(format!("derivation failed: {e}")))?;
+        let xprv = self.xprv_at(path)?;
         k256::ecdsa::SigningKey::from_slice(&xprv.private_key().to_bytes())
             .map_err(|e| CliError::Internal(format!("invalid derived key: {e}")))
+    }
+
+    /// The raw 32-byte private key at a path, wiped when dropped. For a
+    /// boundary that must hand key bytes on; signing in Rust uses
+    /// [`Wallet::signing_key`].
+    pub fn private_key(&self, path: &str) -> Result<Zeroizing<[u8; 32]>> {
+        Ok(Zeroizing::new(self.xprv_at(path)?.to_bytes()))
+    }
+
+    /// The private key and its compressed public key at a path, from one
+    /// derivation.
+    pub fn key_pair(&self, path: &str) -> Result<(Zeroizing<[u8; 32]>, [u8; 33])> {
+        let xprv = self.xprv_at(path)?;
+        Ok((
+            Zeroizing::new(xprv.to_bytes()),
+            xprv.public_key().to_bytes(),
+        ))
+    }
+
+    /// The extended public key at a path, `xpub` or `tpub` by network.
+    pub fn xpub_at(&self, network: Network, path: &str) -> Result<String> {
+        Ok(self
+            .xprv_at(path)?
+            .public_key()
+            .to_string(public_prefix(network)))
+    }
+
+    /// The extended private key at a path, `xprv` or `tprv` by network.
+    pub fn xprv_string_at(&self, network: Network, path: &str) -> Result<Zeroizing<String>> {
+        Ok(self.xprv_at(path)?.to_string(private_prefix(network)))
+    }
+
+    /// BIP32 master fingerprint: the first four bytes of HASH160 of the root
+    /// public key, which PSBTs and descriptors use to name the seed a key
+    /// belongs to.
+    pub fn master_fingerprint(&self) -> Result<[u8; 4]> {
+        let root = self.xprv_at("m")?;
+        let mut fingerprint = [0u8; 4];
+        fingerprint.copy_from_slice(&hash160(&root.public_key().to_bytes())[..4]);
+        Ok(fingerprint)
     }
 
     /// Derive the P2PKH address at a path for a network.
@@ -533,6 +707,34 @@ mod tests {
     }
 
     #[test]
+    fn generated_phrases_are_canonical_fresh_and_full_length() {
+        for words in BIP39_WORD_COUNTS {
+            let first = generate_mnemonic(words).expect("the OS CSPRNG works here");
+            let second = generate_mnemonic(words).expect("and again");
+            assert_eq!(first.split(' ').count(), words);
+            assert!(is_canonical_mnemonic(&first));
+            assert_ne!(*first, *second, "two {words}-word phrases must differ");
+        }
+        assert!(generate_mnemonic(13).is_err());
+    }
+
+    #[test]
+    fn a_thousand_new_phrases_never_repeat() {
+        // A stuck or constant source (the failure a stubbed RNG produces)
+        // repeats at once; 128-bit phrases from a working one never do.
+        let mut phrases: Vec<String> = (0..1000)
+            .map(|_| {
+                generate_mnemonic(12)
+                    .expect("the OS CSPRNG works here")
+                    .to_string()
+            })
+            .collect();
+        phrases.sort_unstable();
+        phrases.dedup();
+        assert_eq!(phrases.len(), 1000);
+    }
+
+    #[test]
     fn rejects_a_bad_mnemonic() {
         // No Debug on Wallet on purpose: it holds a seed, and a derived Debug
         // is exactly how seeds end up in logs. So match rather than unwrap_err.
@@ -651,5 +853,162 @@ mod tests {
             wallet.account_xpub_at(other).unwrap()
         );
         assert!(wallet.account_xpub_at(other).unwrap().starts_with("xpub"));
+    }
+
+    // The vectors below come from the implementation this replaces in the
+    // wallet: bip39.js 3.1.0 and libauth 3.1.0-next.8, run on the BIP39
+    // all-zeros phrase. They are an oracle independent of this crate, and the
+    // published values among them (the TREZOR seed, fingerprint 73c5da0a)
+    // pin both.
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn vector_wallet() -> Wallet {
+        Wallet::from_seed(&bip39_seed(TEST_MNEMONIC, ""))
+    }
+
+    #[test]
+    fn the_seed_matches_bip39_js_for_any_text() {
+        assert_eq!(
+            hex(bip39_seed(TEST_MNEMONIC, "TREZOR").as_ref()),
+            "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f\
+             09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04"
+        );
+        assert_eq!(
+            hex(bip39_seed(TEST_MNEMONIC, "").as_ref()),
+            "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc1\
+             9a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4"
+        );
+        // Not canonical and not reshaped: a stored phrase keeps the seed it
+        // has always had. The passphrase is NFKD already, as the caller must
+        // supply it.
+        let raw = "  Abandon  abandon abandon abandon abandon abandon abandon \
+                   abandon abandon abandon abandon about ";
+        assert_eq!(
+            hex(bip39_seed(raw, "pa\u{0308}ssword").as_ref()),
+            "6b57f5807315ce12840628b776ed964014a9138bd2f008233be5861c584ab766\
+             5b1fe5ce08bb3e9bd1607cbe55d0708ff86cba15acf6a47b68b03a598ec68903"
+        );
+    }
+
+    #[test]
+    fn the_seed_agrees_with_the_checked_entry_point() {
+        let checked = Wallet::from_mnemonic(TEST_MNEMONIC, "TREZOR").unwrap();
+        let raw = Wallet::from_seed(&bip39_seed(TEST_MNEMONIC, "TREZOR"));
+        assert_eq!(
+            checked.xpub_at(Network::Mainnet, "m/44'/145'/0'").unwrap(),
+            raw.xpub_at(Network::Mainnet, "m/44'/145'/0'").unwrap()
+        );
+    }
+
+    #[test]
+    fn canonical_mnemonics_are_exactly_the_ones_bip39_js_accepts() {
+        for (phrase, valid) in [
+            (TEST_MNEMONIC.to_owned(), true),
+            (TEST_MNEMONIC.to_uppercase(), false),
+            (format!(" {TEST_MNEMONIC}"), false),
+            (TEST_MNEMONIC.replacen(' ', "  ", 1), false),
+            (TEST_MNEMONIC.replace("about", "abandon"), false),
+            (
+                "legal winner thank year wave sausage worth useful legal winner \
+                 thank year wave sausage wise"
+                    .to_owned(),
+                true,
+            ),
+            (format!("{}vote", "zoo ".repeat(23)), true),
+            ("not actually a mnemonic".to_owned(), false),
+        ] {
+            assert_eq!(is_canonical_mnemonic(&phrase), valid, "{phrase}");
+        }
+        assert_eq!(
+            mnemonic_from_entropy(&[0x7f; 20]).unwrap(),
+            "legal winner thank year wave sausage worth useful legal winner \
+             thank year wave sausage wise"
+        );
+    }
+
+    #[test]
+    fn extended_keys_match_libauth_by_network() {
+        let wallet = vector_wallet();
+        assert_eq!(
+            wallet.xpub_at(Network::Mainnet, "m/44'/145'/0'/0").unwrap(),
+            "xpub6F2iaK2JUPcgrZ6RTGH6t8VybLPu1XzfrHsDsaKvK6NfULznU6i6aw6ZoefDW2Dp\
+             NruSLw73RwQg46qvpqB3eryeJJ2tkFCF4Z6gbr8Pjja"
+        );
+        assert_eq!(
+            wallet.xpub_at(Network::Chipnet, "m/44'/1'/0'/0").unwrap(),
+            "tpubDEQBfiy13hMZzGT4NWqNnaSWwVqYQ58kuu2pDYjkrf8F6DLKAprm8c65Pyh7Przo\
+             dXHtJuEXFu5yf6JbvYaL8rz7v28zapwbuzZzr7z4UvR"
+        );
+        assert_eq!(
+            wallet
+                .xprv_string_at(Network::Mainnet, "m/44'/145'/0'")
+                .unwrap()
+                .as_str(),
+            "xprv9xywTsqYa9uDLdJs8QpXf7xwRWgPw4rq5FtkcShsDoZTqfNQjVQ3dDCdyedXX3Fq\
+             B18U8e8PfVMeFqkhzPGseKVMDjGe5rPdiUXMxy7BQNJ"
+        );
+        assert_eq!(
+            wallet
+                .xprv_string_at(Network::Chipnet, "m/44'/1'/0'")
+                .unwrap()
+                .as_str(),
+            "tprv8fPDJN9UQqg6pFsQsrVxTwHZmXLvHpfGGcsCA9rtnatUgVtBKxhtFeqiyaYKSWyd\
+             unKpjhvgJf6PwTwgirwuCbFq8YKgpQiaVJf3JCrNmkR"
+        );
+        assert_eq!(hex(&wallet.master_fingerprint().unwrap()), "73c5da0a");
+    }
+
+    #[test]
+    fn keys_at_a_path_match_libauth_and_public_derivation_agrees() {
+        let wallet = vector_wallet();
+        let path = "m/44'/145'/0'/0/4";
+        assert_eq!(
+            hex(wallet.private_key(path).unwrap().as_ref()),
+            "c7e1bfbb861270227865ef22dc539230a97a716775fd8d7f0e612f71cbac2b15"
+        );
+        let public_key = wallet.public_key(path).unwrap();
+        assert_eq!(
+            hex(&public_key),
+            "029c75f034981dcb99bc1b5fb2e1a001f83d37ec21fd5a1006cada901b2133b196"
+        );
+        let receive = wallet.xpub_at(Network::Mainnet, "m/44'/145'/0'/0").unwrap();
+        assert_eq!(hd_public_key_child(&receive, 4).unwrap(), public_key);
+        // The same node behind a tpub derives the same child.
+        let as_tpub = align_hd_public_key_network(Network::Chipnet, &receive).unwrap();
+        assert_eq!(hd_public_key_child(&as_tpub, 4).unwrap(), public_key);
+        assert!(hd_public_key_child(&receive, 0x8000_0000).is_err());
+        assert_eq!(
+            hex(&hash160(&public_key)),
+            "56231f7128a5ce118349f508d88ee7f2d4dd6a96"
+        );
+    }
+
+    #[test]
+    fn aligning_moves_only_the_version_bytes() {
+        let receive = vector_wallet()
+            .xpub_at(Network::Mainnet, "m/44'/145'/0'/0")
+            .unwrap();
+        let tpub = align_hd_public_key_network(Network::Chipnet, &receive).unwrap();
+        assert_eq!(
+            tpub,
+            "tpubDFQM6YqzBfa98MHGuTGC63qLvTVYzvVjPvTXE8P4f18ZDdfVYKZBjNmQ3gk12XB4\
+             AmSLxWcuy3EikHLYDh2HYJRwMtnCRmrUeWh6MuFhbJ7"
+        );
+        assert_eq!(
+            align_hd_public_key_network(Network::Mainnet, &tpub).unwrap(),
+            receive
+        );
+        assert_eq!(
+            align_hd_public_key_network(Network::Mainnet, &format!(" {receive} ")).unwrap(),
+            receive
+        );
+        let xprv = vector_wallet()
+            .xprv_string_at(Network::Mainnet, "m/44'/145'/0'")
+            .unwrap();
+        for bad in ["", "xpub", xprv.as_str()] {
+            assert!(align_hd_public_key_network(Network::Mainnet, bad).is_err());
+        }
     }
 }

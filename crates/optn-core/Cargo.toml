@@ -21,11 +21,11 @@ hkdf = "0.12"
 # `ecdh` is for NIP-44's shared secret; the rest was already here.
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "std"] }
 bip32 = { version = "0.5", default-features = false, features = ["alloc", "secp256k1", "std"] }
-# No "rand": this crate only parses mnemonics, it never generates them.
-# The rand feature pulls getrandom, which refuses to build for
-# wasm32-unknown-unknown without a JS shim -- and generating a seed phrase
-# is the CLI's job, not the protocol core's.
-bip39 = { version = "2", default-features = false, features = ["std", "zeroize"] }
+# "rand_core", not "rand": hd::generate_mnemonic calls bip39's own generator
+# with rand_core's OsRng, the OS CSPRNG read directly. "rand" would add
+# generate(), which draws from rand's userspace thread_rng instead. rand_core
+# is already in the tree through k256, so this adds no crate.
+bip39 = { version = "2", default-features = false, features = ["std", "zeroize", "rand_core"] }
 # CashFusion's Jacobi test is a modpow over the secp256k1 FIELD prime, which
 # k256 does not expose. Both pure Rust and wasm-safe, and the same crates the
 # desktop implementation already used -- so this is a move, not a reimplementation.

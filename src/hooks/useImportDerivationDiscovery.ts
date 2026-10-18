@@ -1,7 +1,7 @@
-import * as bip39 from 'bip39';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Network } from '../state/slices/networkSlice';
+import { isCanonicalBip39Mnemonic } from '../services/Bip39Service';
 import { mnemonicXpubResolver } from '../services/DerivationPathProbe';
 import {
   useDerivationDiscovery,
@@ -19,7 +19,7 @@ export function scheduleCancelable(
 }
 
 export function isValidImportMnemonic(mnemonic: string): boolean {
-  return bip39.validateMnemonic(mnemonic);
+  return isCanonicalBip39Mnemonic(mnemonic);
 }
 
 export function automaticImportPath(

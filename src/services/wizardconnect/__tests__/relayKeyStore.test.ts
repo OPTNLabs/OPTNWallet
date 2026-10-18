@@ -1,13 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sha256, validateSecp256k1PrivateKey } from '@bitauth/libauth';
 
-import { createDeterministicRuntimePrivateKey } from '../../HdWalletService';
 import { binToHex } from '../../../utils/hex';
 
 const URI =
   'wiz://?p=qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6mua7l&s=qpzry9x8';
 const QR_URI =
   'WIZ://%3FP%3DQPZRY9X8GF2TVDW0S3JN54KHCE6MUA7LQPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L%26S%3DQPZRY9X8';
+
+/**
+ * The derivation relay keys once used: SHA-256 of public strings, which
+ * anyone holding the pairing URI could repeat. Kept only as the thing a real
+ * relay key must not equal.
+ */
+function uriDerivedKey(walletId: string): Uint8Array {
+  for (let counter = 0; counter < 1024; counter += 1) {
+    const candidate = sha256.hash(
+      new TextEncoder().encode(`wizardconnect:${walletId}:${URI}:${counter}`)
+    );
+    if (validateSecp256k1PrivateKey(candidate)) return candidate;
+  }
+  throw new Error('no valid key in 1024 tries');
+}
 
 function stubLocalStorage() {
   const storage = new Map<string, string>();
@@ -44,11 +58,7 @@ describe('WizardConnect relay key store', () => {
   it('does not derive the relay key from the pairing URI', async () => {
     const { generateRuntimeRelayKey } = await import('../relayKeyStore');
     const key = generateRuntimeRelayKey();
-    const uriDerived = createDeterministicRuntimePrivateKey(
-      'wizardconnect',
-      '1',
-      URI
-    );
+    const uriDerived = uriDerivedKey('1');
     expect(binToHex(key)).not.toBe(binToHex(uriDerived));
   });
 
@@ -100,11 +110,7 @@ describe('WizardConnect relay key store', () => {
   it('cannot reconstruct a persisted key from walletId and URI alone', async () => {
     const { getOrCreatePersistedRelayKey } = await import('../relayKeyStore');
     const stored = await getOrCreatePersistedRelayKey(9, URI);
-    const guessed = createDeterministicRuntimePrivateKey(
-      'wizardconnect',
-      '9',
-      URI
-    );
+    const guessed = uriDerivedKey('9');
     expect(binToHex(stored)).not.toBe(binToHex(guessed));
     const material = new TextEncoder().encode(`wizardconnect:9:${URI}:0`);
     expect(binToHex(stored)).not.toBe(binToHex(sha256.hash(material)));
