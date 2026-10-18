@@ -3,6 +3,14 @@
 export const memory: WebAssembly.Memory;
 export const addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
 export const bchP2pkhAddresses: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const bcmrAuthorRegistry: (a: number, b: number) => [number, number, number, number];
+export const bcmrDefaultParseBytecode: () => [number, number];
+export const bcmrIpfsCid: (a: number, b: number) => [number, number];
+export const bcmrParsableCommitment: (a: number, b: number) => [number, number, number, number];
+export const bcmrReadPublication: (a: number, b: number) => [number, number];
+export const bcmrSequentialCommitment: (a: number) => [number, number, number, number];
+export const bcmrSuggestIdentity: (a: number, b: number, c: number) => [number, number, number, number];
+export const bcmrSymbolError: (a: number, b: number) => [number, number];
 export const bip39GenerateMnemonic: (a: number) => [number, number, number, number];
 export const bip39IsCanonicalMnemonic: (a: number, b: number) => number;
 export const bip39Seed: (a: number, b: number, c: number, d: number) => any;

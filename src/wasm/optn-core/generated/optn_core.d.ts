@@ -15,6 +15,22 @@ export function addonLegacyGuestCallAllowed(module: string, method: string): boo
  */
 export function bchP2pkhAddresses(network: string, public_key: Uint8Array): string;
 
+export function bcmrAuthorRegistry(request_json: string): string;
+
+export function bcmrDefaultParseBytecode(): string;
+
+export function bcmrIpfsCid(content: Uint8Array): string;
+
+export function bcmrParsableCommitment(type_byte: number, serial: number): string;
+
+export function bcmrReadPublication(locking_bytecode: Uint8Array): string | undefined;
+
+export function bcmrSequentialCommitment(number: number): string;
+
+export function bcmrSuggestIdentity(category: string, has_nfts: boolean): string;
+
+export function bcmrSymbolError(symbol: string): string | undefined;
+
 /**
  * A new recovery phrase, drawn by the core from the browser's own
  * `crypto.getRandomValues` (see `hd::generate_mnemonic`). JavaScript never
@@ -338,6 +354,14 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
     readonly bchP2pkhAddresses: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly bcmrAuthorRegistry: (a: number, b: number) => [number, number, number, number];
+    readonly bcmrDefaultParseBytecode: () => [number, number];
+    readonly bcmrIpfsCid: (a: number, b: number) => [number, number];
+    readonly bcmrParsableCommitment: (a: number, b: number) => [number, number, number, number];
+    readonly bcmrReadPublication: (a: number, b: number) => [number, number];
+    readonly bcmrSequentialCommitment: (a: number) => [number, number, number, number];
+    readonly bcmrSuggestIdentity: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly bcmrSymbolError: (a: number, b: number) => [number, number];
     readonly bip39GenerateMnemonic: (a: number) => [number, number, number, number];
     readonly bip39IsCanonicalMnemonic: (a: number, b: number) => number;
     readonly bip39Seed: (a: number, b: number, c: number, d: number) => any;
