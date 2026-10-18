@@ -7,6 +7,7 @@ import { normalizeExternalUrl } from '../../utils/externalUrl';
 import { useI18n } from '../../i18n/useI18n';
 import { formatDate } from '../../i18n/format';
 import { walletConnectSessionStatus } from '../../utils/connectionStatus';
+import RemoteImg from '../RemoteImg';
 
 interface Props {
   sessionTopic: string;
@@ -48,7 +49,7 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
 
         {/* DApp Details */}
         <div className="flex items-center gap-4 mb-4 min-w-0">
-          <img
+          <RemoteImg
             src={dappMeta.icons[0]}
             alt={t('wc.unknownDapp')}
             className="h-16 w-16 shrink-0 rounded-full object-cover"

@@ -62,9 +62,13 @@ pub fn view(policy: &ConnectionPolicy) -> ConnectionPolicyView {
 
 /// Validate the complete selection before the caller publishes or persists it.
 /// Disabled/banned sources remain excluded by the common selection planner.
+///
+/// The transport is the holder's separate choice and is carried through
+/// unchanged: editing which sources are used never changes how they are reached.
 pub fn policy(
     catalog: &SourceCatalog,
     value: &ConnectionPolicyView,
+    transport: crate::chain::TransportPolicy,
 ) -> Result<ConnectionPolicy, String> {
     fn ids(catalog: &SourceCatalog, values: &[String]) -> Result<Vec<SourceId>, String> {
         let mut seen = BTreeSet::new();
@@ -119,13 +123,14 @@ pub fn policy(
             .map(|value| scope(catalog, value))
             .transpose()?,
         preferred: ids(catalog, &value.preferred)?,
+        transport,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chain::{build_selection_plan, SourceDisposition};
+    use crate::chain::{build_selection_plan, SourceDisposition, TransportPolicy};
     #[test]
     fn edited_selection_preserves_order_scopes_protocols_and_bans() {
         let mut catalog =
@@ -139,8 +144,10 @@ mod tests {
         selection.primary_scope = SourceScopeView::Selected(vec![ids[1].as_str().into()]);
         selection.fallback_scope = Some(SourceScopeView::AllEnabled);
         selection.preferred = ids.iter().rev().map(|id| id.as_str().into()).collect();
-        let edited = policy(&catalog, &selection).unwrap();
+        let edited = policy(&catalog, &selection, TransportPolicy::Direct).unwrap();
         assert_eq!(view(&edited), selection);
+        // Editing the selection carries the holder's transport through.
+        assert_eq!(edited.transport, TransportPolicy::Direct);
         catalog
             .set_disposition(&ids[1], SourceDisposition::Banned)
             .unwrap();
@@ -148,9 +155,9 @@ mod tests {
         assert!(!plan.primary.contains(&ids[1]));
         assert!(!plan.fallback.contains(&ids[1]));
         selection.preferred.push("missing".into());
-        assert!(policy(&catalog, &selection).is_err());
+        assert!(policy(&catalog, &selection, TransportPolicy::default()).is_err());
         selection.preferred.clear();
         selection.protocols.clear();
-        assert!(policy(&catalog, &selection).is_err());
+        assert!(policy(&catalog, &selection, TransportPolicy::default()).is_err());
     }
 }

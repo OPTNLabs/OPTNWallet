@@ -14,8 +14,15 @@ const LABEL_KEY_PREFIX = 'optn.bip37.node-labels.';
 
 // Default P2P ports per network (BCHN chainparams). Used when the user enters a
 // bare host with no port.
+const DEFAULT_P2P_PORT: Record<Network, number> = {
+  [Network.MAINNET]: 8333,
+  [Network.TESTNET3]: 18333,
+  [Network.TESTNET4]: 28333,
+  [Network.CHIPNET]: 48333,
+};
+
 export function defaultNodePort(network: Network): number {
-  return network === Network.CHIPNET ? 48333 : 8333;
+  return DEFAULT_P2P_PORT[network];
 }
 
 /** Split a node target into host + port, defaulting the port for the network. */

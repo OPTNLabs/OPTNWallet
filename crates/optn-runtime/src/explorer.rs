@@ -265,6 +265,7 @@ mod tests {
             primary_scope: crate::chain::SourceScope::UserInfrastructure,
             fallback_scope: Some(crate::chain::SourceScope::AllEnabled),
             preferred: Vec::new(),
+            transport: Default::default(),
         };
         assert_eq!(
             ChainPolicyPreset::describe(&unnameable),

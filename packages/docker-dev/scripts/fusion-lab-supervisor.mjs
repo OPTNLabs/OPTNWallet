@@ -8,8 +8,9 @@
  *   - Default network: chipnet (OPTN_NETWORK=mainnet only if operator accepts risk)
  *   - Secrets only under OPTN_DATA_DIR volume
  *
- * Headless Auto rounds (wallet unlock + FusionRunnerService) need the full
- * desktop/Tauri stack (Tor WebSocket bridge is Rust). This process:
+ * Headless Auto rounds are the Rust CLI's `optn fusion --auto`
+ * (scripts/fusion-lab-headless.sh): the same driver the desktop runs. This
+ * process:
  *   1) Enforces Tor / mode / network
  *   2) Writes a health file for Docker
  *   3) If OPTN_HEADLESS_CMD is set, exec that command (future binary/script)

@@ -17,7 +17,7 @@ import {
 
 /** The core takes the network as a string; this is the only mapping needed. */
 function coreNetwork(network: Network): string {
-  return network === Network.MAINNET ? 'mainnet' : 'chipnet';
+  return network;
 }
 
 export type RpaMatchedOutput = {

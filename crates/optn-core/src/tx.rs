@@ -579,6 +579,10 @@ fn take(b: &[u8], i: &mut usize, n: usize) -> Result<Vec<u8>> {
 /// locking script but shares its length field, so a decoder that ignores it
 /// reports the script as unparseable rather than reporting a token.
 pub fn decode(bytes: &[u8]) -> Result<Decoded> {
+    decode_with_input_scripts(bytes).map(|(transaction, _)| transaction)
+}
+
+pub(crate) fn decode_with_input_scripts(bytes: &[u8]) -> Result<(Decoded, Vec<Vec<u8>>)> {
     let mut i = 0usize;
     let version = u32::from_le_bytes(
         take(bytes, &mut i, 4)?
@@ -588,6 +592,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded> {
 
     let input_count = take_varint(bytes, &mut i)?;
     let mut inputs = Vec::new();
+    let mut scripts = Vec::new();
     for _ in 0..input_count {
         let txid: [u8; 32] = take(bytes, &mut i, 32)?
             .try_into()
@@ -599,7 +604,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded> {
         );
         let script_len = usize::try_from(take_varint(bytes, &mut i)?)
             .map_err(|_| CliError::Protocol("script length exceeds this platform".into()))?;
-        take(bytes, &mut i, script_len)?;
+        scripts.push(take(bytes, &mut i, script_len)?);
         let sequence = u32::from_le_bytes(
             take(bytes, &mut i, 4)?
                 .try_into()
@@ -640,12 +645,15 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded> {
     if i != bytes.len() {
         return Err(CliError::Protocol("transaction has trailing bytes".into()));
     }
-    Ok(Decoded {
-        version,
-        inputs,
-        outputs,
-        locktime,
-    })
+    Ok((
+        Decoded {
+            version,
+            inputs,
+            outputs,
+            locktime,
+        },
+        scripts,
+    ))
 }
 
 #[cfg(test)]

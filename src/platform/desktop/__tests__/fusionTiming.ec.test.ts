@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ACCEPT_UNCONFIRMED_FUSION_INPUTS,
   AUTO_WAIT_FOR_BLOCK_BEFORE_NEXT_ROUND,
-  EC_DEFAULT_MAX_COINS,
   EC_MAX_FUSE_DEPTH,
   P2P_GATHER_MAX_MS,
   P2P_CREDENTIAL_WAIT_MS,
@@ -67,11 +65,6 @@ describe('Electron Cash plugin.py client policy', () => {
     expect(SERVER_AUTOFUSE_INACTIVE_MS).toBe(600_000);
   });
 
-  it('caps batch size at DEFAULT_MAX_COINS = 20', () => {
-    expect(EC_DEFAULT_MAX_COINS).toBe(20);
-    expect(EC_DEFAULT_MAX_COINS).toBeGreaterThan(10);
-  });
-
   it('matches UI fuse-depth ceiling', () => {
     expect(EC_MAX_FUSE_DEPTH).toBe(10);
   });
@@ -81,11 +74,7 @@ describe('Electron Cash plugin.py client policy', () => {
   });
 });
 
-describe('unconfirmed inputs + no block-wait between Auto rounds', () => {
-  it('accepts unconfirmed fusion inputs (EC-maintainer-endorsed direction)', () => {
-    expect(ACCEPT_UNCONFIRMED_FUSION_INPUTS).toBe(true);
-  });
-
+describe('no block-wait between Auto rounds', () => {
   it('does not wait for a block confirmation before the next Auto round', () => {
     expect(AUTO_WAIT_FOR_BLOCK_BEFORE_NEXT_ROUND).toBe(false);
     // Post-success delay is Electrum lag only — far below one block (~10 min).

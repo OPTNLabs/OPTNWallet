@@ -11,6 +11,7 @@
 
 use optn_chain_bchn::{BchnRpcBackend, BchnRpcConfig, RpcAuth};
 pub mod coin_holds_file;
+pub mod discovered_peers_file;
 pub mod network_config;
 pub mod registry_fetch;
 pub mod wallet_checkpoint;
@@ -22,19 +23,22 @@ pub mod wallet_checkpoint;
 pub use optn_chain_bip37::{
     relay_tx_on_stream, Bip37Backend, Bip37Config, Bip37Transport, TxRelayOutcome,
 };
-use optn_chain_electrum::{ElectrumBackend, ElectrumConfig, ElectrumTransport};
+// A CashFusion round checks inputs on Electrum connections of its own; the
+// host drives them directly (see `connect_fusion_lookup`).
+pub use optn_chain_electrum::ElectrumBackend;
+use optn_chain_electrum::{ElectrumConfig, ElectrumTransport};
 use optn_chain_neutrino::{NeutrinoBackend, NeutrinoConfig, NeutrinoTransport};
 use optn_chain_zmq::{BchnZmqConfig, BchnZmqEventSource};
 use optn_core::endpoint::is_loopback_host;
 use optn_core::tor::{route as tor_route, Route as TorRoute, TorStatus};
 use optn_runtime::chain::{
     build_selection_plan, ChainEventSource, ChainSource, ConnectionPolicy, Endpoint, EndpointKind,
-    ProtocolFamily, SourceCatalog, SourceId, SourceScope,
+    ProtocolFamily, SourceCatalog, SourceId, SourceScope, TransportPolicy,
 };
-use optn_runtime::chain_service::ChainService;
+use optn_runtime::chain_service::{ChainBackend, ChainOperation, ChainService};
 use optn_runtime::events::ChainEventStream;
 use rand_core::{OsRng, RngCore};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -163,21 +167,72 @@ pub struct NativeChainStack {
     /// No provider is registered in this state, so callers cannot fall back to
     /// a different route behind the user's back.
     pub configuration_error: Option<String>,
+    /// Electrum servers the connected servers advertised, and BCH P2P nodes
+    /// the DNS seeds named, that the catalog did not already hold (#75 §21.3).
+    /// Hints for the host to keep for later builds. A node a seed named while
+    /// this stack had no wallet route was admitted to it too; see
+    /// `build_native_chain_stack_with_tor_status`.
+    pub discovered_peers: Vec<optn_runtime::bootstrap::DiscoveredPeer>,
+    /// Selected Electrum servers and BCH P2P nodes held back for failover.
+    pub held_back: HeldBackServers,
 }
 
 impl NativeChainStack {
     pub fn unavailable(error: impl Into<String>) -> Self {
         let service = ChainService::new(SourceCatalog::default(), ConnectionPolicy::auto());
+        let revocation = service.revocation();
+        let service = Arc::new(Mutex::new(service));
         Self {
             tor_status: None,
             // Empty rather than seeded: no provider is registered in this
             // state, so nothing should be able to read a header from it.
             headers: Arc::new(optn_runtime::header_store::SharedHeaders::default()),
-            revocation: service.revocation(),
-            service: Arc::new(Mutex::new(service)),
+            revocation: revocation.clone(),
+            held_back: HeldBackServers::none(service.clone(), revocation),
+            service,
             event_sources: Vec::new(),
             failures: Vec::new(),
             configuration_error: Some(error.into()),
+            discovered_peers: Vec::new(),
+        }
+    }
+}
+
+/// Discovered servers dialled in one build when nothing else connected.
+const MAX_FAILOVER_ATTEMPTS: usize = 3;
+
+/// Keep what a connected Electrum server says about its peers: TLS names, and
+/// onions only while Tor carries public traffic. Bounded, without repeats, and
+/// without servers the catalog already has.
+fn note_advertised_peers(
+    provider: &ElectrumBackend,
+    source: &ChainSource,
+    allow_onion: bool,
+    known: &[Endpoint],
+    into: &mut Vec<optn_runtime::bootstrap::DiscoveredPeer>,
+) {
+    use optn_runtime::bootstrap::MAX_DISCOVERED_PEERS;
+    for endpoint in optn_chain_electrum::advertised_peers(
+        &provider.server_info().peers,
+        allow_onion,
+        MAX_DISCOVERED_PEERS,
+    ) {
+        if into.len() >= MAX_DISCOVERED_PEERS {
+            return;
+        }
+        let already = known.iter().any(|existing| {
+            existing.kind == endpoint.kind
+                && existing.port == endpoint.port
+                && existing
+                    .host
+                    .trim_end_matches('.')
+                    .eq_ignore_ascii_case(&endpoint.host)
+        });
+        if !already && into.iter().all(|peer| peer.endpoint != endpoint) {
+            into.push(optn_runtime::bootstrap::DiscoveredPeer {
+                endpoint,
+                advertised_by: source.id.clone(),
+            });
         }
     }
 }
@@ -186,8 +241,9 @@ const REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE: &str =
     "remote native chain route requires a verified Tor SOCKS proxy";
 const REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE: &str =
     "remote native chain route has no verified Tor-capable native adapter";
+const REMOTE_FULL_NODE_LOCAL_ONLY: &str =
+    "remote full-node RPC and ZMQ are unavailable; only a node on this machine is used";
 const DEFAULT_TOR_HOST: &str = "127.0.0.1";
-const TOR_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
 fn selected_source_ids(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> BTreeSet<SourceId> {
     let selection = build_selection_plan(catalog, policy);
@@ -210,26 +266,54 @@ fn policy_allows_public_registry(policy: &ConnectionPolicy) -> bool {
         || policy.fallback_scope.as_ref().is_some_and(allows_public)
 }
 
+/// The configured metadata origins of `kind` this policy selects, each with
+/// whether it is the holder's declared infrastructure.
 fn configured_metadata_origins(
     catalog: &SourceCatalog,
     policy: &ConnectionPolicy,
     kind: EndpointKind,
-) -> Vec<url::Url> {
+) -> Vec<(url::Url, bool)> {
     let plan = optn_runtime::chain::build_endpoint_selection_plan(catalog, policy, kind);
     plan.primary
         .iter()
         .chain(&plan.fallback)
         .filter_map(|id| catalog.get(id))
-        .flat_map(|source| &source.endpoints)
-        .filter(|endpoint| endpoint.kind == kind)
-        .filter_map(|endpoint| {
+        .flat_map(|source| {
+            let own_infrastructure = source.is_user_infrastructure();
+            source
+                .endpoints
+                .iter()
+                .map(move |endpoint| (endpoint, own_infrastructure))
+        })
+        .filter(|(endpoint, _)| endpoint.kind == kind)
+        .filter_map(|(endpoint, own_infrastructure)| {
             let mut url = url::Url::parse("https://gateway.invalid/").ok()?;
             url.set_host(Some(&endpoint.host)).ok()?;
             url.set_port(endpoint.port).ok()?;
-            Some(url)
+            Some((url, own_infrastructure))
         })
         .take(16)
         .collect()
+}
+
+/// How registry and IPFS bytes from an origin of this ownership are fetched.
+///
+/// Registry URIs never name loopback (`registry_fetch` refuses `localhost` and
+/// IP literals), so only ownership and the transport decide.
+fn registry_route(
+    transport: TransportPolicy,
+    own_infrastructure: bool,
+    tor_status: TorStatus,
+) -> registry_fetch::RegistryRoute {
+    if !transport.tor_for(own_infrastructure) {
+        return registry_fetch::RegistryRoute::Direct { own_infrastructure };
+    }
+    match tor_status.usable_port() {
+        Some(socks_port) => {
+            registry_fetch::RegistryRoute::Tor(registry_fetch::VerifiedRegistryTor { socks_port })
+        }
+        None => registry_fetch::RegistryRoute::TorUnavailable,
+    }
 }
 
 fn endpoint_can_use_native_tor(endpoint: &Endpoint, policy: &ConnectionPolicy) -> bool {
@@ -246,29 +330,81 @@ fn endpoint_can_use_native_tor(endpoint: &Endpoint, policy: &ConnectionPolicy) -
 }
 
 fn needs_default_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> bool {
+    let transport = policy.transport;
+    let selected = selected_source_ids(catalog, policy);
+    // A registry named on chain is a third party wherever it is hosted. Asked
+    // only once some source is selected: with none, no identity can resolve,
+    // and an idle install must not wait on Tor detection.
+    if !selected.is_empty() && policy_allows_public_registry(policy) && transport.tor_for(false) {
+        return true;
+    }
+    // Configured gateways and indexers follow the rule like any source.
     if [
         EndpointKind::IpfsGatewayHttps,
         EndpointKind::BcmrIndexerHttps,
     ]
     .into_iter()
-    .any(|kind| !configured_metadata_origins(catalog, policy, kind).is_empty())
+    .flat_map(|kind| configured_metadata_origins(catalog, policy, kind))
+    .any(|(_, own_infrastructure)| transport.tor_for(own_infrastructure))
     {
-        // The bounded metadata HTTP adapter currently requires verified Tor,
-        // including when the configured gateway is owned by the user.
         return true;
     }
-    let selected = selected_source_ids(catalog, policy);
+    // A DNS seed is asked for nodes through Tor wherever the transport
+    // requires it, and a stack that may need nodes may need to ask one.
+    if selected_seeds(catalog, policy).iter().any(|seed| {
+        seed.endpoints
+            .iter()
+            .any(|endpoint| transport.requires_tor(seed.is_user_infrastructure(), &endpoint.host))
+    }) {
+        return true;
+    }
     catalog.iter().any(|source| {
         source.is_enabled()
             && selected.contains(&source.id)
-            // Declared own infrastructure is dialled directly, so it does not
-            // put the stack through Tor detection either -- two probes at
-            // 1500 ms each that nothing would then use.
-            && !source.is_user_infrastructure()
+            // A source the transport reaches directly does not put the stack
+            // through Tor detection either -- two probes at 1500 ms each that
+            // nothing would then use.
             && source.endpoints.iter().any(|endpoint| {
-                !is_loopback_host(&endpoint.host) && endpoint_can_use_native_tor(endpoint, policy)
+                transport.requires_tor(source.is_user_infrastructure(), &endpoint.host)
+                    && endpoint_can_use_native_tor(endpoint, policy)
             })
     })
+}
+
+/// Whether `policy` lets BCH P2P nodes serve it at all.
+fn wants_p2p(policy: &ConnectionPolicy) -> bool {
+    policy.protocols.contains(ProtocolFamily::Bip37)
+        || policy.protocols.contains(ProtocolFamily::Neutrino)
+}
+
+/// The DNS seeds this policy may ask for nodes (#75 §21.3): selected by scope,
+/// disposition and preference like any source, and only where BCH P2P may be
+/// used. Seeds the holder preferred come first, in their order; the rest are
+/// shuffled each build, as a full node shuffles its seeds, so no one seed
+/// hears from every wallet first.
+fn selected_seeds(catalog: &SourceCatalog, policy: &ConnectionPolicy) -> Vec<ChainSource> {
+    if !wants_p2p(policy) {
+        return Vec::new();
+    }
+    let plan = optn_runtime::chain::build_endpoint_selection_plan(
+        catalog,
+        policy,
+        EndpointKind::BchDnsSeed,
+    );
+    let mut seeds = Vec::new();
+    for tier in [&plan.primary, &plan.fallback] {
+        let (preferred, mut rest): (Vec<ChainSource>, Vec<ChainSource>) = tier
+            .iter()
+            .filter_map(|id| catalog.get(id))
+            .cloned()
+            .partition(|seed| policy.preferred.contains(&seed.id));
+        for index in (1..rest.len()).rev() {
+            rest.swap(index, OsRng.next_u32() as usize % (index + 1));
+        }
+        seeds.extend(preferred);
+        seeds.extend(rest);
+    }
+    seeds
 }
 
 /// Where a proxy may be, and why this wallet would trust it.
@@ -374,43 +510,49 @@ pub fn requires_tor_proxy(catalog: &SourceCatalog, policy: &ConnectionPolicy) ->
 async fn socks_answers(host: &str, port: u16) -> bool {
     let probe = async {
         let mut stream = TcpStream::connect((host, port)).await.ok()?;
-        stream.write_all(&[0x05, 0x01, 0x00]).await.ok()?;
+        stream
+            .write_all(&optn_core::tor::SOCKS5_NO_AUTH_GREETING)
+            .await
+            .ok()?;
         let mut response = [0u8; 2];
         stream.read_exact(&mut response).await.ok()?;
-        Some(response == [0x05, 0x00])
+        Some(response == optn_core::tor::SOCKS5_NO_AUTH_ACCEPTED)
     };
     matches!(
-        tokio::time::timeout(TOR_PROBE_TIMEOUT, probe).await,
+        tokio::time::timeout(optn_core::tor::SOCKS_PROBE_TIMEOUT, probe).await,
         Ok(Some(true))
     )
 }
 
 /// How a chain route to `endpoint` on `source` may be made, or that it may not.
 ///
-/// Fails closed like the Fusion rule it borrows, with one difference that
-/// matters: a source the user has *declared* as their own infrastructure is
-/// reached directly, exactly as loopback is.
+/// The holder's transport policy decides (#75 §4.1); ownership is one input
+/// to it, never a rule of its own. Loopback is always direct.
 ///
-/// Tor is there to stop a third-party server learning that this IP is asking
-/// about these addresses. Your own node already knows — it is yours, and it is
-/// the node the wallet is asking on your behalf. Routing to it over Tor buys
-/// nothing and costs the mode its purpose: `is_loopback_host` recognises only
-/// `127.0.0.0/8`, `localhost` and `::1`, so a self-hosted node one room away on
-/// a LAN address, or on a private mesh, was refused as "remote" and
-/// own-infrastructure-only could not reach any own infrastructure that was not
-/// on this machine.
+/// - **Tor on** (the default): a source the holder *declared* as their own is
+///   reached directly, exactly as loopback is. Tor is there to stop a
+///   third-party server learning that this IP is asking about these
+///   addresses; their own node already knows. `is_loopback_host` recognises
+///   only `127.0.0.0/8`, `localhost` and `::1`, so without this a self-hosted
+///   node one room away on a LAN address, or on a private mesh, would be
+///   refused as "remote".
+/// - **Tor off**: nothing is proxied.
 ///
-/// The declaration is what carries this, not the address: `UserInfrastructure`
-/// is a group the holder wrote down (`SourceOrigin::UserInfrastructure`), and
-/// `SourceScope::UserInfrastructure` already selects on exactly that. A plain
-/// `UserAdded` endpoint -- a public server someone pasted in -- is still a
-/// third party and still needs Tor.
+/// The declaration is what carries ownership, not the address:
+/// `UserInfrastructure` is a group the holder wrote down
+/// (`SourceOrigin::UserInfrastructure`), and `SourceScope::UserInfrastructure`
+/// already selects on exactly that. A plain `UserAdded` endpoint -- a public
+/// server someone pasted in -- is still a third party.
+///
+/// Wherever Tor is required this fails closed like the Fusion rule it borrows:
+/// no verified Tor, no route, and never a quiet direct one.
 fn native_chain_route(
     source: &ChainSource,
     endpoint: &Endpoint,
+    transport: TransportPolicy,
     tor_status: TorStatus,
 ) -> TorRoute {
-    if source.is_user_infrastructure() {
+    if !transport.requires_tor(source.is_user_infrastructure(), &endpoint.host) {
         return TorRoute::Direct;
     }
     tor_route(&endpoint.host, tor_status)
@@ -434,7 +576,7 @@ fn record_remote_route_failure(
                 error.to_owned(),
             ));
         }
-        EndpointKind::BchP2p => {
+        EndpointKind::BchP2p | EndpointKind::BchDnsSeed => {
             for protocol in [ProtocolFamily::Bip37, ProtocolFamily::Neutrino] {
                 if policy.protocols.contains(protocol) {
                     failures.push(failure(source, protocol, endpoint, error.to_owned()));
@@ -481,6 +623,69 @@ fn electrum_transport(endpoint: &Endpoint, route: TorRoute) -> Option<ElectrumTr
         }
         TorRoute::Refused(_) => None,
     }
+}
+
+/// Per request on a CashFusion round's lookup connection. A round's phases
+/// are measured in seconds; a server slower than this is skipped for the next.
+const FUSION_LOOKUP_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// The configuration of a CashFusion round's own connection to the Electrum
+/// server at `host:port`, for checking claimed inputs and broadcasts.
+///
+/// Never the wallet's connection: Tor isolation credentials of its own keep
+/// the server from tying the round's questions to the wallet's subscriptions.
+/// Only a loopback server is reached directly; any other needs a verified Tor
+/// `socks_port`, and is refused without one.
+pub fn fusion_lookup_config(
+    network: optn_core::network::Network,
+    host: &str,
+    port: u16,
+    tls: bool,
+    socks_port: Option<u16>,
+) -> Result<ElectrumConfig, String> {
+    let endpoint = Endpoint {
+        kind: if tls {
+            EndpointKind::ElectrumTls
+        } else {
+            EndpointKind::ElectrumTcp
+        },
+        host: host.to_owned(),
+        port: Some(port),
+    };
+    let route = if is_loopback_host(host) {
+        TorRoute::Direct
+    } else {
+        TorRoute::Through {
+            socks_port: socks_port.ok_or_else(|| {
+                format!("{host}: CashFusion lookups reach remote servers only through Tor")
+            })?,
+        }
+    };
+    let transport = electrum_transport(&endpoint, route)
+        .ok_or_else(|| format!("{host}: no route for a CashFusion lookup"))?;
+    let mut config = ElectrumConfig::new(
+        SourceId::new(format!("fusion-lookup:{host}:{port}")),
+        endpoint,
+        transport,
+        optn_chain_bip37::genesis_hash(&network.to_string()),
+    );
+    config.request_timeout = FUSION_LOOKUP_TIMEOUT;
+    Ok(config)
+}
+
+/// Connect a CashFusion round's lookup connection (see
+/// [`fusion_lookup_config`]). The server must be on `network`.
+pub async fn connect_fusion_lookup(
+    network: optn_core::network::Network,
+    host: &str,
+    port: u16,
+    tls: bool,
+    socks_port: Option<u16>,
+) -> Result<ElectrumBackend, String> {
+    let config = fusion_lookup_config(network, host, port, tls, socks_port)?;
+    ElectrumBackend::connect(config)
+        .await
+        .map_err(|error| format!("{host}:{port}: {error:?}"))
 }
 
 fn fresh_tor_isolation_token() -> String {
@@ -588,179 +793,757 @@ async fn build_native_chain_stack_with_tor_status(
     // is chain identity rather than anything a peer supplied, so `getheaders`
     // has a locator to start from on a fresh install.
     let headers = supplied_headers.unwrap_or_else(|| new_accepted_header_store(network));
-    let selected = selected_source_ids(&catalog, &policy);
-    let sources = catalog.iter().cloned().collect::<Vec<_>>();
+    let plan = build_selection_plan(&catalog, &policy);
+    let enabled = |ids: &[SourceId]| -> Vec<ChainSource> {
+        ids.iter()
+            .filter_map(|id| catalog.get(id))
+            .filter(|source| source.is_enabled())
+            .cloned()
+            .collect()
+    };
+    let (primary, fallback) = (enabled(&plan.primary), enabled(&plan.fallback));
+    // Discovered servers are failover (#75 §21.6): after every other source,
+    // in their own order, and dialled only while no Electrum route connected.
+    // Discovered nodes come after them, in the P2P stage at the end.
+    let mut discovered: Vec<ChainSource> = primary
+        .iter()
+        .chain(fallback.iter())
+        .filter(|source| optn_runtime::bootstrap::is_discovered(source))
+        .cloned()
+        .collect();
+    discovered.sort_by_key(|source| source.priority);
+    let (discovered_nodes, discovered): (Vec<ChainSource>, Vec<ChainSource>) =
+        discovered.into_iter().partition(|source| {
+            source
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.kind == EndpointKind::BchP2p)
+        });
+    let known_endpoints: Vec<Endpoint> = catalog
+        .iter()
+        .filter(|source| !optn_runtime::bootstrap::is_discovered(source))
+        .flat_map(|source| source.endpoints.iter().cloned())
+        .collect();
+    let allow_onion = policy.transport.tor_for(false) && tor_status.usable_port().is_some();
     let mut service = ChainService::new(catalog, policy.clone());
-    if let TorStatus::Verified { socks_port } = tor_status {
-        let gateways =
-            configured_metadata_origins(service.catalog(), &policy, EndpointKind::IpfsGatewayHttps);
-        let indexers =
-            configured_metadata_origins(service.catalog(), &policy, EndpointKind::BcmrIndexerHttps);
-        let allow_publisher = policy_allows_public_registry(&policy);
-        if allow_publisher || !gateways.is_empty() || !indexers.is_empty() {
-            service.set_registry_fetcher(Arc::new(registry_fetch::ConfiguredRegistryFetcher::new(
-                registry_fetch::VerifiedRegistryTor { socks_port },
-                gateways,
-                indexers,
-                allow_publisher,
-            )));
+    {
+        // Each metadata origin is reached as the transport says for its owner.
+        let routed = |kind| {
+            configured_metadata_origins(service.catalog(), &policy, kind)
+                .into_iter()
+                .map(|(origin, own_infrastructure)| {
+                    let route = registry_route(policy.transport, own_infrastructure, tor_status);
+                    (origin, route)
+                })
+                .collect::<Vec<_>>()
+        };
+        let fetcher = registry_fetch::ConfiguredRegistryFetcher::new(
+            routed(EndpointKind::IpfsGatewayHttps),
+            routed(EndpointKind::BcmrIndexerHttps),
+            policy_allows_public_registry(&policy)
+                .then(|| registry_route(policy.transport, false, tor_status)),
+        );
+        if fetcher.can_fetch() {
+            service.set_registry_fetcher(Arc::new(fetcher));
         }
     }
-    let mut event_sources: Vec<Arc<dyn NativeChainEventSource>> = Vec::new();
-    let mut failures = Vec::new();
+    let mut build = StackBuild {
+        service,
+        event_sources: Vec::new(),
+        failures: Vec::new(),
+        discovered_peers: Vec::new(),
+        known_endpoints,
+        allow_onion,
+        wallet_routes: 0,
+        electrum_routes: 0,
+    };
+    let mut held_back = VecDeque::new();
 
-    for source in sources {
-        if !source.is_enabled() || !selected.contains(&source.id) {
-            continue;
+    // Primary sources first, in plan order; fallback sources only when no
+    // primary source gave a wallet route, so a public fallback never sees a
+    // handshake while the holder's own node is serving (#75 §21).
+    let tiers = [
+        (primary, Some(&policy.primary_scope)),
+        (fallback, policy.fallback_scope.as_ref()),
+    ];
+    for (tier, (sources, scope)) in tiers.into_iter().enumerate() {
+        if tier > 0 && build.wallet_routes > 0 {
+            break;
         }
-        for endpoint in &source.endpoints {
-            // Keep the chain runtime on the shared core privacy boundary:
-            // loopback endpoints may dial directly. Existing
-            // Electrum/BIP37/Neutrino adapters consume a verified SOCKS route;
-            // the current full-node RPC/event adapters do not.
-            if !is_loopback_host(&endpoint.host)
-                && matches!(endpoint.kind, EndpointKind::BchnRpc | EndpointKind::BchnZmq)
+        let mut jobs = Vec::new();
+        for source in sources
+            .iter()
+            .filter(|source| !optn_runtime::bootstrap::is_discovered(source))
+        {
+            jobs.extend(plan_connect_jobs(
+                source,
+                &policy,
+                secrets,
+                network,
+                tor_status,
+                &mut build.failures,
+            ));
+        }
+        let (electrum, others): (Vec<_>, Vec<_>) = jobs
+            .into_iter()
+            .partition(|job| matches!(job.kind, ConnectKind::Electrum(_)));
+        let mut electrum = VecDeque::from(electrum);
+        // Where the app chooses among public servers, a few are dialled and
+        // the rest held back for failover. Servers the holder named are all
+        // dialled.
+        let bounded = scope.is_some_and(|scope| {
+            matches!(scope, SourceScope::AllEnabled | SourceScope::PublicEnabled)
+        });
+        let first = if bounded {
+            electrum.len().min(ELECTRUM_BATCH)
+        } else {
+            electrum.len()
+        };
+        let mut batch: Vec<ConnectJob> = others;
+        batch.extend(electrum.drain(..first));
+        build.absorb(connect_jobs(batch, network, &headers).await);
+        while build.electrum_routes == 0 && !electrum.is_empty() {
+            let next = electrum.len().min(ELECTRUM_BATCH);
+            build.absorb(connect_jobs(electrum.drain(..next).collect(), network, &headers).await);
+        }
+        held_back.extend(electrum);
+    }
+
+    // One discovered server at a time, so a working one stops the search.
+    for source in discovered.iter().take(MAX_FAILOVER_ATTEMPTS) {
+        if build.electrum_routes > 0 {
+            break;
+        }
+        let jobs = plan_connect_jobs(
+            source,
+            &policy,
+            secrets,
+            network,
+            tor_status,
+            &mut build.failures,
+        );
+        build.absorb(connect_jobs(jobs, network, &headers).await);
+    }
+
+    // BCH P2P nodes found at run time are the last resort of a public scope
+    // (#75 §5.2: BIP37 is failover away from indexed servers). They are
+    // dialled only while nothing above gave a wallet route, and otherwise
+    // held back for when the routes that did connect stop answering. Nodes
+    // found before come first. Only when none of those answers are the DNS
+    // seeds asked for more (#75 §21.3), as a full node asks them only when it
+    // knows too few peers; a node a seed names is admitted to this stack's
+    // catalog and dialled at once, so a wallet whose policy allows nothing
+    // but P2P connects on its first start.
+    //
+    // The seeds are asked together and each answer used as it arrives:
+    // through Tor a node may hold its reply for most of a minute, and one
+    // seed's answer is enough to start with. Answers already in when a node
+    // connects are kept, held back and cached; the rest are dropped.
+    if wants_p2p(&policy) {
+        let mut nodes: VecDeque<Vec<ConnectJob>> = VecDeque::new();
+        for source in &discovered_nodes {
+            let jobs = plan_connect_jobs(
+                source,
+                &policy,
+                secrets,
+                network,
+                tor_status,
+                &mut build.failures,
+            );
+            if !jobs.is_empty() {
+                nodes.push_back(jobs);
+            }
+        }
+        let mut dialled = 0;
+        build
+            .dial_nodes(&mut nodes, &mut dialled, network, &headers)
+            .await;
+        if build.wallet_routes == 0 {
+            let mut asking = tokio::task::JoinSet::new();
+            for seed in selected_seeds(build.service.catalog(), &policy)
+                .into_iter()
+                .take(MAX_SEEDS_ASKED)
             {
-                record_remote_route_failure(
-                    &mut failures,
-                    &source,
-                    endpoint,
-                    &policy,
-                    REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE,
-                );
-                continue;
+                if let Some(question) = build.seed_question(seed, &policy, network, tor_status) {
+                    asking.spawn(question);
+                }
             }
-
-            let route = native_chain_route(&source, endpoint, tor_status);
-            if route.is_refused() {
-                record_remote_route_failure(
-                    &mut failures,
-                    &source,
-                    endpoint,
-                    &policy,
-                    REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE,
-                );
-                continue;
-            }
-
-            match endpoint.kind {
-                EndpointKind::ElectrumTls | EndpointKind::ElectrumTcp
-                    if policy.protocols.contains(ProtocolFamily::Electrum) =>
-                {
-                    let Some(transport) = electrum_transport(endpoint, route) else {
-                        record_remote_route_failure(
-                            &mut failures,
-                            &source,
-                            endpoint,
-                            &policy,
-                            REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE,
-                        );
-                        continue;
+            let admit =
+                |build: &mut StackBuild, answer: Option<SeedAnswer>, nodes: &mut VecDeque<_>| {
+                    let Some(answer) = answer else {
+                        return;
                     };
-                    match ElectrumBackend::connect(ElectrumConfig::new(
-                        source.id.clone(),
-                        endpoint.clone(),
-                        transport,
-                        optn_chain_bip37::genesis_hash(network),
-                    ))
-                    .await
-                    {
-                        Ok(provider) => service.register(Arc::new(provider)),
-                        Err(error) => failures.push(failure(
+                    for source in build.admit_seed_answer(answer, &policy) {
+                        let jobs = plan_connect_jobs(
                             &source,
-                            ProtocolFamily::Electrum,
-                            endpoint,
-                            format!("{error:?}"),
-                        )),
-                    }
-                }
-                EndpointKind::BchP2p => {
-                    if policy.protocols.contains(ProtocolFamily::Bip37) {
-                        let mut config =
-                            Bip37Config::new(source.id.clone(), endpoint.clone(), network);
-                        if let TorRoute::Through { socks_port } = route {
-                            config.transport = Bip37Transport::Tor {
-                                proxy_host: DEFAULT_TOR_HOST.to_owned(),
-                                proxy_port: socks_port,
-                            };
-                        }
-                        match Bip37Backend::connect(config, headers.clone()).await {
-                            Ok(provider) => service.register(Arc::new(provider)),
-                            Err(error) => failures.push(failure(
-                                &source,
-                                ProtocolFamily::Bip37,
-                                endpoint,
-                                format!("{error:?}"),
-                            )),
+                            &policy,
+                            secrets,
+                            network,
+                            tor_status,
+                            &mut build.failures,
+                        );
+                        if !jobs.is_empty() {
+                            nodes.push_back(jobs);
                         }
                     }
-                    if policy.protocols.contains(ProtocolFamily::Neutrino) {
-                        let mut config =
-                            NeutrinoConfig::new(source.id.clone(), endpoint.clone(), network);
-                        if let TorRoute::Through { socks_port } = route {
-                            config.transport = NeutrinoTransport::Tor {
-                                proxy_host: DEFAULT_TOR_HOST.to_owned(),
-                                proxy_port: socks_port,
-                            };
-                        }
-                        match NeutrinoBackend::connect(config, headers.clone()).await {
-                            Ok(provider) => service.register(Arc::new(provider)),
-                            Err(error) => failures.push(failure(
-                                &source,
-                                ProtocolFamily::Neutrino,
-                                endpoint,
-                                format!("{error:?}"),
-                            )),
-                        }
-                    }
+                };
+            while let Some(answer) = asking.join_next().await {
+                admit(&mut build, seed_answer(answer), &mut nodes);
+                build
+                    .dial_nodes(&mut nodes, &mut dialled, network, &headers)
+                    .await;
+                if build.wallet_routes > 0 || dialled >= MAX_NODES_DIALLED {
+                    break;
                 }
-                EndpointKind::BchnRpc if policy.protocols.contains(ProtocolFamily::BchnRpc) => {
-                    let mut config = BchnRpcConfig::new(
-                        source.id.clone(),
-                        endpoint.clone(),
-                        secrets.rpc_auth(&source.id, endpoint),
-                    );
-                    config.txindex = secrets.rpc_txindex.contains(source.id.as_str());
-                    config.https = secrets.rpc_https.contains(source.id.as_str());
-                    match BchnRpcBackend::connect(config).await {
-                        Ok(provider) => service.register(Arc::new(provider)),
-                        Err(error) => failures.push(failure(
-                            &source,
-                            ProtocolFamily::BchnRpc,
-                            endpoint,
-                            format!("{error:?}"),
-                        )),
-                    }
-                }
-                EndpointKind::BchnZmq if policy.protocols.contains(ProtocolFamily::BchnZmq) => {
-                    match BchnZmqEventSource::connect(BchnZmqConfig {
-                        source_id: source.id.clone(),
-                        endpoint: endpoint.clone(),
-                    })
-                    .await
-                    {
-                        Ok(provider) => event_sources.push(Arc::new(provider)),
-                        Err(error) => failures.push(failure(
-                            &source,
-                            ProtocolFamily::BchnZmq,
-                            endpoint,
-                            format!("{error:?}"),
-                        )),
-                    }
-                }
-                _ => {}
+            }
+            while let Some(answer) = asking.try_join_next() {
+                admit(&mut build, seed_answer(answer), &mut nodes);
             }
         }
+        held_back.extend(nodes.into_iter().flatten());
     }
 
+    let revocation = build.service.revocation();
+    let service = Arc::new(Mutex::new(build.service));
     NativeChainStack {
         tor_status: Some(tor_status),
-        headers,
-        revocation: service.revocation(),
-        service: Arc::new(Mutex::new(service)),
-        event_sources,
-        failures,
+        headers: headers.clone(),
+        revocation: revocation.clone(),
+        held_back: HeldBackServers::new(held_back, service.clone(), revocation, network, headers),
+        service,
+        event_sources: build.event_sources,
+        failures: build.failures,
         configuration_error: None,
+        discovered_peers: build.discovered_peers,
+    }
+}
+
+/// Connects in flight at once while a stack is built.
+const MAX_CONCURRENT_CONNECTS: usize = 6;
+/// Electrum servers dialled at a time where the app chooses among public ones.
+const ELECTRUM_BATCH: usize = MAX_FAILOVER_ATTEMPTS;
+/// BCH P2P nodes dialled at a time while a build has no wallet route.
+const NODE_BATCH: usize = 2;
+/// BCH P2P nodes dialled in one build; the rest are held back.
+const MAX_NODES_DIALLED: usize = 8;
+/// DNS seeds asked in one build.
+const MAX_SEEDS_ASKED: usize = 3;
+/// Nodes admitted from one seed's answer.
+const MAX_NODES_PER_SEED: usize = 16;
+
+/// One provider to connect, decided without I/O.
+#[derive(Clone)]
+struct ConnectJob {
+    source: ChainSource,
+    endpoint: Endpoint,
+    kind: ConnectKind,
+}
+
+#[derive(Clone)]
+enum ConnectKind {
+    Electrum(ElectrumTransport),
+    Bip37(Box<Bip37Config>),
+    Neutrino(Box<NeutrinoConfig>),
+    Rpc(Box<BchnRpcConfig>),
+    Zmq(Box<BchnZmqConfig>),
+}
+
+impl ConnectKind {
+    const fn protocol(&self) -> ProtocolFamily {
+        match self {
+            Self::Electrum(_) => ProtocolFamily::Electrum,
+            Self::Bip37(_) => ProtocolFamily::Bip37,
+            Self::Neutrino(_) => ProtocolFamily::Neutrino,
+            Self::Rpc(_) => ProtocolFamily::BchnRpc,
+            Self::Zmq(_) => ProtocolFamily::BchnZmq,
+        }
+    }
+}
+
+enum Connected {
+    Electrum(Box<ElectrumBackend>),
+    Chain(Arc<dyn ChainBackend>),
+    Events(Arc<dyn NativeChainEventSource>),
+}
+
+/// What a stack has gathered while it is being built.
+struct StackBuild {
+    service: ChainService,
+    event_sources: Vec<Arc<dyn NativeChainEventSource>>,
+    failures: Vec<NativeChainProbeFailure>,
+    discovered_peers: Vec<optn_runtime::bootstrap::DiscoveredPeer>,
+    known_endpoints: Vec<Endpoint>,
+    allow_onion: bool,
+    wallet_routes: usize,
+    electrum_routes: usize,
+}
+
+impl StackBuild {
+    /// Register what connected and record what did not, in plan order.
+    fn absorb(&mut self, results: Vec<(ConnectJob, Result<Connected, String>)>) {
+        for (job, result) in results {
+            match result {
+                Ok(Connected::Electrum(provider)) => {
+                    note_advertised_peers(
+                        &provider,
+                        &job.source,
+                        self.allow_onion,
+                        &self.known_endpoints,
+                        &mut self.discovered_peers,
+                    );
+                    self.electrum_routes += 1;
+                    if provider.supports(ChainOperation::WalletRefresh) {
+                        self.wallet_routes += 1;
+                    }
+                    self.service
+                        .register(Arc::<ElectrumBackend>::from(provider));
+                }
+                Ok(Connected::Chain(provider)) => {
+                    if provider.supports(ChainOperation::WalletRefresh) {
+                        self.wallet_routes += 1;
+                    }
+                    self.service.register(provider);
+                }
+                Ok(Connected::Events(source)) => self.event_sources.push(source),
+                Err(error) => self.failures.push(failure(
+                    &job.source,
+                    job.kind.protocol(),
+                    &job.endpoint,
+                    error,
+                )),
+            }
+        }
+    }
+
+    /// Dial `nodes` (each node's jobs together) a few at a time while the
+    /// build has no wallet route, and no more than [`MAX_NODES_DIALLED`] in
+    /// all. What is left stays in `nodes`.
+    async fn dial_nodes(
+        &mut self,
+        nodes: &mut VecDeque<Vec<ConnectJob>>,
+        dialled: &mut usize,
+        network: &str,
+        headers: &Arc<optn_runtime::header_store::SharedHeaders>,
+    ) {
+        while self.wallet_routes == 0 && *dialled < MAX_NODES_DIALLED && !nodes.is_empty() {
+            let take = nodes
+                .len()
+                .min(NODE_BATCH)
+                .min(MAX_NODES_DIALLED - *dialled);
+            *dialled += take;
+            let batch: Vec<ConnectJob> = nodes.drain(..take).flatten().collect();
+            self.absorb(connect_jobs(batch, network, headers).await);
+        }
+    }
+
+    /// How the DNS seed `seed` is to be asked for nodes, decided without I/O:
+    /// the question, ready to run, or `None` when the transport refuses the
+    /// route, recorded as a failure the holder can act on.
+    fn seed_question(
+        &mut self,
+        seed: ChainSource,
+        policy: &ConnectionPolicy,
+        network: &str,
+        tor_status: TorStatus,
+    ) -> Option<impl std::future::Future<Output = SeedAnswer> + Send + 'static> {
+        let endpoint = seed
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.kind == EndpointKind::BchDnsSeed)?
+            .clone();
+        let transport = match native_chain_route(&seed, &endpoint, policy.transport, tor_status) {
+            TorRoute::Direct => Bip37Transport::Direct,
+            TorRoute::Through { socks_port } => Bip37Transport::Tor {
+                proxy_host: DEFAULT_TOR_HOST.to_owned(),
+                proxy_port: socks_port,
+            },
+            TorRoute::Refused(_) => {
+                record_remote_route_failure(
+                    &mut self.failures,
+                    &seed,
+                    &endpoint,
+                    policy,
+                    REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE,
+                );
+                return None;
+            }
+        };
+        let port = endpoint
+            .port
+            .unwrap_or_else(|| optn_chain_bip37::params_for(network).default_port);
+        let network = network.to_owned();
+        Some(async move {
+            let nodes =
+                optn_chain_bip37::seed::seed_nodes(&endpoint.host, port, &network, &transport)
+                    .await;
+            SeedAnswer {
+                seed,
+                endpoint,
+                port,
+                nodes,
+            }
+        })
+    }
+
+    /// Admit the nodes a seed named that this stack may dial. Each joins the
+    /// service's catalog as a discovered source, and `discovered_peers` for the
+    /// host to keep. A seed that could not be asked is recorded as a failure.
+    ///
+    /// A seed, or the node it led to, may name any address at all. Only public
+    /// addresses on the port the seed was asked for are taken: not this
+    /// machine or its network, and not some other service on another port. A
+    /// seed on this machine may name nodes on it. A node the catalog already
+    /// holds is left as it is: dialled above if selected, and otherwise
+    /// disabled or banned by the holder, which stays so.
+    fn admit_seed_answer(
+        &mut self,
+        answer: SeedAnswer,
+        policy: &ConnectionPolicy,
+    ) -> Vec<ChainSource> {
+        let SeedAnswer {
+            seed,
+            endpoint,
+            port,
+            nodes,
+        } = answer;
+        let addresses = match nodes {
+            Ok(addresses) => addresses,
+            Err(error) => {
+                record_remote_route_failure(&mut self.failures, &seed, &endpoint, policy, &error);
+                return Vec::new();
+            }
+        };
+        let local_seed = is_loopback_host(&endpoint.host);
+        let mut admitted = Vec::new();
+        for address in addresses {
+            if admitted.len() == MAX_NODES_PER_SEED {
+                break;
+            }
+            let ip = address.ip();
+            let reachable =
+                registry_fetch::is_public_address(ip) || (local_seed && ip.is_loopback());
+            if !reachable || address.port() != port {
+                continue;
+            }
+            let peer = optn_runtime::bootstrap::DiscoveredPeer {
+                endpoint: Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: ip.to_string(),
+                    port: Some(port),
+                },
+                advertised_by: seed.id.clone(),
+            };
+            let catalog = self.service.catalog();
+            let priority = catalog
+                .iter()
+                .map(|source| source.priority)
+                .max()
+                .map_or(0, |last| last.saturating_add(1));
+            let Some(source) = optn_runtime::bootstrap::discovered_source(&peer, priority) else {
+                continue;
+            };
+            if optn_runtime::bootstrap::is_listed(catalog, &source)
+                || self.service.catalog_mut().insert(source.clone()).is_err()
+            {
+                continue;
+            }
+            self.discovered_peers.push(peer);
+            admitted.push(source);
+        }
+        admitted
+    }
+}
+
+/// What one DNS seed said, or why it could not be asked.
+struct SeedAnswer {
+    seed: ChainSource,
+    endpoint: Endpoint,
+    /// The port it was asked for, and the one its nodes must be on.
+    port: u16,
+    nodes: Result<Vec<std::net::SocketAddr>, String>,
+}
+
+/// A finished seed question. One that panicked fails the build, as a
+/// panicking connect does.
+fn seed_answer(joined: Result<SeedAnswer, tokio::task::JoinError>) -> Option<SeedAnswer> {
+    match joined {
+        Ok(answer) => Some(answer),
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(_) => None,
+    }
+}
+
+/// The providers `source` asks for under this policy. Endpoints that cannot
+/// be used here are recorded as failures, with a reason the holder can act on.
+fn plan_connect_jobs(
+    source: &ChainSource,
+    policy: &ConnectionPolicy,
+    secrets: &NativeChainSecrets,
+    network: &str,
+    tor_status: TorStatus,
+    failures: &mut Vec<NativeChainProbeFailure>,
+) -> Vec<ConnectJob> {
+    let mut jobs = Vec::new();
+    for endpoint in &source.endpoints {
+        // Full-node RPC and ZMQ are used on this machine only, whatever the
+        // transport: their adapters cannot use a proxy, and RPC credentials
+        // are kept for loopback endpoints alone (`optn_runtime::rpc_credentials`).
+        // The reason names what the holder can change.
+        if !is_loopback_host(&endpoint.host)
+            && matches!(endpoint.kind, EndpointKind::BchnRpc | EndpointKind::BchnZmq)
+        {
+            let reason = if policy
+                .transport
+                .requires_tor(source.is_user_infrastructure(), &endpoint.host)
+            {
+                REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE
+            } else {
+                REMOTE_FULL_NODE_LOCAL_ONLY
+            };
+            record_remote_route_failure(failures, source, endpoint, policy, reason);
+            continue;
+        }
+
+        let route = native_chain_route(source, endpoint, policy.transport, tor_status);
+        if route.is_refused() {
+            record_remote_route_failure(
+                failures,
+                source,
+                endpoint,
+                policy,
+                REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE,
+            );
+            continue;
+        }
+        let job = |kind| ConnectJob {
+            source: source.clone(),
+            endpoint: endpoint.clone(),
+            kind,
+        };
+
+        match endpoint.kind {
+            EndpointKind::ElectrumTls | EndpointKind::ElectrumTcp
+                if policy.protocols.contains(ProtocolFamily::Electrum) =>
+            {
+                match electrum_transport(endpoint, route) {
+                    Some(transport) => jobs.push(job(ConnectKind::Electrum(transport))),
+                    None => record_remote_route_failure(
+                        failures,
+                        source,
+                        endpoint,
+                        policy,
+                        REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE,
+                    ),
+                }
+            }
+            EndpointKind::BchP2p => {
+                if policy.protocols.contains(ProtocolFamily::Bip37) {
+                    let mut config = Bip37Config::new(source.id.clone(), endpoint.clone(), network);
+                    if let TorRoute::Through { socks_port } = route {
+                        config.transport = Bip37Transport::Tor {
+                            proxy_host: DEFAULT_TOR_HOST.to_owned(),
+                            proxy_port: socks_port,
+                        };
+                    }
+                    jobs.push(job(ConnectKind::Bip37(Box::new(config))));
+                }
+                if policy.protocols.contains(ProtocolFamily::Neutrino) {
+                    let mut config =
+                        NeutrinoConfig::new(source.id.clone(), endpoint.clone(), network);
+                    if let TorRoute::Through { socks_port } = route {
+                        config.transport = NeutrinoTransport::Tor {
+                            proxy_host: DEFAULT_TOR_HOST.to_owned(),
+                            proxy_port: socks_port,
+                        };
+                    }
+                    jobs.push(job(ConnectKind::Neutrino(Box::new(config))));
+                }
+            }
+            EndpointKind::BchnRpc if policy.protocols.contains(ProtocolFamily::BchnRpc) => {
+                let mut config = BchnRpcConfig::new(
+                    source.id.clone(),
+                    endpoint.clone(),
+                    secrets.rpc_auth(&source.id, endpoint),
+                );
+                config.txindex = secrets.rpc_txindex.contains(source.id.as_str());
+                config.https = secrets.rpc_https.contains(source.id.as_str());
+                jobs.push(job(ConnectKind::Rpc(Box::new(config))));
+            }
+            EndpointKind::BchnZmq if policy.protocols.contains(ProtocolFamily::BchnZmq) => {
+                jobs.push(job(ConnectKind::Zmq(Box::new(BchnZmqConfig {
+                    source_id: source.id.clone(),
+                    endpoint: endpoint.clone(),
+                }))));
+            }
+            _ => {}
+        }
+    }
+    jobs
+}
+
+/// Connect `jobs`, several at once, and return each with its result in the
+/// order given. A hung peer delays only its own slot, not every source
+/// behind it.
+async fn connect_jobs(
+    jobs: Vec<ConnectJob>,
+    network: &str,
+    headers: &Arc<optn_runtime::header_store::SharedHeaders>,
+) -> Vec<(ConnectJob, Result<Connected, String>)> {
+    let mut running = tokio::task::JoinSet::new();
+    let mut waiting = jobs.into_iter().enumerate();
+    let mut finished = Vec::new();
+    loop {
+        while running.len() < MAX_CONCURRENT_CONNECTS {
+            let Some((index, job)) = waiting.next() else {
+                break;
+            };
+            let network = network.to_owned();
+            let headers = headers.clone();
+            running.spawn(async move {
+                let result = connect_job(job.clone(), &network, headers).await;
+                (index, job, result)
+            });
+        }
+        match running.join_next().await {
+            Some(Ok(done)) => finished.push(done),
+            // A provider that panicked while connecting fails the build, as it
+            // did when connects ran one after another.
+            Some(Err(error)) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Some(Err(_)) => {}
+            None => break,
+        }
+    }
+    finished.sort_by_key(|(index, ..)| *index);
+    finished
+        .into_iter()
+        .map(|(_, job, result)| (job, result))
+        .collect()
+}
+
+async fn connect_job(
+    job: ConnectJob,
+    network: &str,
+    headers: Arc<optn_runtime::header_store::SharedHeaders>,
+) -> Result<Connected, String> {
+    match job.kind {
+        ConnectKind::Electrum(transport) => ElectrumBackend::connect(ElectrumConfig::new(
+            job.source.id.clone(),
+            job.endpoint.clone(),
+            transport,
+            optn_chain_bip37::genesis_hash(network),
+        ))
+        .await
+        .map(|provider| Connected::Electrum(Box::new(provider)))
+        .map_err(|error| format!("{error:?}")),
+        ConnectKind::Bip37(config) => Bip37Backend::connect(*config, headers)
+            .await
+            .map(|provider| Connected::Chain(Arc::new(provider)))
+            .map_err(|error| format!("{error:?}")),
+        ConnectKind::Neutrino(config) => NeutrinoBackend::connect(*config, headers)
+            .await
+            .map(|provider| Connected::Chain(Arc::new(provider)))
+            .map_err(|error| format!("{error:?}")),
+        ConnectKind::Rpc(config) => BchnRpcBackend::connect(*config)
+            .await
+            .map(|provider| Connected::Chain(Arc::new(provider)))
+            .map_err(|error| format!("{error:?}")),
+        ConnectKind::Zmq(config) => BchnZmqEventSource::connect(*config)
+            .await
+            .map(|provider| Connected::Events(Arc::new(provider)))
+            .map_err(|error| format!("{error:?}")),
+    }
+}
+
+/// Selected Electrum servers, then BCH P2P nodes, a build did not dial because
+/// enough others connected (#75 §21). When the stack has no wallet route left,
+/// the next few are dialled into the same service, so the wallet fails over
+/// without a rebuild and without every public server seeing a handshake up
+/// front.
+#[derive(Clone)]
+pub struct HeldBackServers {
+    inner: Arc<HeldBackInner>,
+}
+
+struct HeldBackInner {
+    jobs: Mutex<VecDeque<ConnectJob>>,
+    service: Arc<Mutex<ChainService>>,
+    revocation: optn_runtime::chain_service::ChainRevocation,
+    network: String,
+    headers: Arc<optn_runtime::header_store::SharedHeaders>,
+}
+
+impl HeldBackServers {
+    fn new(
+        jobs: VecDeque<ConnectJob>,
+        service: Arc<Mutex<ChainService>>,
+        revocation: optn_runtime::chain_service::ChainRevocation,
+        network: &str,
+        headers: Arc<optn_runtime::header_store::SharedHeaders>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(HeldBackInner {
+                jobs: Mutex::new(jobs),
+                service,
+                revocation,
+                network: network.to_owned(),
+                headers,
+            }),
+        }
+    }
+
+    /// Nothing held back: for a stack that dials everything it selects.
+    pub fn none(
+        service: Arc<Mutex<ChainService>>,
+        revocation: optn_runtime::chain_service::ChainRevocation,
+    ) -> Self {
+        Self::new(
+            VecDeque::new(),
+            service,
+            revocation,
+            "",
+            Arc::new(optn_runtime::header_store::SharedHeaders::default()),
+        )
+    }
+
+    /// How many servers are still held back.
+    pub async fn remaining(&self) -> usize {
+        self.inner.jobs.lock().await.len()
+    }
+
+    /// Dial the next few held-back servers into the service, unless the stack
+    /// was retired, and say how many connected.
+    pub async fn connect_next(&self) -> usize {
+        if self.inner.revocation.is_revoked() {
+            return 0;
+        }
+        let batch: Vec<ConnectJob> = {
+            let mut jobs = self.inner.jobs.lock().await;
+            let next = jobs.len().min(ELECTRUM_BATCH);
+            jobs.drain(..next).collect()
+        };
+        if batch.is_empty() {
+            return 0;
+        }
+        let results = connect_jobs(batch, &self.inner.network, &self.inner.headers).await;
+        if self.inner.revocation.is_revoked() {
+            return 0;
+        }
+        let mut service = self.inner.service.lock().await;
+        let mut connected = 0;
+        for (_, result) in results {
+            match result {
+                Ok(Connected::Electrum(provider)) => {
+                    service.register(Arc::<ElectrumBackend>::from(provider));
+                    connected += 1;
+                }
+                Ok(Connected::Chain(provider)) => {
+                    service.register(provider);
+                    connected += 1;
+                }
+                Ok(Connected::Events(_)) | Err(_) => {}
+            }
+        }
+        connected
     }
 }
 
@@ -823,12 +1606,14 @@ mod tests {
             assert_eq!(
                 configured_metadata_origins(&catalog, &policy, kind)
                     .iter()
-                    .map(url::Url::as_str)
+                    .map(|(origin, own)| (origin.as_str(), *own))
                     .collect::<Vec<_>>(),
-                vec!["https://gateway.example/"]
+                vec![("https://gateway.example/", true)]
             );
             assert!(build_selection_plan(&catalog, &policy).primary.is_empty());
-            assert!(requires_tor_proxy(&catalog, &policy));
+            // The holder's own gateway is reached directly, so it needs no
+            // Tor; a public one would.
+            assert!(!requires_tor_proxy(&catalog, &policy));
             policy.fallback_scope = Some(SourceScope::PublicEnabled);
             let plan = build_endpoint_selection_plan(&catalog, &policy, kind);
             assert_eq!(plan.primary, vec![own.clone()]);
@@ -844,14 +1629,14 @@ mod tests {
                 policy.clone(),
                 "chipnet",
                 &NativeChainSecrets::default(),
-                TorStatus::Verified { socks_port: 9050 },
+                TorStatus::Absent,
                 None,
             )
             .await;
             let service = stack.service.lock().await;
             let fetcher = service
                 .registry_fetcher()
-                .expect("own gateway installs metadata transport");
+                .expect("own gateway installs a direct metadata transport");
             assert!(
                 fetcher
                     .fetch(
@@ -870,7 +1655,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn registry_fetcher_requires_verified_tor_and_a_public_source_scope() {
+    async fn registry_fetcher_needs_a_public_scope_and_a_route_the_transport_allows() {
         async fn installed(policy: ConnectionPolicy, tor_status: TorStatus) -> bool {
             let stack = build_native_chain_stack_with_tor_status(
                 SourceCatalog::default(),
@@ -897,6 +1682,7 @@ mod tests {
             primary_scope: SourceScope::UserInfrastructure,
             fallback_scope: Some(SourceScope::PublicEnabled),
             preferred: Vec::new(),
+            transport: Default::default(),
         }));
         assert!(
             !installed(
@@ -915,6 +1701,18 @@ mod tests {
         assert!(
             !installed(ConnectionPolicy::auto(), TorStatus::Absent).await,
             "public scope without verified proxy must not gain a registry transport"
+        );
+        let mut direct = ConnectionPolicy::auto();
+        direct.transport = TransportPolicy::Direct;
+        assert!(
+            installed(direct, TorStatus::Absent).await,
+            "a direct transport needs no Tor to reach public registries"
+        );
+        let mut own_direct = ConnectionPolicy::own_infrastructure();
+        own_direct.transport = TransportPolicy::Direct;
+        assert!(
+            !installed(own_direct, TorStatus::Absent).await,
+            "a direct transport is not permission to reach public registries"
         );
 
         let stack = build_native_chain_stack_with_tor_status(
@@ -967,7 +1765,12 @@ mod tests {
                 port: Some(50002),
             };
             assert_eq!(
-                native_chain_route(&pasted_source(), &endpoint, TorStatus::Absent),
+                native_chain_route(
+                    &pasted_source(),
+                    &endpoint,
+                    TransportPolicy::default(),
+                    TorStatus::Absent
+                ),
                 TorRoute::Direct,
                 "{host}"
             );
@@ -979,7 +1782,13 @@ mod tests {
                 port: Some(50002),
             };
             assert!(
-                native_chain_route(&pasted_source(), &endpoint, TorStatus::Absent).is_refused(),
+                native_chain_route(
+                    &pasted_source(),
+                    &endpoint,
+                    TransportPolicy::default(),
+                    TorStatus::Absent
+                )
+                .is_refused(),
                 "{host}"
             );
         }
@@ -1007,16 +1816,81 @@ mod tests {
                 port: Some(50001),
             };
             assert_eq!(
-                native_chain_route(&own, &endpoint, TorStatus::Absent),
+                native_chain_route(
+                    &own,
+                    &endpoint,
+                    TransportPolicy::default(),
+                    TorStatus::Absent
+                ),
                 TorRoute::Direct,
                 "declared own infrastructure at {host} must not require Tor"
             );
             // The same address, merely pasted in, is still a third party.
             assert!(
-                native_chain_route(&pasted_source(), &endpoint, TorStatus::Absent).is_refused(),
+                native_chain_route(
+                    &pasted_source(),
+                    &endpoint,
+                    TransportPolicy::default(),
+                    TorStatus::Absent
+                )
+                .is_refused(),
                 "an undeclared {host} must still fail closed"
             );
         }
+    }
+
+    /// The transport, not ownership, decides how each source is reached.
+    #[test]
+    fn the_transport_decides_how_each_source_is_reached() {
+        let tor = TorStatus::Verified { socks_port: 9050 };
+        let through = TorRoute::Through { socks_port: 9050 };
+        let remote = Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "192.168.1.50".into(),
+            port: Some(50001),
+        };
+        let local = Endpoint {
+            host: "127.0.0.1".into(),
+            ..remote.clone()
+        };
+        for (transport, own, public) in [
+            (TransportPolicy::Tor, TorRoute::Direct, through),
+            (TransportPolicy::Direct, TorRoute::Direct, TorRoute::Direct),
+        ] {
+            assert_eq!(
+                native_chain_route(&declared_own_source(), &remote, transport, tor),
+                own,
+                "{transport:?}"
+            );
+            assert_eq!(
+                native_chain_route(&pasted_source(), &remote, transport, tor),
+                public,
+                "{transport:?}"
+            );
+            // Loopback has no hop to hide, whatever the transport.
+            for source in [declared_own_source(), pasted_source()] {
+                assert_eq!(
+                    native_chain_route(&source, &local, transport, tor),
+                    TorRoute::Direct,
+                    "{transport:?}"
+                );
+            }
+        }
+        // Requiring Tor without a trusted one refuses; it never falls back.
+        assert!(native_chain_route(
+            &pasted_source(),
+            &remote,
+            TransportPolicy::Tor,
+            TorStatus::Absent
+        )
+        .is_refused());
+        assert!(native_chain_route(
+            &pasted_source(),
+            &remote,
+            TransportPolicy::default(),
+            TorStatus::Unverified { socks_port: 9050 }
+        )
+        .is_refused());
     }
 
     /// A remote source, so Tor detection actually runs.
@@ -1179,6 +2053,37 @@ mod tests {
     }
 
     #[test]
+    fn the_transport_decides_whether_the_stack_needs_tor_at_all() {
+        let mut policy = ConnectionPolicy::auto();
+        assert!(needs_default_tor_proxy(&public_catalog(), &policy));
+        policy.transport = TransportPolicy::Direct;
+        assert!(
+            !needs_default_tor_proxy(&public_catalog(), &policy),
+            "a direct transport never waits for Tor"
+        );
+        // Registries named on chain are third parties: a policy that permits
+        // public sources wants Tor for them even when every selected chain
+        // source is the holder's own.
+        policy.transport = TransportPolicy::default();
+        let mut own_only = SourceCatalog::default();
+        let mut own = declared_own_source();
+        own.endpoints = vec![Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "100.100.51.120".into(),
+            port: Some(50001),
+        }];
+        own_only.insert(own).expect("insert");
+        assert!(needs_default_tor_proxy(&own_only, &policy));
+        assert!(!needs_default_tor_proxy(
+            &own_only,
+            &ConnectionPolicy::own_infrastructure()
+        ));
+        // With nothing selected nothing can resolve, and an idle install does
+        // not wait on Tor detection.
+        assert!(!needs_default_tor_proxy(&SourceCatalog::default(), &policy));
+    }
+
+    #[test]
     fn verified_tor_route_is_used_for_remote_electrum() {
         let endpoint = Endpoint {
             kind: EndpointKind::ElectrumTls,
@@ -1188,6 +2093,7 @@ mod tests {
         let route = native_chain_route(
             &pasted_source(),
             &endpoint,
+            TransportPolicy::default(),
             TorStatus::Verified { socks_port: 9050 },
         );
 
@@ -1207,6 +2113,80 @@ mod tests {
             }
             _ => panic!("remote endpoint must not use a direct Electrum transport"),
         }
+    }
+
+    /// A round's lookup connection reaches a remote server only through Tor,
+    /// with isolation credentials no other connection shares, and a loopback
+    /// one directly.
+    #[test]
+    fn fusion_lookups_are_tor_only_and_isolated_except_on_loopback() {
+        use optn_core::network::Network;
+
+        let tor = |config: ElectrumConfig| match config.transport {
+            ElectrumTransport::Tor {
+                proxy_port,
+                username,
+                password,
+                tls,
+                ..
+            } => (proxy_port, username, password, tls),
+            other => panic!("a remote lookup went {other:?}"),
+        };
+        let first =
+            tor(
+                fusion_lookup_config(Network::Chipnet, "chip.example", 50002, true, Some(9050))
+                    .unwrap(),
+            );
+        let second =
+            tor(
+                fusion_lookup_config(Network::Chipnet, "chip.example", 50002, true, Some(9050))
+                    .unwrap(),
+            );
+        assert_eq!((first.0, first.3), (9050, true));
+        assert_eq!(first.1, first.2);
+        assert_ne!(first.1, second.1, "each connection is isolated");
+        assert!(
+            fusion_lookup_config(Network::Chipnet, "chip.example", 50002, true, None)
+                .unwrap_err()
+                .contains("only through Tor")
+        );
+        let local =
+            fusion_lookup_config(Network::Chipnet, "127.0.0.1", 50001, false, None).unwrap();
+        assert_eq!(local.transport, ElectrumTransport::Tcp);
+        assert_eq!(
+            local.expected_genesis,
+            optn_chain_bip37::genesis_hash("chipnet")
+        );
+        assert_eq!(local.request_timeout, FUSION_LOOKUP_TIMEOUT);
+    }
+
+    /// A busy Tor answers its SOCKS greeting late. A trusted port that takes
+    /// two seconds is still verified, not demoted to "unverified".
+    #[tokio::test]
+    async fn a_slow_trusted_tor_is_still_verified() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut greeting = [0u8; 3];
+                    if stream.read_exact(&mut greeting).await.is_ok()
+                        && greeting == optn_core::tor::SOCKS5_NO_AUTH_GREETING
+                    {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        let _ = stream
+                            .write_all(&optn_core::tor::SOCKS5_NO_AUTH_ACCEPTED)
+                            .await;
+                    }
+                });
+            }
+        });
+        let status = tor_status_from_trust(TorProxyTrust {
+            managed: &[],
+            trusted: &[port],
+        })
+        .await;
+        assert_eq!(status, TorStatus::Verified { socks_port: port });
     }
 
     #[tokio::test]
@@ -1301,7 +2281,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_full_node_adapters_remain_fail_closed_even_with_tor() {
+    async fn remote_full_node_adapters_remain_fail_closed_whatever_the_transport() {
+        use optn_runtime::chain::SourceOrigin;
         let endpoints = vec![
             Endpoint {
                 kind: EndpointKind::BchnRpc,
@@ -1314,39 +2295,816 @@ mod tests {
                 port: Some(28332),
             },
         ];
-        let mut catalog = SourceCatalog::default();
-        catalog
-            .insert(ChainSource {
-                id: SourceId::new("remote-node"),
-                label: "Remote node".into(),
-                origin: optn_runtime::chain::SourceOrigin::UserInfrastructure {
-                    group: "node".into(),
-                },
-                endpoints,
-                capabilities: Default::default(),
-                disposition: optn_runtime::chain::SourceDisposition::Enabled,
-                priority: 0,
-            })
-            .unwrap();
-        let mut policy = ConnectionPolicy::auto();
-        policy.protocols = ProtocolSet::all();
+        let own = || SourceOrigin::UserInfrastructure {
+            group: "node".into(),
+        };
+        for (origin, transport, reason) in [
+            // Tor is required here, and these adapters cannot use it.
+            (
+                SourceOrigin::UserAdded,
+                TransportPolicy::default(),
+                REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE,
+            ),
+            // No Tor is required, and remote full-node RPC is still not used.
+            (
+                own(),
+                TransportPolicy::default(),
+                REMOTE_FULL_NODE_LOCAL_ONLY,
+            ),
+            (
+                SourceOrigin::UserAdded,
+                TransportPolicy::Direct,
+                REMOTE_FULL_NODE_LOCAL_ONLY,
+            ),
+        ] {
+            let mut catalog = SourceCatalog::default();
+            catalog
+                .insert(ChainSource {
+                    id: SourceId::new("remote-node"),
+                    label: "Remote node".into(),
+                    origin,
+                    endpoints: endpoints.clone(),
+                    capabilities: Default::default(),
+                    disposition: optn_runtime::chain::SourceDisposition::Enabled,
+                    priority: 0,
+                })
+                .unwrap();
+            let mut policy = ConnectionPolicy::auto();
+            policy.protocols = ProtocolSet::all();
+            policy.transport = transport;
 
+            let stack = build_native_chain_stack_with_tor_status(
+                catalog,
+                policy,
+                "chipnet",
+                &NativeChainSecrets::default(),
+                TorStatus::Verified { socks_port: 9050 },
+                None,
+            )
+            .await;
+
+            assert!(stack.event_sources.is_empty(), "{transport:?}");
+            assert_eq!(stack.failures.len(), 2, "{transport:?}");
+            assert!(
+                stack.failures.iter().all(|failure| failure.error == reason),
+                "{transport:?}: {:?}",
+                stack.failures
+            );
+        }
+    }
+
+    /// An Electrum server on loopback that answers the handshake for chipnet
+    /// and advertises `peers`.
+    async fn fake_electrum(peers: serde_json::Value) -> (u16, tokio::task::JoinHandle<()>) {
+        let (port, handle, _) = counting_electrum(peers).await;
+        (port, handle)
+    }
+
+    /// As [`fake_electrum`], counting the connections it accepts.
+    async fn counting_electrum(
+        peers: serde_json::Value,
+    ) -> (
+        u16,
+        tokio::task::JoinHandle<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use tokio::io::AsyncBufReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut genesis = optn_chain_bip37::genesis_hash("chipnet");
+        genesis.reverse();
+        let genesis = hex::encode(genesis);
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = accepted.clone();
+        let handle = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let genesis = genesis.clone();
+                let peers = peers.clone();
+                tokio::spawn(async move {
+                    let (read, mut write) = tokio::io::split(stream);
+                    let mut lines = tokio::io::BufReader::new(read).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let request: serde_json::Value =
+                            serde_json::from_str(&line).unwrap_or_default();
+                        let result = match request["method"].as_str() {
+                            Some("server.version") => serde_json::json!(["Fulcrum test", "1.5"]),
+                            Some("server.features") => {
+                                serde_json::json!({ "genesis_hash": genesis })
+                            }
+                            Some("server.peers.subscribe") => peers.clone(),
+                            _ => serde_json::Value::Null,
+                        };
+                        let reply = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": request["id"],
+                            "result": result,
+                        });
+                        if write
+                            .write_all(format!("{reply}\n").as_bytes())
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        (port, handle, accepted)
+    }
+
+    /// A public (or the holder's own) Electrum source on loopback TCP.
+    fn tcp_source(id: &str, port: u16, own: bool) -> ChainSource {
+        ChainSource {
+            id: SourceId::new(id),
+            origin: if own {
+                optn_runtime::chain::SourceOrigin::UserInfrastructure {
+                    group: "home".into(),
+                }
+            } else {
+                optn_runtime::chain::SourceOrigin::UserAdded
+            },
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::ElectrumTcp,
+                host: "127.0.0.1".into(),
+                port: Some(port),
+            }],
+            ..pasted_source()
+        }
+    }
+
+    fn dialled(counters: &[Arc<std::sync::atomic::AtomicUsize>]) -> usize {
+        counters
+            .iter()
+            .filter(|counter| counter.load(std::sync::atomic::Ordering::SeqCst) > 0)
+            .count()
+    }
+
+    /// Where the app chooses among public servers, a build dials a few and
+    /// holds the rest back, rather than handshaking with every one (#75).
+    #[tokio::test]
+    async fn a_build_dials_a_few_public_servers_and_holds_the_rest_back() {
+        let mut catalog = SourceCatalog::default();
+        let (mut servers, mut counters) = (Vec::new(), Vec::new());
+        for index in 0..21 {
+            let (port, handle, counter) = counting_electrum(serde_json::json!([])).await;
+            servers.push(handle);
+            counters.push(counter);
+            catalog
+                .insert(tcp_source(&format!("s{index:02}"), port, false))
+                .unwrap();
+        }
         let stack = build_native_chain_stack_with_tor_status(
             catalog,
-            policy,
+            ConnectionPolicy::auto(),
             "chipnet",
             &NativeChainSecrets::default(),
-            TorStatus::Verified { socks_port: 9050 },
+            TorStatus::Absent,
             None,
         )
         .await;
+        assert!(stack.failures.is_empty(), "{:?}", stack.failures);
+        assert_eq!(dialled(&counters), ELECTRUM_BATCH);
+        // The first ones in the plan's order.
+        assert!(counters[..ELECTRUM_BATCH]
+            .iter()
+            .all(|counter| counter.load(std::sync::atomic::Ordering::SeqCst) > 0));
+        assert_eq!(stack.held_back.remaining().await, 21 - ELECTRUM_BATCH);
+        assert!(!stack
+            .service
+            .lock()
+            .await
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .is_empty());
 
-        assert!(stack.event_sources.is_empty());
-        assert_eq!(stack.failures.len(), 2);
-        assert!(stack
+        // Held back, then dialled into the same service when asked.
+        assert_eq!(stack.held_back.connect_next().await, ELECTRUM_BATCH);
+        assert_eq!(dialled(&counters), 2 * ELECTRUM_BATCH);
+        assert_eq!(stack.held_back.remaining().await, 21 - 2 * ELECTRUM_BATCH);
+        // A retired stack dials nothing more.
+        stack.revocation.revoke();
+        assert_eq!(stack.held_back.connect_next().await, 0);
+        assert_eq!(dialled(&counters), 2 * ELECTRUM_BATCH);
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// When the first few hang up, the build carries on to the next few in
+    /// order until one connects.
+    #[tokio::test]
+    async fn a_build_fails_over_past_servers_that_hang_up() {
+        let mut catalog = SourceCatalog::default();
+        let (mut servers, mut counters) = (Vec::new(), Vec::new());
+        for index in 0..ELECTRUM_BATCH {
+            let (port, handle) = hang_up().await;
+            servers.push(handle);
+            catalog
+                .insert(tcp_source(&format!("s{index:02}"), port, false))
+                .unwrap();
+        }
+        for index in ELECTRUM_BATCH..10 {
+            let (port, handle, counter) = counting_electrum(serde_json::json!([])).await;
+            servers.push(handle);
+            counters.push(counter);
+            catalog
+                .insert(tcp_source(&format!("s{index:02}"), port, false))
+                .unwrap();
+        }
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            ConnectionPolicy::auto(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        let failed: Vec<_> = stack
             .failures
             .iter()
-            .all(|failure| failure.error == REMOTE_NATIVE_CHAIN_TOR_ADAPTER_UNAVAILABLE));
+            .map(|failure| failure.source.as_str().to_owned())
+            .collect();
+        assert_eq!(failed, ["s00", "s01", "s02"]);
+        assert_eq!(dialled(&counters), ELECTRUM_BATCH);
+        assert_eq!(stack.held_back.remaining().await, 10 - 2 * ELECTRUM_BATCH);
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// A BCH P2P node on loopback that completes the handshake for `network`
+    /// advertising `services`, counting the connections it accepts.
+    async fn counting_node(
+        network: &str,
+        services: u64,
+    ) -> (
+        u16,
+        tokio::task::JoinHandle<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        fake_node(network, services, Vec::new()).await
+    }
+
+    /// As [`counting_node`], answering `getaddr` with `known`, each a full
+    /// node that serves bloom filters.
+    async fn fake_node(
+        network: &str,
+        services: u64,
+        known: Vec<std::net::SocketAddr>,
+    ) -> (
+        u16,
+        tokio::task::JoinHandle<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use sha2::{Digest, Sha256};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let magic = optn_chain_bip37::params_for(network).magic;
+        let frame = move |name: &[u8], payload: &[u8]| {
+            let mut message = magic.to_vec();
+            let mut command = [0u8; 12];
+            command[..name.len()].copy_from_slice(name);
+            message.extend_from_slice(&command);
+            message.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            message.extend_from_slice(&Sha256::digest(Sha256::digest(payload))[..4]);
+            message.extend_from_slice(payload);
+            message
+        };
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&70015i32.to_le_bytes());
+        payload.extend_from_slice(&services.to_le_bytes());
+        payload.extend_from_slice(&0i64.to_le_bytes());
+        payload.extend_from_slice(&[0u8; 52]);
+        payload.extend_from_slice(&7u64.to_le_bytes());
+        payload.push(0);
+        payload.extend_from_slice(&1i32.to_le_bytes());
+        payload.push(0);
+        let version = frame(b"version", &payload);
+        let mut payload = vec![known.len() as u8];
+        for address in &known {
+            payload.extend_from_slice(&1_700_000_000u32.to_le_bytes());
+            payload.extend_from_slice(&(1u64 | 4).to_le_bytes());
+            let ip = match address.ip() {
+                std::net::IpAddr::V4(v4) => v4.to_ipv6_mapped(),
+                std::net::IpAddr::V6(v6) => v6,
+            };
+            payload.extend_from_slice(&ip.octets());
+            payload.extend_from_slice(&address.port().to_be_bytes());
+        }
+        let addr = frame(b"addr", &payload);
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = accepted.clone();
+        let handle = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (version, addr) = (version.clone(), addr.clone());
+                tokio::spawn(async move {
+                    loop {
+                        let mut header = [0u8; 24];
+                        if stream.read_exact(&mut header).await.is_err() {
+                            return;
+                        }
+                        let length = u32::from_le_bytes(header[16..20].try_into().unwrap());
+                        let mut body = vec![0u8; length as usize];
+                        if stream.read_exact(&mut body).await.is_err() {
+                            return;
+                        }
+                        let reply = match &header[4..11] {
+                            b"version" => &version,
+                            b"getaddr" => &addr,
+                            _ => continue,
+                        };
+                        if stream.write_all(reply).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (port, handle, accepted)
+    }
+
+    /// A SOCKS5 proxy, as Tor is one, that records where each connection asked
+    /// to go and carries every one to the loopback port `to`.
+    async fn recording_socks_proxy(
+        to: u16,
+    ) -> (
+        u16,
+        tokio::task::JoinHandle<()>,
+        Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = asked.clone();
+        let handle = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let record = record.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 2];
+                    stream.read_exact(&mut buf).await.ok()?;
+                    let mut methods = vec![0u8; usize::from(buf[1])];
+                    stream.read_exact(&mut methods).await.ok()?;
+                    // Username and password: the wallet isolates each stream.
+                    stream.write_all(&[5, 2]).await.ok()?;
+                    stream.read_exact(&mut buf).await.ok()?;
+                    let mut user = vec![0u8; usize::from(buf[1])];
+                    stream.read_exact(&mut user).await.ok()?;
+                    let mut length = [0u8; 1];
+                    stream.read_exact(&mut length).await.ok()?;
+                    let mut password = vec![0u8; usize::from(length[0])];
+                    stream.read_exact(&mut password).await.ok()?;
+                    stream.write_all(&[1, 0]).await.ok()?;
+                    let mut request = [0u8; 4];
+                    stream.read_exact(&mut request).await.ok()?;
+                    let target = match request[3] {
+                        1 => {
+                            let mut ip = [0u8; 4];
+                            stream.read_exact(&mut ip).await.ok()?;
+                            std::net::IpAddr::from(ip).to_string()
+                        }
+                        4 => {
+                            let mut ip = [0u8; 16];
+                            stream.read_exact(&mut ip).await.ok()?;
+                            format!("[{}]", std::net::IpAddr::from(ip))
+                        }
+                        3 => {
+                            stream.read_exact(&mut length).await.ok()?;
+                            let mut name = vec![0u8; usize::from(length[0])];
+                            stream.read_exact(&mut name).await.ok()?;
+                            format!("name {}", String::from_utf8(name).ok()?)
+                        }
+                        _ => return None,
+                    };
+                    let mut port = [0u8; 2];
+                    stream.read_exact(&mut port).await.ok()?;
+                    record
+                        .lock()
+                        .unwrap()
+                        .push(format!("{target}:{}", u16::from_be_bytes(port)));
+                    stream
+                        .write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+                        .await
+                        .ok()?;
+                    let mut node = tokio::net::TcpStream::connect(("127.0.0.1", to))
+                        .await
+                        .ok()?;
+                    let _ = tokio::io::copy_bidirectional(&mut stream, &mut node).await;
+                    Some(())
+                });
+            }
+        });
+        (port, handle, asked)
+    }
+
+    /// A DNS seed the holder added, on this machine: it names nodes on this
+    /// machine, on `port`.
+    fn local_seed(port: u16) -> ChainSource {
+        ChainSource {
+            id: SourceId::new("seed"),
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::BchDnsSeed,
+                host: "localhost".into(),
+                port: Some(port),
+            }],
+            ..pasted_source()
+        }
+    }
+
+    fn p2p_only() -> ConnectionPolicy {
+        ConnectionPolicy {
+            protocols: ProtocolSet::only(ProtocolFamily::Bip37),
+            ..ConnectionPolicy::auto()
+        }
+    }
+
+    /// A node a seed named, as the catalog lists it.
+    fn seed_named(port: u16, priority: u16) -> ChainSource {
+        optn_runtime::bootstrap::discovered_source(
+            &optn_runtime::bootstrap::DiscoveredPeer {
+                endpoint: Endpoint {
+                    kind: EndpointKind::BchP2p,
+                    host: "127.0.0.1".into(),
+                    port: Some(port),
+                },
+                advertised_by: SourceId::new("seed"),
+            },
+            priority,
+        )
+        .unwrap()
+    }
+
+    /// A wallet whose policy allows only BCH P2P, on a first start with no
+    /// node known, asks a seed and connects to a node it names (#75 §21.3).
+    /// The node joins the stack's catalog as a discovered source and is
+    /// handed to the host to keep.
+    #[tokio::test]
+    async fn with_no_node_known_a_p2p_policy_asks_a_seed_and_dials_its_nodes() {
+        let (port, node, accepted) = counting_node("chipnet", 1 | 4).await;
+        let mut catalog = SourceCatalog::default();
+        catalog.insert(local_seed(port)).unwrap();
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            p2p_only(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        assert!(accepted.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        let id = SourceId::new(format!("bootstrap:p2p:127.0.0.1:{port}"));
+        let service = stack.service.lock().await;
+        let source = service.catalog().get(&id).expect("admitted to the stack");
+        assert!(optn_runtime::bootstrap::is_discovered(source));
+        assert!(service
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .iter()
+            .any(|route| route.source == id));
+        assert!(stack.discovered_peers.iter().any(|peer| {
+            peer.endpoint.host == "127.0.0.1" && peer.advertised_by.as_str() == "seed"
+        }));
+        node.abort();
+    }
+
+    /// Under Auto a working server is enough: a known node is held back for
+    /// failover and no seed is asked. When the server stops serving, the
+    /// held-back node is what the stack turns to.
+    #[tokio::test]
+    async fn a_working_server_holds_nodes_back_and_leaves_seeds_unasked() {
+        let (server_port, server) = fake_electrum(serde_json::json!([])).await;
+        let (node_port, node, node_accepted) = counting_node("chipnet", 1 | 4).await;
+        let (seed_port, seed_node, seed_accepted) = counting_node("chipnet", 1 | 4).await;
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(tcp_source("server", server_port, false))
+            .unwrap();
+        catalog.insert(seed_named(node_port, 1)).unwrap();
+        catalog.insert(local_seed(seed_port)).unwrap();
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            ConnectionPolicy::auto(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        let accepted = |counter: &Arc<std::sync::atomic::AtomicUsize>| {
+            counter.load(std::sync::atomic::Ordering::SeqCst)
+        };
+        assert_eq!(accepted(&node_accepted), 0);
+        assert_eq!(accepted(&seed_accepted), 0);
+        assert!(stack
+            .discovered_peers
+            .iter()
+            .all(|peer| peer.endpoint.kind != EndpointKind::BchP2p));
+        // Its BIP37 and Neutrino probes, after every held-back server.
+        assert_eq!(stack.held_back.remaining().await, 2);
+        assert!(stack.held_back.connect_next().await >= 1);
+        assert!(accepted(&node_accepted) > 0);
+        for task in [server, node, seed_node] {
+            task.abort();
+        }
+    }
+
+    /// A node the holder banned stays banned when a seed names it again.
+    #[tokio::test]
+    async fn a_seed_cannot_bring_back_a_node_the_holder_banned() {
+        let (port, node, accepted) = counting_node("chipnet", 1 | 4).await;
+        let mut catalog = SourceCatalog::default();
+        let banned = seed_named(port, 1);
+        let id = banned.id.clone();
+        catalog.insert(banned).unwrap();
+        catalog
+            .set_disposition(&id, optn_runtime::chain::SourceDisposition::Banned)
+            .unwrap();
+        catalog.insert(local_seed(port)).unwrap();
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            p2p_only(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            stack
+                .service
+                .lock()
+                .await
+                .catalog()
+                .get(&id)
+                .unwrap()
+                .disposition,
+            optn_runtime::chain::SourceDisposition::Banned
+        );
+        assert!(stack
+            .discovered_peers
+            .iter()
+            .all(|peer| peer.endpoint.host != "127.0.0.1"));
+        node.abort();
+    }
+
+    /// With Tor on, a seed goes to Tor by name, so the exit resolves it and
+    /// nothing is looked up here (#75 §4.1); the node it leads to is asked for
+    /// addresses, and the public ones it names are dialled through Tor by
+    /// address, IPv6 as an address too.
+    #[tokio::test]
+    async fn through_tor_a_seed_is_asked_by_name_and_its_nodes_by_address() {
+        let v4: std::net::SocketAddr = "1.1.1.1:48333".parse().unwrap();
+        let v6: std::net::SocketAddr = "[2606:4700:4700::1111]:48333".parse().unwrap();
+        let (node_port, node, _) = fake_node(
+            "chipnet",
+            1 | 4,
+            vec![
+                v4,
+                v6,
+                // Never dialled: this machine, and another port.
+                "127.0.0.1:48333".parse().unwrap(),
+                "8.8.8.8:22".parse().unwrap(),
+            ],
+        )
+        .await;
+        let (proxy_port, proxy, asked) = recording_socks_proxy(node_port).await;
+        let mut catalog = SourceCatalog::default();
+        catalog
+            .insert(ChainSource {
+                endpoints: vec![Endpoint {
+                    kind: EndpointKind::BchDnsSeed,
+                    host: "seed.example.org".into(),
+                    port: Some(48333),
+                }],
+                ..local_seed(48333)
+            })
+            .unwrap();
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            p2p_only(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Verified {
+                socks_port: proxy_port,
+            },
+            None,
+        )
+        .await;
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked[0], "name seed.example.org:48333");
+        assert!(asked.contains(&"1.1.1.1:48333".to_owned()), "{asked:?}");
+        assert!(
+            asked.contains(&"[2606:4700:4700::1111]:48333".to_owned()),
+            "{asked:?}"
+        );
+        assert!(asked
+            .iter()
+            .all(|target| !target.contains("127.0.0.1") && !target.ends_with(":22")));
+        let found: Vec<_> = stack
+            .discovered_peers
+            .iter()
+            .map(|peer| peer.endpoint.host.clone())
+            .collect();
+        assert_eq!(found, ["1.1.1.1", "2606:4700:4700::1111"]);
+        assert!(!stack
+            .service
+            .lock()
+            .await
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .is_empty());
+        node.abort();
+        proxy.abort();
+    }
+
+    /// A public seed is asked only through Tor while Tor is on. With no Tor
+    /// to use, it is reported, not looked up directly; and a stack that may
+    /// need to ask it is one that looks for Tor.
+    #[tokio::test]
+    async fn a_public_seed_is_never_asked_directly_while_tor_is_on() {
+        let mut catalog = SourceCatalog::default();
+        let seed = ChainSource {
+            endpoints: vec![Endpoint {
+                kind: EndpointKind::BchDnsSeed,
+                host: "seed.example.org".into(),
+                port: Some(48333),
+            }],
+            ..local_seed(48333)
+        };
+        catalog.insert(seed).unwrap();
+        assert!(requires_tor_proxy(&catalog, &p2p_only()));
+        assert!(!requires_tor_proxy(
+            &catalog,
+            &ConnectionPolicy {
+                protocols: ProtocolSet::only(ProtocolFamily::Electrum),
+                ..ConnectionPolicy::auto()
+            }
+        ));
+        let stack = build_native_chain_stack_with_tor_status(
+            catalog,
+            p2p_only(),
+            "chipnet",
+            &NativeChainSecrets::default(),
+            TorStatus::Absent,
+            None,
+        )
+        .await;
+        assert!(stack.failures.iter().any(|failure| {
+            failure.source.as_str() == "seed"
+                && failure.error == REMOTE_NATIVE_CHAIN_TOR_UNAVAILABLE
+        }));
+        assert!(stack.discovered_peers.is_empty());
+    }
+
+    /// A public fallback sees no handshake while the holder's own node serves,
+    /// and is used when it does not.
+    #[tokio::test]
+    async fn a_public_fallback_is_dialled_only_when_the_own_node_is_down() {
+        let policy = ConnectionPolicy {
+            fallback_scope: Some(SourceScope::PublicEnabled),
+            ..ConnectionPolicy::own_infrastructure()
+        };
+        let secrets = NativeChainSecrets::default();
+        let build = |catalog| {
+            build_native_chain_stack_with_tor_status(
+                catalog,
+                policy.clone(),
+                "chipnet",
+                &secrets,
+                TorStatus::Absent,
+                None,
+            )
+        };
+        let (public_port, public_server, public) = counting_electrum(serde_json::json!([])).await;
+
+        let (own_port, own_server, own) = counting_electrum(serde_json::json!([])).await;
+        let mut catalog = SourceCatalog::default();
+        catalog.insert(tcp_source("own", own_port, true)).unwrap();
+        catalog
+            .insert(tcp_source("public", public_port, false))
+            .unwrap();
+        let stack = build(catalog).await;
+        assert!(stack.failures.is_empty(), "{:?}", stack.failures);
+        assert!(own.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        assert_eq!(public.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let (down_port, down_server) = hang_up().await;
+        let mut catalog = SourceCatalog::default();
+        catalog.insert(tcp_source("own", down_port, true)).unwrap();
+        catalog
+            .insert(tcp_source("public", public_port, false))
+            .unwrap();
+        let stack = build(catalog).await;
+        assert_eq!(stack.failures.len(), 1, "{:?}", stack.failures);
+        assert!(public.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        assert!(!stack
+            .service
+            .lock()
+            .await
+            .routes_for_operation(ChainOperation::WalletRefresh)
+            .is_empty());
+        for server in [public_server, own_server, down_server] {
+            server.abort();
+        }
+    }
+
+    /// A loopback port that accepts and hangs up, so a dial fails at once.
+    async fn hang_up() -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        (port, handle)
+    }
+
+    /// Discovered servers are failover (#75 §21.6): untouched while another
+    /// Electrum route works, a bounded few in order when none does. What a
+    /// working server advertises comes back for the host to keep.
+    #[tokio::test]
+    async fn discovered_servers_are_bounded_failover_and_peer_lists_are_kept() {
+        use optn_runtime::bootstrap::{stable_source_id, with_discovered_peers, DiscoveredPeer};
+        let electrum = |port| Endpoint {
+            kind: EndpointKind::ElectrumTcp,
+            host: "127.0.0.1".into(),
+            port: Some(port),
+        };
+        let mut servers = Vec::new();
+        let mut peers = Vec::new();
+        for _ in 0..5 {
+            let (port, handle) = hang_up().await;
+            servers.push(handle);
+            peers.push(DiscoveredPeer {
+                endpoint: electrum(port),
+                advertised_by: SourceId::new("pasted"),
+            });
+        }
+        let catalog_with = |port| {
+            let mut catalog = SourceCatalog::default();
+            let mut source = pasted_source();
+            source.endpoints = vec![electrum(port)];
+            catalog.insert(source).unwrap();
+            with_discovered_peers(catalog, &peers)
+        };
+        let secrets = NativeChainSecrets::default();
+        let build = |catalog| {
+            build_native_chain_stack_with_tor_status(
+                catalog,
+                ConnectionPolicy::auto(),
+                "chipnet",
+                &secrets,
+                TorStatus::Absent,
+                None,
+            )
+        };
+
+        // Nothing else connects: three discovered servers, in their order.
+        let (dead, handle) = hang_up().await;
+        servers.push(handle);
+        let stack = build(catalog_with(dead)).await;
+        let tried: Vec<_> = stack
+            .failures
+            .iter()
+            .map(|failure| failure.source.clone())
+            .collect();
+        let expected: Vec<_> = std::iter::once(SourceId::new("pasted"))
+            .chain(
+                peers
+                    .iter()
+                    .take(MAX_FAILOVER_ATTEMPTS)
+                    .map(|peer| SourceId::new(stable_source_id(&peer.endpoint))),
+            )
+            .collect();
+        assert_eq!(tried, expected);
+
+        // A working route: no discovered server is dialled, and the public
+        // names it advertises are kept, never an address.
+        let (port, handle) = fake_electrum(serde_json::json!([
+            ["203.0.113.7", "found.example.org", ["v1.5", "s50002"]],
+            ["203.0.113.8", "127.0.0.1", ["s50002"]]
+        ]))
+        .await;
+        servers.push(handle);
+        let stack = build(catalog_with(port)).await;
+        assert!(stack.failures.is_empty(), "{:?}", stack.failures);
+        assert_eq!(
+            stack.discovered_peers,
+            vec![DiscoveredPeer {
+                endpoint: Endpoint {
+                    kind: EndpointKind::ElectrumTls,
+                    host: "found.example.org".into(),
+                    port: Some(50002),
+                },
+                advertised_by: SourceId::new("pasted"),
+            }]
+        );
+        for server in servers {
+            server.abort();
+        }
     }
 
     /// The provider crates keep separate copies of the network tables, and

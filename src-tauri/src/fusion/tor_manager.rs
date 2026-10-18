@@ -215,6 +215,18 @@ mod tests {
         SOCKS_PORT.store(0, Ordering::SeqCst);
     }
 
+    /// Tor's state is process-wide and the harness runs tests in parallel, so
+    /// a test that drives it holds this turn for its whole length. Without it
+    /// one test's reset lands in the middle of another's lifecycle.
+    fn take_turn() -> std::sync::MutexGuard<'static, ()> {
+        static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let turn = TURN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_status();
+        turn
+    }
+
     #[test]
     fn parses_bootstrap_percentages() {
         assert_eq!(
@@ -233,8 +245,11 @@ mod tests {
     }
 
     #[tokio::test]
+    // The turn is a test-only std mutex held across awaits on purpose: the
+    // state it guards is not touched by anything this test awaits.
+    #[allow(clippy::await_holding_lock)]
     async fn occupied_managed_port_fails_closed() {
-        reset_status();
+        let _turn = take_turn();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let paths = TorPaths {
@@ -251,8 +266,11 @@ mod tests {
     }
 
     #[tokio::test]
+    // The turn is a test-only std mutex held across awaits on purpose: the
+    // state it guards is not touched by anything this test awaits.
+    #[allow(clippy::await_holding_lock)]
     async fn status_does_not_promote_an_open_socket_to_ready() {
-        reset_status();
+        let _turn = take_turn();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         SOCKS_PORT.store(listener.local_addr().unwrap().port(), Ordering::SeqCst);
         let observed = status();
@@ -264,7 +282,7 @@ mod tests {
 
     #[test]
     fn child_log_and_exit_control_the_readiness_lifecycle() {
-        reset_status();
+        let _turn = take_turn();
         SPAWNED.store(true, Ordering::SeqCst);
 
         observe_child_log("[notice] Bootstrapped 100% (done): Done");

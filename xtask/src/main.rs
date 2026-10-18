@@ -678,6 +678,7 @@ fn architecture() {
 
     cashcode_policy(&root, &mut failures);
     explorer_policy(&root, &mut failures);
+    renderer_entropy_policy(&root, &mut failures);
     tauri_handler_modules(&root, &mut failures);
 
     if failures.is_empty() {
@@ -849,6 +850,47 @@ fn explorer_policy(root: &Path, failures: &mut Vec<String>) {
  them on every surface",
                     relative.display()
                 ));
+            }
+        }
+    }
+}
+
+/// APIs a renderer would use to draw a recovery phrase's entropy itself.
+const RENDERER_ENTROPY_APIS: &[&str] = &[
+    "get_random_values",
+    "getRandomValues",
+    "mnemonic_from_entropy",
+    "OsRng",
+    "getrandom",
+];
+
+/// #71: a new wallet's phrase is drawn by the runtime (`seed_draft`), never by
+/// a renderer. A renderer that gathers entropy itself holds the phrase from
+/// its first byte, and `Create` could carry words the runtime never chose.
+fn renderer_entropy_policy(root: &Path, failures: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(root.join("crates")) else {
+        return;
+    };
+    let renderers = entries.filter_map(Result::ok).filter(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name == "optn-ui" || name.starts_with("optn-ui-"))
+    });
+    for renderer in renderers {
+        for path in walk_files(&renderer.path().join("src")) {
+            if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+                continue;
+            }
+            let code = rust_code_only(&read(&path));
+            for api in RENDERER_ENTROPY_APIS {
+                if code.contains(api) {
+                    failures.push(format!(
+                        "{} uses '{api}'; a new wallet's phrase is drawn by the runtime \
+ (seed_draft), never by a renderer",
+                        path.strip_prefix(root).unwrap_or(&path).display()
+                    ));
+                }
             }
         }
     }

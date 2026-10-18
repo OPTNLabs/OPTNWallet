@@ -29,6 +29,8 @@ pub mod event_recovery;
 pub mod events;
 /// Explorer routing is deliberately separate from wallet consensus/state.
 pub mod explorer;
+pub mod external_payment;
+pub mod fusion_contribution;
 /// Public-key HD account discovery over the shared chain service.
 pub mod hd_sync;
 pub mod header_recovery;
@@ -120,6 +122,8 @@ pub struct AppRuntime {
     operation_changes: watch::Sender<u64>,
     operation_mutations: Arc<AtomicU64>,
     wallet_sync_rx: watch::Receiver<wallet_sync::WalletReconciliation>,
+    /// Coins fusion rounds in this process are using.
+    fusion_holds: Arc<std::sync::Mutex<fusion_contribution::FusionHolds>>,
 }
 
 /// Lifetime of work authorized against one wallet/coin snapshot. This grants
@@ -213,6 +217,16 @@ impl Drop for WalletMutationGuard {
 }
 
 enum RuntimeRequest {
+    ExternalPayment(
+        external_payment::PaymentOperation,
+        Box<WalletOperationGuard>,
+        oneshot::Sender<Result<optn_core::payment::PaymentRecord, TransportError>>,
+    ),
+    FusionContribution(
+        fusion_contribution::FusionContributionRequest,
+        Box<WalletOperationGuard>,
+        oneshot::Sender<Result<fusion_contribution::FusionContributionReply, TransportError>>,
+    ),
     Airgap(
         optn_transport::AirgapRequest,
         u64,
@@ -226,6 +240,11 @@ enum RuntimeRequest {
     ),
     Action(AppAction, oneshot::Sender<()>),
     Observation(AppAction, oneshot::Sender<()>),
+    SeedDraft(
+        usize,
+        u64,
+        oneshot::Sender<Result<optn_transport::SeedDraft, TransportError>>,
+    ),
     Security(
         WalletSecurityRequest,
         u64,
@@ -274,6 +293,12 @@ impl AppTransport for DirectTransport {
         request: WalletSecurityRequest,
     ) -> TransportFuture<'a, WalletSecurityStatus> {
         Box::pin(async move { self.runtime.wallet_security(request).await })
+    }
+    fn seed_draft<'a>(
+        &'a self,
+        word_count: usize,
+    ) -> TransportFuture<'a, optn_transport::SeedDraft> {
+        Box::pin(async move { self.runtime.seed_draft(word_count).await })
     }
     fn dispatch<'a>(&'a self, action: AppAction) -> TransportFuture<'a, ()> {
         Box::pin(async move {
@@ -367,6 +392,7 @@ impl AppRuntime {
                 operation_changes: operation_changes.clone(),
                 operation_mutations: Arc::new(AtomicU64::new(0)),
                 wallet_sync_rx,
+                fusion_holds: Arc::default(),
             },
             AppRuntimeDriver {
                 airgap: Default::default(),
@@ -476,6 +502,21 @@ impl AppRuntime {
         rx.await.map_err(|_| TransportError::Closed)?
     }
 
+    /// Draw a recovery phrase of `word_count` words for a new wallet. The
+    /// runtime draws and keeps it; `Create` names the draft.
+    pub async fn seed_draft(
+        &self,
+        word_count: usize,
+    ) -> Result<optn_transport::SeedDraft, TransportError> {
+        let generation = self.revocation.load(Ordering::SeqCst);
+        let (tx, rx) = oneshot::channel();
+        self.action_tx
+            .send(RuntimeRequest::SeedDraft(word_count, generation, tx))
+            .await
+            .map_err(|_| TransportError::Closed)?;
+        rx.await.map_err(|_| TransportError::Closed)?
+    }
+
     pub fn state(&self) -> AppState {
         self.state_rx.borrow().clone()
     }
@@ -561,8 +602,26 @@ impl AppRuntimeDriver {
             self.expire_session();
             let now_ms = self.now_ms();
             match request {
+                RuntimeRequest::ExternalPayment(operation, generation, reply) => {
+                    self.handle_external_payment(operation, generation, reply);
+                }
+                RuntimeRequest::FusionContribution(request, generation, reply) => {
+                    self.handle_fusion_contribution(request, generation, reply);
+                }
                 RuntimeRequest::Airgap(request, generation, reply) => {
                     self.handle_airgap(request, generation, reply);
+                }
+                RuntimeRequest::SeedDraft(word_count, generation, reply) => {
+                    let result = if generation != self.revocation.load(Ordering::SeqCst) {
+                        Err(TransportError::Other(
+                            "Wallet operation was cancelled.".into(),
+                        ))
+                    } else if let Some(security) = &mut self.security {
+                        security.draft_seed(&self.state, word_count)
+                    } else {
+                        Err(TransportError::Unsupported)
+                    };
+                    let _ = reply.send(result);
                 }
                 RuntimeRequest::WalletSync(request) => {
                     self.wallet_sync.handle(

@@ -13,9 +13,19 @@ export type BcmrMetadataFreshness =
   | 'offline'
   | 'unavailable';
 
+/** How the runtime established a verified identity's authhead. */
+export type BcmrIdentityAssurance = 'node-validated' | 'server-reported';
+
 export type BcmrTokenMetadataState = {
   /** Present only for the authenticated, wallet-scoped Rust projection. */
   identityStatus?: 'verified' | 'stale' | 'unpublished' | 'unresolved';
+  /**
+   * Who vouched for the authhead behind a verified name: the holder's own
+   * node, or a chain server. The registry matched its hash either way.
+   */
+  identityAssurance?: BcmrIdentityAssurance;
+  /** The identity is burned: its registry can no longer change. */
+  identityFinal?: boolean;
   status: 'loading' | 'ready' | 'error';
   freshness: BcmrMetadataFreshness;
   name: string;
@@ -30,18 +40,31 @@ export type BcmrTokenMetadataState = {
   isRefreshing: boolean;
 };
 
+type BcmrStatusInput = Pick<
+  BcmrTokenMetadataState,
+  | 'status'
+  | 'freshness'
+  | 'isRefreshing'
+  | 'snapshot'
+  | 'identityStatus'
+  | 'identityAssurance'
+  | 'identityFinal'
+>;
+
 export function getBcmrMetadataStatusLabel(
-  metadata?: Pick<
-    BcmrTokenMetadataState,
-    'status' | 'freshness' | 'isRefreshing' | 'snapshot' | 'identityStatus'
-  > | null
+  metadata?: BcmrStatusInput | null
 ): string {
   if (!metadata) return 'Unavailable';
 
   if (metadata.identityStatus) {
     switch (metadata.identityStatus) {
-      case 'verified':
-        return 'Verified';
+      case 'verified': {
+        const verified =
+          metadata.identityAssurance === 'server-reported'
+            ? 'Verified via server'
+            : 'Verified';
+        return metadata.identityFinal ? `${verified} · final` : verified;
+      }
       case 'stale':
         return 'Last known';
       case 'unpublished':
@@ -72,11 +95,9 @@ export function getBcmrMetadataStatusLabel(
 }
 
 export function getBcmrMetadataStatusTone(
-  metadata?: Pick<
-    BcmrTokenMetadataState,
-    'status' | 'freshness' | 'isRefreshing' | 'snapshot' | 'identityStatus'
-  > | null
+  metadata?: BcmrStatusInput | null
 ): 'accent' | 'muted' | 'warning' | 'danger' {
+  if (metadata?.identityStatus === 'verified') return 'accent';
   const label = getBcmrMetadataStatusLabel(metadata);
   switch (label) {
     case 'Verified':

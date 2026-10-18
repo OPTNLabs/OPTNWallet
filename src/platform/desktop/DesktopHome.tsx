@@ -29,7 +29,6 @@ import {
 } from '../../services/WalletUtxoRefreshService';
 import { logError } from '../../utils/errorHandling';
 import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
-import { Network } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
@@ -44,12 +43,14 @@ import {
 import { isTxConfirmed } from '../../utils/txConfirmation';
 import { isFusionTransaction } from './fusionCoinDepth';
 import { useFusionDepthRevision } from './useFusionDepthRevision';
+import { useElectrumPoolNotice } from './useElectrumPoolNotice';
 import { FusionBadge } from '../../components/FusionBadge';
 import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from '../../features/home/useHomeConnect';
 import { unitFor } from '../../utils/unitLabel';
 import { useI18n } from '../../i18n/useI18n';
+import { isTestNetwork, networkProfile } from '../../utils/networkProfile';
 
 type QuickActionButtonProps = {
   title: string;
@@ -116,6 +117,7 @@ const Home: React.FC = () => {
     );
   });
   const currentNetwork = useSelector(selectCurrentNetwork);
+  const electrumNotice = useElectrumPoolNotice(currentNetwork);
   const unit = unitFor(currentNetwork);
   const bchUsdQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']?.price
@@ -279,12 +281,27 @@ const Home: React.FC = () => {
         <PageHeader
           title={t('home.title')}
           subtitle={
-            currentNetwork === Network.CHIPNET ? t('assets.chipnet') : undefined
+            isTestNetwork(currentNetwork)
+              ? t(networkProfile(currentNetwork).labelKey)
+              : undefined
           }
           compact
         />
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-4">
+          {electrumNotice ? (
+            <SectionCard className="shrink-0 p-3">
+              <p className="text-sm font-semibold wallet-text-strong">
+                Electrum servers are off for this wallet
+              </p>
+              <p className="mt-1 text-sm wallet-muted">
+                {electrumNotice} The balance and activity on this screen come
+                from Electrum servers, so they will not update until one is
+                selected.
+              </p>
+            </SectionCard>
+          ) : null}
+
           <SectionCard className="shrink-0 p-2.5">
             <PriceFeed compact />
           </SectionCard>

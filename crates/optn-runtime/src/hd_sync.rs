@@ -762,6 +762,7 @@ mod tests {
                 confirmation: SecretText::default(),
                 network: "chipnet".into(),
                 account_path: "m/44'/1'/8'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -983,6 +984,7 @@ mod tests {
                 network: "chipnet".into(),
                 // Separate public account for this fixture's checkpoint nonce stream.
                 account_path: "m/44'/1'/4'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -1175,6 +1177,7 @@ mod tests {
                 network: "chipnet".into(),
                 // Distinct public account keeps this mock nonce stream on its own key.
                 account_path: "m/44'/1'/2'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -1300,6 +1303,7 @@ mod tests {
                 network: "chipnet".into(),
                 // Keep deterministic checkpoint nonces separate from other test keys.
                 account_path: "m/44'/1'/3'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -1397,6 +1401,7 @@ mod tests {
                 confirmation: SecretText::default(),
                 network: "chipnet".into(),
                 account_path: path.into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -1662,6 +1667,7 @@ mod tests {
                 // Separate public fixture account keeps the checkpoint key
                 // distinct from the lifecycle test's deterministic nonce stream.
                 account_path: "m/44'/1'/1'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -2100,6 +2106,7 @@ mod tests {
                 confirmation: SecretText::default(),
                 network: "chipnet".into(),
                 account_path: "m/44'/1'/0'".into(),
+                draft: None,
             })
             .await
             .unwrap();
@@ -2311,9 +2318,12 @@ mod tests {
             .await
             .unwrap();
         let before = runtime.state().coins;
-        transactions.push(transaction(None, vec![(500, script(&xpub, 0, 5))]));
-        // Index 3 drives the scan toward index 5; hitting the cap is not a gap.
-        transactions.push(transaction(None, vec![(500, script(&xpub, 0, 3))]));
+        // The budget is the longest branch the last scan kept (6) plus one
+        // gap. Indexes 3 and 5 drive the scan toward 7, and 7 past the budget;
+        // hitting the cap is not a gap.
+        for index in [7, 5, 3] {
+            transactions.push(transaction(None, vec![(500, script(&xpub, 0, index))]));
+        }
         let (mut capped, _) = service(transactions, false);
         assert!(matches!(
             runtime
@@ -2323,6 +2333,56 @@ mod tests {
         ));
         assert_eq!(runtime.state().coins, before);
         assert!(!runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+    }
+
+    /// A refresh on a smaller budget still covers what a larger scan kept.
+    /// Found in the fleet run: after `rescan --max-addresses 3000` reached a
+    /// used address at index 1,368, every desktop refresh on the default
+    /// budget refused "retained wallet scripts are outside this HD account or
+    /// scan cap", so the wallet never became fresh there again.
+    #[tokio::test]
+    async fn a_smaller_budget_still_covers_what_a_larger_scan_kept() {
+        const LARGER: HdSyncLimits = HdSyncLimits {
+            gap_limit: 2,
+            addresses_per_branch: 20,
+        };
+        let (runtime, xpub) = account();
+        let mut transactions = history(&xpub);
+        // Past LIMITS' six addresses per branch, reachable through 3, 5, 7.
+        for index in [9, 7, 5, 3] {
+            transactions.push(transaction(None, vec![(500, script(&xpub, 0, index))]));
+        }
+        let (mut service, _) = service(transactions, false);
+        let mut worker = ProgressiveSyncWorker::new(Default::default());
+        runtime
+            .sync_hd_wallet(&mut service, &mut worker, xpub.clone(), LARGER)
+            .await
+            .unwrap();
+        let kept = runtime.state().coins;
+        assert!(kept.iter().any(|coin| coin.address()
+            == address_under_account(Network::Chipnet, &xpub, 0, 9)
+                .unwrap()
+                .address));
+
+        assert_eq!(
+            runtime
+                .sync_hd_wallet(&mut service, &mut worker, xpub.clone(), LIMITS)
+                .await
+                .unwrap(),
+            ReconciliationDecision::Accepted
+        );
+        assert_eq!(runtime.state().coins, kept);
+        assert!(runtime.subscribe_wallet_sync().borrow().sync.utxos_fresh);
+        let interests = runtime
+            .subscribe_wallet_sync()
+            .borrow()
+            .authoritative
+            .as_ref()
+            .unwrap()
+            .value
+            .interests
+            .clone();
+        assert!(interests.contains(&WalletInterest::script(script(&xpub, 0, 9))));
     }
 
     #[tokio::test]

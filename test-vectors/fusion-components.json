@@ -117,7 +117,7 @@
       "serializedHex": "0a201111111111111111111111111111111111111111111111111111111111111111124b0a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f10001a2102020202020202020202020202020202020202020202020202020202020202020220c09a0c"
     }
   ],
-  "note": "CashFusion component wire format, shared by src-tauri/src/fusion/p2p_component.rs and src/platform/desktop/nostr/fusionComponentV4.ts. Regenerate with WRITE_FUSION_COMPONENT_VECTORS=1 cargo test -p optn-wallet-desktop component_vectors. A diff here is a wire-format change.",
+  "note": "CashFusion component wire format, shared by crates/optn-fusion/src/p2p_component.rs and src/platform/desktop/nostr/fusionComponentV4.ts. Regenerate with WRITE_FUSION_COMPONENT_VECTORS=1 cargo test -p optn-fusion component_vectors. A diff here is a wire-format change.",
   "outputComponents": [
     {
       "amount": 0,

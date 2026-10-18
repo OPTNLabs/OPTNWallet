@@ -1,4 +1,5 @@
 import type { AddonCapability, AddonManifest } from '../../types/addons';
+import { hostTrustTier } from './AddonTrust';
 
 export type AddonPolicyTier = 'restricted' | 'reviewed' | 'internal';
 
@@ -58,12 +59,10 @@ function tierMultiplier(tier: AddonPolicyTier): number {
   }
 }
 
+/** The host decides the tier. A manifest's own `trustTier` is a claim by its
+ *  author and never raises a quota; see `hostTrustTier`. */
 function resolveTier(manifest: AddonManifest): AddonPolicyTier {
-  const tier = manifest.trustTier;
-  if (tier === 'internal' || tier === 'reviewed' || tier === 'restricted') {
-    return tier;
-  }
-  return 'restricted';
+  return hostTrustTier(manifest);
 }
 
 export function createAddonPolicyEngine(options: AddonPolicyEngineOptions) {

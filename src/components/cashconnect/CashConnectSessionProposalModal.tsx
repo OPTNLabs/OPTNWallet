@@ -12,6 +12,7 @@ import {
 import WalletPopupSheet from '../ui/WalletPopupSheet';
 import { shortenHash } from '../../utils/shortenHash';
 import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
+import RemoteImg from '../RemoteImg';
 
 const KNOWN_TOKEN_LABELS: Record<string, string> = {
   d9ab24ed15a7846cc3d9e004aa5cb976860f13dac1ead05784ee4f4622af96ea: 'FURU',
@@ -73,7 +74,7 @@ export default function CashConnectSessionProposalModal() {
       <h2 className="text-xl font-bold text-center mb-3">Approve CashConnect</h2>
       {proposal.dapp.icon ? (
         <div className="flex justify-center mb-3">
-          <img
+          <RemoteImg
             src={proposal.dapp.icon}
             alt=""
             className="h-12 w-12 rounded-full object-cover"

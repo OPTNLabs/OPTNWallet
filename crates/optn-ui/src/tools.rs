@@ -4,8 +4,9 @@ use crate::{dispatch_action, qr::encode_address_qr, UiTransport};
 use leptos::prelude::*;
 use optn_app::{
     assets_view_model, chrome_network_label, chrome_network_pill, coins_view_model,
-    flipstarter_view_model, format_bch, fundme_view_model, history_view_model, nfts_view_model,
-    parse_bch, portfolio_totals, product_nav, sample_chipnet_campaign_blob, AppAction, AppRoute,
+    flipstarter_view_model, format_bch, fundme_view_model, header_checkpoint_label,
+    history_view_model, nfts_view_model, parse_bch, portfolio_totals, product_nav,
+    provider_health_summary, sample_chipnet_campaign_blob, snapshot_age_label, AppAction, AppRoute,
     AppState, Coin, FreezeReason, HistoryEntry, HistoryKind, Network, Outpoint, OwnedCategory,
     OwnedNft, PledgeStatus, ProductNavItem, SpendKind, TokenIdentity, WalletKind,
 };
@@ -168,8 +169,11 @@ fn WalletSyncControl(transport: UiTransport, state: RwSignal<AppState>) -> impl 
             <p class="muted">{move || {
                 let sync = state.get().wallet_sync;
                 match (sync.source, sync.evidence) {
-                    (Some(source), Some(evidence)) => format!("{source} · {evidence}{}",
-                        sync.tip_height.map(|height| format!(" · tip {height}")).unwrap_or_default()),
+                    (Some(source), Some(evidence)) => format!("{source} · {evidence}{}{}",
+                        sync.tip_height.map(|height| format!(" · tip {height}")).unwrap_or_default(),
+                        sync.snapshot_at_unix_ms
+                            .map(|at| format!(" · {}", snapshot_age_label(at, now_ms())))
+                            .unwrap_or_default()),
                     _ if sync.refreshing => "Synchronizing this HD account through the selected source.".into(),
                     _ => "Select a chain source in Settings, then refresh this HD account.".into(),
                 }
@@ -180,6 +184,14 @@ fn WalletSyncControl(transport: UiTransport, state: RwSignal<AppState>) -> impl 
                     format!("Reported confirmed: {} · pending change: {:+} sats",
                         format_bch(sync.confirmed_sats.unwrap_or_default()), sync.pending_sats)
                 }}</p>
+            </Show>
+            <Show when=move || state.get().wallet_sync.header_checkpoint.is_some()>
+                <p class="muted">{move || state.get().wallet_sync.header_checkpoint
+                    .as_ref().map(header_checkpoint_label).unwrap_or_default()}</p>
+            </Show>
+            <Show when=move || provider_health_summary(&state.get().wallet_sync.providers).is_some()>
+                <p class="muted">{move || provider_health_summary(&state.get().wallet_sync.providers)
+                    .unwrap_or_default()}</p>
             </Show>
             <p class="muted" role="status">{move || error.get().or(state.get().wallet_sync.error).unwrap_or_default()}</p>
             <button class="text-link" type="button" on:click=move |_|
@@ -585,7 +597,7 @@ pub fn NftsPage(transport: UiTransport, state: RwSignal<AppState>) -> impl IntoV
 /// needs them to look different.
 fn category_label(identity: &Option<TokenIdentity>, category_hex: &str) -> String {
     match identity {
-        Some(identity) => match identity.status.caveat() {
+        Some(identity) => match identity.caveat() {
             Some(caveat) => format!("{} ({caveat})", identity.name),
             None => identity.name.clone(),
         },
@@ -653,7 +665,11 @@ fn CoinRow(
     let outpoint = coin.outpoint();
     let frozen = coin.is_reserved();
     let token_protected = coin.token().is_some();
-    let output_protected = token_protected || coin.value_sats() == 0;
+    let output_protected = token_protected
+        || coin.value_sats() == 0
+        || coin
+            .freeze()
+            .is_some_and(|reason| !reason.is_user_reversible());
     let status = match coin.freeze() {
         None if token_protected => "CashTokens (protected)".to_string(),
         None if coin.value_sats() == 0 => "Zero-value output".to_string(),
@@ -662,6 +678,7 @@ fn CoinRow(
         Some(FreezeReason::FlipstarterPledge) => "Flipstarter pledge".into(),
         Some(FreezeReason::Authhead) => "Authhead".into(),
         Some(FreezeReason::FusionInFlight) => "Fusing".into(),
+        Some(FreezeReason::ExternalPayment) => "Reserved for payment".into(),
     };
     let label = coin.label().unwrap_or("").to_owned();
     let has_label = !label.is_empty();

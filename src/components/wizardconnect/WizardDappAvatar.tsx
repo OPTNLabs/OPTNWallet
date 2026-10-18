@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import RemoteImg from '../RemoteImg';
 
 interface Props {
   name: string | null | undefined;
@@ -28,12 +29,17 @@ export default function WizardDappAvatar({
   if (iconUrl && !imageFailed) {
     return (
       <div className={className}>
-        <img
+        <RemoteImg
           src={iconUrl}
           alt={`${title} icon`}
           className="block h-full w-full object-cover"
           referrerPolicy="no-referrer"
           onError={() => setImageFailed(true)}
+          fallback={
+            <span className="text-lg font-bold wallet-text-strong">
+              {fallback}
+            </span>
+          }
         />
       </div>
     );

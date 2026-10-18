@@ -39,6 +39,7 @@ import type {
 } from './walletConnectTypes';
 import { AddonModuleI18nProvider } from '../../../i18n/AddonModuleI18nProvider';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
+import { RemoteBackground } from '../../../components/RemoteImg';
 
 interface Pledge {
   campaignID: string;
@@ -1064,18 +1065,18 @@ const CampaignDetailScreen: React.FC = () => {
           <div className="flex flex-col gap-6">
             {/* Banner Section */}
             <div className="flex flex-col">
-              <div
+              <RemoteBackground
                 className="w-full h-[200px] bg-cover bg-center rounded-t-lg"
-                style={{ backgroundImage: `url(${campaignInfo.banner})` }}
+                src={campaignInfo.banner}
               />
               <div className="flex items-center p-4 bg-black/50">
                 {isLoading ? (
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0AC18E]" />
                 ) : (
                   <>
-                    <div
+                    <RemoteBackground
                       className="h-12 w-12 bg-cover bg-center rounded-full"
-                      style={{ backgroundImage: `url(${campaignInfo.logo})` }}
+                      src={campaignInfo.logo}
                     />
                     <span className="ml-3 font-medium">
                       {campaignInfo.owner}
@@ -1448,18 +1449,18 @@ const CampaignDetailScreen: React.FC = () => {
         <div className="max-w-6xl mx-auto p-4">
           {/* Banner and User Info */}
           <div className="flex flex-col">
-            <div
+            <RemoteBackground
               className="w-full h-[200px] bg-cover bg-center rounded-t-lg"
-              style={{ backgroundImage: `url(${campaignInfo.banner})` }}
+              src={campaignInfo.banner}
             />
             <div className="flex items-center p-4 bg-black/50">
               {isLoading ? (
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0AC18E]" />
               ) : (
                 <div className="flex items-center gap-3">
-                  <div
+                  <RemoteBackground
                     className="h-12 w-12 bg-cover bg-center rounded-full"
-                    style={{ backgroundImage: `url(${campaignInfo.logo})` }}
+                    src={campaignInfo.logo}
                   />
                   <span className="font-medium">{campaignInfo.owner}</span>
                 </div>

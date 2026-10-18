@@ -98,33 +98,28 @@ it should be a stated decision rather than an accident of two filters agreeing.
 Both of Tangem's JavaScript bridges are archived; the supported route is their
 Swift and Kotlin SDKs, so this needs native code before it can move.
 
-### 4. Two CI path filters do not fire on the code they guard
+### 4. ~~Two CI path filters do not fire on the code they guard~~ — **done**
 
-**Status:** open, **blocked** — needs `.github/workflows/`, which is off-limits
-in the agent lane. Found by CodeRabbit on PR #63.
+**Where:** `.github/workflows/rust-quality.yml`, `.github/workflows/rust-formal.yml`.
 
-- `rust-quality.yml` line 14 lists only `src-tauri/Cargo.toml`. A pull request
-  that changes only `src-tauri/**/*.rs` runs no nextest, dependency policy,
-  feature or coverage job. **This is the exact hole that let a `src-tauri`
-  syntax error reach CI.** Add `src-tauri/**`.
-- `rust-formal.yml` excludes the workspace `Cargo.toml` and `Cargo.lock` from
-  both `pull_request.paths` and `push.paths`, so a dependency change reaching
-  `optn-core` can skip the Kani proofs. Add both files to both filters.
+Both holes are closed in the workflows themselves. `rust-quality.yml` no longer
+filters `pull_request` by path at all, so a change confined to `src-tauri/**/*.rs`
+runs nextest, dependency policy, features and coverage. `rust-formal.yml` runs on
+every pull request into `dev`, `staging` and `main`, and its `push` filter lists
+the workspace `Cargo.toml` and `Cargo.lock`, so a dependency change reaching
+`optn-core` cannot skip the Kani proofs. Checked against the workflow files on
+2026-10-08.
 
-Each is one line.
+### 5. ~~Regenerating the fusion component vectors races its own readers~~ — **done**
 
-### 5. Regenerating the fusion component vectors races its own readers
+**Where:** `crates/optn-fusion/src/component_vectors.rs`.
 
-**Status:** open, **blocked** — `src-tauri/src/fusion/` is Codex's; coordinate
-first. Found by CodeRabbit.
-
-`component_vectors.rs` writes `PATH` with `std::fs::write` while four sibling
-tests read the same file through `stored()` on other threads. With
-`WRITE_FUSION_COMPONENT_VECTORS` set, a reader can observe a truncated file and
-panic. The documented regeneration command is therefore intermittently red.
-
-The fix is to serve the freshly built value to readers during regeneration
-rather than making them race the file.
+The engine moved to `crates/optn-fusion`, and its `stored()` now serves the
+freshly built value whenever `WRITE_FUSION_COMPONENT_VECTORS` is set, so no
+reader can observe a half-written file. The old copy under
+`src-tauri/src/fusion/` was no longer part of any module tree and still had the
+race; it has been deleted. The regeneration command is
+`WRITE_FUSION_COMPONENT_VECTORS=1 cargo test -p optn-fusion component_vectors`.
 
 ---
 

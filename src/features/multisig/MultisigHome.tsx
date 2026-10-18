@@ -8,6 +8,8 @@ import type { MultisigPolicy } from '../../services/psbt/multisigWallet';
 import { createMultisigDescriptorSet } from '../../services/psbt/multisigWallet';
 import { refreshMultisigWalletUtxos } from '../../services/WalletUtxoRefreshService';
 import MultisigPage from './MultisigPage';
+import { networkProfile } from '../../utils/networkProfile';
+import { Network } from '../../state/slices/networkSlice';
 
 export default function MultisigHome() {
   const navigate = useNavigate();
@@ -143,7 +145,7 @@ export default function MultisigHome() {
           </div>
         </div>
         <p className="mt-2 text-xs wallet-muted">
-          {policy?.network === 'mainnet' ? 'Mainnet' : 'Chipnet'} ·
+          {networkProfile(policy?.network ?? Network.CHIPNET).label} ·
           OP_CHECKMULTISIG
         </p>
       </section>

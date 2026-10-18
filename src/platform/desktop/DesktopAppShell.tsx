@@ -26,6 +26,7 @@ import {
 import { persistor } from '../../state/store';
 import { invoke } from '@tauri-apps/api/core';
 import { pruneDesktopCache } from './filesystem';
+import { rendererNetwork } from './rendererNetwork';
 
 const DesktopAppShell: React.FC = () => {
   useMenuBar();
@@ -186,13 +187,40 @@ const DesktopAppShell: React.FC = () => {
   // A Tauri webview silently blocks target="_blank" links, so faucet/explorer/
   // external links never open. Intercept clicks on external http(s) links and
   // open them in the user's default browser via the open_external command.
+  // The browser is outside the Tor switch: with Tor on, Rust refuses until the
+  // holder confirms, since the site would see their IP and, for an explorer,
+  // which transaction or address is theirs.
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       const anchor = (e.target as HTMLElement | null)?.closest?.('a');
       const href = anchor?.getAttribute('href');
       if (href && /^https?:\/\//i.test(href)) {
         e.preventDefault();
-        void invoke('open_external', { url: href }).catch(() => {});
+        const network = rendererNetwork();
+        void invoke('open_external', { url: href, network }).catch(
+          (error: unknown) => {
+            if (String(error) !== 'external-link-outside-tor') return;
+            let host = href;
+            try {
+              host = new URL(href).host;
+            } catch {
+              /* shown as written */
+            }
+            const confirmed = window.confirm(
+              `Open ${host} in your browser?\n\n` +
+                'Tor is on in this wallet, but your browser does not use it. ' +
+                'The site will see your IP address, and an explorer link ' +
+                'tells it which transaction or address you are looking at.'
+            );
+            if (confirmed) {
+              void invoke('open_external', {
+                url: href,
+                network,
+                confirmed: true,
+              }).catch(() => {});
+            }
+          }
+        );
       }
     };
     document.addEventListener('click', onClick);

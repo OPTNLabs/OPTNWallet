@@ -12,6 +12,7 @@
 mod console;
 mod contract;
 mod electrum;
+mod fusion;
 mod keychain;
 mod lmots;
 mod msgsign;
@@ -22,6 +23,7 @@ mod token;
 mod tx;
 mod wallet_security;
 mod x402;
+mod x402_exact;
 
 // These modules live in optn-core so the wallet can reach the same code
 // through wasm32. Re-exported under their old paths so every `crate::rpa::...`
@@ -242,10 +244,60 @@ enum Command {
         /// Addresses per chain to scan for spendable outputs.
         #[arg(long, default_value_t = 20)]
         gap: u32,
+        /// Saved wallets: fail a scan that reaches this bound before its
+        /// unused gap (as for rescan).
+        #[arg(long, default_value_t = 200)]
+        max_addresses: u32,
         /// Build and sign, print the raw transaction, but do not broadcast.
         #[arg(long)]
         dry_run: bool,
         /// Required to actually broadcast.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Fuse this wallet's coins in CashFusion rounds, through a server
+    /// (Electron Cash protocol) or peer to peer over Nostr (--p2p), in the same
+    /// native fusion host as the desktop.
+    ///
+    /// Needs a saved wallet (--wallet) and --yes: every round pays fees. Tor is
+    /// required for any remote leg. Without --auto, runs one round (or
+    /// --rounds). With --auto, keeps fusing until every coin reaches
+    /// --fuse-depth, then idles and watches the wallet. Progress goes to
+    /// stderr as JSON lines; the result is on stdout.
+    Fusion {
+        /// CashFusion server: host[:port][:s|:t]. A local server defaults to
+        /// plain TCP, a remote one to TLS; port 8789 if omitted. Required
+        /// unless --p2p.
+        #[arg(long, required_unless_present = "p2p", conflicts_with = "p2p")]
+        server: Option<String>,
+        /// Fuse with other wallets peer to peer, coordinated over Nostr,
+        /// instead of through a server. Needs at least six wallets in the pool.
+        #[arg(long)]
+        p2p: bool,
+        /// Nostr relay for P2P rounds (repeatable): wss, or plain ws for a
+        /// loopback relay. The desktop's relay set if omitted.
+        #[arg(long = "relay", requires = "p2p")]
+        relays: Vec<String>,
+        /// Keep fusing like the desktop's Auto Fusion.
+        #[arg(long)]
+        auto: bool,
+        /// Stop after this many completed rounds.
+        #[arg(long)]
+        rounds: Option<u32>,
+        /// Rounds each coin goes through before Auto leaves it alone.
+        #[arg(long, default_value_t = 3)]
+        fuse_depth: u32,
+        /// Register only this tier, in satoshis (repeatable), so wallets that
+        /// must meet do. Server rounds only: a P2P pool agrees its own tier.
+        #[arg(long = "tier", conflicts_with = "p2p")]
+        tiers: Vec<u64>,
+        /// Addresses per chain to scan before each round.
+        #[arg(long, default_value_t = 20)]
+        gap: u32,
+        /// Fail a scan that reaches this bound before its unused gap.
+        #[arg(long, default_value_t = 200)]
+        max_addresses: u32,
+        /// Required: rounds pay fees.
         #[arg(long)]
         yes: bool,
     },
@@ -400,6 +452,18 @@ enum NetworkCommand {
     Configure { file: std::path::PathBuf },
     /// Choose auto, privacy, own-infrastructure, electrum-only, bip37-only or neutrino-only.
     Policy { preset: String },
+    /// Turn Tor on or off. Off connects directly and CashFusion does not run.
+    Tor {
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
+    /// Trust the SOCKS proxy on 127.0.0.1:PORT as your Tor, as the desktop's
+    /// Privacy & Transport does. --remove stops trusting it.
+    TorTrust {
+        port: u16,
+        #[arg(long)]
+        remove: bool,
+    },
     /// Add one source using an AddSourceRequest JSON file.
     Add { file: std::path::PathBuf },
     /// Enable, disable, or ban a source known to this network catalog.
@@ -621,8 +685,17 @@ enum KeychainCommand {
 
 #[derive(Subcommand)]
 enum X402Command {
+    /// Inspect an x402 v2 exact quote using the BCH SDK.
+    Check(x402_exact::Request),
+    /// Inspect the durable local payment record without contacting its server.
+    Status {
+        #[arg(long)]
+        payment_id: String,
+    },
+    /// Pay an exact quote from a saved wallet, retaining its transaction for recovery.
+    Pay(x402_exact::Pay),
     /// Ask what a resource costs. Reads only; never spends.
-    Check {
+    LegacyCheck {
         url: String,
         /// Extra request header, as `Name: value`. Repeatable.
         #[arg(long = "header", short = 'H')]
@@ -638,7 +711,7 @@ enum X402Command {
     /// Without --fund this debits an existing funding output and spends
     /// nothing on-chain, which is the normal case once a server is funded.
     /// --fund broadcasts a funding transaction first and needs --yes.
-    Pay {
+    LegacyPay {
         url: String,
         /// Fund the server with this many satoshis before authorising.
         ///
@@ -749,6 +822,8 @@ fn command_name(command: &Command) -> &'static str {
             action:
                 NetworkCommand::Configure { .. }
                 | NetworkCommand::Policy { .. }
+                | NetworkCommand::Tor { .. }
+                | NetworkCommand::TorTrust { .. }
                 | NetworkCommand::Add { .. }
                 | NetworkCommand::Disposition { .. }
                 | NetworkCommand::Remove { .. },
@@ -774,6 +849,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::TokenSend { .. } => "token-send",
         Command::Send { .. } => "send",
         Command::Rescan { .. } => "rescan",
+        Command::Fusion { .. } => "fusion",
         Command::History { .. } => "history",
         Command::Discover { .. } => "discover",
         Command::Contract { .. } => "contract",
@@ -788,7 +864,11 @@ fn command_name(command: &Command) -> &'static str {
     }
 }
 
-fn client_for(cli: &Cli) -> Result<Client> {
+/// How long one candidate server gets to answer `server.version` before the
+/// next is tried.
+const CANDIDATE_PROBE_SECS: u64 = 20;
+
+async fn client_for(cli: &Cli) -> Result<Client> {
     // Read once, applied to whichever endpoint is chosen below: which proxy
     // the holder trusts does not depend on which server they are talking to.
     let trusted =
@@ -805,24 +885,54 @@ fn client_for(cli: &Cli) -> Result<Client> {
         .map(|client| client.trusting_socks_ports(trusted));
     }
 
-    let endpoint =
-        network_settings::shared_electrum(cli.network, cli.network_config_dir.as_deref())
+    let build = |host: String, port: u16, tls: bool| {
+        Client::new(host, port, tls, timeout_seconds(cli)).map(|client| {
+            // The holder's Tor switch and own-node declaration, from the same
+            // shared settings the desktop uses. Unreadable settings keep Tor on.
+            let (transport, own) = network_settings::transport_for_host(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                client.host(),
+            );
+            client
+                .trusting_socks_ports(trusted.clone())
+                .following(transport, own)
+        })
+    };
+    let servers =
+        network_settings::shared_electrum_servers(cli.network, cli.network_config_dir.as_deref())
             .map_err(CliError::Usage)?;
-    match endpoint {
-        Some(endpoint) => Client::new(
-            endpoint.host().to_owned(),
-            endpoint.port(),
-            endpoint.encrypted(),
-            timeout_seconds(cli),
-        ),
-        None => Client::new(
+    let Some(servers) = servers else {
+        return build(
             cli.network.default_host().to_owned(),
             cli.network.default_port(),
             true,
-            timeout_seconds(cli),
-        ),
+        );
+    };
+    if let [only] = servers.as_slice() {
+        return build(only.host().to_owned(), only.port(), only.encrypted());
     }
-    .map(|client| client.trusting_socks_ports(trusted))
+    // Several selected servers: the first that answers, in the selection's
+    // order, as the shared stack would fail over. A down server is skipped,
+    // never replaced by one outside the selection.
+    let mut tried = Vec::new();
+    for server in &servers {
+        let client = build(server.host().to_owned(), server.port(), server.encrypted())?;
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(CANDIDATE_PROBE_SECS),
+            client.server_version(),
+        )
+        .await
+        {
+            Ok(Ok(_)) => return Ok(client),
+            Ok(Err(error)) => tried.push(format!("{}: {error}", client.endpoint())),
+            Err(_) => tried.push(format!("{}: no answer", client.endpoint())),
+        }
+    }
+    Err(CliError::Usage(format!(
+        "no selected Electrum server answered: {}",
+        tried.join("; ")
+    )))
 }
 
 fn timeout_seconds(cli: &Cli) -> u64 {
@@ -830,6 +940,7 @@ fn timeout_seconds(cli: &Cli) -> u64 {
         if matches!(
             &cli.command,
             Command::Rescan { .. }
+                | Command::Fusion { .. }
                 | Command::History { .. }
                 | Command::Tokens { .. }
                 | Command::Wallet { .. }
@@ -917,6 +1028,10 @@ fn shared_network_status(cli: &Cli) -> Result<Value> {
             })
         })
         .collect::<Vec<_>>();
+    let tor = match selection.policy.transport {
+        optn_runtime::chain::TransportPolicy::Tor => "on",
+        optn_runtime::chain::TransportPolicy::Direct => "off",
+    };
     Ok(json!({
         "ok": true,
         "network": cli.network.to_string(),
@@ -927,6 +1042,7 @@ fn shared_network_status(cli: &Cli) -> Result<Value> {
             "fallback_scope": selection.policy.fallback_scope.as_ref().map(|scope| format!("{scope:?}")),
             "preferred": selection.policy.preferred.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
         },
+        "tor": tor,
         "sources": sources,
         "primary": plan.primary.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
         "fallback": plan.fallback.iter().map(|source| source.as_str()).collect::<Vec<_>>(),
@@ -983,7 +1099,7 @@ async fn fetch_headers_window(
             ));
         }
     }
-    let client = client_for(cli)?;
+    let client = client_for(cli).await?;
     let (tip_height, _) = client.tip().await?;
     let start_height = match start {
         Some(height) => height,
@@ -1107,7 +1223,7 @@ async fn ping_selected_chain(cli: &Cli) -> Result<Value> {
     // Command-line endpoint flags are an explicit per-invocation override.
     // Without one, the CLI uses the exact durable selection shared with Tauri.
     if cli.host.is_some() || cli.port.is_some() || cli.no_tls {
-        let client = client_for(cli)?;
+        let client = client_for(cli).await?;
         let version = client.server_version().await?;
         return Ok(json!({
             "ok": true,
@@ -1122,7 +1238,7 @@ async fn ping_selected_chain(cli: &Cli) -> Result<Value> {
         network_settings::shared_chain_selection(cli.network, cli.network_config_dir.as_deref())
             .map_err(CliError::Usage)?
     else {
-        let client = client_for(cli)?;
+        let client = client_for(cli).await?;
         let version = client.server_version().await?;
         return Ok(json!({
             "ok": true,
@@ -1224,7 +1340,7 @@ async fn transaction_selected_chain(cli: &Cli, txid: &str, verbose: bool) -> Res
     let mut requested = decode_hex32(txid)?;
     requested.reverse();
     let Some(selection) = configured_chain(cli)? else {
-        let transaction = client_for(cli)?.transaction(txid, verbose).await?;
+        let transaction = client_for(cli).await?.transaction(txid, verbose).await?;
         return Ok(json!({"ok": true, "txid": txid, "transaction": transaction}));
     };
     tokio::time::timeout(
@@ -1274,7 +1390,7 @@ async fn broadcast_selected_chain(cli: &Cli, raw: &str) -> Result<Value> {
     }
     let txid = optn_core::header_hash::sha256d(&bytes);
     let Some(selection) = configured_chain(cli)? else {
-        let txid = client_for(cli)?.broadcast(raw).await?;
+        let txid = client_for(cli).await?.broadcast(raw).await?;
         return Ok(json!({"ok": true, "network": cli.network.to_string(), "txid": txid}));
     };
     let budget = std::time::Duration::from_secs(timeout_seconds(cli));
@@ -1325,7 +1441,7 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
     let scripthash = parsed.electrum_scripthash();
     let Some(selection) = configured_chain(cli)? else {
         if include_outputs {
-            let utxos = client_for(cli)?.utxos(&scripthash).await?;
+            let utxos = client_for(cli).await?.utxos(&scripthash).await?;
             let total: u64 = utxos.iter().map(|output| output.value).sum();
             return Ok(
                 json!({"ok": true, "network": cli.network.to_string(), "address": address,
@@ -1334,7 +1450,7 @@ async fn address_selected_chain(cli: &Cli, address: &str, include_outputs: bool)
                 })).collect::<Vec<_>>()}),
             );
         }
-        let balance = client_for(cli)?.balance(&scripthash).await?;
+        let balance = client_for(cli).await?.balance(&scripthash).await?;
         return Ok(
             json!({"ok": true, "network": cli.network.to_string(), "address": address,
             "scripthash": scripthash, "confirmed": balance.confirmed, "unconfirmed": balance.unconfirmed,
@@ -1813,6 +1929,8 @@ fn authorize_command(cli: &Cli) -> Result<()> {
             action: NetworkCommand::Configure { .. }
                 | NetworkCommand::Import { .. }
                 | NetworkCommand::Policy { .. }
+                | NetworkCommand::Tor { .. }
+                | NetworkCommand::TorTrust { .. }
                 | NetworkCommand::Add { .. }
                 | NetworkCommand::Disposition { .. }
                 | NetworkCommand::Remove { .. }
@@ -1846,6 +1964,33 @@ async fn run(cli: &Cli) -> Result<Value> {
             )
             .map_err(CliError::Usage)?;
             return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::Tor { state },
+        } => {
+            network_settings::set_transport(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                network_settings::parse_tor_switch(state).map_err(CliError::Usage)?,
+            )
+            .map_err(CliError::Usage)?;
+            return shared_network_status(cli);
+        }
+        Command::Network {
+            action: NetworkCommand::TorTrust { port, remove },
+        } => {
+            let trusted = network_settings::set_trusted_socks_port(
+                cli.network,
+                cli.network_config_dir.as_deref(),
+                *port,
+                !*remove,
+            )
+            .map_err(CliError::Usage)?;
+            return Ok(json!({
+                "ok": true,
+                "network": cli.network.to_string(),
+                "trusted_socks_ports": trusted,
+            }));
         }
         Command::Network {
             action: NetworkCommand::Export,
@@ -1941,13 +2086,8 @@ async fn run(cli: &Cli) -> Result<Value> {
 
     // Resolve the legacy route only when an operation actually needs it.
     // Cache it for the command so a settings edit cannot mix endpoints mid-scan.
-    let legacy_client = std::cell::OnceCell::new();
-    let client = || -> Result<&Client> {
-        if legacy_client.get().is_none() {
-            let _ = legacy_client.set(client_for(cli)?);
-        }
-        Ok(legacy_client.get().expect("client initialized above"))
-    };
+    let legacy_client = tokio::sync::OnceCell::new();
+    let client = || legacy_client.get_or_try_init(|| client_for(cli));
 
     match &cli.command {
         Command::Wallet { .. } => unreachable!("handled before network setup"),
@@ -2049,6 +2189,7 @@ async fn run(cli: &Cli) -> Result<Value> {
             sats,
             fee_rate,
             gap,
+            max_addresses,
             dry_run,
             yes,
         } => {
@@ -2058,9 +2199,22 @@ async fn run(cli: &Cli) -> Result<Value> {
                 ));
             }
             let destination = parse_address(to, cli.network)?;
+            if cli.wallet.is_some() {
+                return send_from_saved_wallet(
+                    cli,
+                    to,
+                    &destination,
+                    *sats,
+                    *fee_rate,
+                    *gap,
+                    *max_addresses,
+                    *dry_run,
+                )
+                .await;
+            }
             let wallet = read_wallet(cli).await?;
             let spend = spend_to(
-                client()?,
+                client().await?,
                 cli.network,
                 &wallet,
                 destination.script_pubkey(),
@@ -2130,7 +2284,11 @@ async fn run(cli: &Cli) -> Result<Value> {
                 for index in 0..*gap {
                     let path = hd::address_path(coin, 0, change, index);
                     let address = wallet.address(cli.network, &path)?;
-                    for u in client()?.utxos(&address.electrum_scripthash()).await? {
+                    for u in client()
+                        .await?
+                        .utxos(&address.electrum_scripthash())
+                        .await?
+                    {
                         let mut txid = decode_hex32(&u.tx_hash)?;
                         txid.reverse();
                         let utxo = tx::Utxo {
@@ -2263,7 +2421,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }));
             }
 
-            let txid = client()?.broadcast(&raw_hex).await?;
+            let txid = client().await?.broadcast(&raw_hex).await?;
             Ok(json!({
                 "ok": true,
                 "network": cli.network.to_string(),
@@ -2313,7 +2471,11 @@ async fn run(cli: &Cli) -> Result<Value> {
                 for index in 0..*gap {
                     let path = hd::address_path(coin, 0, change, index);
                     let address = wallet.address(cli.network, &path)?;
-                    for u in client()?.utxos(&address.electrum_scripthash()).await? {
+                    for u in client()
+                        .await?
+                        .utxos(&address.electrum_scripthash())
+                        .await?
+                    {
                         let mut txid = decode_hex32(&u.tx_hash)?;
                         txid.reverse();
                         let utxo = tx::Utxo {
@@ -2431,7 +2593,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                 }));
             }
 
-            let txid = client()?.broadcast(&raw_hex).await?;
+            let txid = client().await?.broadcast(&raw_hex).await?;
             Ok(json!({
                 "ok": true,
                 "network": cli.network.to_string(),
@@ -2473,6 +2635,46 @@ async fn run(cli: &Cli) -> Result<Value> {
             )
             .await
         }
+        Command::Fusion {
+            server,
+            p2p,
+            relays,
+            auto,
+            rounds,
+            fuse_depth,
+            tiers,
+            gap,
+            max_addresses,
+            yes,
+        } => {
+            if !*yes {
+                return Err(CliError::Usage(
+                    "refusing to fuse without --yes: every round pays fees".to_string(),
+                ));
+            }
+            let venue = match (server.as_deref(), *p2p) {
+                (_, true) => fusion::Venue::P2p { relays },
+                (Some(server), false) => fusion::Venue::Server(server),
+                (None, false) => {
+                    return Err(CliError::Usage(
+                        "pass --server for a CashFusion server, or --p2p".to_string(),
+                    ))
+                }
+            };
+            fusion::run(
+                cli,
+                fusion::FusionArgs {
+                    venue,
+                    auto: *auto,
+                    rounds: *rounds,
+                    fuse_depth: *fuse_depth,
+                    tiers,
+                    gap: *gap,
+                    max_addresses: *max_addresses,
+                },
+            )
+            .await
+        }
         Command::History { gap, limit } => {
             let result = rescan_shared_wallet(
                 cli,
@@ -2507,7 +2709,10 @@ async fn run(cli: &Cli) -> Result<Value> {
                         for index in 0..*gap {
                             let path = hd::address_path(coin, account, change, index);
                             let address = wallet.address(cli.network, &path)?;
-                            let balance = client()?.balance(&address.electrum_scripthash()).await?;
+                            let balance = client()
+                                .await?
+                                .balance(&address.electrum_scripthash())
+                                .await?;
                             if balance.confirmed != 0 || balance.unconfirmed != 0 {
                                 used += 1;
                                 total += balance.confirmed + balance.unconfirmed;
@@ -3041,7 +3246,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                     .to_bytes()
                     .into();
                 let spend_pub = wallet.public_key(&rpa::spend_path(coin, *account))?;
-                let raw_hex = client()?.transaction(txid, false).await?;
+                let raw_hex = client().await?.transaction(txid, false).await?;
                 let raw_hex = raw_hex.as_str().ok_or_else(|| {
                     CliError::Protocol("server did not return raw transaction hex".into())
                 })?;
@@ -3102,10 +3307,15 @@ async fn run(cli: &Cli) -> Result<Value> {
                     )));
                 }
                 let decoded = rpa::decode(code)?;
-                if decoded.network() != cli.network {
+                // A code only says mainnet or test network, never which test chain.
+                if !decoded.matches(cli.network) {
+                    let family = if decoded.is_mainnet() {
+                        "mainnet"
+                    } else {
+                        "a test network"
+                    };
                     return Err(CliError::Usage(format!(
-                        "that code is for {}, but this is {}",
-                        decoded.network(),
+                        "that code is for {family}, but this is {}",
                         cli.network
                     )));
                 }
@@ -3119,7 +3329,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                         .await?
                 } else {
                     rpa_pay(
-                        client()?,
+                        client().await?,
                         cli.network,
                         &wallet,
                         &decoded,
@@ -3200,7 +3410,10 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
         }
         Command::X402 { action } => match action {
-            X402Command::Check {
+            X402Command::Check(_) | X402Command::Pay(_) | X402Command::Status { .. } => {
+                unreachable!("exact protocol is dispatched through its native adapter")
+            }
+            X402Command::LegacyCheck {
                 url,
                 headers,
                 method,
@@ -3243,7 +3456,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                     "options_offered": required.accepts.len(),
                 }))
             }
-            X402Command::Pay {
+            X402Command::LegacyPay {
                 url,
                 fund,
                 txid,
@@ -3318,7 +3531,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                         )));
                     }
                     let spend = spend_to(
-                        client()?,
+                        client().await?,
                         cli.network,
                         &wallet,
                         destination.script_pubkey(),
@@ -3415,6 +3628,10 @@ async fn run(cli: &Cli) -> Result<Value> {
 /// boundary before polling that future.
 fn dispatch(cli: &Cli) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + '_>> {
     match &cli.command {
+        Command::X402 {
+            action:
+                action @ (X402Command::Check(_) | X402Command::Pay(_) | X402Command::Status { .. }),
+        } => x402_exact::dispatch(cli, action),
         Command::Console { json } => Box::pin(run_console(cli, json)),
         _ => Box::pin(run(cli)),
     }
@@ -3679,7 +3896,11 @@ async fn rpa_pay_selected(
     if p2p && from_height.is_none() {
         return Err(CliError::Usage("Selected P2P Cash Code funding requires --from-height with the wallet's nonzero birth height".into()));
     }
-    let policy = optn_runtime::chain::ConnectionPolicy::exact(route.source.clone(), route.protocol);
+    // Narrow to the one route; how it is reached stays the holder's choice.
+    let policy = optn_runtime::chain::ConnectionPolicy {
+        transport: service.policy().transport,
+        ..optn_runtime::chain::ConnectionPolicy::exact(route.source.clone(), route.protocol)
+    };
     let mut worker =
         hd_sync_worker(cli.network, &policy)?.with_accepted_headers(stack.headers.clone());
     service.set_policy(policy);
@@ -3951,6 +4172,95 @@ fn build_rpa_payment(
         protocol: None,
         includes_mempool: true,
     })
+}
+
+/// `send` for a saved wallet, on the shared native stack.
+///
+/// The wallet runtime releases signing keys only after a refresh in the same
+/// session, so this refreshes through the shared HD runtime first. It then
+/// spends the runtime's own coins (ordinary HD coins; tokens never), honours
+/// every hold, sends change to a change address the runtime reserved durably,
+/// and broadcasts through the selected chain stack. A dry run plans and signs
+/// against the next change index without reserving it, and broadcasts nothing.
+#[allow(clippy::too_many_arguments)]
+async fn send_from_saved_wallet(
+    cli: &Cli,
+    to: &str,
+    destination: &Address,
+    sats: u64,
+    fee_rate: u64,
+    gap: u32,
+    max_addresses: u32,
+    dry_run: bool,
+) -> Result<Value> {
+    let synced = sync_shared_wallet(cli, gap, max_addresses, None, None, None).await?;
+    let runtime = wallet_security::open_managed_runtime(cli).await?;
+    let coins =
+        optn_runtime::wallet_spend::snapshot_spendable_coins(&synced.snapshot.value, cli.network)
+            .map_err(CliError::Protocol)?;
+    let held: std::collections::BTreeSet<String> = synced
+        .state
+        .coins
+        .iter()
+        .filter(|coin| coin.freeze().is_some())
+        .map(|coin| coin.outpoint().to_string())
+        .collect();
+    let wallet = wallet_security::read_managed_wallet(cli).await?;
+    let change_script = if dry_run {
+        let book = synced.address_book()?;
+        let next = synced
+            .state
+            .hd_addresses
+            .as_ref()
+            .map_or(0, |allocation| allocation.next_indexes()[1]);
+        let change =
+            optn_core::watch_only::address_under_account(cli.network, &book.account_xpub, 1, next)?;
+        Address::decode(&change.address)
+            .map_err(CliError::Protocol)?
+            .script_pubkey()
+    } else {
+        runtime
+            .reserve_change_outputs(1)
+            .await
+            .map_err(|error| CliError::Usage(wallet_security::message(error)))?
+            .pop()
+            .ok_or_else(|| CliError::Internal("no change output was reserved".into()))?
+    };
+    let prepared = optn_runtime::wallet_spend::prepare_spend(
+        &wallet,
+        &coins,
+        &optn_runtime::wallet_spend::SpendRequest {
+            destination_script: destination.script_pubkey(),
+            amount_sats: sats,
+            fee_per_byte: fee_rate,
+            change_script,
+            held,
+        },
+    )?;
+    if dry_run {
+        return Ok(json!({
+            "ok": true,
+            "dry_run": true,
+            "network": cli.network.to_string(),
+            "to": to,
+            "sats": sats,
+            "fee": prepared.fee_sats,
+            "change": prepared.change_sats,
+            "inputs": prepared.input_count,
+            "size_bytes": prepared.size_bytes,
+            "raw": prepared.raw_hex,
+        }));
+    }
+    let mut broadcast = broadcast_selected_chain(cli, &prepared.raw_hex).await?;
+    if let Some(result) = broadcast.as_object_mut() {
+        result.insert("to".into(), json!(to));
+        result.insert("sats".into(), json!(sats));
+        result.insert("fee".into(), json!(prepared.fee_sats));
+        result.insert("change".into(), json!(prepared.change_sats));
+        result.insert("inputs".into(), json!(prepared.input_count));
+        result.insert("spent".into(), json!(prepared.inputs));
+    }
+    Ok(broadcast)
 }
 
 /// Build, sign, and broadcast a payment out of the wallet's own coins.
@@ -4314,7 +4624,7 @@ fn default_coin_type(network: Network) -> u32 {
 
 /// Decode an even-length hex string.
 fn decode_hex(s: &str) -> Result<Vec<u8>> {
-    if s.len() % 2 != 0 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !s.len().is_multiple_of(2) || !s.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(CliError::Usage(format!("'{s}' is not valid hex")));
     }
     (0..s.len())
@@ -4573,7 +4883,13 @@ fn print_human(command: &Command, v: &Value) {
             println!("scripthash  {}", s("scripthash"));
         }
         Command::X402 { action } => match action {
-            X402Command::Check { .. } => {
+            X402Command::Check(_) | X402Command::Status { .. } => {
+                println!("{}", serde_json::to_string_pretty(v).unwrap_or_default())
+            }
+            X402Command::Pay(_) => {
+                println!("{}", serde_json::to_string_pretty(v).unwrap_or_default())
+            }
+            X402Command::LegacyCheck { .. } => {
                 if v.get("payment_required").and_then(Value::as_bool) != Some(true) {
                     println!("status    {}  no payment required", n("status"));
                 } else {
@@ -4584,7 +4900,7 @@ fn print_human(command: &Command, v: &Value) {
                     println!("scheme    {}", s("scheme"));
                 }
             }
-            X402Command::Pay { .. } => {
+            X402Command::LegacyPay { .. } => {
                 if v.get("dry_run").and_then(Value::as_bool) == Some(true) {
                     println!("would pay {} sats to {}", n("sats"), s("pay_to"));
                     println!("as        {}", s("from"));

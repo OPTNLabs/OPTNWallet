@@ -7,6 +7,8 @@ import {
 import type { MultisigPolicy } from '../../services/psbt/multisigWallet';
 import MultisigPage from './MultisigPage';
 import { copyToClipboard } from '../../utils/clipboard';
+import { networkProfile } from '../../utils/networkProfile';
+import { Network } from '../../state/slices/networkSlice';
 
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
@@ -103,7 +105,7 @@ export default function MultisigPolicy() {
             <div>
               <p className="text-xs wallet-muted">Network</p>
               <p className="mt-1 text-sm font-semibold wallet-text-strong">
-                {policy.network === 'mainnet' ? 'Mainnet' : 'Chipnet'}
+                {networkProfile(policy.network ?? Network.CHIPNET).label}
               </p>
             </div>
             <div>

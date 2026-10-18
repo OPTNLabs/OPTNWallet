@@ -64,6 +64,8 @@ pub enum FreezeReason {
     /// its own rather than borrowed from `User` -- a hold the round must
     /// release cannot be the same thing as a freeze only the user may lift.
     FusionInFlight,
+    /// Signed payment retained for external settlement; only its runtime lifecycle may release it.
+    ExternalPayment,
 }
 
 impl FreezeReason {
@@ -73,6 +75,7 @@ impl FreezeReason {
             Self::FlipstarterPledge => "flipstarter-pledge",
             Self::Authhead => "authhead",
             Self::FusionInFlight => "fusion-in-flight",
+            Self::ExternalPayment => "external-payment",
         }
     }
 
@@ -851,6 +854,7 @@ mod tests {
             FreezeReason::FlipstarterPledge,
             FreezeReason::Authhead,
             FreezeReason::FusionInFlight,
+            FreezeReason::ExternalPayment,
         ] {
             assert!(!held.is_user_reversible(), "{held:?}");
             // And each stays distinguishable, so releasing one never releases
