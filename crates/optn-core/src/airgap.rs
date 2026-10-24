@@ -144,7 +144,7 @@ mod tests {
         let seed = mnemonic.to_seed_normalized("");
         let coin = Network::Mainnet.default_coin_type();
         let path = format!("m/44'/{coin}'/0'").parse().unwrap();
-        XPrv::derive_from_path(seed, &path)
+        XPrv::derive_from_path(&seed, &path)
             .unwrap()
             .public_key()
             .to_string(Prefix::XPUB)

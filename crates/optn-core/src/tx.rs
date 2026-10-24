@@ -236,12 +236,12 @@ impl Transaction {
                 .map_err(|e| CliError::Internal(format!("signing failed: {e}")))?;
             // Low-S is a consensus rule on BCH. k256 can emit high-S, and a
             // high-S signature is rejected at broadcast rather than at signing.
-            let normalized = signature.normalize_s().unwrap_or(signature);
+            let normalized = signature.normalize_s();
 
             let mut sig_bytes = normalized.to_der().as_bytes().to_vec();
             sig_bytes.push(SIGHASH_ALL_FORKID as u8);
 
-            let pubkey = key.verifying_key().to_encoded_point(true);
+            let pubkey = key.verifying_key().to_sec1_point(true);
             let mut script_sig = push_data(&sig_bytes);
             script_sig.extend_from_slice(&push_data(pubkey.as_bytes()));
             script_sigs.push(script_sig);
@@ -329,7 +329,7 @@ pub(crate) fn verified_p2pkh_script_sig(
         }
     } else {
         let der = Signature::from_der(signature_bytes).map_err(|_| invalid())?;
-        if der.normalize_s().is_some() || key.verify_prehash(digest, &der).is_err() {
+        if der.normalize_s() != der || key.verify_prehash(digest, &der).is_err() {
             return Err(invalid());
         }
     }

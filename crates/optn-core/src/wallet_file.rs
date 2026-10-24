@@ -541,7 +541,6 @@ impl WatchOnlyFile {
 mod watch_only_file_tests {
     use super::*;
     use crate::hd::BIP39_TEST_VECTOR_MNEMONIC;
-    use k256::elliptic_curve::rand_core::{OsRng, RngCore};
 
     // Drawn a byte at a time rather than zero-initialised and then overwritten.
     // The two are identical at runtime -- `fill_bytes` replaces every byte --
@@ -551,7 +550,7 @@ mod watch_only_file_tests {
     // placeholder answers the finding without weakening the rule: a real
     // constant reaching a salt or nonce would still be reported.
     fn random_bytes<const N: usize>() -> [u8; N] {
-        std::array::from_fn(|_| OsRng.next_u32() as u8)
+        std::array::from_fn(|_| getrandom_04::u32().expect("the OS has entropy") as u8)
     }
 
     fn entropy() -> [u8; 56] {
@@ -878,7 +877,7 @@ mod watch_only_file_tests {
         )
         .is_err());
         let private =
-            bip32::XPrv::derive_from_path(random_bytes::<32>(), &account.path().parse().unwrap())
+            bip32::XPrv::derive_from_path(&random_bytes::<32>(), &account.path().parse().unwrap())
                 .unwrap();
         assert!(make(
             &private.to_string(bip32::Prefix::XPRV),
