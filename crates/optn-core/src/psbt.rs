@@ -2052,11 +2052,10 @@ mod tests {
     fn finalize_p2pkh_verifies_ecdsa_and_preserves_each_sequence() {
         use crate::tx::{self, Output, Transaction, Utxo};
         use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
-        use k256::elliptic_curve::rand_core::OsRng;
 
         let keys = [
-            SigningKey::random(&mut OsRng),
-            SigningKey::random(&mut OsRng),
+            SigningKey::from_slice(&[0x11; 32]).unwrap(),
+            SigningKey::from_slice(&[0x22; 32]).unwrap(),
         ];
         let sequences = [0xffff_fffd, 42];
         let mut specs = Vec::new();
@@ -2064,7 +2063,7 @@ mod tests {
         for (index, key) in keys.iter().enumerate() {
             let pubkey: [u8; 33] = key
                 .verifying_key()
-                .to_encoded_point(true)
+                .to_sec1_point(true)
                 .as_bytes()
                 .try_into()
                 .unwrap();
@@ -2144,7 +2143,7 @@ mod tests {
                     .unwrap(),
             );
             let signature: Signature = key.sign_prehash(&digest).unwrap();
-            let signature = signature.normalize_s().unwrap_or(signature);
+            let signature = signature.normalize_s();
             let mut bytes = signature.to_der().as_bytes().to_vec();
             bytes.push(0x41);
             let pubkey = specs[index].derivations[0].pubkey;

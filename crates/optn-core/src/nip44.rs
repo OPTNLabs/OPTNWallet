@@ -41,7 +41,7 @@ use base64::Engine as _;
 use chacha20::cipher::{KeyIvInit, StreamCipher};
 use chacha20::ChaCha20;
 use hmac::{Hmac, Mac};
-use k256::elliptic_curve::sec1::ToEncodedPoint;
+use k256::elliptic_curve::sec1::ToSec1Point;
 use k256::{PublicKey, SecretKey};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
@@ -135,7 +135,7 @@ pub fn conversation_key(
 pub fn xonly_public_key(secret: &[u8; 32]) -> Result<[u8; 32]> {
     let secret_key = SecretKey::from_slice(secret)
         .map_err(|_| CliError::Usage("not a valid secp256k1 secret key".into()))?;
-    let point = secret_key.public_key().to_encoded_point(true);
+    let point = secret_key.public_key().to_sec1_point(true);
     let bytes = point.as_bytes();
     let mut xonly = [0u8; 32];
     xonly.copy_from_slice(&bytes[1..33]);
