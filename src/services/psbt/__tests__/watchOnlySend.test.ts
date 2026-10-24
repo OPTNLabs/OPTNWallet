@@ -9,6 +9,7 @@ import {
   binToHex,
   decodeTransaction,
   encodeCashAddress,
+  encodeTransaction,
   generateSigningSerializationBch,
   hash160,
   hash256,
@@ -707,5 +708,70 @@ describe('watch-only import verification', () => {
       signInput(proposal, 0, proposal.sighashType, otherKey),
     ]);
     expect(inspectImportedPsbt(signed, proposal).state).toBe('invalid');
+  });
+});
+
+describe('watch-only coins that carry CashTokens', () => {
+  // A token coin with no declared token: what coin control hands the builder
+  // when a server's coin list omitted, or the screen ignored, its token data.
+  function undeclaredTokenInput() {
+    const lockingBytecode = p2pkhScript(publicKey);
+    const parentBytes = encodeTransaction({
+      version: 2,
+      inputs: [
+        {
+          outpointTransactionHash: new Uint8Array(32).fill(0x21),
+          outpointIndex: 0,
+          unlockingBytecode: new Uint8Array(),
+          sequenceNumber: 0xffffffff,
+        },
+      ],
+      outputs: [
+        {
+          lockingBytecode,
+          valueSatoshis: 1_000n,
+          token: { category: new Uint8Array(32).fill(0xab), amount: 1_000n },
+        },
+      ],
+      locktime: 0,
+    });
+    return {
+      ...makeInput({ satoshis: 1_000n }),
+      txid: binToHex(hash256(parentBytes).slice().reverse()),
+      previousTransactionHex: binToHex(parentBytes),
+    };
+  }
+
+  function build(inputs: ReturnType<typeof makeInput>[]) {
+    return buildWatchOnlyPsbt({
+      inputs,
+      recipient: recipientAddress,
+      amountSats: 10_000n,
+      changeAddress,
+      accountPath: ACCOUNT_PATH,
+      masterFingerprint: FINGERPRINT,
+    });
+  }
+
+  it('refuses to spend a token coin in a send with no token output for it', () => {
+    // Before this check the PSBT was built, and its outputs dropped the
+    // 1000 tokens: a burn the signer was then asked to approve.
+    expect(() =>
+      build([undeclaredTokenInput(), makeInput({ seed: 0x22 })])
+    ).toThrow(/Coin 1 carries CashTokens .*token-aware transfer/);
+  });
+
+  it('refuses a parent transaction that is not the coin it claims to be', () => {
+    const coin = makeInput();
+    const other = makeInput({ seed: 0x33 });
+    expect(() =>
+      build([{ ...coin, previousTransactionHex: other.previousTransactionHex }])
+    ).toThrow(/different transaction/);
+  });
+
+  it('still builds a send from coins without tokens', () => {
+    expect(
+      build([makeInput(), makeInput({ seed: 0x22 })]).outputs
+    ).toHaveLength(2);
   });
 });

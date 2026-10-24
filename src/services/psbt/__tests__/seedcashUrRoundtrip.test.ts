@@ -6,14 +6,13 @@
 // `seedcash/helpers/ur2/ur_decoder.py`, the one `decode_qr.py` feeds from the
 // camera — reconstructs the exact PSBT bytes we meant to send.
 //
-// Stock SeedCash feeds `decoder.result_message().cbor` straight to parse_psbt.
-// That only works when the UR CBOR field IS the PSBT (`70736274ff…`), which is
-// what SeedCash itself emits (`UR("crypto-psbt", self.psbt)`). We encode that
-// same payload. These tests run SeedCash's decoder and assert the recovered
-// bytes start with PSBT magic — if they ever need a CBOR unwrap, the encoder
-// has drifted back to the Keystone wrap that SeedCash rejects.
+// SeedCash 30c5ba6 decodes a crypto-psbt message as one CBOR byte string
+// (`decode_cbor_by_type`), hands the PSBT inside to parse_psbt, and never
+// completes on anything else, including the raw PSBT OPTN used to send. These
+// tests run that decoder and assert it recovers our exact bytes.
 //
-// Opt-in, because it shells out to Python:
+// Opt-in, because it shells out to Python. SEEDCASH_SRC is the src directory
+// of a SeedCash checkout at 30c5ba6 or later:
 //   RUN_SEEDCASH_LIVE=1 npx vitest run src/services/psbt/__tests__/seedcashUrRoundtrip.test.ts
 
 import { execFileSync } from 'node:child_process';
@@ -24,7 +23,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { binToHex } from '@bitauth/libauth';
 
-import { encodePsbtToUrFrames, encodePsbtToSingleUr } from '../urPsbt';
+import { encodePsbtToUrFrames } from '../urPsbt';
 
 const SIGNER = join(process.cwd(), 'scripts', 'seedcash', 'sign_psbt.py');
 const CWD = join(process.cwd(), 'scripts', 'seedcash');
@@ -79,10 +78,24 @@ describeLive('SeedCash UR decoding', () => {
     expect(decodeWithSeedCash(shuffled)).toBe(binToHex(psbt));
   });
 
+  it('rebuilds the PSBT from mixed frames alone', () => {
+    // Skip the whole first pass, as a camera pointed late would. Only mixed
+    // frames remain, so this passes only if SeedCash picks the same fragments
+    // for each sequence number as the Rust encoder mixed.
+    const psbt = payload(1200);
+    const encoder = encodePsbtToUrFrames(psbt);
+    for (let i = 0; i < encoder.count; i += 1) encoder.next();
+    const frames = Array.from({ length: encoder.count * 4 }, () =>
+      encoder.next()
+    );
+
+    expect(decodeWithSeedCash(frames)).toBe(binToHex(psbt));
+  });
+
   it('reads the single-frame form too', () => {
     const psbt = payload(200);
-    expect(decodeWithSeedCash([encodePsbtToSingleUr(psbt)])).toBe(
-      binToHex(psbt)
-    );
+    const encoder = encodePsbtToUrFrames(psbt, 450);
+    expect(encoder.count).toBe(1);
+    expect(decodeWithSeedCash([encoder.next()])).toBe(binToHex(psbt));
   });
 });

@@ -308,7 +308,7 @@ impl Wallet {
         let parsed: DerivationPath = path
             .parse()
             .map_err(|_| CliError::Usage(format!("'{path}' is not a valid derivation path")))?;
-        let xprv = XPrv::derive_from_path(self.seed, &parsed)
+        let xprv = XPrv::derive_from_path(&self.seed, &parsed)
             .map_err(|e| CliError::Internal(format!("derivation failed: {e}")))?;
         Ok(xprv.public_key().to_bytes())
     }
@@ -320,7 +320,7 @@ impl Wallet {
         let parsed: DerivationPath = path
             .parse()
             .map_err(|_| CliError::Usage(format!("'{path}' is not a valid derivation path")))?;
-        let xprv = XPrv::derive_from_path(self.seed, &parsed)
+        let xprv = XPrv::derive_from_path(&self.seed, &parsed)
             .map_err(|e| CliError::Internal(format!("derivation failed: {e}")))?;
         k256::ecdsa::SigningKey::from_slice(&xprv.private_key().to_bytes())
             .map_err(|e| CliError::Internal(format!("invalid derived key: {e}")))
@@ -351,7 +351,7 @@ impl Wallet {
             .path()
             .parse()
             .map_err(|_| CliError::Usage("invalid account path".into()))?;
-        let xprv = XPrv::derive_from_path(self.seed, &path)
+        let xprv = XPrv::derive_from_path(&self.seed, &path)
             .map_err(|error| CliError::Internal(format!("derivation failed: {error}")))?;
         Ok(xprv.public_key().to_string(Prefix::XPUB))
     }

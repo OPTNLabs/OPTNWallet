@@ -1,22 +1,30 @@
-// UR (crypto-psbt) transport — a static QR for small payloads and an
-// animated-QR channel for larger payloads.
+// UR (crypto-psbt) transport: the animated QR an air-gapped signer scans, and
+// the scanner for the signed return.
 //
-// SeedCash and Keystone both use type `crypto-psbt`, but they do not put the
-// same bytes in the UR CBOR field:
+// The frames come from Rust (crates/optn-core/src/ur.rs) on every surface.
+// Phones used to get one static QR of up to 2,400 characters here while
+// desktop got 50-byte frames, and SeedCash's camera cannot read the static
+// one. The core now refuses any frame denser than the density control's top.
 //
-//   SeedCash  encode_qr.py:280  UR("crypto-psbt", raw_psbt_bytes)
-//             decode_qr.py:141  parse_psbt(decoder.result_message().cbor)
-//   Keystone  CryptoPSBT        CBOR byte-string wrap (BCR-2020-006)
+// The UR message is the PSBT in one CBOR byte string (BCR-2020-006), which is
+// what Keystone writes and what SeedCash now requires:
 //
-// Stock SeedCash never unwraps that byte string. A spec-wrapped QR therefore
-// arrives as `59 01 90 70 73 62 74 ff …` and `parse_psbt` dies with
-// "invalid PSBT magic". Issue #8 is the SeedCash air-gap, so we emit the
-// device's native payload (raw PSBT as the UR CBOR) and accept both shapes
-// on the way back.
+//   SeedCash 30c5ba6  ur_decoder.py  decode_cbor_by_type: one byte string or
+//                                    nothing, so a raw PSBT never completes
+//                     encode_qr.py   UrPsbtQrEncoder wraps its signed return
+//   Keystone          CryptoPSBT     the same wrap
+//
+// SeedCash before that read the message as the raw PSBT. Signed returns of
+// either shape are accepted on the way back.
 
-import { UR, UREncoder } from '@ngraveio/bc-ur';
 import { CryptoPSBT } from '@keystonehq/bc-ur-registry-btc';
 import { URRegistryDecoder } from '@keystonehq/bc-ur-registry';
+
+import {
+  ensureOptnCore,
+  psbtUrFrame,
+  psbtUrFrameCount,
+} from '../../wasm/optn-core';
 
 /**
  * Fragment size, in bytes of the UR payload.
@@ -28,8 +36,7 @@ import { URRegistryDecoder } from '@keystonehq/bc-ur-registry';
  */
 export const PSBT_UR_FRAGMENT_LENGTHS = [50, 100, 200, 400] as const;
 
-export type PsbtUrFragmentLength =
-  (typeof PSBT_UR_FRAGMENT_LENGTHS)[number];
+export type PsbtUrFragmentLength = (typeof PSBT_UR_FRAGMENT_LENGTHS)[number];
 
 /**
  * Conservative default for SeedCash camera compatibility.
@@ -68,13 +75,6 @@ export const PSBT_UR_QR_DISPLAY_SIZE = 640;
 /** Keep L. Q/H add modules and densify the same UR payload. */
 export const PSBT_UR_QR_ERROR_LEVEL = 'L' as const;
 
-/**
- * Keep ordinary PSBTs in one QR at the mobile display size. The value is a
- * character limit for the rendered UR, not a PSBT byte limit: UR framing adds
- * its own header and encoding overhead. Larger payloads use fountain frames.
- */
-export const DEFAULT_STATIC_UR_MAX_CHARACTERS = 2_400;
-
 const PSBT_MAGIC = Uint8Array.of(0x70, 0x73, 0x62, 0x74, 0xff);
 
 export function startsWithPsbtMagic(bytes: Uint8Array): boolean {
@@ -85,8 +85,9 @@ export function startsWithPsbtMagic(bytes: Uint8Array): boolean {
 /**
  * Recover PSBT bytes from a decoded `crypto-psbt` UR CBOR field.
  *
- * SeedCash puts the raw PSBT there. BCR-2020-006 / Keystone wrap it in a
- * CBOR byte string. Accept both so a signed return from either device works.
+ * BCR-2020-006, Keystone and current SeedCash wrap it in a CBOR byte string;
+ * SeedCash before 30c5ba6 put the raw PSBT there. Accept both so a signed
+ * return from any of them works.
  */
 export function extractPsbtFromUrCbor(cbor: Uint8Array): Uint8Array {
   if (startsWithPsbtMagic(cbor)) {
@@ -109,52 +110,50 @@ export type PsbtQrDisplay = {
   count: number;
 };
 
-function toSeedCashUr(psbt: Uint8Array): UR {
-  return new UR(Buffer.from(psbt), 'crypto-psbt');
-}
-
-/** Split a PSBT into UR frames for display as an animated QR. */
+/**
+ * Split a PSBT into UR frames for display as an animated QR.
+ *
+ * Rust refuses anything that is not a PSBT and any fragment length above the
+ * density control's top, so no caller can draw a QR the signer cannot read.
+ */
 export function encodePsbtToUrFrames(
   psbt: Uint8Array,
   fragmentLength: number = DEFAULT_UR_FRAGMENT_LENGTH
 ): UrFrames {
-  if (psbt.length === 0) throw new Error('Cannot encode an empty PSBT.');
-  const encoder = new UREncoder(toSeedCashUr(psbt), fragmentLength);
+  ensureOptnCore();
+  const bytes = Uint8Array.from(psbt);
+  const count = rustCall(() => psbtUrFrameCount(bytes, fragmentLength));
+  let seqNum = 0;
   return {
-    next: () => encoder.nextPart().toUpperCase(),
-    count: encoder.fragmentsLength,
+    next: () => {
+      seqNum += 1;
+      return rustCall(() => psbtUrFrame(bytes, fragmentLength, seqNum));
+    },
+    count,
   };
 }
 
-/** A single-frame UR, for the rare PSBT small enough to need no animation. */
-export function encodePsbtToSingleUr(psbt: Uint8Array): string {
-  if (psbt.length === 0) throw new Error('Cannot encode an empty PSBT.');
-  return UREncoder.encodeSinglePart(toSeedCashUr(psbt)).toUpperCase();
+function rustCall<T>(call: () => T): T {
+  try {
+    return call();
+  } catch (error) {
+    // wasm-bindgen throws the Rust error as a bare string.
+    throw new Error(error instanceof Error ? error.message : String(error));
+  }
 }
 
 /**
- * Choose the least cumbersome QR transport for a PSBT. Small unsigned and
- * partially signed PSBTs stay as one static QR; only payloads that would make
- * the phone-sized QR unreasonably dense use the animated stream.
+ * The QR to show for a PSBT, the same on a phone as on desktop. It is static
+ * only when the whole PSBT fits in one frame; anything larger animates.
  */
 export function encodePsbtToQrDisplay(
   psbt: Uint8Array,
-  staticMaxCharacters: number = DEFAULT_STATIC_UR_MAX_CHARACTERS
+  fragmentLength: number = DEFAULT_UR_FRAGMENT_LENGTH
 ): PsbtQrDisplay {
-  let single: string | null = null;
-  try {
-    const candidate = encodePsbtToSingleUr(psbt);
-    if (candidate.length <= staticMaxCharacters) single = candidate;
-  } catch {
-    // The single-frame encoder has its own maximum capacity. Fall through to
-    // the streaming encoder for larger PSBTs.
+  const frames = encodePsbtToUrFrames(psbt, fragmentLength);
+  if (frames.count === 1) {
+    return { mode: 'static', uri: frames.next(), frames: null, count: 1 };
   }
-
-  if (single !== null) {
-    return { mode: 'static', uri: single, frames: null, count: 1 };
-  }
-
-  const frames = encodePsbtToUrFrames(psbt);
   return { mode: 'stream', uri: frames.next(), frames, count: frames.count };
 }
 
