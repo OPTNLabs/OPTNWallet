@@ -1,4 +1,5 @@
 import { Network } from '../state/slices/networkSlice';
+import { networkProfile } from '../utils/networkProfile';
 
 // BCH upgrades activate network-wide on May 15; BCH upgrades conventionally
 // activate at 12:00 UTC, so we gate active mainnet Quantumroot flows from then.
@@ -18,6 +19,15 @@ export function getQuantumrootNetworkSupport(
   network: Network,
   now = new Date()
 ): QuantumrootNetworkSupport {
+  if (network !== Network.MAINNET && network !== Network.CHIPNET) {
+    return {
+      activationAt: null,
+      isActive: false,
+      isPreviewOnly: false,
+      canReceiveOnChain: false,
+      statusLabel: `Not available on ${networkProfile(network).label}`,
+    };
+  }
   if (network === Network.CHIPNET) {
     return {
       activationAt: null,

@@ -40,6 +40,7 @@ import {
   grindRpaTransaction as coreGrindRpaTransaction,
 } from '../wasm/optn-core';
 
+import { cashAddressPrefix } from '../utils/networkProfile';
 /** BIP68: bit 31 set disables relative locktime. */
 export const RPA_SEQUENCE_DISABLE_LOCKTIME = 0x80000000;
 
@@ -143,7 +144,7 @@ function cashAddressFromLocking(locking: Uint8Array, network: Network): string {
       ? locking.slice(3, 23)
       : hash160(locking);
   const encoded = encodeCashAddress({
-    prefix: network === Network.MAINNET ? 'bitcoincash' : 'bchtest',
+    prefix: cashAddressPrefix(network),
     type: 'p2pkh',
     payload: pkh,
   });
@@ -358,7 +359,7 @@ export function makeRpaDummyAddress(network: Network): string {
   }
   entropy.fill(0);
   const encoded = encodeCashAddress({
-    prefix: network === Network.MAINNET ? 'bitcoincash' : 'bchtest',
+    prefix: cashAddressPrefix(network),
     type: 'p2pkh',
     payload: hash160(pub),
   });

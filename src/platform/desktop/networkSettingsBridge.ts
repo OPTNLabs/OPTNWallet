@@ -5,8 +5,9 @@ import type { Backend } from './backendSelection';
 
 const WIRE_PROTOCOL_VERSION = 1;
 
-function wireNetwork(network: Network): 'mainnet' | 'chipnet' {
-  return network === Network.CHIPNET ? 'chipnet' : 'mainnet';
+/** `Network` values are the Rust `optn_core::network::Network` names. */
+function wireNetwork(network: Network): string {
+  return network;
 }
 
 /** Persist the legacy desktop renderer's one-backend selection through Rust. */

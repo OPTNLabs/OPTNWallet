@@ -27,6 +27,7 @@ members = [
   "xtask",
 ]
 exclude = [
+  "crates/optn-x402",
   "crates/optn-cli",
   "crates/optn-ui-egui",
   "crates/optn-ui-dioxus",

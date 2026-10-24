@@ -380,6 +380,7 @@ pub enum WireFreezeReason {
     FlipstarterPledge,
     Authhead,
     FusionInFlight,
+    ExternalPayment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1516,6 +1517,7 @@ impl From<FreezeReason> for WireFreezeReason {
             FreezeReason::FlipstarterPledge => Self::FlipstarterPledge,
             FreezeReason::Authhead => Self::Authhead,
             FreezeReason::FusionInFlight => Self::FusionInFlight,
+            FreezeReason::ExternalPayment => Self::ExternalPayment,
         }
     }
 }
@@ -1527,6 +1529,7 @@ impl From<WireFreezeReason> for FreezeReason {
             WireFreezeReason::FlipstarterPledge => Self::FlipstarterPledge,
             WireFreezeReason::Authhead => Self::Authhead,
             WireFreezeReason::FusionInFlight => Self::FusionInFlight,
+            WireFreezeReason::ExternalPayment => Self::ExternalPayment,
         }
     }
 }
@@ -2180,6 +2183,7 @@ impl TryFrom<WireState> for AppState {
         let servers = ServerOverrides::try_from(value.servers)?;
         Ok(Self {
             snapshot_revision: value.snapshot_revision,
+            payment_outbox: Vec::new(),
             route: value.route.into(),
             theme: value.theme.into(),
             skin: value.skin.into(),

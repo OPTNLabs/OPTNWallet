@@ -328,7 +328,7 @@ mod tests {
     use crate::components::{build_round_commit, FusionInput, FusionOutput};
     use crate::pedersen;
     use crate::schnorr;
-    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    use k256::elliptic_curve::sec1::ToSec1Point;
     use k256::ProjectivePoint;
 
     fn p2pkh_out(tag: u8) -> Vec<u8> {
@@ -440,7 +440,7 @@ mod tests {
             .map(|_| {
                 let k = pedersen::random_nonce();
                 let p = ProjectivePoint::GENERATOR * k;
-                p.to_affine().to_encoded_point(true).as_bytes().to_vec()
+                p.to_affine().to_sec1_point(true).as_bytes().to_vec()
             })
             .collect();
 

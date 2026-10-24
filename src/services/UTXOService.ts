@@ -21,6 +21,7 @@ import { binToHex, hexToBin } from '../utils/hex';
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { setAddressDiscoveryInProgress } from '../state/slices/utxoSlice';
 
+import { cashAddressPrefix } from '../utils/networkProfile';
 const bcmrCache = new Map<
   string,
   { ts: number; data: Awaited<ReturnType<BcmrService['getSnapshot']>> | null }
@@ -36,9 +37,7 @@ function setAddressDiscoveryState(inProgress: boolean): void {
 function getPrefix(networkOverride?: Network): string {
   try {
     const network = networkOverride ?? selectCurrentNetwork(store.getState());
-    return network === Network.MAINNET
-      ? 'bitcoincash'
-      : 'bchtest';
+    return cashAddressPrefix(network);
   } catch {
     return 'bitcoincash';
   }
@@ -531,9 +530,7 @@ const UTXOService = {
           if (reservedOutpoints.has(outpointKey(pending))) continue;
           const existing = formattedByAddress[pending.address] ?? [];
           if (
-            !existing.some(
-              (utxo) => outpointKey(utxo) === outpointKey(pending)
-            )
+            !existing.some((utxo) => outpointKey(utxo) === outpointKey(pending))
           ) {
             formattedByAddress[pending.address] = [...existing, pending];
           }

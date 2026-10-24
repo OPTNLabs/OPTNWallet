@@ -36,6 +36,7 @@ import {
   reservedOutpoints,
 } from './fusionRoundState';
 import { isLocalFusionDestination } from './FusionTorResolver';
+import { networkProfile } from '../../utils/networkProfile';
 
 // ── EC protocol constants (protocol.py / util.py / server.py) ─────────────
 // Strict Electron Cash client limits — keep in lockstep with EC sources.
@@ -200,6 +201,11 @@ export function inputLookupEndpoints(
 }
 
 export function defaultRelayEndpoints(network: Network): FusionRelayEndpoints {
+  if (network !== Network.MAINNET && network !== Network.CHIPNET) {
+    throw new Error(
+      `CashFusion is not available on ${networkProfile(network).label}.`
+    );
+  }
   if (network === Network.CHIPNET) {
     return {
       relayHost: 'chipnet.bitjson.com',

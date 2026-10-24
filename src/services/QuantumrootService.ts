@@ -25,6 +25,7 @@ import { zeroize } from '../utils/secureMemory';
 import quantumrootTemplateJson from '../../reference/quantumroot/quantumroot-schnorr-lm-ots-vault.json';
 import type { QuantumrootVaultRecord } from '../types/types';
 
+import { cashAddressPrefix } from '../utils/networkProfile';
 export const QUANTUMROOT_VARIABLE_PATH = {
   identifierSource: "0'",
   key: "1'",
@@ -110,7 +111,7 @@ export function getQuantumrootComponentPath(
 }
 
 function getCashAddressPrefix(network: Network) {
-  return network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  return cashAddressPrefix(network);
 }
 
 export function deriveQuantumrootKeyIdentifier(

@@ -29,6 +29,7 @@ pub mod event_recovery;
 pub mod events;
 /// Explorer routing is deliberately separate from wallet consensus/state.
 pub mod explorer;
+pub mod external_payment;
 /// Public-key HD account discovery over the shared chain service.
 pub mod hd_sync;
 pub mod header_recovery;
@@ -213,6 +214,11 @@ impl Drop for WalletMutationGuard {
 }
 
 enum RuntimeRequest {
+    ExternalPayment(
+        external_payment::PaymentOperation,
+        Box<WalletOperationGuard>,
+        oneshot::Sender<Result<optn_core::payment::PaymentRecord, TransportError>>,
+    ),
     Airgap(
         optn_transport::AirgapRequest,
         u64,
@@ -561,6 +567,9 @@ impl AppRuntimeDriver {
             self.expire_session();
             let now_ms = self.now_ms();
             match request {
+                RuntimeRequest::ExternalPayment(operation, generation, reply) => {
+                    self.handle_external_payment(operation, generation, reply);
+                }
                 RuntimeRequest::Airgap(request, generation, reply) => {
                     self.handle_airgap(request, generation, reply);
                 }

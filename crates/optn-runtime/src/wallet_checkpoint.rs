@@ -71,6 +71,7 @@ pub struct WalletCheckpoint {
     pub(crate) restore_state: WalletRestoreState,
     pub(crate) state: WalletReconciliation,
     pub(crate) coins: CoinSet,
+    pub(crate) payment_outbox: Vec<optn_core::payment::PaymentRecord>,
     /// Cached chain-authenticated presentation only. It is deliberately
     /// downgraded before a restored checkpoint reaches application state.
     token_identities: BTreeMap<String, TokenIdentity>,
@@ -146,6 +147,8 @@ struct StoredCheckpoint {
     tip: Option<(u32, Hash32)>,
     transactions: Vec<StoredTransaction>,
     annotations: Vec<StoredAnnotation>,
+    #[serde(default)]
+    payment_outbox: Vec<optn_core::payment::PaymentRecord>,
     #[serde(default)]
     allocation: Option<HdAddressAllocation>,
     #[serde(default)]
@@ -412,6 +415,7 @@ impl WalletCheckpoint {
             restore_state: restore_state.clone(),
             state: state.clone(),
             coins: app.coins.clone(),
+            payment_outbox: app.payment_outbox.clone(),
             token_identities: cacheable_token_identities(&app.token_identities),
             bcmr_cache: BcmrIdentityCache::default(),
             // The view lives on the sync worker, which the host owns; it is
@@ -507,6 +511,7 @@ impl WalletCheckpoint {
     }
 
     pub(crate) fn validate_wallet(&self, app: &AppState) -> Result<(), String> {
+        optn_core::payment::validate_outbox(&self.payment_outbox)?;
         validate_scan_coverage(
             self.scan_coverage,
             self.state
@@ -627,6 +632,7 @@ impl WalletCheckpoint {
                     height: tx.block_height,
                 })
                 .collect(),
+            payment_outbox: self.payment_outbox.clone(),
             annotations: self
                 .coins
                 .iter()
@@ -737,6 +743,7 @@ impl WalletCheckpoint {
         }
         validate_restore_state(&restore_state, stored.tip)?;
         let token_identities = decode_token_identities(&stored.token_identities)?;
+        optn_core::payment::validate_outbox(&stored.payment_outbox)?;
         let branch_lengths: [u32; 4] =
             match (stored.format.as_str(), stored.branch_lengths.as_slice()) {
                 (LEGACY_FORMAT, [receive, change, old_defi]) if stored.allocation.is_none() => {
@@ -789,6 +796,7 @@ impl WalletCheckpoint {
                     restore_state,
                     state: WalletReconciliation::default(),
                     coins: CoinSet::new(),
+                    payment_outbox: stored.payment_outbox,
                     token_identities: BTreeMap::new(),
                     bcmr_cache: stored.bcmr_cache,
                     header_progress,
@@ -868,6 +876,7 @@ impl WalletCheckpoint {
             restore_state,
             state,
             coins,
+            payment_outbox: stored.payment_outbox,
             token_identities,
             bcmr_cache: stored.bcmr_cache,
             header_progress,
@@ -908,6 +917,7 @@ mod tests {
                 tip: None,
                 transactions: vec![],
                 annotations: vec![],
+                payment_outbox: vec![],
                 scan_coverage: None,
                 rescan_requested: None,
                 restore_state: WalletRestoreState::default(),

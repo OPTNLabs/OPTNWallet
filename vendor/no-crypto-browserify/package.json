@@ -1,0 +1,8 @@
+{
+  "name": "@optn/no-crypto-browserify",
+  "version": "3.12.2-optn.1",
+  "private": true,
+  "description": "Stand-in for crypto-browserify so elliptic (GHSA-848j-6mx2-7j84, no patched release) is never installed. OPTN Wallet does not polyfill Node's crypto in the browser.",
+  "license": "MIT",
+  "main": "index.js"
+}

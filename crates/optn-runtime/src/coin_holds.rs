@@ -100,6 +100,7 @@ pub fn parse_reason(value: &str) -> Result<FreezeReason, CoinHoldError> {
         "flipstarter-pledge" => FreezeReason::FlipstarterPledge,
         "authhead" => FreezeReason::Authhead,
         "fusion-in-flight" => FreezeReason::FusionInFlight,
+        "external-payment" => FreezeReason::ExternalPayment,
         other => return Err(CoinHoldError::UnknownReason(other.to_owned())),
     })
 }

@@ -219,7 +219,7 @@ pub fn parse_argument(parameter: &Parameter, raw: &str) -> Result<Argument> {
 
     let expect_hex = |expected: Option<usize>| -> Result<Vec<u8>> {
         let text = raw.strip_prefix("0x").unwrap_or(raw);
-        if text.len() % 2 != 0 || !text.chars().all(|c| c.is_ascii_hexdigit()) {
+        if !text.len().is_multiple_of(2) || !text.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(CliError::Usage(format!(
                 "{name} ({kind}) must be hex, got '{raw}'"
             )));

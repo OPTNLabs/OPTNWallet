@@ -22,6 +22,7 @@ mod token;
 mod tx;
 mod wallet_security;
 mod x402;
+mod x402_exact;
 
 // These modules live in optn-core so the wallet can reach the same code
 // through wasm32. Re-exported under their old paths so every `crate::rpa::...`
@@ -621,8 +622,17 @@ enum KeychainCommand {
 
 #[derive(Subcommand)]
 enum X402Command {
+    /// Inspect an x402 v2 exact quote using the BCH SDK.
+    Check(x402_exact::Request),
+    /// Inspect the durable local payment record without contacting its server.
+    Status {
+        #[arg(long)]
+        payment_id: String,
+    },
+    /// Pay an exact quote from a saved wallet, retaining its transaction for recovery.
+    Pay(x402_exact::Pay),
     /// Ask what a resource costs. Reads only; never spends.
-    Check {
+    LegacyCheck {
         url: String,
         /// Extra request header, as `Name: value`. Repeatable.
         #[arg(long = "header", short = 'H')]
@@ -638,7 +648,7 @@ enum X402Command {
     /// Without --fund this debits an existing funding output and spends
     /// nothing on-chain, which is the normal case once a server is funded.
     /// --fund broadcasts a funding transaction first and needs --yes.
-    Pay {
+    LegacyPay {
         url: String,
         /// Fund the server with this many satoshis before authorising.
         ///
@@ -3102,10 +3112,15 @@ async fn run(cli: &Cli) -> Result<Value> {
                     )));
                 }
                 let decoded = rpa::decode(code)?;
-                if decoded.network() != cli.network {
+                // A code only says mainnet or test network, never which test chain.
+                if !decoded.matches(cli.network) {
+                    let family = if decoded.is_mainnet() {
+                        "mainnet"
+                    } else {
+                        "a test network"
+                    };
                     return Err(CliError::Usage(format!(
-                        "that code is for {}, but this is {}",
-                        decoded.network(),
+                        "that code is for {family}, but this is {}",
                         cli.network
                     )));
                 }
@@ -3200,7 +3215,10 @@ async fn run(cli: &Cli) -> Result<Value> {
             }
         }
         Command::X402 { action } => match action {
-            X402Command::Check {
+            X402Command::Check(_) | X402Command::Pay(_) | X402Command::Status { .. } => {
+                unreachable!("exact protocol is dispatched through its native adapter")
+            }
+            X402Command::LegacyCheck {
                 url,
                 headers,
                 method,
@@ -3243,7 +3261,7 @@ async fn run(cli: &Cli) -> Result<Value> {
                     "options_offered": required.accepts.len(),
                 }))
             }
-            X402Command::Pay {
+            X402Command::LegacyPay {
                 url,
                 fund,
                 txid,
@@ -3415,6 +3433,10 @@ async fn run(cli: &Cli) -> Result<Value> {
 /// boundary before polling that future.
 fn dispatch(cli: &Cli) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + '_>> {
     match &cli.command {
+        Command::X402 {
+            action:
+                action @ (X402Command::Check(_) | X402Command::Pay(_) | X402Command::Status { .. }),
+        } => x402_exact::dispatch(cli, action),
         Command::Console { json } => Box::pin(run_console(cli, json)),
         _ => Box::pin(run(cli)),
     }
@@ -4314,7 +4336,7 @@ fn default_coin_type(network: Network) -> u32 {
 
 /// Decode an even-length hex string.
 fn decode_hex(s: &str) -> Result<Vec<u8>> {
-    if s.len() % 2 != 0 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !s.len().is_multiple_of(2) || !s.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(CliError::Usage(format!("'{s}' is not valid hex")));
     }
     (0..s.len())
@@ -4573,7 +4595,13 @@ fn print_human(command: &Command, v: &Value) {
             println!("scripthash  {}", s("scripthash"));
         }
         Command::X402 { action } => match action {
-            X402Command::Check { .. } => {
+            X402Command::Check(_) | X402Command::Status { .. } => {
+                println!("{}", serde_json::to_string_pretty(v).unwrap_or_default())
+            }
+            X402Command::Pay(_) => {
+                println!("{}", serde_json::to_string_pretty(v).unwrap_or_default())
+            }
+            X402Command::LegacyCheck { .. } => {
                 if v.get("payment_required").and_then(Value::as_bool) != Some(true) {
                     println!("status    {}  no payment required", n("status"));
                 } else {
@@ -4584,7 +4612,7 @@ fn print_human(command: &Command, v: &Value) {
                     println!("scheme    {}", s("scheme"));
                 }
             }
-            X402Command::Pay { .. } => {
+            X402Command::LegacyPay { .. } => {
                 if v.get("dry_run").and_then(Value::as_bool) == Some(true) {
                     println!("would pay {} sats to {}", n("sats"), s("pay_to"));
                     println!("as        {}", s("from"));
