@@ -575,12 +575,7 @@ mod tests {
                             .unwrap(),
                     );
                     let signature: Signature = signing_keys[index].sign_prehash(&digest).unwrap();
-                    let mut der = signature
-                        .normalize_s()
-                        .unwrap_or(signature)
-                        .to_der()
-                        .as_bytes()
-                        .to_vec();
+                    let mut der = signature.normalize_s().to_der().as_bytes().to_vec();
                     der.push(0x41);
                     let key = fixture.keys[&input.outpoint];
                     signed_inputs.push(PsbtInputSpec {

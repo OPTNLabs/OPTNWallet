@@ -39,7 +39,7 @@ fn origin(index: u32, change: bool) -> KeyOrigin {
     KeyOrigin {
         pubkey: key
             .verifying_key()
-            .to_encoded_point(true)
+            .to_sec1_point(true)
             .as_bytes()
             .try_into()
             .unwrap(),

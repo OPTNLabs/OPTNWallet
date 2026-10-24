@@ -33,7 +33,7 @@
 //! relabelling its prefix. This module does not do that.
 
 use hmac::{Hmac, Mac};
-use k256::elliptic_curve::sec1::ToEncodedPoint;
+use k256::elliptic_curve::sec1::ToSec1Point;
 use k256::elliptic_curve::PrimeField;
 use k256::{AffinePoint, ProjectivePoint, PublicKey, Scalar};
 use sha2::{Digest, Sha256, Sha512};
@@ -122,7 +122,7 @@ pub fn scan_public_key(scan_private: &[u8; 32]) -> Result<[u8; 33]> {
         .map_err(|_| CliError::Protocol("invalid Cash Code scan key".into()))?;
     Ok(key
         .public_key()
-        .to_encoded_point(true)
+        .to_sec1_point(true)
         .as_bytes()
         .try_into()
         .expect("compressed key"))
@@ -159,7 +159,7 @@ pub fn signing_key_for_receipt(
     let actual = Address::from_hash(
         network.prefix(),
         AddressKind::P2pkh,
-        hash160(key.verifying_key().to_encoded_point(true).as_bytes()),
+        hash160(key.verifying_key().to_sec1_point(true).as_bytes()),
     );
     if actual.script_pubkey() != expected.script_pubkey() {
         return Err(CliError::Protocol(
@@ -564,7 +564,7 @@ pub fn shared_secret(
         .map_err(|_| CliError::Usage("counterpart pubkey is not a curve point".to_string()))?;
     let scalar = scalar_from_bytes(privkey)?;
     let product = (point.to_projective() * scalar).to_affine();
-    let encoded = product.to_encoded_point(false);
+    let encoded = product.to_sec1_point(false);
     let x = encoded
         .x()
         .ok_or_else(|| CliError::Internal("ECDH product has no x coordinate".to_string()))?;
@@ -609,7 +609,7 @@ pub fn payment_address(
     let tweak = scalar_from_bytes(&ckd_tweak(secret, spend_pubkey, index)?)?;
     let child: AffinePoint =
         (parent.to_projective() + ProjectivePoint::GENERATOR * tweak).to_affine();
-    let compressed = child.to_encoded_point(true);
+    let compressed = child.to_sec1_point(true);
     Ok(Address::from_hash(
         network.prefix(),
         AddressKind::P2pkh,
@@ -623,7 +623,7 @@ pub fn spending_key(spend_privkey: &[u8; 32], secret: &[u8; 32], index: u32) -> 
     let pubkey = k256::SecretKey::from_slice(spend_privkey)
         .map_err(|e| CliError::Usage(format!("invalid spend private key: {e}")))?
         .public_key()
-        .to_encoded_point(true);
+        .to_sec1_point(true);
     let mut parent_pub = [0u8; 33];
     parent_pub.copy_from_slice(pubkey.as_bytes());
 
@@ -653,7 +653,7 @@ pub fn spending_key_address(
     let pubkey = k256::SecretKey::from_slice(&key)
         .map_err(|e| CliError::Internal(format!("derived key rejected: {e}")))?
         .public_key()
-        .to_encoded_point(true);
+        .to_sec1_point(true);
     Ok(Address::from_hash(
         network.prefix(),
         AddressKind::P2pkh,
@@ -884,7 +884,7 @@ mod tests {
     fn pubkey_of(priv_bytes: &[u8; 32]) -> [u8; 33] {
         let sk = k256::SecretKey::from_slice(priv_bytes).unwrap();
         let mut out = [0u8; 33];
-        out.copy_from_slice(sk.public_key().to_encoded_point(true).as_bytes());
+        out.copy_from_slice(sk.public_key().to_sec1_point(true).as_bytes());
         out
     }
 
@@ -1277,7 +1277,7 @@ mod tests {
         let parent = PublicKey::from_sec1_bytes(&spend).unwrap();
         let tweak = scalar_from_bytes(&ckd_tweak(&secret, &spend, 0).unwrap()).unwrap();
         let child = (parent.to_projective() + ProjectivePoint::GENERATOR * tweak).to_affine();
-        let compressed = child.to_encoded_point(true);
+        let compressed = child.to_sec1_point(true);
         assert_eq!(compressed.as_bytes().len(), 33);
         let expected = Address::from_hash(
             Network::Chipnet.prefix(),
@@ -1287,7 +1287,7 @@ mod tests {
         assert_eq!(addr.encode(), expected.encode());
 
         // And it must NOT be Electron Cash's uncompressed form.
-        let uncompressed = child.to_encoded_point(false);
+        let uncompressed = child.to_sec1_point(false);
         assert_eq!(uncompressed.as_bytes().len(), 65);
         let ec_address = Address::from_hash(
             Network::Chipnet.prefix(),
@@ -1480,7 +1480,7 @@ mod shared_vectors {
 
     fn pubkey_hex(privkey: &[u8; 32]) -> String {
         let sk = k256::SecretKey::from_slice(privkey).unwrap();
-        hex_of(sk.public_key().to_encoded_point(true).as_bytes())
+        hex_of(sk.public_key().to_sec1_point(true).as_bytes())
     }
 
     #[test]
