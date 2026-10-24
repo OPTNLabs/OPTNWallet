@@ -66,7 +66,7 @@ sha2 = "0.10"
 # Schnorr signatures need raw secp256k1 point/scalar arithmetic with a CUSTOM
 # generator H, which the Bitcoin-Core secp256k1 bindings don't expose. k256
 # (RustCrypto, pure Rust) does, and matches Electron Cash's scheme byte-for-byte.
-k256 = "0.13"
+k256 = "0.14"
 optn-core = { path = "../crates/optn-core", version = "=1.7.3" }
 optn-fusion = { path = "../crates/optn-fusion", version = "=1.7.3" }
 optn-app = { path = "../crates/optn-app", version = "=1.7.3" }
