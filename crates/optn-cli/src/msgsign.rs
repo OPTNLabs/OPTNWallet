@@ -22,7 +22,7 @@
 
 use k256::ecdsa::SigningKey;
 
-use crate::error::{CliError, Result};
+use crate::error::Result;
 use crate::tx::{double_sha256, varint};
 
 const MAGIC: &[u8] = b"Bitcoin Signed Message:\n";
@@ -45,10 +45,10 @@ pub fn message_digest(message: &[u8]) -> [u8; 32] {
 /// ours.
 pub fn sign_message(key: &SigningKey, message: &[u8]) -> Result<String> {
     let digest = message_digest(message);
-    let (signature, recovery_id) = key
-        .sign_prehash_recoverable(&digest)
-        .map_err(|e| CliError::Internal(format!("message signing failed: {e}")))?;
-    let normalized = signature.normalize_s().unwrap_or(signature);
+    // k256 signs low-S and adjusts the recovery id to match, so normalizing
+    // here changes nothing; it keeps the low-S rule visible where it matters.
+    let (signature, recovery_id) = key.sign_prehash_recoverable(&digest);
+    let normalized = signature.normalize_s();
 
     // 27 base, +4 for a compressed key, + the recovery id.
     let header = 27u8 + 4 + recovery_id.to_byte();

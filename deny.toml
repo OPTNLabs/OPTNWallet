@@ -12,9 +12,7 @@ all-features = true
 [advisories]
 unmaintained = "workspace"
 unsound = "all"
-ignore = [
-  { id = "RUSTSEC-2024-0429", reason = "Tauri 2.11.5 Linux currently depends on GTK/glib 0.18.5; the RustSec fix requires glib >=0.20, outside Tauri's accepted GTK graph. OPTN does not call VariantStrIter directly. Remove this exception as soon as upstream Tauri/WebKitGTK moves to glib >=0.20." },
-]
+ignore = []
 
 [bans]
 multiple-versions = "warn"
