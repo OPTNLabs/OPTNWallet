@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use k256::elliptic_curve::sec1::ToEncodedPoint;
+use k256::elliptic_curve::sec1::ToSec1Point;
 use k256::elliptic_curve::{Group, PrimeField};
 use k256::{ProjectivePoint, Scalar};
 use prost::Message;
@@ -235,7 +235,7 @@ pub fn validate_proof_internal(
     if bool::from(point.is_identity()) {
         return Err(BlameError::new("pedersen commitment is point at infinity"));
     }
-    let encoded = point.to_affine().to_encoded_point(false);
+    let encoded = point.to_affine().to_sec1_point(false);
     if encoded.as_bytes() != commitment.amount_commitment {
         return Err(BlameError::new("pedersen commitment mismatch"));
     }
@@ -537,7 +537,7 @@ mod tests {
             salted_component_hash: salted.finalize().to_vec(),
             amount_commitment: amount_point
                 .to_affine()
-                .to_encoded_point(false)
+                .to_sec1_point(false)
                 .as_bytes()
                 .to_vec(),
             communication_key: communication_key.to_vec(),
