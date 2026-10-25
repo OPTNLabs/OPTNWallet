@@ -1847,3 +1847,18 @@ was updated and passed **1 file / 2 tests**.
 The shared connector-summary labels also have Arabic translations so the
 resource fallback check remains clean. The full core suite passed **318 files /
 2,022 tests** (7 files and 10 tests skipped).
+
+### 2026-10-25: connector preview consistency verification
+
+Revision `23903a961` on `codex/ux-basics-and-workflow` is the current source
+fingerprint. `npm run test:ui` passed **31 files / 82 tests**; `npm run
+test:apps` passed **36 files / 157 tests**; `npm run typecheck:core`,
+`npm run lint:core -- --no-cache`, `npm run format:check`, `npm run deps:check`,
+`npm run addons:validate`, `npm run security:test`, `npm run build`, and
+`VITE_APP_SURFACE=desktop npm run build:web` passed. The UI Vite
+`configLoader: 'native'` extension warning remains non-fatal.
+
+The focused WalletConnect review passed **1 file / 2 tests** after the shared
+summary was introduced. No connector peer, hardware approval, native toast,
+browser external-link, or live-chain transaction was exercised; those remain
+explicit evidence gaps. FundMe remains excluded by user direction.
