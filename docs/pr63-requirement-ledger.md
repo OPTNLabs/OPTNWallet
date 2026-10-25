@@ -1678,3 +1678,6 @@ The broader regression pass on this revision also passed `npm run test:ui`
 2,010 passed / 10 skipped tests**), and `npm run security:test` (**2 files / 6
 tests**). The UI run still emits the repository's existing Vite
 `configLoader: 'native'` warning; it does not fail the suite.
+
+Repository gates also passed on this revision: `npm run deps:check`,
+`npm run format:check`, and `npm run addons:validate` (**1 file / 1 test**).
