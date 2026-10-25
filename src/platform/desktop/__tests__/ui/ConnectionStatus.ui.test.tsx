@@ -110,9 +110,11 @@ describe('connection panels', () => {
       screen.getByRole('button', { name: 'Sign', exact: true })
     ).toBeEnabled();
     expect(
-      await screen.findByText('Verified wallet effect')
+      await screen.findByText('What changes in this wallet')
     ).toBeInTheDocument();
-    expect(screen.getByText('−0.00001000 BCH')).toBeInTheDocument();
+    expect(screen.getAllByText('0.00001000 BCH').length).toBeGreaterThanOrEqual(
+      2
+    );
     expect(
       screen.getByText('Technical transaction details (1 inputs, 1 outputs)')
     ).toBeInTheDocument();

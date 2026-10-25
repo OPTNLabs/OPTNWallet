@@ -16,6 +16,7 @@ import { decodeWizardConnectTransaction } from '../../services/wizardconnect/tra
 import { showWalletNotification } from '../../utils/copyWithFeedback';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import { transactionPreview } from '../../services/connect/transactionPreview';
+import { describeConnectorRequest } from '../../services/connect/requestDescription';
 import ConnectorWalletEffectSummary from '../connect/ConnectorWalletEffectSummary';
 import ConnectorTransactionSummary from '../connect/ConnectorTransactionSummary';
 
@@ -66,6 +67,7 @@ export default function WizardSignTransactionModal() {
 
   const connection = connections[pending.connectionId];
   const payload = pending.request.transaction;
+  const requestDescription = describeConnectorRequest(payload.userPrompt);
   let decoded: ReturnType<typeof decodeWizardConnectTransaction> | null = null;
   let connectorPreview: ReturnType<typeof transactionPreview> | null = null;
   try {
@@ -183,6 +185,7 @@ export default function WizardSignTransactionModal() {
             <ConnectorWalletEffectSummary
               preview={connectorPreview}
               walletId={walletId}
+              tokenLabel={requestDescription.tokenLabel}
             />
           )}
 

@@ -85,12 +85,14 @@ it('shows Chipnet destinations and a verified wallet effect', async () => {
   ).toBeInTheDocument();
   expect(screen.getByText('Chipnet')).toBeInTheDocument();
   expect(screen.getByText('Sign and return to the app')).toBeInTheDocument();
-  expect(screen.getByText('0.00001000 BCH')).toBeInTheDocument();
-  expect(await screen.findByText('Verified wallet effect')).toBeInTheDocument();
-  expect(screen.getByText('−0.00001000 BCH')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: /Inputs/ }));
+  expect(
+    await screen.findByText('What changes in this wallet')
+  ).toBeInTheDocument();
+  expect(
+    (await screen.findAllByText('0.00001000 BCH')).length
+  ).toBeGreaterThanOrEqual(2);
+  fireEvent.click(screen.getByText(/Technical transaction details/));
   expect(screen.getByText('Index: 3')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: /Outputs/ }));
   expect(screen.getByText(/bchtest:/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Sign' })).toBeEnabled();
 });
@@ -108,4 +110,31 @@ it('blocks an incomplete request without displaying a negative fee', () => {
   );
   expect(screen.getByRole('button', { name: 'Sign' })).toBeDisabled();
   expect(screen.queryByText(/-0\.00009 BCH/)).not.toBeInTheDocument();
+});
+
+it('surfaces a Cauldron swap prompt and token label before technical details', async () => {
+  const pendingSignTx = request();
+  pendingSignTx.params.request.params.userPrompt =
+    'Cauldron swap 0.00999962 BCH -> PUSD';
+  pendingSignTx.params.request.params.transaction.outputs[0].token = {
+    category: new Uint8Array(32).fill(2),
+    amount: 267n,
+  };
+  mock.state = {
+    wallet_id: { currentWalletId: 1, networkType: 'chipnet' },
+    walletconnect: {
+      pendingSignTx,
+      activeSessions: {},
+    },
+  };
+  render(<SignTransactionModal />);
+
+  expect(
+    screen.getByRole('heading', { name: 'Cauldron swap' })
+  ).toBeInTheDocument();
+  expect(screen.getByText('0.00999962 BCH → PUSD')).toBeInTheDocument();
+  expect(await screen.findByText('You receive PUSD')).toBeInTheDocument();
+  expect(screen.getByText('267 atoms')).toBeInTheDocument();
+  const technicalDetails = screen.getByText(/Technical transaction details/);
+  expect(technicalDetails.closest('details')).not.toHaveAttribute('open');
 });

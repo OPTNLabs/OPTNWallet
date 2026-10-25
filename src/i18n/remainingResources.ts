@@ -8,13 +8,31 @@ import type { BaseLocale } from './types';
 export const remainingTranslations = {
   en: {
     'txReview.requestSummary': 'Review this transaction request',
+    'txReview.transactionRequest': 'Transaction request',
+    'txReview.cauldronSwap': 'Cauldron swap',
+    'txReview.cauldronPayment': 'Cauldron payment',
+    'txReview.cauldronPoolCreate': 'Create Cauldron pool',
+    'txReview.cauldronPoolWithdraw': 'Withdraw Cauldron pool',
+    'txReview.appDescription': 'App-provided description',
+    'txReview.requestedBy': 'Requested by',
+    'txReview.reviewBeforeSigning':
+      'WalletConnect request · review before signing',
     'txReview.network': 'Network',
     'txReview.action': 'Wallet action',
     'txReview.signAndBroadcast': 'Sign and broadcast',
     'txReview.signAndReturn': 'Sign and return to the app',
-    'txReview.estimatedNetworkFee': 'Estimated network fee',
+    'txReview.estimatedNetworkFee': 'Network fee',
+    'txReview.walletEffect': 'What changes in this wallet',
+    'txReview.walletEffectHelp':
+      'These amounts are matched to this wallet’s inputs and change.',
+    'txReview.spend': 'You spend',
+    'txReview.receive': 'You receive',
+    'txReview.token': 'token',
+    'txReview.nft': 'NFT',
+    'txReview.tokenIdentity': 'Token identity',
+    'txReview.technicalDetails': 'Technical transaction details',
     'txReview.feeScope':
-      'This fee is calculated from the complete request. Your wallet effect below identifies the inputs and change that belong to this wallet.',
+      'This fee is calculated from the complete request. The wallet effect identifies the inputs and change that belong to this wallet.',
     'txReview.technicalTotals': 'Technical transaction totals',
     'txReview.totalInput': 'Total input',
     'txReview.totalOutput': 'Total output',

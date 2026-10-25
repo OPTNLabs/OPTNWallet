@@ -1882,3 +1882,23 @@ recorded UI/apps suites and both production build configurations are unchanged
 by this service-only fix; both `npm run build` and
 `VITE_APP_SURFACE=desktop npm run build:web` were rerun successfully after the
 fix.
+
+### 2026-10-25: WalletConnect Cauldron/PUSD review
+
+The WalletConnect approval sheet was reviewed against a Cauldron BCH-to-PUSD
+request. The decision-critical area now leads with the app-described action
+(`Cauldron swap … BCH → PUSD`) and the verified wallet-owned effect. BCH and
+token changes are presented as explicit spend/receive cards; the full token
+category remains available under a token-identity disclosure. Network, action,
+and complete-request fee remain visible, while raw inputs, outputs, scripts,
+and addresses are grouped under one collapsed technical-details disclosure.
+The approval and cancellation actions remain in a safe-area-aware footer while
+the request body scrolls.
+
+Focused WalletConnect, WizardConnect, request-description, and localization
+regressions passed (**3 files / 10 tests**, plus **2 resource tests / 14
+tests**). The Cauldron fixture verifies `0.00999962 BCH → PUSD`, the `PUSD`
+label, and the collapsed technical disclosure. Live WalletConnect peer,
+native-device rendering, and BCMR decimal-display evidence remain open; the
+app-supplied prompt is context only and does not replace wallet-verified
+transaction effects. FundMe remains excluded.

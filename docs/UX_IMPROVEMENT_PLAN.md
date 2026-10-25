@@ -1249,3 +1249,19 @@ skipped files; 2,020 passed / 10 skipped tests**), `npm run test:ui` (**30 files
 `npm run security:test` (**2 files / 6 tests**), `npm run build`,
 `VITE_APP_SURFACE=desktop npm run build:web`, and `git diff --check`. The Vite
 `configLoader: 'native'` message remains a non-fatal repository warning.
+
+### WalletConnect Cauldron/PUSD layout review — 2026-10-25
+
+The WalletConnect approval screenshots showed that a Cauldron BCH-to-PUSD
+request was dominated by raw input/output data and that the wallet effect did
+not explain the direction of the swap. The review now presents the
+app-provided Cauldron action as context, places verified wallet spend/receive
+effects first, keeps network/action/fee visible, and moves raw transaction
+identity into one collapsed technical disclosure. The approval footer remains
+visible while the body scrolls and includes safe-area padding for mobile.
+
+The prompt remains explicitly untrusted context; wallet-owned effects are
+derived from exact locking-bytecode matches. The focused fixture covers
+`0.00999962 BCH → PUSD`, token labeling, and the closed technical disclosure.
+Live peer, packaged native, and BCMR decimal-display evidence remain gaps.
+FundMe is excluded from this review.
