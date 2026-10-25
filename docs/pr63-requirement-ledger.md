@@ -1681,3 +1681,21 @@ tests**). The UI run still emits the repository's existing Vite
 
 Repository gates also passed on this revision: `npm run deps:check`,
 `npm run format:check`, and `npm run addons:validate` (**1 file / 1 test**).
+
+### 2026-10-24: Quantumroot recovery review continuation
+
+Revision `c5b274b85` moves Quantumroot regular recovery, aggregate BCH sweep,
+Quantum Lock recovery, and token-authorized recovery behind an exact prepared
+transaction review. The modal now shows the destination, input total, recovery
+amount, network fee, protected successor output when present, input outpoints,
+and transaction byte length; confirmation broadcasts only the retained raw
+transaction and guards repeated activation. A new pure review helper verifies
+that selected-input totals equal the reviewed fee, recovery amount, and any
+protected successor output.
+
+The focused Quantumroot and recovery-service regression passed **3 files / 31
+tests**; the built-in-app suite passed **36 files / 157 tests**; core typecheck,
+lint, changed-file Prettier, `git diff --check`, standard production build,
+and `VITE_APP_SURFACE=desktop npm run build:web` passed. These are local
+source/component and React-bundle checks. Rendered mobile/native, live-chain,
+hardware, and packaged evidence remain unavailable. FundMe remains excluded.
