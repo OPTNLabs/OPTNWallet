@@ -303,6 +303,23 @@ Use consistent typography, spacing and button hierarchy from existing components
 44px mobile targets, visible keyboard focus, and accessible status announcements.
 Preparing a review must not say that funds are being sent or confirmed.
 
+For every spend or connector approval, review the transaction built for that
+action, including custom, multisig, hardware and built-in app paths. The first
+view should identify the requester and network; what leaves and returns to the
+wallet; destination or contract effect; token/NFT identity and authority;
+network and app fees; and whether approval signs, returns bytes to an app,
+attempts broadcast, or merely stages a preview. Label whole-transaction totals
+as such when wallet ownership or fee share cannot be verified. Never call gross
+funding inputs the wallet's net debit. Keep raw inputs, outputs and routes behind
+a reachable Technical details disclosure.
+
+Bind approval to the reviewed transaction and amounts. If a builder refreshes
+UTXOs, quote liquidity, recipients, fees or signed bytes after review, require
+another review before signing. Make preparing, signing, submitting, submitted,
+unknown and failed states distinct; an uncertain broadcast must not invite a
+blind retry. A preview-only action uses a plain completion control, not a send
+gesture. Every deliberate approval must remain reachable by keyboard and touch.
+
 For visual changes, inspect rendered mobile and desktop layouts, dialog layering,
 safe areas, keyboard focus and long translated labels. Verify native notifications
 in a native package. Record unchecked surfaces as gaps in the existing UX plan and

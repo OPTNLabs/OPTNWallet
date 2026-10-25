@@ -40,6 +40,7 @@ import {
 } from '../../../../utils/tokenPresentation';
 import { useAddonI18n } from '../../../../i18n/useAddonI18n';
 import { readFromClipboard } from '../../../../utils/clipboard';
+import { formatDistributionTotal } from '../airdropReview';
 
 type FlowStep = 'recipients' | 'asset' | 'send';
 
@@ -238,6 +239,22 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   const preparedJobs = useMemo(
     () => jobs.filter((job) => job.status === 'prepared'),
     [jobs]
+  );
+  const preparedTotalAtomic = preparedJobs.reduce(
+    (sum, job) => sum + BigInt(job.amount),
+    0n
+  );
+  const preparedTotalDisplay = formatDistributionTotal(
+    preparedTotalAtomic,
+    distributionDraft.assetType === 'bch'
+      ? { kind: 'bch' }
+      : {
+          kind: 'token',
+          decimals: getTokenPresentation(distributionDraft.tokenCategory)
+            .decimals,
+          label: getTokenPresentation(distributionDraft.tokenCategory)
+            .primaryLabel,
+        }
   );
   const preparedJobsPreviewKey = useMemo(
     () =>
@@ -1275,11 +1292,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
               </div>
             ) : null}
             <div className="text-sm wallet-muted">
-              {preparedJobs.length} recipients · total{' '}
-              {preparedJobs
-                .reduce((sum, job) => sum + BigInt(job.amount), 0n)
-                .toString()}{' '}
-              · {distributionDraft.assetType === 'token' ? 'Token' : 'BCH'}
+              {preparedJobs.length} recipients · total {preparedTotalDisplay}
               {txPreview ? ` · fee ${txPreview.feeSats} sats` : ''}
             </div>
             {jobs.length === 0 ? (
@@ -1636,7 +1649,8 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
                     return {};
                   },
                 },
-                preparedJobs
+                preparedJobs,
+                txPreview
               );
               await runSmoothReset(async () => {
                 await refreshWalletAfterSend();
@@ -1668,11 +1682,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
         {txPreview ? (
           <div className="space-y-3">
             <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm">
-              {preparedJobs.length} recipients · total{' '}
-              {preparedJobs
-                .reduce((sum, job) => sum + BigInt(job.amount), 0n)
-                .toString()}{' '}
-              · {distributionDraft.assetType === 'token' ? 'Token' : 'BCH'}
+              {preparedJobs.length} recipients · total {preparedTotalDisplay}
             </div>
             <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm">
               {txPreview.inputs.length} inputs · {txPreview.finalOutputs.length}{' '}

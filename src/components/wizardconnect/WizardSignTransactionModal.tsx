@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import type { AppDispatch, RootState } from '../../state/store';
@@ -53,6 +54,8 @@ export default function WizardSignTransactionModal() {
   const connections = useSelector(
     (state: RootState) => state.wizardconnect.activeConnections
   );
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
 
   if (!pending) return null;
 
@@ -82,7 +85,9 @@ export default function WizardSignTransactionModal() {
     totalInput >= totalOutput;
 
   const handleApprove = async () => {
-    if (!canApprove) return;
+    if (!canApprove || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
     try {
       await dispatch(approveWizardSignRequest()).unwrap();
       await showWalletNotification(t('wizard.approved'));
@@ -94,10 +99,16 @@ export default function WizardSignTransactionModal() {
       await showWalletNotification(
         t('wizard.approveFailed', { message: toErrorMessage(error) })
       );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   };
 
   const handleReject = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
     try {
       await dispatch(rejectWizardSignRequest()).unwrap();
       await showWalletNotification(t('wizard.rejected'));
@@ -109,6 +120,9 @@ export default function WizardSignTransactionModal() {
       await showWalletNotification(
         t('wizard.rejectFailed', { message: toErrorMessage(error) })
       );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   };
 
@@ -147,33 +161,55 @@ export default function WizardSignTransactionModal() {
             </div>
           )}
 
+          {canApprove && (
+            <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 text-sm space-y-2">
+              <div className="font-semibold">
+                {network === 'chipnet' ? 'Chipnet' : 'Mainnet'} transaction
+              </div>
+              <p>
+                The wallet will sign and return the transaction to this app. The
+                app may broadcast it later.
+              </p>
+              <p className="wallet-muted">
+                The totals describe the whole transaction, including other
+                participants. This request does not identify your wallet’s exact
+                change or fee share.
+              </p>
+            </div>
+          )}
+
           {tx && canApprove && (
             <>
-              {(sourceOutputs as TxInputSource[]).map((source, index) => (
-                <div
-                  key={`${pending.request.sequence}-${index}`}
-                  className="ml-2"
-                >
-                  <div>
-                    {t('wizard.txid')}:{' '}
-                    <span className="font-mono break-all">
-                      {binToHex(
-                        ensureUint8Array(
-                          tx.inputs[index].outpointTransactionHash
-                        )
-                      )}
-                    </span>
+              <details>
+                <summary className="cursor-pointer font-semibold">
+                  Technical inputs ({sourceOutputs.length})
+                </summary>
+                {(sourceOutputs as TxInputSource[]).map((source, index) => (
+                  <div
+                    key={`${pending.request.sequence}-${index}`}
+                    className="ml-2"
+                  >
+                    <div>
+                      {t('wizard.txid')}:{' '}
+                      <span className="font-mono break-all">
+                        {binToHex(
+                          ensureUint8Array(
+                            tx.inputs[index].outpointTransactionHash
+                          )
+                        )}
+                      </span>
+                    </div>
+                    <div>
+                      {t('wizard.index')}: {tx.inputs[index].outpointIndex}
+                    </div>
+                    <div>
+                      {Number(parseSatoshis(source.valueSatoshis)) /
+                        SATSINBITCOIN}{' '}
+                      BCH
+                    </div>
                   </div>
-                  <div>
-                    {t('wizard.index')}: {tx.inputs[index].outpointIndex}
-                  </div>
-                  <div>
-                    {Number(parseSatoshis(source.valueSatoshis)) /
-                      SATSINBITCOIN}{' '}
-                    BCH
-                  </div>
-                </div>
-              ))}
+                ))}
+              </details>
 
               {(outputs as TxOutput[]).map((output, index) => {
                 const value = parseSatoshis(output.valueSatoshis);
@@ -238,6 +274,22 @@ export default function WizardSignTransactionModal() {
                               {String(parseSatoshis(output.token.amount))}
                             </div>
                           )}
+                        {output.token.nft && (
+                          <>
+                            <div>
+                              <strong>NFT capability:</strong>{' '}
+                              {output.token.nft.capability}
+                            </div>
+                            <div>
+                              <strong>NFT commitment:</strong>{' '}
+                              <span className="font-mono break-all">
+                                {binToHex(
+                                  ensureUint8Array(output.token.nft.commitment)
+                                ) || 'empty'}
+                              </span>
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -245,6 +297,7 @@ export default function WizardSignTransactionModal() {
               })}
 
               <div className="text-sm border-t border-[var(--wallet-border)] pt-2">
+                <div className="font-semibold">Whole transaction</div>
                 <div>
                   {t('wizard.totalInput')}: {Number(totalInput) / SATSINBITCOIN}{' '}
                   BCH
@@ -258,7 +311,7 @@ export default function WizardSignTransactionModal() {
                   {Number(totalInput - totalOutput) / SATSINBITCOIN} BCH
                 </div>
                 <div>
-                  {t('wizard.broadcast')}:{' '}
+                  App requested broadcast:{' '}
                   {payload.broadcast ? t('wizard.yes') : t('wizard.no')}
                 </div>
               </div>
@@ -268,15 +321,16 @@ export default function WizardSignTransactionModal() {
 
         <div className="flex justify-around pt-2">
           <button
-            disabled={!canApprove}
+            disabled={!canApprove || busy}
             onClick={() => void handleApprove()}
             className="wallet-btn-primary"
           >
-            {t('wizard.sign')}
+            {busy ? 'Working…' : t('wizard.sign')}
           </button>
           <button
             onClick={() => void handleReject()}
             className="wallet-btn-danger"
+            disabled={busy}
           >
             {t('wizard.cancel')}
           </button>

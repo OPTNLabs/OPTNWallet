@@ -35,10 +35,12 @@ export default function CashConnectExecuteActionModal() {
   );
   if (!pending) return null;
 
-  const { session, response } = pending;
+  const { session, request, response } = pending;
   const dappUrl = normalizeExternalUrl(session.dapp.url);
   const title = formatMeta(response.meta?.title) || session.template.name;
   const description = formatMeta(response.meta?.description);
+  const balanceChanges = Object.entries(response.balanceChanges);
+  const transactionCount = response.transactions.length;
 
   return (
     <WalletPopupSheet
@@ -48,14 +50,14 @@ export default function CashConnectExecuteActionModal() {
         <div className="grid grid-cols-2 gap-3">
           <button
             type="button"
-            className="wallet-btn-primary px-3 py-2"
+            className="wallet-btn-primary min-h-[44px] px-3 py-2"
             onClick={() => dispatch(approveCashConnectActionAction())}
           >
-            Approve
+            Approve request
           </button>
           <button
             type="button"
-            className="wallet-btn-danger px-3 py-2"
+            className="wallet-btn-danger min-h-[44px] px-3 py-2"
             onClick={() => dispatch(rejectCashConnectActionAction())}
           >
             Reject
@@ -78,9 +80,29 @@ export default function CashConnectExecuteActionModal() {
       {description ? (
         <p className="mt-3 text-sm wallet-muted">{description}</p>
       ) : null}
+      <div className="wallet-card mt-4 p-3 text-sm">
+        <p className="font-semibold">What this request does</p>
+        <p className="mt-1 break-all">Action: {request.action}</p>
+        <p className="mt-1">
+          Approving returns {transactionCount} prepared transaction
+          {transactionCount === 1 ? '' : 's'} to {session.dapp.name}. The app
+          may submit them to the network.
+        </p>
+        {transactionCount > 1 ? (
+          <p className="mt-2 wallet-warning-panel rounded-lg p-2">
+            This action includes multiple transactions. Review the estimated
+            balance changes below.
+          </p>
+        ) : null}
+      </div>
       <div className="mt-4 text-sm space-y-1">
-        <p className="font-semibold">Balance change</p>
-        {Object.entries(response.balanceChanges).map(([category, amount]) => (
+        <p className="font-semibold">Estimated wallet balance change</p>
+        {balanceChanges.length === 0 ? (
+          <p className="wallet-muted">
+            No balance change was supplied for this request.
+          </p>
+        ) : null}
+        {balanceChanges.map(([category, amount]) => (
           <p key={category}>{formatBalance(category, amount)}</p>
         ))}
       </div>

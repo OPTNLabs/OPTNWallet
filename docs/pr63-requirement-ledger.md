@@ -1523,3 +1523,54 @@ reproduction. No application fix or production/release readiness is claimed;
 build/typecheck/platform gates must be rerun when implementation changes land.
 Documentation Prettier checks, `git diff --check`, and all 31 source/reference
 fingerprints plus the diagnostic fixture checksum pass reconciliation.
+
+### 2026-10-24: transaction-preview implementation follow-up
+
+Checkout `/home/lightswarm/projects/OPTNWallet`, branch
+`codex/ux-basics-and-workflow`. The preceding UX baseline was committed as
+`05456aa669f678a13b7497059552e9bc13ae2355` without a push. This entry
+records the follow-up preview change on that branch. No mainnet signing,
+spending, broadcast, publication or peer approval was exercised; all transaction
+fixtures are disposable and synthetic.
+
+Implemented preview corrections and explicit partial statuses are recorded in
+[the existing UX plan](UX_IMPROVEMENT_PLAN.md#transaction-preview-implementation-follow-up--2026-10-24).
+WalletConnect validates source/output shape before approval, uses the selected
+network, and reports signed-only, hardware-not-broadcast, broadcasted,
+submitted and failed-broadcast outcomes separately. Wizard review exposes NFT
+authority/commitment. Multisig, Mint, custom builder, Airdrops, Paper Wallet
+Sweep and CashConnect received verified-summary or feedback corrections.
+The canonical UI/UX skill now calls for source-verified wallet effects,
+review-to-sign binding and distinct signature/broadcast outcomes across
+ordinary, connector and built-in-app actions.
+Cauldron ordinary swaps now go from input to final review, include fees and
+require a new quote if rebuilt signed bytes or amounts change. Pool withdrawal
+prepares before approval and pool builds require another review after a changed
+plan. Paryon's redeem path is explicitly preview-only; live borrow/stake
+errors remain visible with history guidance.
+
+Focused synthetic checks passed: WalletConnect signing/preview validation,
+component Chipnet/invalid-request review, multisig total, custom-builder token
+accounting, Airdrops rebuild binding/units, Cauldron plan binding, Mint token
+summary, shared modal keyboard/preview-only action, Paper Wallet Sweep planner
+and Arabic copy regression. Full app suite: **34 files / 148 tests passed**.
+Full UI suite: **29 files / 75 tests passed**. Full core suite initially found
+two untranslated Arabic transaction-copy strings; the focused reproduction
+failed, the strings were added, and the rerun passed **310 files / 2,002 tests**
+with 7 files / 10 tests skipped. Core TypeScript, standard React build, core
+lint, repository formatting and `git diff --check` passed after the connector
+outcome edit. The desktop React build and full UI suite also passed at the final
+code revision. These are local/package checks,
+not release evidence.
+
+The browser inventory is empty in this session and `adb devices` reports no
+attached device; no new rendered or packaged-native screenshots of this
+revision are claimed. The 18 older, redacted Android/Chrome screenshots were
+moved from the repository's untracked evidence directory to
+`/run/user/1000/optn-ui-screenshots-20261024/` (tmpfs), so they disappear on
+shutdown and are not part of the commit. Prior relative screenshot links in
+historical entries refer to their original location; those images cover an
+earlier revision and cannot validate these preview edits. Connector peer,
+hardware, native touch/focus, changed chain liquidity, and real broadcast
+outcomes remain unverified. FundMe/AuthGuard and exact wallet-effect summaries
+need further implementation as marked in the UX plan.

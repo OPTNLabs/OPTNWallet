@@ -175,6 +175,8 @@ export const ContainedSwipeConfirmModal: React.FC<{
   warning?: React.ReactNode;
   loading?: boolean;
   canConfirm?: boolean;
+  confirmationMode?: 'slide' | 'button';
+  confirmationLabel?: string;
   onCancel: () => void;
   onConfirm: () => void;
   children?: React.ReactNode;
@@ -185,28 +187,85 @@ export const ContainedSwipeConfirmModal: React.FC<{
   warning,
   loading = false,
   canConfirm = true,
+  confirmationMode = 'slide',
+  confirmationLabel = 'Confirm',
   onCancel,
   onConfirm,
   children,
 }) => {
   const addonI18n = useContext(AddonI18nContext);
   const cancelLabel = addonI18n?.t('common.cancel', 'Cancel') ?? 'Cancel';
-  const defaultWarning =
-    addonI18n?.t(
-      'common.broadcastWarning',
-      'Broadcasts immediately after confirmation.'
-    ) ?? 'Broadcasts immediately after confirmation.';
+  const defaultWarning = 'Review the details before confirming.';
   const HANDLE_SIZE = 56;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCancelRef = useRef(onCancel);
+  const loadingRef = useRef(loading);
+  const confirmedRef = useRef(false);
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragX, setDragX] = useState(0);
   const [maxX, setMaxX] = useState(0);
   const [slideCompleted, setSlideCompleted] = useState(false);
+
+  onCancelRef.current = onCancel;
+  loadingRef.current = loading;
+
+  useEffect(() => {
+    if (!open) return;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const dialog = dialogRef.current;
+    const getFocusable = () =>
+      Array.from(
+        dialog?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter((element) => !element.closest('[hidden]'));
+    closeButtonRef.current?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (!loadingRef.current) {
+          event.preventDefault();
+          onCancelRef.current();
+        }
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = getFocusable();
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!dialog?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus();
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
       setDragX(0);
       setSlideCompleted(false);
       setMaxX(0);
+      confirmedRef.current = false;
     }
   }, [open]);
 
@@ -266,6 +325,15 @@ export const ContainedSwipeConfirmModal: React.FC<{
   const pendingHandle = `hsl(${progressHue} 82% 44%)`;
   const pendingHandleShadow = `0 8px 24px hsla(${progressHue}, 82%, 44%, 0.35)`;
 
+  const confirm = () => {
+    if (!canConfirm || loading || slideCompleted || confirmedRef.current)
+      return;
+    confirmedRef.current = true;
+    setDragX(maxX);
+    setSlideCompleted(true);
+    onConfirm();
+  };
+
   const handleStop = (_: unknown, data: { x: number }) => {
     if (slideCompleted || loading || maxX <= 0) return;
 
@@ -276,9 +344,7 @@ export const ContainedSwipeConfirmModal: React.FC<{
         setSlideCompleted(false);
         return;
       }
-      setDragX(maxX);
-      setSlideCompleted(true);
-      onConfirm();
+      confirm();
     } else {
       setDragX(0);
       setSlideCompleted(false);
@@ -296,10 +362,12 @@ export const ContainedSwipeConfirmModal: React.FC<{
 
       <div className="relative mx-auto flex h-full w-full max-w-[430px] items-center px-3 py-4 sm:px-4 sm:py-8">
         <div
+          ref={dialogRef}
           className="wallet-popup-panel flex w-full flex-col overflow-hidden rounded-[28px] shadow-[0_24px_70px_rgba(0,0,0,0.3)]"
           role="dialog"
           aria-modal="true"
           aria-label={title}
+          tabIndex={-1}
           style={{
             maxHeight:
               'min(84vh, calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px))',
@@ -321,10 +389,11 @@ export const ContainedSwipeConfirmModal: React.FC<{
               </div>
 
               <button
+                ref={closeButtonRef}
                 type="button"
                 onClick={onCancel}
                 disabled={loading}
-                className="shrink-0 inline-flex items-center justify-center rounded-full h-9 w-9 wallet-surface-strong wallet-text-strong disabled:opacity-50"
+                className="shrink-0 inline-flex items-center justify-center rounded-full h-11 w-11 wallet-surface-strong wallet-text-strong disabled:opacity-50"
                 aria-label={cancelLabel}
                 title={cancelLabel}
               >
@@ -350,99 +419,119 @@ export const ContainedSwipeConfirmModal: React.FC<{
           ) : null}
 
           <div className="px-4 pb-4 pt-2 wallet-surface">
-            <div className="text-[15px] wallet-muted mb-2.5 px-1">
-              {loading
-                ? 'Preparing…'
-                : slideCompleted
-                  ? 'Confirmed'
-                  : nearingSend
-                    ? 'Release to send'
-                    : 'Slide to confirm'}
-            </div>
-
-            <div
-              ref={trackRef}
-              className={`relative w-full h-14 rounded-[18px] border overflow-hidden transition-colors ${
-                slideCompleted ? 'bg-emerald-50 border-emerald-200' : ''
-              }`}
-              style={
-                slideCompleted
-                  ? undefined
-                  : {
-                      backgroundColor: pendingTrackBg,
-                      borderColor: pendingTrackBorder,
-                    }
-              }
-            >
-              <div className="absolute right-0 top-0 h-14 w-[18%] bg-amber-100/70 border-l border-amber-200/80 pointer-events-none" />
-
-              <div
-                className="absolute left-0 top-0 h-14 pointer-events-none"
-                style={{
-                  width: `${progress}%`,
-                  backgroundColor: slideCompleted
-                    ? 'rgba(16,185,129,0.2)'
-                    : pendingFill,
-                }}
-              />
-
-              <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
-                <span
-                  className="text-[10px] font-bold tracking-wide"
-                  style={{
-                    color: slideCompleted ? 'rgb(4 120 87)' : pendingText,
-                  }}
-                >
-                  SEND
-                </span>
-              </div>
-
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <span
-                  className="text-[15px] leading-none tracking-[0.02em] font-semibold transition-colors"
-                  style={{
-                    color: slideCompleted ? 'rgb(4 120 87)' : pendingText,
-                  }}
-                >
+            {confirmationMode === 'button' ? (
+              <button
+                type="button"
+                className="wallet-btn-primary min-h-[48px] w-full"
+                disabled={!canConfirm || loading || slideCompleted}
+                onClick={confirm}
+              >
+                {loading ? 'Working…' : confirmationLabel}
+              </button>
+            ) : (
+              <>
+                <div className="text-[15px] wallet-muted mb-2.5 px-1">
                   {loading
-                    ? 'Sending…'
+                    ? 'Working…'
                     : slideCompleted
                       ? 'Confirmed'
                       : nearingSend
                         ? 'Release to send'
                         : 'Slide to confirm'}
-                </span>
-              </div>
-
-              <Draggable
-                axis="x"
-                bounds={{ left: 0, right: maxX }}
-                position={{ x: dragX, y: 0 }}
-                onDrag={(_, data) =>
-                  setDragX(Math.min(Math.max(0, data.x), maxX))
-                }
-                onStop={handleStop}
-                disabled={loading || slideCompleted || maxX <= 0}
-              >
+                </div>
                 <div
-                  className={`absolute left-0 top-0 h-14 w-14 rounded-[18px] flex items-center justify-center text-white text-xl select-none transition-colors ${
-                    slideCompleted
-                      ? 'bg-emerald-600 shadow-[0_8px_24px_rgba(5,150,105,0.35)]'
-                      : ''
+                  ref={trackRef}
+                  className={`relative w-full h-14 rounded-[18px] border overflow-hidden transition-colors ${
+                    slideCompleted ? 'bg-emerald-50 border-emerald-200' : ''
                   }`}
                   style={
                     slideCompleted
                       ? undefined
                       : {
-                          backgroundColor: pendingHandle,
-                          boxShadow: pendingHandleShadow,
+                          backgroundColor: pendingTrackBg,
+                          borderColor: pendingTrackBorder,
                         }
                   }
                 >
-                  {slideCompleted ? '✓' : '→'}
+                  <div className="absolute right-0 top-0 h-14 w-[18%] bg-amber-100/70 border-l border-amber-200/80 pointer-events-none" />
+
+                  <div
+                    className="absolute left-0 top-0 h-14 pointer-events-none"
+                    style={{
+                      width: `${progress}%`,
+                      backgroundColor: slideCompleted
+                        ? 'rgba(16,185,129,0.2)'
+                        : pendingFill,
+                    }}
+                  />
+
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
+                    <span
+                      className="text-[10px] font-bold tracking-wide"
+                      style={{
+                        color: slideCompleted ? 'rgb(4 120 87)' : pendingText,
+                      }}
+                    >
+                      CONFIRM
+                    </span>
+                  </div>
+
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <span
+                      className="text-[15px] leading-none tracking-[0.02em] font-semibold transition-colors"
+                      style={{
+                        color: slideCompleted ? 'rgb(4 120 87)' : pendingText,
+                      }}
+                    >
+                      {loading
+                        ? 'Working…'
+                        : slideCompleted
+                          ? 'Confirmed'
+                          : nearingSend
+                            ? 'Release to send'
+                            : 'Slide to confirm'}
+                    </span>
+                  </div>
+
+                  <Draggable
+                    axis="x"
+                    bounds={{ left: 0, right: maxX }}
+                    position={{ x: dragX, y: 0 }}
+                    onDrag={(_, data) =>
+                      setDragX(Math.min(Math.max(0, data.x), maxX))
+                    }
+                    onStop={handleStop}
+                    disabled={loading || slideCompleted || maxX <= 0}
+                  >
+                    <div
+                      className={`absolute left-0 top-0 h-14 w-14 rounded-[18px] flex items-center justify-center text-white text-xl select-none transition-colors ${
+                        slideCompleted
+                          ? 'bg-emerald-600 shadow-[0_8px_24px_rgba(5,150,105,0.35)]'
+                          : ''
+                      }`}
+                      style={
+                        slideCompleted
+                          ? undefined
+                          : {
+                              backgroundColor: pendingHandle,
+                              boxShadow: pendingHandleShadow,
+                            }
+                      }
+                    >
+                      {slideCompleted ? '✓' : '→'}
+                    </div>
+                  </Draggable>
                 </div>
-              </Draggable>
-            </div>
+                <button
+                  type="button"
+                  className="sr-only focus:not-sr-only focus:mt-3 focus:block focus:w-full wallet-btn-primary"
+                  disabled={!canConfirm || loading || slideCompleted}
+                  onClick={confirm}
+                >
+                  Confirm action
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

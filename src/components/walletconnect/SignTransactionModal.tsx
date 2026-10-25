@@ -1,6 +1,6 @@
 // inside src/components/walletconnect/SignTransactionModal.tsx
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '../../state/store';
 import {
@@ -11,8 +11,9 @@ import {
 } from '../../state/slices/walletconnectSlice';
 import { enqueueNotification } from '../../state/slices/notificationsSlice';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
-import { SATSINBITCOIN } from '../../utils/constants';
-import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
+import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
+import { transactionPreview } from '../../services/connect/transactionPreview';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import useOutboundTransactions from '../../hooks/useOutboundTransactions';
 import { shortenAddress } from '../../utils/shortenHash';
@@ -38,6 +39,7 @@ export function SignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
   const { t } = useI18n();
   const walletId = useSelector(selectWalletId);
+  const network = useSelector(selectCurrentNetwork);
   const signTxRequest = useSelector(
     (state: RootState) => state.walletconnect.pendingSignTx
   );
@@ -47,7 +49,9 @@ export function SignTransactionModal() {
   const { hasUnresolved } = useOutboundTransactions(walletId);
 
   const [inputsExpanded, setInputsExpanded] = useState(false);
-  const [outputsExpanded, setOutputsExpanded] = useState(false);
+  const [outputsExpanded, setOutputsExpanded] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
 
   if (!signTxRequest) return null;
 
@@ -58,23 +62,14 @@ export function SignTransactionModal() {
   const userPrompt = request.params?.userPrompt ?? '';
   const shouldBroadcast = !!request.params?.broadcast;
   const dappMetadata = activeSessions?.[topic]?.peer?.metadata;
-  const inputs = tx?.inputs || [];
-  const outputs = tx?.outputs || [];
-
-  type TxAmountCarrier = { valueSatoshis: unknown };
-  type TxToken = {
-    category: unknown;
-    amount?: unknown;
-    nft?: { capability?: string; commitment?: unknown };
-  };
-  type TxOutput = TxAmountCarrier & {
-    lockingBytecode: unknown;
-    token?: TxToken;
-  };
-  type TxInputSource = TxAmountCarrier & {
-    outpointTransactionHash: unknown;
-    outpointIndex: number;
-  };
+  let preview: ReturnType<typeof transactionPreview> | null = null;
+  try {
+    preview = transactionPreview(tx, sourceOutputs);
+  } catch {
+    // Keep malformed requests visible so the user can reject them.
+  }
+  const inputs = preview?.inputs ?? [];
+  const outputs = preview?.outputs ?? [];
 
   function parsePushData(bytecode: Uint8Array): string[] {
     const result: string[] = [];
@@ -91,14 +86,11 @@ export function SignTransactionModal() {
     return result;
   }
 
-  function toCashAddress(
-    bytecode: unknown,
-    prefix: 'bitcoincash' | 'bchtest' | 'bchreg' = 'bitcoincash'
-  ): string {
+  function toCashAddress(bytecode: Uint8Array): string {
     try {
       const result = lockingBytecodeToCashAddress({
-        prefix,
-        bytecode: ensureUint8Array(bytecode),
+        prefix: PREFIX[network],
+        bytecode,
       });
       return typeof result === 'string' ? `⚠️ ${result}` : result.address;
     } catch {
@@ -106,32 +98,35 @@ export function SignTransactionModal() {
     }
   }
 
-  const totalInput: bigint = (sourceOutputs as TxInputSource[]).reduce(
-    (sum: bigint, o) => sum + parseSatoshis(o.valueSatoshis),
-    0n
-  );
-  const totalOutput: bigint = (outputs as TxOutput[]).reduce(
-    (sum: bigint, o) => sum + parseSatoshis(o.valueSatoshis),
-    0n
-  );
-  const fee = totalInput - totalOutput;
   const broadcastLocked = shouldBroadcast && hasUnresolved;
   const dappUrl = dappMetadata?.url
     ? normalizeExternalUrl(dappMetadata.url)
     : null;
 
   const handleSign = async () => {
-    if (broadcastLocked) return;
+    if (broadcastLocked || !preview || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
     try {
-      await dispatch(respondWithTxSignature(signTxRequest)).unwrap();
+      const outcome = await dispatch(
+        respondWithTxSignature(signTxRequest)
+      ).unwrap();
+      const outcomeMessage =
+        outcome.kind === 'broadcasted'
+          ? 'Signed and broadcast by this wallet.'
+          : outcome.kind === 'submitted'
+            ? 'Signed and submitted. Watch transaction history before sending again.'
+            : outcome.kind === 'failed'
+              ? `Signed transaction returned to the app, but wallet broadcast failed: ${outcome.message}. The app may still submit it.`
+              : outcome.kind === 'not_attempted_hardware'
+                ? 'Signed on the hardware wallet and returned to the app. Wallet broadcast was not attempted; the app may submit it.'
+                : 'Signed transaction returned to the app. The app may submit it later.';
       dispatch(
         enqueueNotification({
           id: `walletconnect:tx:signed:${topic}:${signTxRequest.id}`,
           kind: 'walletconnect',
           title: t('wc.transactionApprovedTitle'),
-          body: dappMetadata?.name
-            ? t('wc.transactionSentBody', { name: dappMetadata.name })
-            : t('wc.transactionResponseSentBody'),
+          body: outcomeMessage,
           createdAt: Date.now(),
         })
       );
@@ -166,10 +161,16 @@ export function SignTransactionModal() {
           createdAt: Date.now(),
         })
       );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   };
 
   const handleCancel = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
     try {
       await dispatch(respondWithTxError(signTxRequest)).unwrap();
       dispatch(
@@ -212,6 +213,9 @@ export function SignTransactionModal() {
           createdAt: Date.now(),
         })
       );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   };
 
@@ -260,6 +264,33 @@ export function SignTransactionModal() {
             </div>
           )}
 
+          {!preview && (
+            <div
+              role="alert"
+              className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 wallet-text-strong"
+            >
+              {t('wc.unsupportedTransaction')}
+            </div>
+          )}
+
+          {preview && (
+            <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 text-sm space-y-2">
+              <div className="font-semibold">
+                {network === 'chipnet' ? 'Chipnet' : 'Mainnet'} transaction
+              </div>
+              <p>
+                {shouldBroadcast
+                  ? 'The wallet will sign and attempt to broadcast. The app also receives the signed transaction.'
+                  : 'The wallet will sign and return the transaction to the app. The app may broadcast it later.'}
+              </p>
+              <p className="wallet-muted">
+                Amounts below describe the whole transaction, including other
+                participants. Your wallet’s exact change and fee share are not
+                identified in this request.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-2">
             <button
               type="button"
@@ -271,12 +302,9 @@ export function SignTransactionModal() {
             </button>
             {inputsExpanded && (
               <div className="space-y-1">
-                {inputs.map((_: unknown, i: number) => {
-                  const source = sourceOutputs[i];
-                  const txid = binToHex(
-                    ensureUint8Array(source.outpointTransactionHash)
-                  );
-                  const value = parseSatoshis(source.valueSatoshis);
+                {inputs.map((source, i: number) => {
+                  const txid = binToHex(source.outpointTransactionHash);
+                  const value = source.valueSatoshis;
                   return (
                     <div key={i} className="ml-2">
                       <div>
@@ -305,11 +333,9 @@ export function SignTransactionModal() {
             </button>
             {outputsExpanded && (
               <div className="space-y-1">
-                {(outputs as TxOutput[]).map((output, i: number) => {
-                  const value = parseSatoshis(output.valueSatoshis);
-                  const lockingBytecode = ensureUint8Array(
-                    output.lockingBytecode
-                  );
+                {outputs.map((output, i: number) => {
+                  const value = output.valueSatoshis;
+                  const lockingBytecode = output.lockingBytecode;
                   const isOpReturn = lockingBytecode[0] === 0x6a;
                   const token = output.token;
 
@@ -333,7 +359,7 @@ export function SignTransactionModal() {
                     );
                   }
 
-                  const address = toCashAddress(lockingBytecode, 'bitcoincash');
+                  const address = toCashAddress(lockingBytecode);
                   return (
                     <div
                       key={i}
@@ -361,15 +387,16 @@ export function SignTransactionModal() {
                           <div>
                             <strong>{t('wc.tokenCategory')}:</strong>{' '}
                             <span className="font-mono break-all">
-                              {binToHex(ensureUint8Array(token.category))}
+                              {binToHex(token.category)}
                             </span>
                           </div>
-                          {token.amount !== undefined && token.amount !== null && (
-                            <div>
-                              <strong>{t('wc.fungibleAmount')}:</strong>{' '}
-                              {String(parseSatoshis(token.amount))}
-                            </div>
-                          )}
+                          {token.amount !== undefined &&
+                            token.amount !== null && (
+                              <div>
+                                <strong>{t('wc.fungibleAmount')}:</strong>{' '}
+                                {String(token.amount)}
+                              </div>
+                            )}
                           {token.nft && (
                             <>
                               <div>
@@ -380,9 +407,7 @@ export function SignTransactionModal() {
                                 <div>
                                   <strong>{t('wc.nftCommitment')}:</strong>{' '}
                                   <span className="font-mono break-all">
-                                    {binToHex(
-                                      ensureUint8Array(token.nft.commitment)
-                                    )}
+                                    {binToHex(token.nft.commitment)}
                                   </span>
                                 </div>
                               )}
@@ -397,34 +422,46 @@ export function SignTransactionModal() {
             )}
           </div>
 
-          <div className="text-sm border-t border-[var(--wallet-border)] pt-2">
-            <div>
-              {t('wc.totalInput')}: {Number(totalInput) / SATSINBITCOIN} BCH
+          {preview && (
+            <div className="text-sm border-t border-[var(--wallet-border)] pt-2">
+              <div>
+                {t('wc.totalInput')}:{' '}
+                {Number(preview.totalInput) / SATSINBITCOIN} BCH
+              </div>
+              <div>
+                {t('wc.totalOutput')}:{' '}
+                {Number(preview.totalOutput) / SATSINBITCOIN} BCH
+              </div>
+              <div className="font-semibold">
+                {t('wc.estimatedFee')}: {Number(preview.fee) / SATSINBITCOIN}{' '}
+                BCH
+              </div>
+              <div>
+                Wallet broadcast requested:{' '}
+                {shouldBroadcast ? t('wc.yes') : t('wc.no')}
+              </div>
             </div>
-            <div>
-              {t('wc.totalOutput')}: {Number(totalOutput) / SATSINBITCOIN} BCH
-            </div>
-            <div className="font-semibold">
-              {t('wc.estimatedFee')}: {Number(fee) / SATSINBITCOIN} BCH
-            </div>
-            <div>
-              {t('wc.broadcast')}: {shouldBroadcast ? t('wc.yes') : t('wc.no')}
-            </div>
-          </div>
+          )}
         </div>
 
         <div className="flex justify-around pt-2">
           <button
             onClick={handleSign}
             className="wallet-btn-primary"
-            disabled={broadcastLocked}
+            disabled={broadcastLocked || !preview || busy}
             title={broadcastLocked ? t('wc.waitPrevious') : undefined}
           >
             {broadcastLocked && shouldBroadcast
               ? t('wc.waitingForSync')
-              : t('wc.sign')}
+              : busy
+                ? t('wc.working')
+                : t('wc.sign')}
           </button>
-          <button onClick={handleCancel} className="wallet-btn-danger">
+          <button
+            onClick={handleCancel}
+            className="wallet-btn-danger"
+            disabled={busy}
+          >
             {t('wc.cancel')}
           </button>
         </div>

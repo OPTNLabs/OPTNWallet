@@ -77,6 +77,7 @@ export function ReviewCard({
   const onCloseRef = useRef(onClose);
   const isSendingRef = useRef(isSending);
   const trackRef = useRef<HTMLDivElement>(null);
+  const confirmedRef = useRef(false);
   const [dragX, setDragX] = useState(0);
   const [maxX, setMaxX] = useState(0);
   const [slideCompleted, setSlideCompleted] = useState(false);
@@ -151,6 +152,7 @@ export function ReviewCard({
     if (!open) {
       setDragX(0);
       setSlideCompleted(false);
+      confirmedRef.current = false;
       setMaxX(0);
       setShowTechnicalDetails(false);
     }
@@ -289,14 +291,20 @@ export function ReviewCard({
   const pendingHandle = `hsl(${progressHue} 82% 44%)`;
   const pendingHandleShadow = `0 8px 24px hsla(${progressHue}, 82%, 44%, 0.35)`;
 
+  const confirm = () => {
+    if (slideCompleted || isSending || confirmedRef.current) return;
+    confirmedRef.current = true;
+    setDragX(maxX);
+    setSlideCompleted(true);
+    onConfirmSend();
+  };
+
   const handleStop = (_: unknown, data: { x: number }) => {
     if (slideCompleted || isSending || maxX <= 0) return;
 
     const finalX = Math.min(Math.max(0, data.x), maxX);
     if (finalX >= threshold) {
-      setDragX(maxX);
-      setSlideCompleted(true);
-      onConfirmSend();
+      confirm();
       return;
     }
 
@@ -699,6 +707,14 @@ export function ReviewCard({
               </div>
             </Draggable>
           </div>
+          <button
+            type="button"
+            className="sr-only focus:not-sr-only focus:mt-3 focus:block focus:w-full wallet-btn-primary"
+            disabled={isSending || slideCompleted}
+            onClick={confirm}
+          >
+            {t('send.slideToConfirm')}
+          </button>
         </div>
       </div>
     </div>

@@ -9,7 +9,6 @@ type MultisigBroadcastReviewProps = {
   open: boolean;
   recipient: string;
   amountSats: bigint;
-  inputSumSats: bigint;
   feeSats: bigint;
   outputs: WatchOnlyBuildOutput[];
   selectedInputs: UTXO[];
@@ -74,7 +73,6 @@ export default function MultisigBroadcastReview({
   open,
   recipient,
   amountSats,
-  inputSumSats,
   feeSats,
   outputs,
   selectedInputs,
@@ -90,7 +88,7 @@ export default function MultisigBroadcastReview({
   const review: ReviewState = {
     rawTx: rawTxHex,
     feeSats: Number(feeSats),
-    totalSats: Number(inputSumSats),
+    totalSats: Number(amountSats + feeSats),
     finalOutputs: toReviewOutputs(outputs, network),
   };
 

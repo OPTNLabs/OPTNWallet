@@ -126,6 +126,8 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     preview: null,
     action: null,
   });
+  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
   const lastDebugLogRef = useRef<string | null>(null);
 
   const writeEnabled = nativeSnapshot?.market.writeEnabled ?? false;
@@ -445,6 +447,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
   ]);
 
   const openPreview = (preview: ParyonActionPreview) => {
+    setConfirmError(null);
     setConfirmState({
       open: true,
       preview,
@@ -458,13 +461,17 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
   };
 
   const confirmPreview = async () => {
-    if (!confirmState.preview) return;
+    if (!confirmState.preview || confirmLoading) return;
     if (confirmState.action === 'borrow') {
       if (!nativeSnapshot) {
         setStatusMessage('Live wallet state is still loading.');
+        setConfirmError(
+          'Live wallet state is still loading. Close this review and try again once it is ready.'
+        );
         return;
       }
       try {
+        setConfirmLoading(true);
         setStatusMessage(
           'Building and broadcasting the live borrow transaction…'
         );
@@ -481,18 +488,24 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
         closePreview();
         return;
       } catch (error) {
-        setStatusMessage(
-          error instanceof Error ? error.message : String(error)
-        );
+        const message = error instanceof Error ? error.message : String(error);
+        setStatusMessage(message);
+        setConfirmError(message);
         return;
+      } finally {
+        setConfirmLoading(false);
       }
     }
     if (confirmState.action === 'stake') {
       if (!nativeSnapshot) {
         setStatusMessage('Live wallet state is still loading.');
+        setConfirmError(
+          'Live wallet state is still loading. Close this review and try again once it is ready.'
+        );
         return;
       }
       try {
+        setConfirmLoading(true);
         setStatusMessage(
           'Building and broadcasting the live stake transaction…'
         );
@@ -508,10 +521,12 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
         closePreview();
         return;
       } catch (error) {
-        setStatusMessage(
-          error instanceof Error ? error.message : String(error)
-        );
+        const message = error instanceof Error ? error.message : String(error);
+        setStatusMessage(message);
+        setConfirmError(message);
         return;
+      } finally {
+        setConfirmLoading(false);
       }
     }
     setStatusMessage(
@@ -1328,12 +1343,33 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
                 ? confirmState.preview.blockedReason
                 : undefined
           }
-          canConfirm={Boolean(confirmState.preview?.canProceed)}
+          canConfirm={
+            Boolean(confirmState.preview?.canProceed) && !confirmError
+          }
+          loading={confirmLoading}
+          confirmationMode={
+            confirmState.action === 'redeem' ? 'button' : 'slide'
+          }
+          confirmationLabel="Finish preview"
           onCancel={closePreview}
           onConfirm={() => void confirmPreview()}
         >
           {confirmState.preview ? (
             <div className="space-y-3">
+              {confirmState.action === 'redeem' ? (
+                <p className="wallet-card p-3 text-sm">
+                  Preview only. Finishing this review will not build, sign, or
+                  send a transaction.
+                </p>
+              ) : null}
+              {confirmError ? (
+                <p
+                  role="alert"
+                  className="wallet-warning-panel rounded-xl p-3 text-sm"
+                >
+                  {confirmError} Check transaction history before trying again.
+                </p>
+              ) : null}
               <PreviewMetric
                 label={confirmState.preview.primaryMetricLabel}
                 value={confirmState.preview.primaryMetricValue}

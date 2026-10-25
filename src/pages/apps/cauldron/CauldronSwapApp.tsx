@@ -112,6 +112,10 @@ import {
   type CauldronQuoteSafetyBanner,
 } from './quoteSafety';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
+import {
+  matchesReviewedPoolTransaction,
+  matchesReviewedTradeQuote,
+} from './reviewBinding';
 import OutboundTransactionTracker from '../../../services/OutboundTransactionTracker';
 import {
   formatTimestamp,
@@ -1959,6 +1963,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [quote, setQuote] = useState<QuoteState | null>(null);
+  const [quoteNowMs, setQuoteNowMs] = useState(() => Date.now());
   const [selectedTokenSpotPriceSats, setSelectedTokenSpotPriceSats] = useState<
     number | null
   >(null);
@@ -1967,7 +1972,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const [merchantDetailsOpen, setMerchantDetailsOpen] = useState(false);
   const [reviewWarningsAccepted, setReviewWarningsAccepted] = useState(false);
   const [poolReview, setPoolReview] = useState<PoolReviewState | null>(null);
-  const [withdrawConfirmOpen, setWithdrawConfirmOpen] = useState(false);
+  const [poolReviewChanged, setPoolReviewChanged] = useState(false);
+  const [poolReviewRevision, setPoolReviewRevision] = useState(0);
   const [broadcastNotice, setBroadcastNotice] = useState<{
     title: string;
     subtitle: string;
@@ -1976,9 +1982,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   } | null>(null);
   const [merchantBroadcastStarted, setMerchantBroadcastStarted] =
     useState(false);
-  const [merchantSubmittedDebitSats, setMerchantSubmittedDebitSats] = useState<
-    bigint | null
-  >(null);
   const [walletPoolPositions, setWalletPoolPositions] = useState<
     CauldronWalletPoolPosition[]
   >([]);
@@ -2193,7 +2196,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setQuote(null);
     setSelectedTokenSpotPriceSats(null);
     setPoolReview(null);
-    setWithdrawConfirmOpen(false);
     setSelectedWalletPoolId(null);
     setSelectedWalletPoolHistory(null);
     setSelectedWalletPoolApy(null);
@@ -3006,14 +3008,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           0n
         )
       : null;
-  const merchantEstimatedWalletDebitSats =
-    merchantPaymentProposal && quote
-      ? quote.built.walletInputs.reduce(
-          (total, input) =>
-            total + parseSatoshis(input.utxo.amount ?? input.utxo.value ?? 0),
-          0n
-        )
-      : null;
 
   useEffect(() => {
     setPoolTokenAmountAuto(true);
@@ -3495,6 +3489,12 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const previewTradeCount =
     quote?.trades.length ?? previewPlan?.trades.length ?? 0;
   const previewedRouteRows = quote?.trades ?? [];
+  useEffect(() => {
+    if (!quote) return;
+    setQuoteNowMs(Date.now());
+    const timer = window.setInterval(() => setQuoteNowMs(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
+  }, [quote?.builtAt]);
   const quoteSafetyBanner = useMemo<CauldronQuoteSafetyBanner | null>(
     () =>
       buildCauldronQuoteSafetyBanner({
@@ -3507,10 +3507,16 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           : null,
         liveUpdatesEnabled: apiStatus?.liveUpdatesEnabled ?? true,
         liveUpdatedAt: apiStatus?.liveUpdatedAt ?? null,
-        nowMs: Date.now(),
+        nowMs: quoteNowMs,
         translate: addonT,
       }),
-    [addonT, apiStatus?.liveUpdatedAt, apiStatus?.liveUpdatesEnabled, quote]
+    [
+      addonT,
+      apiStatus?.liveUpdatedAt,
+      apiStatus?.liveUpdatesEnabled,
+      quote,
+      quoteNowMs,
+    ]
   );
   const quoteReviewWarnings =
     quoteSafetyBanner?.messages ?? quote?.warnings ?? [];
@@ -4273,7 +4279,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
     try {
       setSubmitting(true);
-      setMessage(null);
+      setMessage(
+        'Checking current pool liquidity and the reviewed transaction…'
+      );
       const merchantTerms = merchantPaymentProposal
         ? getMerchantPaymentTerms(merchantPaymentProposal)
         : null;
@@ -4449,14 +4457,26 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               : `Cauldron swap ${formatTokenAmount(refreshedPlan.summary.supply, effectiveDecimals)} ${effectiveSymbol} -> BCH`,
       });
 
-      if (merchantPaymentProposal) {
-        setMerchantSubmittedDebitSats(
-          built.walletInputs.reduce(
-            (total, input) =>
-              total + parseSatoshis(input.utxo.amount ?? input.utxo.value ?? 0),
-            0n
-          )
+      if (
+        !matchesReviewedTradeQuote(
+          {
+            ...quote.built,
+            totalSupply: quote.totalSupply,
+            totalDemand: quote.totalDemand,
+          },
+          {
+            ...built,
+            totalSupply: refreshedPlan.summary.supply,
+            totalDemand: refreshedPlan.summary.demand,
+          }
+        )
+      ) {
+        setQuote(null);
+        setReviewOpen(false);
+        setMessage(
+          'Pool liquidity, funding, or fee changed. Get a fresh quote and review it before confirming. No transaction was sent.'
         );
+        return;
       }
 
       if (merchantPaymentProposal) {
@@ -4624,10 +4644,11 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setReviewOpen(true);
   };
 
-  const handleQuoteAndOpenDetails = () => {
+  const handleQuoteAndOpenReview = () => {
     void handleQuote().then((success) => {
       if (success) {
-        setQuoteDetailsOpen(true);
+        setReviewWarningsAccepted(false);
+        setReviewOpen(true);
       }
     });
   };
@@ -4651,7 +4672,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setPoolCreateTokenAmount('');
     setPoolReview(null);
     setSelectedWalletPoolId(null);
-    setWithdrawConfirmOpen(false);
     setPoolTokenAmountAuto(true);
     setPoolSyncAnchor('bch');
   };
@@ -4676,7 +4696,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setMerchantRecipientAddress('');
     setMerchantDetailsOpen(false);
     setMerchantBroadcastStarted(false);
-    setMerchantSubmittedDebitSats(null);
     setMerchantProposalAutoPreparePending(false);
     setSelectedWalletPoolHistory(null);
     setSelectedWalletPoolApy(null);
@@ -4988,6 +5007,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         tokenAmount: parsedPoolCreateTokenAmount,
         ownerAddress,
       });
+      setPoolReviewChanged(false);
     } catch (error) {
       setMessage(
         localizeCauldronErrorMessage(
@@ -4999,7 +5019,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     }
   };
 
-  const handleWithdrawPool = async () => {
+  const handlePrepareWithdrawPool = async () => {
+    if (submitting) return;
+    setSubmitting(true);
     try {
       setMessage(null);
 
@@ -5044,98 +5066,12 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         userPrompt: `Withdraw Cauldron pool ${selectedPoolName}`,
       });
 
-      setSubmitting(true);
-      showBroadcastNotice(
-        addonT(
-          'module.broadcastingPoolWithdrawal',
-          'Broadcasting pool withdrawal'
-        ),
-        addonT(
-          'module.preparingTransaction',
-          'Preparing the transaction for submission.'
-        ),
-        'broadcasting'
-      );
-
-      const result = await signAndBroadcastCauldronPoolWithdrawRequest(
-        walletContext.walletId,
+      setPoolReview({
+        kind: 'withdraw',
         built,
-        {
-          sourceLabel: 'Cauldron Pool Withdraw',
-          recipientSummary: selectedPoolName,
-          amountSummary: `${formatCompactBchAmount(selectedWalletPoolPosition.pool.output.amountSatoshis)} + ${formatTokenDisplayAmount(selectedWalletPoolPosition.pool.output.tokenAmount, selectedPoolDecimals, selectedPoolSymbol)}`,
-          userPrompt: built.signRequest.transaction.userPrompt ?? null,
-        }
-      );
-      if (result.errorMessage) {
-        throw new Error(result.errorMessage);
-      }
-
-      const withdrawnPoolId = getPoolSelectionId(
-        selectedWalletPoolPosition.pool
-      );
-      removeCreatedWalletPoolPosition(
-        currentNetwork,
-        withdrawnPoolId,
-        walletContext.walletId
-      );
-      const nextSuppressedWalletPoolIds = suppressedWalletPoolIds.includes(
-        withdrawnPoolId
-      )
-        ? suppressedWalletPoolIds
-        : [withdrawnPoolId, ...suppressedWalletPoolIds];
-      setSuppressedWalletPoolIds(nextSuppressedWalletPoolIds);
-      setWalletPoolPositions((current) =>
-        current.filter(
-          (position) => getPoolSelectionId(position.pool) !== withdrawnPoolId
-        )
-      );
-      setPendingWalletPoolPositions((current) =>
-        current.filter(
-          (position) => getPoolSelectionId(position.pool) !== withdrawnPoolId
-        )
-      );
-      setSelectedWalletPoolId(null);
-      setSelectedWalletPoolHistory(null);
-      setSelectedWalletPoolApy(null);
-
-      showBroadcastNotice(
-        result.broadcastState === 'submitted'
-          ? addonT(
-              'module.poolWithdrawalSubmitted',
-              'Pool withdrawal submitted'
-            )
-          : addonT(
-              'module.poolWithdrawalBroadcasted',
-              'Pool withdrawal broadcasted'
-            ),
-        result.broadcastState === 'submitted'
-          ? addonT(
-              'module.transactionWatch',
-              'Keeping {txid} under watch while the wallet refreshes in the background.',
-              { txid: result.txid }
-            )
-          : addonT(
-              'module.broadcastComplete',
-              'Broadcast completed with {txid}.',
-              {
-                txid: result.txid,
-              }
-            ),
-        'submitted',
-        result.txid
-      );
-      setMessage(
-        addonT(
-          'module.poolWithdrawalMessage',
-          'Pool withdrawal submitted: {txid}',
-          {
-            txid: result.txid,
-          }
-        )
-      );
-      await refreshCauldronState(nextSuppressedWalletPoolIds);
-      resetCauldronViewState(nextSuppressedWalletPoolIds);
+        pool: selectedWalletPoolPosition.pool,
+      });
+      setPoolReviewChanged(false);
     } catch (error) {
       setMessage(
         localizeCauldronErrorMessage(
@@ -5144,6 +5080,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           'Unable to withdraw Cauldron pool'
         )
       );
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -5154,19 +5092,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       setSubmitting(true);
       setMessage(null);
       showBroadcastNotice(
-        poolReview.kind === 'create'
-          ? addonT(
-              'module.broadcastingPoolCreation',
-              'Broadcasting pool creation'
-            )
-          : addonT(
-              'module.broadcastingPoolWithdrawal',
-              'Broadcasting pool withdrawal'
-            ),
-        addonT(
-          'module.preparingTransaction',
-          'Preparing the transaction for submission.'
-        ),
+        'Checking pool transaction',
+        'Checking funding and reviewed terms before signing.',
         'broadcasting'
       );
 
@@ -5223,6 +5150,22 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             `Create Cauldron pool ${formatBchAmount(poolReview.bchAmount)} BCH + ${formatTokenAmount(poolReview.tokenAmount, effectiveDecimals)} ${effectiveSymbol}`,
         });
 
+        if (!matchesReviewedPoolTransaction(poolReview.built, rebuilt)) {
+          setPoolReview({ ...poolReview, built: rebuilt, ownerAddress });
+          setPoolReviewChanged(true);
+          setPoolReviewRevision((revision) => revision + 1);
+          clearBroadcastNotice();
+          setMessage(
+            'Pool funding or fee changed. Review the updated transaction before confirming.'
+          );
+          return;
+        }
+
+        showBroadcastNotice(
+          'Broadcasting pool creation',
+          'Signing and submitting the reviewed transaction.',
+          'broadcasting'
+        );
         const result = await signAndBroadcastCauldronPoolDepositRequest(
           walletContext.walletId,
           rebuilt,
@@ -5395,6 +5338,22 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           `Withdraw Cauldron pool ${selectedPoolName}`,
       });
 
+      if (!matchesReviewedPoolTransaction(poolReview.built, rebuilt)) {
+        setPoolReview({ kind: 'withdraw', built: rebuilt, pool: currentPool });
+        setPoolReviewChanged(true);
+        setPoolReviewRevision((revision) => revision + 1);
+        clearBroadcastNotice();
+        setMessage(
+          'Pool funding or fee changed. Review the updated transaction before confirming.'
+        );
+        return;
+      }
+
+      showBroadcastNotice(
+        'Broadcasting pool withdrawal',
+        'Signing and submitting the reviewed transaction.',
+        'broadcasting'
+      );
       const result = await signAndBroadcastCauldronPoolWithdrawRequest(
         walletContext.walletId,
         rebuilt,
@@ -5638,18 +5597,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                       </div>
                       <div className="mt-4 space-y-2 rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-left text-sm">
                         <div className="flex items-center justify-between gap-3">
-                          <span className="wallet-muted">
-                            Total from wallet
-                          </span>
-                          <span className="font-semibold wallet-text-strong">
-                            {merchantSubmittedDebitSats != null
-                              ? formatCompactBchAmount(
-                                  merchantSubmittedDebitSats
-                                )
-                              : '—'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
                           <span className="wallet-muted">Status</span>
                           <span className="font-semibold text-amber-300">
                             0-conf accepted
@@ -5845,16 +5792,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                           </span>
                         </div>
                       ) : null}
-                      <div className="flex items-center justify-between gap-3 font-semibold">
-                        <span className="wallet-text-strong">
-                          Total from wallet
-                        </span>
-                        <span className="wallet-text-strong">
-                          {formatCompactBchAmount(
-                            merchantEstimatedWalletDebitSats ?? 0n
-                          )}
-                        </span>
-                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -6036,16 +5973,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                                 <span className="font-semibold wallet-text-strong">
                                   {formatCompactBchAmount(
                                     quote.estimatedFeeSatoshis
-                                  )}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between gap-3 border-t border-[var(--wallet-border)] pt-1">
-                                <span className="font-semibold wallet-text-strong">
-                                  Estimated wallet debit
-                                </span>
-                                <span className="font-semibold wallet-text-strong">
-                                  {formatCompactBchAmount(
-                                    merchantEstimatedWalletDebitSats ?? 0n
                                   )}
                                 </span>
                               </div>
@@ -6353,7 +6280,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                           ? handleReviewSwap
                           : activeView === 'merchant'
                             ? () => void handleQuote()
-                            : handleQuoteAndOpenDetails
+                            : handleQuoteAndOpenReview
                       }
                       disabled={
                         quoteActionsDisabled ||
@@ -6377,7 +6304,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                               : 'Review Swap'
                             : activeView === 'merchant'
                               ? 'Prepare payment'
-                              : 'Get Quote'}
+                              : 'Review Swap'}
                     </button>
                   </div>
                   <div className="mt-2 px-1 text-xs wallet-muted">
@@ -6825,16 +6752,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                       </span>
                     </div>
                   ) : null}
-                  <div className="mt-2 flex items-center justify-between gap-3 border-t border-[var(--wallet-border)] pt-2">
-                    <span className="font-semibold wallet-text-strong">
-                      Total from wallet
-                    </span>
-                    <span className="font-semibold wallet-text-strong">
-                      {formatCompactBchAmount(
-                        merchantEstimatedWalletDebitSats ?? 0n
-                      )}
-                    </span>
-                  </div>
                 </>
               ) : (
                 <div className="flex items-center justify-between gap-3">
@@ -6870,6 +6787,26 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                         : formatCompactBchAmount(quote.minReceive)}
                     </span>
                   </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="wallet-muted">Network fee</span>
+                    <span className="font-medium wallet-text-strong">
+                      {formatCompactBchAmount(quote.estimatedFeeSatoshis)}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="wallet-muted">
+                      LP fee · included in quote
+                    </span>
+                    <span className="font-medium wallet-text-strong">
+                      {direction === 'bch_to_token'
+                        ? formatCompactBchAmount(totalLpFee)
+                        : formatTokenDisplayAmount(
+                            totalLpFee,
+                            effectiveDecimals,
+                            effectiveSymbol
+                          )}
+                    </span>
+                  </div>
                 </>
               ) : null}
               {merchantPaymentProposal ? (
@@ -6891,7 +6828,12 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             </div>
 
             {activeView !== 'merchant' && quoteRiskSummary ? (
-              <div
+              <details
+                key={quote.builtAt}
+                open={
+                  quoteRiskSummary.highSlippage ||
+                  quoteRiskSummary.highLiquidityUsage
+                }
                 className={`rounded-2xl border px-4 py-3 ${
                   quoteRiskSummary.highSlippage ||
                   quoteRiskSummary.highLiquidityUsage
@@ -6899,12 +6841,12 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     : 'border-[var(--wallet-border)]'
                 }`}
               >
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] wallet-text-strong">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.18em] wallet-text-strong">
                   {addonT(
                     'module.liquiditySlippageCheck',
                     'Liquidity & slippage check'
                   )}
-                </div>
+                </summary>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   <div
                     className={`rounded-xl border px-3 py-2 ${
@@ -6982,7 +6924,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     'Re-quote if the market moves or if you want a tighter fill. The actual transaction is still re-validated before broadcast.'
                   )}
                 </div>
-              </div>
+              </details>
             ) : null}
 
             {activeView !== 'merchant' && quoteReviewWarnings.length > 0 ? (
@@ -7022,10 +6964,10 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             ) : null}
 
             {activeView !== 'merchant' ? (
-              <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
+              <details className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
+                <summary className="cursor-pointer text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
                   {addonT('module.route', 'Route')}
-                </div>
+                </summary>
                 <div className="mt-2 space-y-2">
                   {previewedRouteRows.slice(0, 2).map((trade) => (
                     <div
@@ -7057,7 +6999,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     </div>
                   ) : null}
                 </div>
-              </div>
+              </details>
             ) : null}
           </div>
         </ContainedSwipeConfirmModal>
@@ -7352,6 +7294,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
       {poolReview ? (
         <ContainedSwipeConfirmModal
+          key={poolReviewRevision}
           open={Boolean(poolReview)}
           title={
             poolReview.kind === 'create'
@@ -7363,10 +7306,19 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           warning={
             <span>{addonT('module.slideConfirm', 'Slide to confirm.')}</span>
           }
-          onCancel={() => setPoolReview(null)}
+          onCancel={() => {
+            setPoolReview(null);
+            setPoolReviewChanged(false);
+          }}
           onConfirm={() => void handleConfirmPoolReview()}
         >
           <div className="space-y-3 px-1 py-2 text-sm">
+            {poolReviewChanged ? (
+              <p role="status" className="wallet-warning-panel rounded-xl p-3">
+                Pool funding or fee changed. Review these updated terms before
+                confirming.
+              </p>
+            ) : null}
             <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
               {poolReview.kind === 'create' ? (
                 <>
@@ -7449,7 +7401,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             <div className="mt-4 flex gap-3">
               <button
                 type="button"
-                onClick={() => setWithdrawConfirmOpen(true)}
+                onClick={() => void handlePrepareWithdrawPool()}
                 className="wallet-btn-primary flex-1"
                 disabled={submitting}
               >
@@ -7677,63 +7629,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           </div>
         </div>
       ) : null}
-
-      <ContainedSwipeConfirmModal
-        open={withdrawConfirmOpen}
-        title={addonT('common.withdraw', 'Withdraw LP')}
-        subtitle={selectedPoolName}
-        loading={submitting}
-        warning={
-          <span>
-            {addonT('common.slideWithdraw', 'Slide to confirm withdrawal.')}
-          </span>
-        }
-        onCancel={() => setWithdrawConfirmOpen(false)}
-        onConfirm={() => {
-          setWithdrawConfirmOpen(false);
-          void handleWithdrawPool();
-        }}
-      >
-        {selectedWalletPoolPosition ? (
-          <div className="space-y-3 px-1 py-2 text-sm">
-            <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
-              <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
-                {addonT('module.lpPosition', 'LP position')}
-              </div>
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <span className="wallet-muted">
-                  {addonT('common.pool', 'Pool')}
-                </span>
-                <span className="font-medium wallet-text-strong">
-                  {selectedPoolName}
-                </span>
-              </div>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="wallet-muted">
-                  {addonT('module.bchReserve', 'BCH reserve')}
-                </span>
-                <span className="font-medium wallet-text-strong">
-                  {formatCompactBchAmount(
-                    selectedWalletPoolPosition.pool.output.amountSatoshis
-                  )}
-                </span>
-              </div>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="wallet-muted">
-                  {selectedPoolSymbol} reserve
-                </span>
-                <span className="font-medium wallet-text-strong">
-                  {formatTokenDisplayAmount(
-                    selectedWalletPoolPosition.pool.output.tokenAmount,
-                    selectedPoolDecimals,
-                    selectedPoolSymbol
-                  )}
-                </span>
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </ContainedSwipeConfirmModal>
 
       {tokenPickerOpen ? (
         <div className="absolute inset-0 z-20 flex items-end bg-black/50 px-4 pb-4 pt-4">

@@ -192,14 +192,14 @@ export const respondWithTxSignature = createAsyncThunk(
     const state = getState() as RootState;
     const walletKit = state.walletconnect.web3wallet;
     if (!walletKit) throw new Error('WalletConnect not initialized');
-    const { id, topic, signedTxObject } =
+    const { id, topic, signedTxObject, broadcastOutcome } =
       await signWalletConnectTransactionRequest(signTxRequest, state);
     await walletKit.respondSessionRequest({
       topic,
       response: { id, jsonrpc: '2.0', result: signedTxObject },
     });
 
-    return signedTxObject;
+    return broadcastOutcome;
   }
 );
 

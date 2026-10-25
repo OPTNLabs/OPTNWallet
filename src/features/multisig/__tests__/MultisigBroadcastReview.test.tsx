@@ -14,9 +14,8 @@ describe('MultisigBroadcastReview', () => {
           <MultisigBroadcastReview
             open
             recipient="bchtest:qqexampledestination"
-            amountSats={99_000n}
-            inputSumSats={100_000n}
-            feeSats={1_000n}
+            amountSats={10_000n}
+            feeSats={100n}
             outputs={[]}
             selectedInputs={[]}
             rawTxHex="00"
@@ -36,5 +35,7 @@ describe('MultisigBroadcastReview', () => {
     expect(html).toContain('Multisig policy policy-123');
     expect(html).toContain('2 of 2 signatures');
     expect(html).toContain('Slide to confirm');
+    expect(html).toContain('0.00010100 BCH');
+    expect(html).not.toContain('0.00100000 BCH');
   });
 });

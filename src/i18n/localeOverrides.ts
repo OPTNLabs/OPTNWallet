@@ -1012,6 +1012,8 @@ export const localeOverrides = {
     'history.fee': 'الرسوم',
     'history.timestamp': 'الطابع الزمني',
     'history.openExplorer': 'فتح في المستكشف',
+    'history.copyTransaction': 'نسخ معرّف المعاملة',
+    'history.transactionCopied': 'تم نسخ معرّف المعاملة',
     'history.loadingDetails': 'جارٍ تحميل تفاصيل المعاملة…',
     'history.closeDetails': 'إغلاق التفاصيل',
     'history.noData': 'لا تتوفر بيانات.',

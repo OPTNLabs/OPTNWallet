@@ -73,4 +73,7 @@ it('names the review dialog, contains keyboard focus, cancels on Escape, and res
 
   rerender(renderTree(false));
   expect(document.activeElement).toBe(trigger);
+  rerender(renderTree(true));
+  fireEvent.click(screen.getByRole('button', { name: 'send.slideToConfirm' }));
+  expect(onConfirmSend).toHaveBeenCalledOnce();
 });

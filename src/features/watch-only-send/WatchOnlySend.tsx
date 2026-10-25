@@ -2445,7 +2445,6 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                     open={broadcastArmed}
                     recipient={recipient}
                     amountSats={amountSats ?? 0n}
-                    inputSumSats={proposalState.inputSumSats}
                     feeSats={proposalState.feeSats}
                     outputs={proposalState.proposal.outputs}
                     selectedInputs={selectedInputs.map((input) => input.utxo)}

@@ -1089,3 +1089,30 @@ ambiguous broadcast. Capture final summaries, expanded details and recovery at
 390×844, 412×915, compact desktop and a wide desktop viewport. Verify native
 touch/Back/focus/status separately, storing only disposable redacted images on
 tmpfs. All these rendered/platform cases remain open in this assessment.
+
+### Transaction-preview implementation follow-up — 2026-10-24
+
+The baseline UX changes were committed as `05456aa66` on
+`codex/ux-basics-and-workflow`. The transaction-preview fixes below are the
+follow-up change on that branch. The prior assessment is the reproduction
+record; these statuses describe the subsequent implementation, not a
+production acceptance.
+
+| Finding  | Current result                                                                                                                                                                                                           | Remaining verification or correction                                                                                                  |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| TX-01    | Partial: WalletConnect/WizardConnect now distinguish whole-transaction figures from wallet effects; CashConnect names its action, prepared transaction count and estimated balance changes.                              | Derive verified wallet-owned inputs/change/token deltas across connectors. Do not infer ownership from app prompts.                   |
+| TX-02–03 | Source/component fixed: WalletConnect uses the selected network and rejects missing/invalid source data before enabling Sign. Input outpoints come from transaction inputs.                                              | Real peer/device round-trip.                                                                                                          |
+| TX-04    | Partial: reviews explain sign/return versus requested broadcast, including CashConnect handoff. WalletConnect reports broadcasted, submitted, failed, or hardware-not-attempted separately after returning signed bytes. | Verify real peer/hardware results and make the connector result model consistent across WalletConnect, WizardConnect and CashConnect. |
+| TX-05    | Partial: Wizard review and Mint's shared summary show NFT capability/commitment and token identity.                                                                                                                      | Apply the verified token/NFT summary to ordinary Send and every app action; check BCMR display units.                                 |
+| TX-06    | Multisig total fixed to recipient plus fee. Merchant review no longer labels gross funding as wallet debit.                                                                                                              | Calculate exact merchant net wallet effect, including token debit and change, from the built transaction.                             |
+| TX-07    | Simple Send, custom builder and shared app modal have keyboard confirmation; shared modal now traps/restores focus and supports Escape.                                                                                  | Rendered keyboard, touch and screen-reader exercise on mobile/desktop.                                                                |
+| TX-08    | Custom builder final review shows outputs/fee and blocks unaccounted input tokens; implicit fungible burn disabled. Airdrops formats BCH/token totals; sweep shows destination, fee and technical outputs.               | Broaden verified final summaries to FundMe/AuthGuard/Paryon executable plans.                                                         |
+| TX-09    | Airdrops compares the rebuilt transaction with the reviewed one. Cauldron pool and swap paths require another review after material signed-byte/fee/amount changes.                                                      | Bind FundMe/Paryon executable actions to concrete plans; test real stale UTXO/quote failures.                                         |
+| TX-10    | Connector approval and shared app confirmation guard repeated activation; Paryon reports live action errors in the review and requires history check after an uncertain failure.                                         | Preserve hardware progress through Simple Send mode transitions; model submitted/unknown/retry states per action.                     |
+| TX-11–13 | Cauldron's first swap action opens final review directly; ordinary review includes network/LP fees and collapses routine detail. Withdraw prepares before final review. Quote-age guidance refreshes on a timer.         | Verify rendered compact layout, actual mobile touch flow, and net effects.                                                            |
+| TX-14    | Partial: CashConnect action semantics improved; Paryon preview-only redeem uses a plain “Finish preview” button and says it will not send.                                                                               | FundMe and AuthGuard still need per-action host-owned reviews and plan binding.                                                       |
+
+All proposed fixes must preserve explicit transaction authorization and must not
+treat component tests or React builds as proof of native, live-chain or release
+readiness. The full affected flow inventory remains in this plan; inaccessible
+peer/hardware/native states are verification gaps rather than passes.

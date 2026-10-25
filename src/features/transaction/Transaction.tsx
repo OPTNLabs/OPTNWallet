@@ -258,6 +258,7 @@ const Transaction: React.FC = () => {
     inputs: { [key: string]: string },
     abiInputs: { name: string; type: string }[]
   ) => {
+    setRawTX('');
     setContractFunctionInputs(inputs);
     await handleContractFunctionSelect(contractFunction, inputs, abiInputs);
   };
@@ -288,6 +289,7 @@ const Transaction: React.FC = () => {
   );
 
   const setChangeAddressWithOverride = useCallback((address: string) => {
+    setRawTX('');
     setHasManualChangeSelection(true);
     setChangeAddress(address);
   }, []);
@@ -339,6 +341,7 @@ const Transaction: React.FC = () => {
         : legacyDefault;
 
     if (changeAddress !== nextDefault) {
+      setRawTX('');
       setChangeAddress(nextDefault);
     }
   }, [

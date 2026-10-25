@@ -45,6 +45,7 @@ if (typeof address === 'string') throw new Error(address);
 const state = {
   wallet_id: { currentWalletId: 1 },
   network: { currentNetwork: Network.CHIPNET },
+  walletconnect: { activeSessions: {} },
 } as RootState;
 
 beforeEach(() => {
@@ -121,5 +122,39 @@ describe('WalletConnect shared Rust signing path', () => {
       signWalletConnectTransactionRequest(envelope(payload), state)
     ).rejects.toThrow('Malformed');
     expect(mocks.fetchAddressPrivateKey).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed requested broadcast while preserving signed bytes for the app', async () => {
+    const payload = { ...request(), broadcast: true };
+    mocks.broadcast.mockResolvedValue({
+      txid: null,
+      errorMessage: 'Node unavailable',
+    });
+    const result = await signWalletConnectTransactionRequest(
+      envelope(payload),
+      state
+    );
+    expect(result.signedTxObject.signedTransaction).toBeTruthy();
+    expect(result.broadcastOutcome).toEqual({
+      kind: 'failed',
+      message: 'Node unavailable',
+    });
+  });
+
+  it('distinguishes a submitted broadcast from a confirmed one', async () => {
+    const payload = { ...request(), broadcast: true };
+    mocks.broadcast.mockResolvedValue({
+      txid: 'ab'.repeat(32),
+      errorMessage: null,
+      broadcastState: 'submitted',
+    });
+    const result = await signWalletConnectTransactionRequest(
+      envelope(payload),
+      state
+    );
+    expect(result.broadcastOutcome).toEqual({
+      kind: 'submitted',
+      txid: 'ab'.repeat(32),
+    });
   });
 });

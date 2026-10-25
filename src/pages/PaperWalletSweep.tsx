@@ -32,6 +32,8 @@ import { useI18n } from '../i18n/useI18n';
 import { AddonModuleI18nProvider } from '../i18n/AddonModuleI18nProvider';
 import { useAddonI18n } from '../i18n/useAddonI18n';
 import PaperWalletSweepError from './PaperWalletSweepError';
+import TxSummary from '../components/confirm/TxSummary';
+import { summarizeBuilderReview } from '../features/transaction/builderReview';
 
 const BASE58_WIF_PATTERN =
   /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
@@ -84,6 +86,8 @@ function decodeScannedWif(wif: string) {
 type SweepState = {
   plan: Awaited<ReturnType<typeof buildPaperWalletSweepPlan>>;
   builtHex: string;
+  finalOutputs: TransactionOutput[];
+  feeSats: number;
 };
 
 function PaperWalletSweepScreen() {
@@ -258,11 +262,26 @@ function PaperWalletSweepScreen() {
         [...plan.paperWalletUtxos, ...plan.feeInputs]
       );
 
-      if (built.errorMsg || !built.finalTransaction) {
+      if (built.errorMsg || !built.finalTransaction || !built.finalOutputs) {
         throw new Error(built.errorMsg || t('paper.buildFailed'));
       }
 
-      setPendingSweep({ plan, builtHex: built.finalTransaction });
+      const review = summarizeBuilderReview(
+        [...plan.paperWalletUtxos, ...plan.feeInputs],
+        built.finalOutputs
+      );
+      if (review.unaccountedTokens.length) {
+        throw new Error(
+          'The sweep would leave tokens unaccounted for. Check the paper wallet and try again.'
+        );
+      }
+
+      setPendingSweep({
+        plan,
+        builtHex: built.finalTransaction,
+        finalOutputs: built.finalOutputs,
+        feeSats: review.feeSats,
+      });
       setConfirmOpen(true);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -456,9 +475,35 @@ function PaperWalletSweepScreen() {
                 {pendingSweep.plan.outputs.filter((o) => !o.token).length}
               </Badge>
             </div>
+            <div className="pt-2 border-t border-[var(--wallet-border)]">
+              <span className="wallet-muted">Destination</span>
+              <div className="font-mono text-xs break-all">
+                {pendingSweep.plan.destinationAddress}
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="wallet-muted">Network fee</span>
+              <span>{(pendingSweep.feeSats / 100_000_000).toFixed(8)} BCH</span>
+            </div>
             <div className="pt-2 text-xs wallet-muted">
               {t('paper.oneTransaction')} {t('paper.tokenBacking')}
             </div>
+            <details className="mt-3">
+              <summary className="cursor-pointer font-semibold">
+                Transaction details
+              </summary>
+              <div className="mt-2 max-h-[32vh] overflow-y-auto">
+                <TxSummary
+                  inputsRaw={[
+                    ...pendingSweep.plan.paperWalletUtxos,
+                    ...pendingSweep.plan.feeInputs,
+                  ]}
+                  outputsRaw={pendingSweep.finalOutputs}
+                  feeSats={pendingSweep.feeSats}
+                  txSizeBytes={pendingSweep.builtHex.length / 2}
+                />
+              </div>
+            </details>
           </div>
         ) : null}
       </ContainedSwipeConfirmModal>
