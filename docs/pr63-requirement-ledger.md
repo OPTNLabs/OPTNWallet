@@ -1746,3 +1746,7 @@ navigation, selected-network history details, retry, transaction-ID copy, and
 the blocked-access Settings link. Core typecheck, lint, Prettier and diff checks
 passed. Native browser-open behavior and a packaged settings render remain
 unverified. FundMe was not touched.
+
+The follow-up full suites also passed `npm run test:ui` (**30 files / 79
+tests**) and `npm run test:apps` (**36 files / 157 tests**); the standard and
+desktop web builds passed on the same checkout.
