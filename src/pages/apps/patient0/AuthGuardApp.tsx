@@ -2,7 +2,7 @@
 
 // src/pages/apps/patient0/AuthGuardApp.tsx
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AddonManifest, AddonAppDefinition } from '../../../types/addons';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { UTXO, TransactionOutput, Token } from '../../../types/types';
@@ -22,6 +22,14 @@ import {
 } from '../../../apis/ChaingraphManager/ChaingraphManager';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
+import { ContainedSwipeConfirmModal } from '../mint-cashtokens-poc/components/uiPrimitives';
+import TxSummary from '../../../components/confirm/TxSummary';
+import {
+  authorizeAuthGuardBroadcast,
+  assertAuthGuardReviewContext,
+  prepareAuthGuardBroadcastReview,
+  type ContextualAuthGuardBroadcastReview,
+} from './authGuardReview';
 
 type AuthGuardArtifactInput = {
   type: string;
@@ -264,6 +272,28 @@ export default function AuthGuardApp({
   const [buildBytes, setBuildBytes] = useState<number>(0);
   const [buildErr, setBuildErr] = useState<string>('');
   const [busy, setBusy] = useState(false);
+  const [broadcastReview, setBroadcastReview] = useState<{
+    title: string;
+    warning: string;
+    transaction: ContextualAuthGuardBroadcastReview;
+  } | null>(null);
+  const reviewDecisionRef = useRef<((approved: boolean) => void) | null>(null);
+
+  useEffect(
+    () => () => {
+      reviewDecisionRef.current?.(false);
+      reviewDecisionRef.current = null;
+    },
+    []
+  );
+
+  const settleBroadcastReview = useCallback((approved: boolean) => {
+    const resolve = reviewDecisionRef.current;
+    if (!resolve) return;
+    reviewDecisionRef.current = null;
+    setBroadcastReview(null);
+    resolve(approved);
+  }, []);
 
   // Chaingraph authhead discovery
   const [authHeadCandidatesChain, setAuthHeadCandidatesChain] = useState<
@@ -382,26 +412,55 @@ export default function AuthGuardApp({
       outputs: TransactionOutput[],
       changeAddress: string
     ) => {
+      const walletId = currentWalletId();
+      const network = currentNetwork();
       const res = await sdk.tx.build({ inputs, outputs, changeAddress });
-      if (res.errorMsg) throw new Error(res.errorMsg);
-      if (!res.hex) throw new Error('build returned no hex');
-      return { hex: res.hex, bytes: res.bytes || 0 };
+      assertAuthGuardReviewContext(
+        { walletId, network },
+        { walletId: currentWalletId(), network: currentNetwork() }
+      );
+      return {
+        ...prepareAuthGuardBroadcastReview(inputs, res),
+        walletId,
+        network,
+      };
     },
     [sdk]
   );
 
   const broadcastTx = useCallback(
-    async (hex: string) => {
-      const res = await sdk.tx.broadcast(hex);
-      if (!res.txid || typeof res.txid !== 'string') {
-        throw new Error(
-          `Broadcast returned invalid txid: ${res.errorMessage ?? String(res.txid)}`
-        );
+    async (
+      transaction: ContextualAuthGuardBroadcastReview,
+      title: string,
+      warning: string
+    ) => {
+      if (reviewDecisionRef.current) {
+        throw new Error('Another transaction is already awaiting review.');
       }
-      return {
-        txid: res.txid,
-        broadcastState: res.broadcastState,
-      };
+      return await authorizeAuthGuardBroadcast(
+        transaction,
+        () => ({
+          walletId: currentWalletId(),
+          network: currentNetwork(),
+        }),
+        () =>
+          new Promise<boolean>((resolve) => {
+            reviewDecisionRef.current = resolve;
+            setBroadcastReview({ title, warning, transaction });
+          }),
+        async (hex) => {
+          const res = await sdk.tx.broadcast(hex);
+          if (!res.txid || typeof res.txid !== 'string') {
+            throw new Error(
+              `Broadcast returned invalid txid: ${res.errorMessage ?? String(res.txid)}`
+            );
+          }
+          return {
+            txid: res.txid,
+            broadcastState: res.broadcastState,
+          };
+        }
+      );
     },
     [sdk]
   );
@@ -643,6 +702,7 @@ export default function AuthGuardApp({
     setBuildBytes(0);
     setStep0AStatus('');
 
+    let createdGenesisTxid: string | null = null;
     try {
       const primary = await getPrimaryWalletAddress();
 
@@ -675,8 +735,17 @@ export default function AuthGuardApp({
             { recipientAddress: primary, amount: MIN_GENESIS_SATS },
           ];
           const built1 = await buildTx([feeInput], outputs1, primary);
-          const sent1 = await broadcastTx(built1.hex);
+          const sent1 = await broadcastTx(
+            built1,
+            'Review genesis candidate',
+            'This broadcasts a wallet-owned vout=0 output. Creating the AuthKey may require a separate second transaction.'
+          );
+          if (!sent1) {
+            setStep0AStatus('Review cancelled. Nothing was broadcast.');
+            return;
+          }
           const txid1 = sent1.txid;
+          createdGenesisTxid = txid1;
           const tx1ResultLabel =
             sent1.broadcastState === 'submitted' ? 'submitted' : 'broadcasted';
 
@@ -765,7 +834,19 @@ export default function AuthGuardApp({
       setStep0AStatus('Minting AuthKey NFT (first spend of genesis)…');
 
       const built = await buildTx(inputs, outputs, ownerBase);
-      const sent = await broadcastTx(built.hex);
+      const sent = await broadcastTx(
+        built,
+        'Review AuthKey mint',
+        'This first spend of the genesis output creates an AuthKey NFT. The opportunity to create this category’s initial supply cannot be repeated.'
+      );
+      if (!sent) {
+        setStep0AStatus(
+          createdGenesisTxid
+            ? `AuthKey review cancelled. Genesis candidate ${createdGenesisTxid} was already broadcast; no AuthKey transaction was broadcast.`
+            : 'AuthKey review cancelled. Nothing was broadcast.'
+        );
+        return;
+      }
       const txid = sent.txid;
 
       setStep0AStatus(
@@ -784,7 +865,12 @@ export default function AuthGuardApp({
           : `AuthKey minted: ${txid}. Returned to the start screen.`
       );
     } catch (e: unknown) {
-      setBuildErr(e instanceof Error ? e.message : String(e));
+      const reason = e instanceof Error ? e.message : String(e);
+      setBuildErr(
+        createdGenesisTxid
+          ? `${reason} Genesis candidate ${createdGenesisTxid} was already broadcast; check transaction history before retrying.`
+          : reason
+      );
       setStep0AStatus('');
     } finally {
       setBusy(false);
@@ -971,7 +1057,15 @@ export default function AuthGuardApp({
       // Change address should be a wallet-controlled address.
       // Use the primary cashaddr base, builder handles change output.
       const built = await buildTx(inputs, outputs, primary);
-      const sent = await broadcastTx(built.hex);
+      const sent = await broadcastTx(
+        built,
+        'Review token mint',
+        'This first spend of the genesis output creates token supply. Check the category, amount, NFT capability and recipients before broadcasting.'
+      );
+      if (!sent) {
+        setStep0BStatus('Mint review cancelled. Nothing was broadcast.');
+        return;
+      }
       const txid = sent.txid;
 
       setStep0BStatus(
@@ -1986,6 +2080,25 @@ export default function AuthGuardApp({
           </div>
         </div>
       )}
+      <ContainedSwipeConfirmModal
+        open={broadcastReview !== null}
+        title={broadcastReview?.title ?? 'Review transaction'}
+        subtitle={`${manifest.name || manifest.id} · ${broadcastReview?.transaction.network === Network.CHIPNET ? 'Chipnet' : 'Mainnet'}`}
+        warning={broadcastReview?.warning}
+        confirmationMode="button"
+        confirmationLabel="Broadcast transaction"
+        onCancel={() => settleBroadcastReview(false)}
+        onConfirm={() => settleBroadcastReview(true)}
+      >
+        {broadcastReview && (
+          <TxSummary
+            inputsRaw={broadcastReview.transaction.inputs}
+            outputsRaw={broadcastReview.transaction.outputs}
+            bytes={broadcastReview.transaction.bytes}
+            feeSats={broadcastReview.transaction.feeSats}
+          />
+        )}
+      </ContainedSwipeConfirmModal>
     </div>
   );
 }
