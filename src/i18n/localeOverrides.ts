@@ -1304,6 +1304,17 @@ export const localeOverrides = {
       'فشل تغيير كلمة المرور. حاول مرة أخرى.',
     'settingsAppLock.biometricSetupFailed':
       'فشل إعداد القياسات الحيوية: {message}',
+    'txReview.requestSummary': 'مراجعة طلب المعاملة هذا',
+    'txReview.network': 'الشبكة',
+    'txReview.action': 'إجراء المحفظة',
+    'txReview.signAndBroadcast': 'توقيع وبث',
+    'txReview.signAndReturn': 'توقيع وإعادة إلى التطبيق',
+    'txReview.estimatedNetworkFee': 'رسوم الشبكة المقدرة',
+    'txReview.feeScope':
+      'تُحسب هذه الرسوم من الطلب الكامل. يحدد تأثير محفظتك أدناه المدخلات والباقي اللذين يخصان هذه المحفظة.',
+    'txReview.technicalTotals': 'إجماليات المعاملة التقنية',
+    'txReview.totalInput': 'إجمالي المدخلات',
+    'txReview.totalOutput': 'إجمالي المخرجات',
     'wc.disconnectsOn': 'ينقطع الاتصال في',
     'wc.signTransactionRequest': 'طلب توقيع معاملة',
     'wc.prompt': 'المطالبة',

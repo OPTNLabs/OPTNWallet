@@ -1843,3 +1843,7 @@ first; whole-transaction totals and output rows are progressively disclosed.
 The verified wallet-owned effect remains prominent and exact preview validation
 and approval boundaries are unchanged. The focused WalletConnect UI regression
 was updated and passed **1 file / 2 tests**.
+
+The shared connector-summary labels also have Arabic translations so the
+resource fallback check remains clean. The full core suite passed **318 files /
+2,022 tests** (7 files and 10 tests skipped).
