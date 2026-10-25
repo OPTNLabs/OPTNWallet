@@ -1573,4 +1573,46 @@ historical entries refer to their original location; those images cover an
 earlier revision and cannot validate these preview edits. Connector peer,
 hardware, native touch/focus, changed chain liquidity, and real broadcast
 outcomes remain unverified. FundMe/AuthGuard and exact wallet-effect summaries
-need further implementation as marked in the UX plan.
+needed further implementation at that revision, as marked in the UX plan.
+
+### 2026-10-24: transaction-preview implementation continuation
+
+Checkout `/home/lightswarm/projects/OPTNWallet`, branch
+`codex/ux-basics-and-workflow`, Linux `7.0.0-38-generic` x86_64, Node
+`v24.14.1`, npm `11.11.0`. This continuation added four review-boundary
+commits after `6f7237e4f`: AuthGuard final reviews (`6125cdce6`), ordinary Send
+CashToken authority and final-output checks (`0796e9dbb`), Cauldron merchant net
+wallet effects (`a00f98516`), and verified WalletConnect/WizardConnect effects
+(`6b214d8bc`). FundMe source and verification were excluded at the user's
+direction. No push was performed.
+
+AuthGuard now reviews the exact built inputs, final outputs and fee before each
+broadcast and rejects wallet/network drift. Ordinary Send displays the selected
+final CashToken output's full category, recipient, fungible amount, NFT
+capability and commitment, and blocks authorization when that output is absent.
+Cauldron merchant previews derive net BCH and token effects from wallet-owned
+inputs and final change outputs rather than presenting gross funding as a
+debit. WalletConnect and WizardConnect match validated source inputs and final
+outputs against the wallet's stored public locking bytecodes to show net BCH,
+token-atom and NFT-count changes separately from whole-transaction totals.
+CashConnect still lacks source outputs; its balance changes are labelled as
+request-reported and not independently verified.
+
+Focused checks passed for AuthGuard review data (**6 tests**), ordinary Send
+review UI (**3 tests**), Cauldron wallet-effect derivation (**2 tests**) and
+surrounding Cauldron paths (**3 files / 33 tests**), connector preview/effect
+logic (**2 files / 6 tests**), and WalletConnect/WizardConnect UI
+(**2 files / 6 tests**). At final connector revision `6b214d8bc`, the full app
+suite passed **35 files / 154 tests**, full UI passed **29 files / 77 tests**,
+and non-UI core passed **312 files / 2,008 tests**, with 7 files / 10 tests
+skipped. `npm run typecheck:core`, `npm run lint:core`, `npm run format:check`,
+explicit changed-file Prettier, `npm run build`,
+`VITE_APP_SURFACE=desktop npm run build:web`, and `git diff --check` passed.
+
+These results prove local source/component behavior and React bundle creation.
+No live connector peer, hardware signer, packaged Android/iOS/Tauri target,
+native touch/focus, mainnet signing, spending or broadcast was exercised. The
+browser inventory remained unavailable and no current-revision rendered
+screenshots were captured. CashConnect source-output verification, real peer
+result semantics, Simple Send hardware progress across mode transitions, and
+rendered/native transaction-review evidence remain open in the UX plan.
