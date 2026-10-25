@@ -1672,3 +1672,9 @@ Prettier, `git diff --check`, standard production build, and
 local source/component and React-bundle checks; rendered, packaged, live
 contract, hardware, mainnet signing, spending, broadcast, and push evidence
 remain unavailable. FundMe remains excluded from this follow-up.
+
+The broader regression pass on this revision also passed `npm run test:ui`
+(**30 files / 78 tests**), `npm run test:core` (**313 passed / 7 skipped files;
+2,010 passed / 10 skipped tests**), and `npm run security:test` (**2 files / 6
+tests**). The UI run still emits the repository's existing Vite
+`configLoader: 'native'` warning; it does not fail the suite.
