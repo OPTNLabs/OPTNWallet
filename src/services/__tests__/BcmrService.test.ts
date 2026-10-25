@@ -11,7 +11,11 @@ vi.mock('@capacitor/filesystem', () => ({
 
 vi.mock('../../utils/ipfs', () => ({
   ipfsFetch: vi.fn(),
-  resolveIpfsGatewayUrl: vi.fn((uri: string) => uri),
+  resolveIpfsGatewayUrl: vi.fn((uri: string) =>
+    uri.includes('.ipfs.') || uri.startsWith('ipfs://')
+      ? 'https://ipfs.optnlabs.com/ipfs/example'
+      : null
+  ),
 }));
 
 vi.mock('../../apis/ChaingraphManager/ChaingraphManager', () => ({
@@ -313,6 +317,39 @@ describe('BcmrService', () => {
     expect(snapshot.name).toBe('Merged Token');
     expect(snapshot.token?.symbol).toBe('MRG');
     expect(snapshot.uris?.icon).toBe('ipfs://merged-icon');
+  });
+
+  it('fetches gateway-hosted IPFS icons instead of returning a CORP-blocked URL', async () => {
+    const category = 'ab'.repeat(32);
+    const service = new BcmrService();
+    vi.mocked(ipfsFetch).mockResolvedValue(
+      new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      })
+    );
+
+    const extractIdentityByCategory = vi
+      .spyOn(service, 'extractIdentityByCategory')
+      .mockReturnValue({
+        name: 'Gateway token',
+        token: { category, decimals: 0, symbol: 'GW' },
+        uris: {
+          icon: 'https://bafyexample.ipfs.dweb.link/icon.png',
+        },
+      });
+
+    const icon = await service.resolveIcon(
+      'cd'.repeat(32),
+      undefined,
+      category
+    );
+
+    expect(extractIdentityByCategory).toHaveBeenCalledWith(category);
+    expect(ipfsFetch).toHaveBeenCalledWith(
+      'https://bafyexample.ipfs.dweb.link/icon.png'
+    );
+    expect(icon).toMatch(/^data:image\/png;base64,/);
   });
 
   it('can resolve category-specific hosted BCMR when the current authchain registry does not include that token', async () => {

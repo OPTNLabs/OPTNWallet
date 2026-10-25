@@ -1862,3 +1862,11 @@ The focused WalletConnect review passed **1 file / 2 tests** after the shared
 summary was introduced. No connector peer, hardware approval, native toast,
 browser external-link, or live-chain transaction was exercised; those remain
 explicit evidence gaps. FundMe remains excluded by user direction.
+
+The console-log BCMR icon issue is also covered in this revision: IPFS gateway
+icons now flow through the configured gateway/data-URI path instead of being
+handed directly to a browser image element that can be blocked by CORP/CORS.
+`src/services/__tests__/BcmrService.test.ts` passed **1 file / 9 tests** for
+the service regression. The log's extension transport warnings and historical
+Vite module-load failures are external/stale-environment evidence, not wallet
+runtime failures established by the current production build.

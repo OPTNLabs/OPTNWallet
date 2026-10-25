@@ -1224,6 +1224,16 @@ WalletConnect output rows start collapsed so a newcomer sees the wallet impact
 before scripts, addresses, and token identity. The existing exact preview
 validation and approval guards are unchanged.
 
+### BCMR/IPFS icon loading — 2026-10-25
+
+The attached browser log also showed CORP/CORS failures for CashToken icons
+served from third-party IPFS gateways. BCMR now recognizes gateway-form IPFS
+URLs as content-addressed resources and fetches them through the configured
+gateway path, caching a data URI for the wallet UI instead of returning the
+blocked origin directly to an image element. Ordinary non-IPFS HTTPS metadata
+URLs retain their direct behavior. A service regression covers the gateway URL
+case; missing token registries still remain an explicit metadata fallback.
+
 ### Verification continuation — 2026-10-25
 
 The Arabic fallback catalog now includes the newly surfaced preview, explorer
