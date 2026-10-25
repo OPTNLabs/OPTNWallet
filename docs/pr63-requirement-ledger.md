@@ -1625,3 +1625,21 @@ browser inventory remained unavailable and no current-revision rendered
 screenshots were captured. CashConnect source-output verification, real peer
 result semantics, packaged hardware-wallet progress, and rendered/native
 transaction-review evidence remain open in the UX plan.
+
+### 2026-10-24: connector delivery outcome continuation
+
+Revision `daa7a55e9` on `codex/ux-basics-and-workflow` aligned post-approval
+copy with the actual adapter boundaries. WizardConnect now reports that the
+signed transaction was returned to the app and may be broadcast later.
+CashConnect reports that prepared transactions were returned to the app, keeps
+its source-output verification limitation visible, guards repeated approval or
+rejection, and reports success/failure through the shared native/browser
+notification presenter. FundMe remains excluded.
+
+The focused CashConnect approval regression passed **2 UI files / 5 tests**;
+the translation-resource suite passed **11 tests**; the full UI suite passed
+**30 files / 78 tests**; and `npm run typecheck:core`, `npm run lint:core`,
+changed-file Prettier, `git diff --check`, and `npm run build` passed. These are
+local source/component and React-bundle checks. No live peer, hardware signer,
+native package, mainnet action, signing, spending, broadcast, or push was
+performed.
