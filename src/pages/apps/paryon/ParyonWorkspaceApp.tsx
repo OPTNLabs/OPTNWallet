@@ -32,6 +32,7 @@ import type { ParyonExecutionPlan } from '../../../services/paryon/types';
 import { ContainedSwipeConfirmModal } from '../mint-cashtokens-poc/components/uiPrimitives';
 import {
   canConfirmParyonAction,
+  matchesParyonPreview,
   paryonConfirmationLabel,
 } from './actionConfirmation';
 import { getReturnPath } from '../../../utils/navigation';
@@ -464,8 +465,27 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     setConfirmState({ open: false, preview: null, action: null });
   };
 
+  const currentConfirmPreview =
+    confirmState.action === 'borrow'
+      ? borrowPreview
+      : confirmState.action === 'stake'
+        ? stakePreview
+        : confirmState.action === 'redeem'
+          ? redeemPreview
+          : null;
+  const reviewMatchesCurrentPreview = matchesParyonPreview(
+    confirmState.preview,
+    currentConfirmPreview
+  );
+
   const confirmPreview = async () => {
     if (!confirmState.preview || confirmLoading) return;
+    if (!reviewMatchesCurrentPreview) {
+      setConfirmError(
+        'Live market or wallet state changed. Close this review and prepare it again.'
+      );
+      return;
+    }
     if (
       !canConfirmParyonAction(
         confirmState.action,
@@ -1366,7 +1386,9 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
               confirmState.action,
               Boolean(confirmState.preview?.canProceed),
               writeEnabled
-            ) && !confirmError
+            ) &&
+            reviewMatchesCurrentPreview &&
+            !confirmError
           }
           loading={confirmLoading}
           confirmationMode={
