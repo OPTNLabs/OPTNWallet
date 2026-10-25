@@ -105,6 +105,26 @@ it('copies the transaction ID from the header', async () => {
   );
 });
 
+it('shows the verified wallet net effect in transaction details', async () => {
+  mocks.fetchDetails.mockResolvedValue({
+    inputs: [{ address: 'wallet', amountSats: 20_000 }],
+    outputs: [{ address: 'wallet', amountSats: 15_000 }],
+    confirmations: 0,
+    height: 0,
+  });
+  render(
+    <TransactionDetailPopup
+      txid={'d'.repeat(64)}
+      txHeight={0}
+      explorerUrl={null}
+      walletAddresses={new Set(['wallet'])}
+      onClose={vi.fn()}
+    />
+  );
+
+  expect(await screen.findByText('-0.00005 BCH')).toBeInTheDocument();
+});
+
 it('explains unavailable explorer access and links to explorer settings', async () => {
   mocks.fetchDetails.mockResolvedValue({
     inputs: [],

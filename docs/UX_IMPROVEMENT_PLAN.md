@@ -1203,6 +1203,11 @@ announce a wallet-owned recovery message. Tauri links continue through the
 existing system-browser adapter. Modified-click behavior remains available for
 users who want the browser's normal new-tab controls.
 
+Transaction details now reuse the ownership-safe wallet-effect derivation used
+by history cards, so confirmed participant data also shows the wallet's net BCH
+movement. When no wallet-owned input or output can be matched, the value stays
+unknown rather than displaying zero.
+
 ### Verification continuation — 2026-10-25
 
 The Arabic fallback catalog now includes the newly surfaced preview, explorer

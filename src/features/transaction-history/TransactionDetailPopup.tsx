@@ -17,6 +17,7 @@ import { formatDate, formatNumber } from '../../i18n/format';
 import type { SupportedLocale } from '../../i18n/types';
 import { copyWithFeedback } from '../../utils/copyWithFeedback';
 import { handleExternalLinkClick } from '../../utils/openExternalLink';
+import { deriveWalletTransactionEffect } from './transactionEffect';
 
 type Props = {
   txid: string;
@@ -198,6 +199,9 @@ export default function TransactionDetailPopup({
     () => markWalletParticipants(details?.outputs ?? [], walletAddresses),
     [details?.outputs, walletAddresses]
   );
+  const walletEffect = details
+    ? deriveWalletTransactionEffect(details, walletAddresses)
+    : null;
 
   return (
     <Popup closePopups={onClose} closeButtonText={t('history.closeDetails')}>
@@ -267,6 +271,20 @@ export default function TransactionDetailPopup({
                 {loading
                   ? '…'
                   : formatSats(details?.feeSats, locale, t('history.unknown'))}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs wallet-muted">
+                {t('history.walletEffect')}
+              </div>
+              <div className="wallet-text-strong">
+                {loading
+                  ? '…'
+                  : formatSats(
+                      walletEffect?.bchDeltaSats,
+                      locale,
+                      t('history.unknown')
+                    )}
               </div>
             </div>
             <div className="col-span-2">

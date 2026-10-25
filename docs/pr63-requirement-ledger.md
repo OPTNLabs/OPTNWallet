@@ -1828,3 +1828,7 @@ focused `ExplorerLink` UI regression passed **1 file / 2 tests**. Browser/mobile
 popup failures now use the wallet status presenter; the focused external-link
 regression passed **1 file / 2 tests**. Tauri continues through its existing
 system-browser adapter.
+
+Transaction details now show the same verified wallet-owned BCH effect as the
+history card, with unknown ownership remaining explicit. The detail regression
+passed **1 file / 4 tests**.
