@@ -766,6 +766,8 @@ export const coreTranslations = {
     'history.timestamp': 'Timestamp',
     'history.openExplorer': 'Open in explorer',
     'history.openExplorerSettings': 'Open explorer settings',
+    'history.openExplorerFailed':
+      'Could not open the browser. Check browser permissions and try again.',
     'history.copyTransaction': 'Copy transaction ID',
     'history.transactionCopied': 'Transaction ID copied',
     'history.loadingDetails': 'Loading transaction details…',

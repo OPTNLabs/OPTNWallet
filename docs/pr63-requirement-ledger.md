@@ -1824,4 +1824,7 @@ available, so native compilation and device launch timing remain unverified.
 The shared explorer action was also tightened: blocked policy explanations now
 include a Settings → Explorer recovery link anywhere the reusable component is
 used, while available links still use the selected network and preset. The
-focused `ExplorerLink` UI regression passed **1 file / 2 tests**.
+focused `ExplorerLink` UI regression passed **1 file / 2 tests**. Browser/mobile
+popup failures now use the wallet status presenter; the focused external-link
+regression passed **1 file / 2 tests**. Tauri continues through its existing
+system-browser adapter.

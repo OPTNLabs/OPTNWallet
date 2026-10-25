@@ -16,6 +16,7 @@ import { useI18n } from '../../i18n/useI18n';
 import { formatDate, formatNumber } from '../../i18n/format';
 import type { SupportedLocale } from '../../i18n/types';
 import { copyWithFeedback } from '../../utils/copyWithFeedback';
+import { handleExternalLinkClick } from '../../utils/openExternalLink';
 
 type Props = {
   txid: string;
@@ -289,6 +290,12 @@ export default function TransactionDetailPopup({
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-sm underline wallet-text-strong"
+                  onClick={(event) =>
+                    handleExternalLinkClick(
+                      event,
+                      t('history.openExplorerFailed')
+                    )
+                  }
                 >
                   {t('history.openExplorer')}
                 </a>

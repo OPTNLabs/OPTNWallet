@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom';
 import { useI18n } from '../i18n/useI18n';
 import type { Network } from '../state/slices/networkSlice';
 import { useExplorerLink } from '../utils/servers/useExplorerLink';
+import { handleExternalLinkClick } from '../utils/openExternalLink';
 
 type Props = {
   network: Network;
@@ -44,7 +45,15 @@ export default function ExplorerLink({
   }
 
   return (
-    <a href={href} target="_blank" rel="noreferrer" className={className}>
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className={className}
+      onClick={(event) =>
+        handleExternalLinkClick(event, t('history.openExplorerFailed'))
+      }
+    >
       {label}
     </a>
   );
