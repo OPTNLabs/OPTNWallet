@@ -1643,3 +1643,18 @@ changed-file Prettier, `git diff --check`, and `npm run build` passed. These are
 local source/component and React-bundle checks. No live peer, hardware signer,
 native package, mainnet action, signing, spending, broadcast, or push was
 performed.
+
+### 2026-10-24: Paryon action-boundary continuation
+
+Revision `6c0e4a4f5` clarified the Paryon transaction review boundary. Borrow
+and Stake confirmations are disabled unless the live verified workspace is
+writable, their action is labelled “Confirm and broadcast,” and a failed
+readiness check stays in the review with an error. Redeem remains explicitly
+preview-only with “Finish preview” and cannot build, sign, or send.
+
+The Paryon action-semantics regression passed **2 files / 5 tests** and the
+full built-in-app suite passed **36 files / 156 tests**. Core typecheck, lint,
+changed-file Prettier, `git diff --check`, standard production build, and
+`VITE_APP_SURFACE=desktop npm run build:web` passed. These are local
+source/component and React-bundle checks; no live Paryon contract action,
+mainnet signing, spending, or broadcast was performed.
