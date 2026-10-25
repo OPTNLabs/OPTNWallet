@@ -1528,8 +1528,8 @@ fingerprints plus the diagnostic fixture checksum pass reconciliation.
 
 Checkout `/home/lightswarm/projects/OPTNWallet`, branch
 `codex/ux-basics-and-workflow`. The preceding UX baseline was committed as
-`05456aa669f678a13b7497059552e9bc13ae2355` without a push. This entry
-records the follow-up preview change on that branch. No mainnet signing,
+`05456aa669f678a13b7497059552e9bc13ae2355` without a push. The preview
+source revision reviewed here is `6f7237e4f`. No mainnet signing,
 spending, broadcast, publication or peer approval was exercised; all transaction
 fixtures are disposable and synthetic.
 

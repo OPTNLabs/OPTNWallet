@@ -1093,8 +1093,8 @@ tmpfs. All these rendered/platform cases remain open in this assessment.
 ### Transaction-preview implementation follow-up — 2026-10-24
 
 The baseline UX changes were committed as `05456aa66` on
-`codex/ux-basics-and-workflow`. The transaction-preview fixes below are the
-follow-up change on that branch. The prior assessment is the reproduction
+`codex/ux-basics-and-workflow`. The transaction-preview fixes below are in
+`6f7237e4f` on that branch. The prior assessment is the reproduction
 record; these statuses describe the subsequent implementation, not a
 production acceptance.
 
