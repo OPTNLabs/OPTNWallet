@@ -101,7 +101,6 @@ export default function MultisigBroadcastReview({
       amountBch={(Number(amountSats) / 100_000_000).toFixed(8)}
       fiatSummary={{ amountUsd: 0, feeUsd: 0, totalUsd: 0 }}
       selectedCategory=""
-      amountToken=""
       tokenMeta={{}}
       displayNameFor={(category) => category}
       selectedForTx={selectedInputs}

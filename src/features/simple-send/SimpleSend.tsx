@@ -795,7 +795,6 @@ export default function SimpleSend() {
             amountBch={amountBch}
             fiatSummary={fiatSummary}
             selectedCategory={selectedCategory}
-            amountToken={amountToken}
             tokenMeta={tokenMeta}
             displayNameFor={displayTokenName}
             selectedForTx={selectedForTx}

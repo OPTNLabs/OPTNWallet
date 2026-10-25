@@ -34,7 +34,6 @@ it('names the review dialog, contains keyboard focus, cancels on Escape, and res
         amountBch="0.1"
         fiatSummary={{ amountUsd: 0, feeUsd: 0, totalUsd: 0 }}
         selectedCategory=""
-        amountToken=""
         tokenMeta={{}}
         displayNameFor={(category) => category}
         selectedForTx={[]}
@@ -76,4 +75,75 @@ it('names the review dialog, contains keyboard focus, cancels on Escape, and res
   rerender(renderTree(true));
   fireEvent.click(screen.getByRole('button', { name: 'send.slideToConfirm' }));
   expect(onConfirmSend).toHaveBeenCalledOnce();
+});
+
+it('shows final NFT identity and authority before authorization', () => {
+  const category = 'ab'.repeat(32);
+  render(
+    <ReviewCard
+      open
+      review={{
+        rawTx: '00',
+        feeSats: 200,
+        totalSats: 1000,
+        finalOutputs: [
+          {
+            recipientAddress: 'bchtest:zrecipient',
+            amount: 800,
+            token: {
+              category,
+              amount: 0n,
+              nft: { capability: 'minting', commitment: 'cafe' },
+            },
+          },
+        ],
+      }}
+      recipient="bchtest:qrecipient"
+      assetType="nft"
+      amountBch=""
+      fiatSummary={{ amountUsd: 0, feeUsd: 0, totalUsd: 0 }}
+      selectedCategory={category}
+      tokenMeta={{}}
+      displayNameFor={() => 'Authority token'}
+      selectedForTx={[]}
+      rawHexLen={2}
+      isSending={false}
+      onClose={vi.fn()}
+      onConfirmSend={vi.fn()}
+    />
+  );
+
+  expect(screen.getByText(category)).toBeInTheDocument();
+  expect(screen.getByText('bchtest:zrecipient')).toBeInTheDocument();
+  expect(screen.getByText('cafe')).toBeInTheDocument();
+  expect(screen.getByText('assets.mintingNfts')).toBeInTheDocument();
+  expect(screen.getByText('assets.mintingNftsDescription')).toBeInTheDocument();
+});
+
+it('blocks authorization when the built token output is missing', () => {
+  render(
+    <ReviewCard
+      open
+      review={{ rawTx: '00', feeSats: 1, totalSats: 1, finalOutputs: [] }}
+      recipient="bchtest:qrecipient"
+      assetType="nft"
+      amountBch=""
+      fiatSummary={{ amountUsd: 0, feeUsd: 0, totalUsd: 0 }}
+      selectedCategory={'ab'.repeat(32)}
+      tokenMeta={{}}
+      displayNameFor={() => 'NFT'}
+      selectedForTx={[]}
+      rawHexLen={2}
+      isSending={false}
+      onClose={vi.fn()}
+      onConfirmSend={vi.fn()}
+    />
+  );
+
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'built transaction does not contain the selected CashToken output'
+  );
+  expect(
+    screen.getByRole('button', { name: 'send.slideToConfirm' })
+  ).toBeDisabled();
 });

@@ -20,7 +20,6 @@ type ReviewCardProps = {
   amountBch: string;
   fiatSummary: { amountUsd: number; feeUsd: number; totalUsd: number };
   selectedCategory: string;
-  amountToken: string;
   tokenMeta: TokenMetaMap;
   displayNameFor: (category: string) => string;
   selectedForTx: SimpleSendInput[];
@@ -43,7 +42,6 @@ export function ReviewCard({
   amountBch,
   fiatSummary,
   selectedCategory,
-  amountToken,
   tokenMeta,
   displayNameFor,
   selectedForTx,
@@ -277,12 +275,68 @@ export function ReviewCard({
       : 0;
   }, [review.finalOutputs]);
 
+  const reviewedTokenOutput = useMemo(() => {
+    if (assetType === 'bch' || !selectedCategory) return null;
+    const category = selectedCategory.toLowerCase();
+    return (
+      review.finalOutputs.find(
+        (output) =>
+          !('opReturn' in output) &&
+          output.token?.category.toLowerCase() === category &&
+          (assetType === 'nft' ? !!output.token.nft : !output.token.nft)
+      ) ?? null
+    );
+  }, [assetType, review.finalOutputs, selectedCategory]);
+
+  const reviewedToken =
+    reviewedTokenOutput && !('opReturn' in reviewedTokenOutput)
+      ? reviewedTokenOutput.token
+      : undefined;
+  const reviewedTokenRecipient =
+    reviewedTokenOutput && !('opReturn' in reviewedTokenOutput)
+      ? reviewedTokenOutput.recipientAddress
+      : '';
+  const reviewTokenIssue =
+    assetType !== 'bch' && !reviewedToken
+      ? 'The built transaction does not contain the selected CashToken output. Close this review and prepare it again.'
+      : '';
+  const canConfirmReview = !reviewTokenIssue;
+  const reviewedTokenPresentation = selectedCategory
+    ? resolveTokenPresentation(selectedCategory, tokenMeta[selectedCategory])
+    : null;
+  const reviewedFtAmount =
+    assetType === 'ft' && reviewedToken && reviewedTokenPresentation
+      ? formatFtAmount(
+          BigInt(reviewedToken.amount ?? 0),
+          reviewedTokenPresentation.decimals
+        )
+      : '';
+  const reviewedNft = assetType === 'nft' ? reviewedToken?.nft : undefined;
+  const reviewedNftCapabilityLabel = reviewedNft
+    ? reviewedNft.capability === 'minting'
+      ? t('assets.mintingNfts')
+      : reviewedNft.capability === 'mutable'
+        ? t('assets.mutableNfts')
+        : t('assets.plainNfts')
+    : '';
+  const reviewedNftCapabilityDescription = reviewedNft
+    ? reviewedNft.capability === 'minting'
+      ? t('assets.mintingNftsDescription')
+      : reviewedNft.capability === 'mutable'
+        ? t('assets.mutableNftsDescription')
+        : t('assets.plainNftsDescription')
+    : '';
+
   if (!open) return null;
 
   const threshold = Math.max(0, maxX - 1);
   const progressRatio = Math.min(1, Math.max(0, dragX / Math.max(1, maxX)));
   const nearingSend =
-    !isSending && !slideCompleted && maxX > 0 && progressRatio >= 0.9;
+    canConfirmReview &&
+    !isSending &&
+    !slideCompleted &&
+    maxX > 0 &&
+    progressRatio >= 0.9;
   const progressHue = Math.round(progressRatio * 120);
   const pendingTrackBg = `hsl(${progressHue} 80% 95%)`;
   const pendingTrackBorder = `hsl(${progressHue} 65% 80%)`;
@@ -292,7 +346,13 @@ export function ReviewCard({
   const pendingHandleShadow = `0 8px 24px hsla(${progressHue}, 82%, 44%, 0.35)`;
 
   const confirm = () => {
-    if (slideCompleted || isSending || confirmedRef.current) return;
+    if (
+      !canConfirmReview ||
+      slideCompleted ||
+      isSending ||
+      confirmedRef.current
+    )
+      return;
     confirmedRef.current = true;
     setDragX(maxX);
     setSlideCompleted(true);
@@ -400,16 +460,69 @@ export function ReviewCard({
                 </div>
               )}
 
-              {assetType !== 'bch' && (
+              {assetType !== 'bch' && reviewedToken && (
                 <div className="wallet-stat-row">
                   <span className="font-medium">{t('send.asset')}</span>
                   <span className="font-mono wallet-text-strong">
                     {assetType.toUpperCase()} ·{' '}
                     {selectedCategory ? displayNameFor(selectedCategory) : '—'}
-                    {assetType === 'ft' && amountToken
-                      ? ` · amount: ${amountToken}`
+                    {assetType === 'ft' && reviewedFtAmount
+                      ? ` · ${reviewedFtAmount}`
                       : ''}
                   </span>
+                </div>
+              )}
+
+              {assetType !== 'bch' && reviewedToken && (
+                <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] p-3">
+                  <div>
+                    <div className="text-xs font-medium wallet-muted">
+                      {t('send.tokenCategory')}
+                    </div>
+                    <div className="mt-1 break-all font-mono text-xs wallet-text-strong">
+                      {reviewedToken.category}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium wallet-muted">
+                      {t('send.to')}
+                    </div>
+                    <div className="mt-1 break-all font-mono text-xs wallet-text-strong">
+                      {reviewedTokenRecipient}
+                    </div>
+                  </div>
+                  {reviewedNft && (
+                    <>
+                      <div className="wallet-stat-row items-start">
+                        <span className="font-medium">
+                          {t('builder.nftCapability')}
+                        </span>
+                        <span className="text-right wallet-text-strong">
+                          {reviewedNftCapabilityLabel}
+                        </span>
+                      </div>
+                      <div className="text-xs wallet-muted">
+                        {reviewedNftCapabilityDescription}
+                      </div>
+                      <div>
+                        <div className="text-xs font-medium wallet-muted">
+                          {t('send.nftCommitment')}
+                        </div>
+                        <div className="mt-1 break-all font-mono text-xs wallet-text-strong">
+                          {reviewedNft.commitment || '—'}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {reviewTokenIssue && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-[var(--wallet-danger-border)] bg-[var(--wallet-danger-bg)] p-3 text-sm text-[var(--wallet-danger-text)]"
+                >
+                  {reviewTokenIssue}
                 </div>
               )}
 
@@ -685,7 +798,9 @@ export function ReviewCard({
                 setDragX(Math.min(Math.max(0, data.x), maxX))
               }
               onStop={handleStop}
-              disabled={isSending || slideCompleted || maxX <= 0}
+              disabled={
+                !canConfirmReview || isSending || slideCompleted || maxX <= 0
+              }
             >
               <div
                 className="absolute left-0 top-0 h-14 w-14 rounded-[18px] flex items-center justify-center text-xl select-none transition-colors"
@@ -710,7 +825,7 @@ export function ReviewCard({
           <button
             type="button"
             className="sr-only focus:not-sr-only focus:mt-3 focus:block focus:w-full wallet-btn-primary"
-            disabled={isSending || slideCompleted}
+            disabled={!canConfirmReview || isSending || slideCompleted}
             onClick={confirm}
           >
             {t('send.slideToConfirm')}
