@@ -30,6 +30,10 @@ import {
 import type { ParyonLiveMarketState } from '../../../services/paryon/native';
 import type { ParyonExecutionPlan } from '../../../services/paryon/types';
 import { ContainedSwipeConfirmModal } from '../mint-cashtokens-poc/components/uiPrimitives';
+import {
+  canConfirmParyonAction,
+  paryonConfirmationLabel,
+} from './actionConfirmation';
 import { getReturnPath } from '../../../utils/navigation';
 import WalletScreen from '../../../components/ui/WalletScreen';
 import SegmentedSubnav from '../../../components/ui/SegmentedSubnav';
@@ -462,6 +466,20 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
 
   const confirmPreview = async () => {
     if (!confirmState.preview || confirmLoading) return;
+    if (
+      !canConfirmParyonAction(
+        confirmState.action,
+        confirmState.preview.canProceed,
+        writeEnabled
+      )
+    ) {
+      setConfirmError(
+        confirmState.action === 'redeem'
+          ? confirmState.preview.blockedReason ?? 'This preview is not ready.'
+          : writeWarning
+      );
+      return;
+    }
     if (confirmState.action === 'borrow') {
       if (!nativeSnapshot) {
         setStatusMessage('Live wallet state is still loading.');
@@ -1344,13 +1362,17 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
                 : undefined
           }
           canConfirm={
-            Boolean(confirmState.preview?.canProceed) && !confirmError
+            canConfirmParyonAction(
+              confirmState.action,
+              Boolean(confirmState.preview?.canProceed),
+              writeEnabled
+            ) && !confirmError
           }
           loading={confirmLoading}
           confirmationMode={
             confirmState.action === 'redeem' ? 'button' : 'slide'
           }
-          confirmationLabel="Finish preview"
+          confirmationLabel={paryonConfirmationLabel(confirmState.action)}
           onCancel={closePreview}
           onConfirm={() => void confirmPreview()}
         >
