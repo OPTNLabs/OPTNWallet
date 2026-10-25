@@ -1729,3 +1729,20 @@ endpoints: both `https://indexer.riften.net/health` and
 is already at the matching upstream `master` revision (`25bf5a2`); it was not
 modified. No wallet-side Cauldron endpoint or schema upgrade is required by
 this check.
+
+### 2026-10-25: explorer policy and settings correction
+
+Revision `bc5eb2682` makes transaction explorer links obey the selected Rust
+chain policy for both transaction and address URLs. A transaction detail popup
+now shows the selected-network explorer action, or explains why access is
+blocked and links to the dedicated Settings → Explorer panel. Explorer choice
+has been removed from the confusing mobile Server panel and is available as a
+separate settings destination; the existing preset list remains intact.
+
+The focused standard regression passed **8 files / 38 tests**; the targeted
+explorer/detail run passed **3 files / 14 tests**; and the latest desktop UI
+settings run passed **2 files / 3 tests**. These cover policy refusal, settings
+navigation, selected-network history details, retry, transaction-ID copy, and
+the blocked-access Settings link. Core typecheck, lint, Prettier and diff checks
+passed. Native browser-open behavior and a packaged settings render remain
+unverified. FundMe was not touched.
