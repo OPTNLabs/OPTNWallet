@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   FaArrowRight,
@@ -41,6 +41,7 @@ import SelectableValueCard from './SelectableValueCard';
 import { isConfiguredQuantumrootTokenCategory } from '../../services/QuantumrootTokenAwarenessService';
 import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
 import { ContainedSwipeConfirmModal } from '../apps/mint-cashtokens-poc/components/uiPrimitives';
+import type { QuantumrootRecoveryReview } from './recoveryReview';
 
 type QuantumrootVaultPopupProps = {
   selectedVault: QuantumrootVaultRecord | null;
@@ -69,10 +70,26 @@ type QuantumrootVaultPopupProps = {
   onSpendUtxo: (utxo: UTXO, destinationAddress: string) => void;
   onAuthorizedSpendUtxo: (utxo: UTXO, destinationAddress: string) => void;
   onRecoverQuantumLockUtxo: (utxo: UTXO, destinationAddress: string) => void;
+  pendingRecoveryReview: QuantumrootRecoveryReview | null;
+  recoveryReviewLoading: boolean;
+  recoveryReviewError: string | null;
+  onCancelRecoveryReview: () => void;
+  onConfirmRecoveryReview: () => void;
 };
 
 function formatBch(sats: number) {
   return `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
+}
+
+function formatBigIntBch(sats: bigint) {
+  const negative = sats < 0n;
+  const absolute = negative ? -sats : sats;
+  const whole = absolute / 100_000_000n;
+  const fraction = (absolute % 100_000_000n)
+    .toString()
+    .padStart(8, '0')
+    .replace(/0+$/, '');
+  return `${negative ? '−' : ''}${whole.toString()}${fraction ? `.${fraction}` : ''} BCH`;
 }
 
 type PopupTranslator = (
@@ -214,6 +231,11 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
   onSpendUtxo,
   onAuthorizedSpendUtxo,
   onRecoverQuantumLockUtxo,
+  pendingRecoveryReview,
+  recoveryReviewLoading,
+  recoveryReviewError,
+  onCancelRecoveryReview,
+  onConfirmRecoveryReview,
 }) => {
   const { t } = useI18n();
   const navigate = useNavigate();
@@ -293,8 +315,6 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                 : t('quantumroot.popup.block.inactiveNetwork')
     : null;
   const isReadyState = quantumrootUiState.canAuthorizedSpend;
-  const [pendingAuthorizedSpendReview, setPendingAuthorizedSpendReview] =
-    useState<UTXO | null>(null);
   const walletTokenMetadata = useSharedTokenMetadata(
     quantumrootPlainNftFamilies.map((token) => token.category)
   );
@@ -663,7 +683,7 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                               !isActiveNetwork
                             }
                             onClick={() =>
-                              setPendingAuthorizedSpendReview(utxo)
+                              onAuthorizedSpendUtxo(utxo, pendingSpendAddress)
                             }
                           >
                             {t('quantumroot.popup.reviewSpend')}
@@ -1326,7 +1346,7 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                               !isActiveNetwork
                             }
                             onClick={() =>
-                              setPendingAuthorizedSpendReview(utxo)
+                              onAuthorizedSpendUtxo(utxo, pendingSpendAddress)
                             }
                           >
                             {t('quantumroot.popup.reviewSpend')}
@@ -1428,7 +1448,9 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                 >
                   {sweepingAll
                     ? t('quantumroot.popup.sweeping')
-                    : t('quantumroot.popup.sweepBch', {
+                    : t('quantumroot.popup.reviewSweep') +
+                      ' · ' +
+                      t('quantumroot.popup.sweepBch', {
                         count:
                           selectedVaultStatus?.recoverableReceiveUtxos.length ??
                           0,
@@ -1490,7 +1512,7 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                             >
                               {isRecovering
                                 ? t('quantumroot.popup.recovering')
-                                : t('quantumroot.popup.recover')}
+                                : t('quantumroot.popup.reviewRecovery')}
                             </button>
                           </div>
                         </div>
@@ -1546,7 +1568,7 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                           >
                             {isRecovering
                               ? t('quantumroot.popup.spending')
-                              : t('quantumroot.popup.spend')}
+                              : t('quantumroot.popup.reviewSpend')}
                           </button>
                         </div>
                       </div>
@@ -1630,68 +1652,92 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
         </details>
 
         <ContainedSwipeConfirmModal
-          open={Boolean(pendingAuthorizedSpendReview)}
-          title={t('quantumroot.popup.reviewSpendTitle')}
-          subtitle={t('quantumroot.popup.reviewSpendSubtitle')}
-          warning={t('quantumroot.popup.broadcastWarning')}
-          canConfirm={
-            Boolean(pendingAuthorizedSpendReview) &&
-            Boolean(pendingSpendAddress.trim()) &&
-            isActiveNetwork &&
-            Boolean(selectedFamilySummary) &&
-            quantumrootUiState.canAuthorizedSpend
+          open={Boolean(pendingRecoveryReview)}
+          title={
+            pendingRecoveryReview?.kind === 'sweep'
+              ? t('quantumroot.popup.reviewSweepTitle')
+              : pendingRecoveryReview?.kind === 'quantum-lock'
+                ? t('quantumroot.popup.reviewQuantumLockTitle')
+                : t('quantumroot.popup.reviewSpendTitle')
           }
-          onCancel={() => setPendingAuthorizedSpendReview(null)}
-          onConfirm={() => {
-            if (!pendingAuthorizedSpendReview) return;
-            const reviewUtxo = pendingAuthorizedSpendReview;
-            setPendingAuthorizedSpendReview(null);
-            onAuthorizedSpendUtxo(reviewUtxo, pendingSpendAddress);
-          }}
+          subtitle={t('quantumroot.popup.recoveryReviewSubtitle')}
+          warning={
+            recoveryReviewError ?? t('quantumroot.popup.broadcastWarning')
+          }
+          canConfirm={
+            Boolean(pendingRecoveryReview) &&
+            isActiveNetwork &&
+            bchSpendEnabled &&
+            !recoveryReviewError
+          }
+          loading={recoveryReviewLoading}
+          onCancel={onCancelRecoveryReview}
+          onConfirm={onConfirmRecoveryReview}
         >
-          {pendingAuthorizedSpendReview ? (
-            <div className="space-y-2 px-5 pb-5 text-sm">
+          {pendingRecoveryReview ? (
+            <div className="space-y-3 px-5 pb-5 text-sm">
               <div className="wallet-surface-strong rounded-[16px] p-3">
                 <div className="text-[11px] uppercase tracking-[0.16em] wallet-muted">
                   {t('quantumroot.popup.destination')}
                 </div>
                 <div className="mt-1 break-all font-semibold wallet-text-strong">
-                  {pendingSpendAddress.trim() ||
-                    t('quantumroot.popup.noDestination')}
+                  {pendingRecoveryReview.destinationAddress}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div className="wallet-surface-strong rounded-[16px] p-3">
                   <div className="text-[11px] uppercase tracking-[0.16em] wallet-muted">
-                    {t('quantumroot.popup.readyCoin')}
+                    {t('quantumroot.popup.recoveryInput')}
                   </div>
-                  <div className="mt-1 font-bold">
-                    {formatBch(
-                      pendingAuthorizedSpendReview.value ??
-                        pendingAuthorizedSpendReview.amount ??
-                        0
-                    )}
+                  <div className="mt-1 font-semibold">
+                    {formatBigIntBch(pendingRecoveryReview.inputSats)}
                   </div>
                   <div className="mt-1 text-[11px] wallet-muted">
-                    {getUtxoStateLabel(pendingAuthorizedSpendReview.height, t)}
+                    {pendingRecoveryReview.sweptUtxos.length}{' '}
+                    {t('quantumroot.popup.inputsCount')}
                   </div>
                 </div>
                 <div className="wallet-surface-strong rounded-[16px] p-3">
                   <div className="text-[11px] uppercase tracking-[0.16em] wallet-muted">
-                    {t('quantumroot.popup.approvalKey')}
+                    {t('quantumroot.popup.recoveryAmount')}
                   </div>
                   <div className="mt-1 font-semibold">
-                    {selectedFamilySummary
-                      ? shortTokenCategory(selectedFamilySummary.category)
-                      : t('quantumroot.popup.selectedApprovalKey')}
+                    {formatBigIntBch(pendingRecoveryReview.recoveryAmountSats)}
                   </div>
                   <div className="mt-1 text-[11px] wallet-muted">
-                    {t('quantumroot.popup.inQuantumLock', {
-                      count: approvalKeyQuantumLockCount,
-                    })}
+                    {t('quantumroot.popup.networkFee')}:{' '}
+                    {formatBigIntBch(pendingRecoveryReview.feeSats)}
                   </div>
                 </div>
               </div>
+              <div className="wallet-surface-strong rounded-[16px] p-3 text-xs wallet-muted">
+                {t('quantumroot.popup.recoveryReviewDetails', {
+                  bytes: pendingRecoveryReview.transactionByteLength,
+                })}
+              </div>
+              {pendingRecoveryReview.reservedOutputSats > 0n ? (
+                <div className="wallet-surface-strong rounded-[16px] p-3 text-xs">
+                  <span className="wallet-muted">
+                    {t('quantumroot.popup.protectedOutput')}:{' '}
+                  </span>
+                  <span className="font-semibold">
+                    {formatBigIntBch(pendingRecoveryReview.reservedOutputSats)}
+                  </span>
+                </div>
+              ) : null}
+              <details className="wallet-surface-strong rounded-[16px] p-3">
+                <summary className="cursor-pointer font-semibold">
+                  {t('quantumroot.popup.recoveryInputs')}
+                </summary>
+                <div className="mt-2 max-h-[20vh] space-y-1 overflow-y-auto font-mono text-xs wallet-muted">
+                  {pendingRecoveryReview.sweptUtxos.map((utxo) => (
+                    <div key={`${utxo.tx_hash}:${utxo.tx_pos}`}>
+                      {shortenTxHash(utxo.tx_hash)}:{utxo.tx_pos} ·{' '}
+                      {formatBch(Number(utxo.value ?? utxo.amount ?? 0))}
+                    </div>
+                  ))}
+                </div>
+              </details>
             </div>
           ) : null}
         </ContainedSwipeConfirmModal>

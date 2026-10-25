@@ -104,6 +104,8 @@ export const coreTranslations = {
     'quantumroot.popup.confirmed': 'Confirmed',
     'quantumroot.popup.pending': 'Pending',
     'quantumroot.popup.reviewSpend': 'Review spend',
+    'quantumroot.popup.reviewSweep': 'Review BCH sweep',
+    'quantumroot.popup.reviewRecovery': 'Review recovery',
     'quantumroot.popup.reviewDestination':
       'Review the destination before broadcasting.',
     'quantumroot.popup.destination': 'Destination',
@@ -224,6 +226,18 @@ export const coreTranslations = {
     'quantumroot.popup.reviewSpendTitle': 'Review spend',
     'quantumroot.popup.reviewSpendSubtitle':
       'Check the destination, approval key, and ready coin before you broadcast.',
+    'quantumroot.popup.reviewSweepTitle': 'Review BCH sweep',
+    'quantumroot.popup.reviewQuantumLockTitle': 'Review Quantum Lock recovery',
+    'quantumroot.popup.recoveryReviewSubtitle':
+      'Check the destination, amount, fee, and inputs before broadcasting.',
+    'quantumroot.popup.recoveryInput': 'Inputs',
+    'quantumroot.popup.recoveryAmount': 'You will receive',
+    'quantumroot.popup.protectedOutput': 'Returned to protected lane',
+    'quantumroot.popup.networkFee': 'Network fee',
+    'quantumroot.popup.inputsCount': 'input(s)',
+    'quantumroot.popup.recoveryReviewDetails':
+      'Prepared transaction: {bytes} bytes. This exact transaction will be broadcast after confirmation.',
+    'quantumroot.popup.recoveryInputs': 'Show recovery inputs',
     'quantumroot.popup.broadcastWarning':
       'This will broadcast after confirmation.',
     'quantumroot.popup.commitment': 'Commitment:',

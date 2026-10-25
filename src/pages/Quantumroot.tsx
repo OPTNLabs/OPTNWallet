@@ -87,6 +87,11 @@ const Quantumroot: React.FC = () => {
     handleAuthorizedSpendUtxo,
     handleSweepAllReceiveUtxos,
     handleRecoverQuantumLockUtxo,
+    pendingRecoveryReview,
+    recoveryReviewLoading,
+    recoveryReviewError,
+    handleCancelRecoveryReview,
+    handleConfirmRecoveryReview,
     setSelectedVault,
     setPendingSpendAddress,
     setPendingTokenCategory,
@@ -320,6 +325,11 @@ const Quantumroot: React.FC = () => {
         onRecoverQuantumLockUtxo={(utxo, destinationAddress) =>
           void handleRecoverQuantumLockUtxo(utxo, destinationAddress)
         }
+        pendingRecoveryReview={pendingRecoveryReview}
+        recoveryReviewLoading={recoveryReviewLoading}
+        recoveryReviewError={recoveryReviewError}
+        onCancelRecoveryReview={handleCancelRecoveryReview}
+        onConfirmRecoveryReview={() => void handleConfirmRecoveryReview()}
       />
     </WalletScreen>
   );
