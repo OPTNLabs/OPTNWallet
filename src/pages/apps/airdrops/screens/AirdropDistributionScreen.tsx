@@ -101,7 +101,6 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   const [showTokenImportPopup, setShowTokenImportPopup] = useState(false);
   const [showPayoutPreviewPopup, setShowPayoutPreviewPopup] = useState(false);
   const [showPayoutRulePopup, setShowPayoutRulePopup] = useState(false);
-  const [showTxPreviewPopup, setShowTxPreviewPopup] = useState(false);
   const [showSendConfirm, setShowSendConfirm] = useState(false);
   const [showManualReferenceInput, setShowManualReferenceInput] =
     useState(false);
@@ -530,7 +529,6 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
     setShowTokenImportPopup(false);
     setShowPayoutPreviewPopup(false);
     setShowPayoutRulePopup(false);
-    setShowTxPreviewPopup(false);
     setShowSendConfirm(false);
     setShowManualReferenceInput(false);
     setTokenImportBusy(false);
@@ -1301,14 +1299,6 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
               </p>
             ) : (
               <>
-                {txPreview ? (
-                  <button
-                    className="wallet-btn-secondary w-full mb-2"
-                    onClick={() => setShowTxPreviewPopup(true)}
-                  >
-                    {addonT('module.reviewTransaction', 'Review transaction')}
-                  </button>
-                ) : null}
                 {preparedJobs.length > 0 ? (
                   <button
                     className="wallet-btn-primary w-full mb-2"
@@ -1328,90 +1318,6 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
             </button>
           </div>
         </SectionCard>
-      ) : null}
-
-      {showTxPreviewPopup && txPreview ? (
-        <Popup
-          closePopups={() => setShowTxPreviewPopup(false)}
-          closeButtonText="Done"
-        >
-          <div className="space-y-4">
-            <div>
-              <div className="text-lg font-semibold wallet-text-strong">
-                {addonT('module.transactionReview', 'Transaction review')}
-              </div>
-              <div className="text-sm wallet-muted">
-                {txPreview.inputs.length} inputs ·{' '}
-                {txPreview.finalOutputs.length} outputs · {txPreview.feeSats}{' '}
-                sats fee
-              </div>
-            </div>
-            <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm space-y-2">
-              <div className="font-medium wallet-text-strong">
-                {addonT('module.inputs', 'Inputs')}
-              </div>
-              <div className="max-h-44 overflow-y-auto pr-1 space-y-2">
-                {txPreview.inputs.map((input, index) => (
-                  <div
-                    key={`${input.tx_hash}:${input.tx_pos}:${index}`}
-                    className="text-xs wallet-muted break-all"
-                  >
-                    {input.token
-                      ? `Token input · ${formatTokenIdentityLabel(input.token.category)} · ${formatAtomicTokenAmount(
-                          input.token.amount,
-                          getTokenPresentation(input.token.category).decimals
-                        )}`
-                      : `BCH fee input · ${shortenMiddle(input.tx_hash, 12, 8)}:${input.tx_pos} · ${input.amount ?? input.value} sats`}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm space-y-2">
-              <div className="font-medium wallet-text-strong">
-                {addonT('module.outputs', 'Outputs')}
-              </div>
-              <div className="max-h-52 overflow-y-auto pr-1 space-y-2">
-                {txPreview.finalOutputs.map((output, index) =>
-                  'recipientAddress' in output ? (
-                    <div
-                      key={`${output.recipientAddress}:${index}`}
-                      className="text-xs wallet-muted break-all"
-                    >
-                      <div className="wallet-text-strong">
-                        {output.token
-                          ? output.recipientAddress ===
-                            txPreview.tokenChangeAddress
-                            ? 'Token change'
-                            : 'Token recipient'
-                          : output.recipientAddress === txPreview.changeAddress
-                            ? 'BCH change'
-                            : 'BCH recipient'}
-                      </div>
-                      <div>{output.recipientAddress}</div>
-                      <div>{String(output.amount)} sats</div>
-                      {output.token ? (
-                        <div>
-                          {formatTokenIdentityLabel(output.token.category)} ·{' '}
-                          {formatAtomicTokenAmount(
-                            output.token.amount,
-                            getTokenPresentation(output.token.category).decimals
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div
-                      key={`opreturn:${index}`}
-                      className="text-xs wallet-muted"
-                    >
-                      OP_RETURN
-                    </div>
-                  )
-                )}
-              </div>
-            </div>
-          </div>
-        </Popup>
       ) : null}
 
       {showPayoutRulePopup ? (
@@ -1688,6 +1594,84 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
               {txPreview.inputs.length} inputs · {txPreview.finalOutputs.length}{' '}
               outputs
             </div>
+            <details className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
+              <summary className="cursor-pointer text-sm font-semibold wallet-text-strong">
+                {addonT(
+                  'module.transactionReview',
+                  'Review transaction details'
+                )}
+              </summary>
+              <div className="mt-3 space-y-3">
+                <div className="wallet-surface-strong rounded-2xl px-3 py-3 text-sm space-y-2">
+                  <div className="font-medium wallet-text-strong">
+                    {addonT('module.inputs', 'Inputs')}
+                  </div>
+                  <div className="max-h-36 overflow-y-auto pr-1 space-y-2">
+                    {txPreview.inputs.map((input, index) => (
+                      <div
+                        key={`${input.tx_hash}:${input.tx_pos}:${index}`}
+                        className="text-xs wallet-muted break-all"
+                      >
+                        {input.token
+                          ? `Token input · ${formatTokenIdentityLabel(input.token.category)} · ${formatAtomicTokenAmount(
+                              input.token.amount,
+                              getTokenPresentation(input.token.category)
+                                .decimals
+                            )}`
+                          : `BCH fee input · ${shortenMiddle(input.tx_hash, 12, 8)}:${input.tx_pos} · ${input.amount ?? input.value} sats`}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="wallet-surface-strong rounded-2xl px-3 py-3 text-sm space-y-2">
+                  <div className="font-medium wallet-text-strong">
+                    {addonT('module.outputs', 'Outputs')}
+                  </div>
+                  <div className="max-h-44 overflow-y-auto pr-1 space-y-2">
+                    {txPreview.finalOutputs.map((output, index) =>
+                      'recipientAddress' in output ? (
+                        <div
+                          key={`${output.recipientAddress}:${index}`}
+                          className="text-xs wallet-muted break-all"
+                        >
+                          <div className="wallet-text-strong">
+                            {output.token
+                              ? output.recipientAddress ===
+                                txPreview.tokenChangeAddress
+                                ? 'Token change'
+                                : 'Token recipient'
+                              : output.recipientAddress ===
+                                  txPreview.changeAddress
+                                ? 'BCH change'
+                                : 'BCH recipient'}
+                          </div>
+                          <div>{output.recipientAddress}</div>
+                          <div>{String(output.amount)} sats</div>
+                          {output.token ? (
+                            <div>
+                              {formatTokenIdentityLabel(output.token.category)}{' '}
+                              ·{' '}
+                              {formatAtomicTokenAmount(
+                                output.token.amount,
+                                getTokenPresentation(output.token.category)
+                                  .decimals
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div
+                          key={`opreturn:${index}`}
+                          className="text-xs wallet-muted"
+                        >
+                          OP_RETURN
+                        </div>
+                      )
+                    )}
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
         ) : null}
       </ContainedSwipeConfirmModal>

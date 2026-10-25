@@ -1157,6 +1157,35 @@ packaged native dialogs, hardware confirmation and rendered compact Cauldron
 screens remain explicit verification gaps; no signing, spending, broadcast or
 push was performed. FundMe remains excluded by user direction.
 
+### Transaction-preview inventory continuation — 2026-10-25
+
+The remaining in-scope executable app previews were re-read after the
+connector and Cauldron changes. Airdrops now uses one deliberate confirmation
+sheet: the recipient count, formatted payout total, and network fee remain
+visible first, while the exact input and output list (including token identity,
+change classification, and OP_RETURN entries) is available in one keyboard- and
+touch-accessible disclosure. The previous separate review popup was removed so
+the user does not have to review the same transaction in two surfaces.
+
+Paper-wallet sweep prepares the exact final outputs before confirmation,
+rejects unaccounted token state, and shows the destination, fee, output counts,
+and expandable technical summary in the confirmation sheet. AuthGuard keeps
+the reviewed built bytes, wallet/network context, final outputs, fee, and
+cancellable broadcast boundary together. The regular builder uses the final
+outputs returned by the build step, computes the fee from selected inputs and
+those outputs, blocks unaccounted input tokens, and retains keyboard
+confirmation alongside the touch gesture. WalletConnect/WizardConnect retain
+whole-transaction totals while keeping the verified wallet effect prominent;
+technical inputs, scripts, and token identity stay behind progressive
+disclosure. Cauldron's healthy swap path now goes directly from a fresh quote
+to one final review, with route and market-depth details available on demand.
+
+Focused verification after this pass: `npm run test:apps` passed **36 files /
+157 tests**; `npm run typecheck:core`, `npm run lint:core -- --no-cache`,
+Prettier, and `git diff --check` passed. Rendered compact layouts, packaged
+native notifications, hardware approval, and live connector peers remain
+verification gaps; no signing, spending, or broadcast evidence was produced.
+
 ### Verification continuation — 2026-10-25
 
 The Arabic fallback catalog now includes the newly surfaced preview, explorer

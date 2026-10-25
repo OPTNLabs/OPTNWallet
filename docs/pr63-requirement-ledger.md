@@ -1794,3 +1794,20 @@ tests**), `npm run test:apps` (**36 files / 157 tests**),
 existing Vite native-config-loader warning remains non-fatal. No live connector,
 packaged native, hardware or mainnet signing/spending/broadcast evidence was
 produced.
+
+### 2026-10-25: executable preview inventory continuation
+
+The in-scope app preview inventory was rechecked at the current branch head.
+Airdrops now presents one final confirmation sheet with recipient count,
+formatted total, fee, and an expandable exact input/output review instead of a
+separate duplicate transaction popup. Paper-wallet sweep, AuthGuard, the
+regular builder, WalletConnect/WizardConnect, and Cauldron were source-reviewed
+against the same preview contract: prepare exact bytes, show wallet-relevant
+effects and costs, keep technical identity available on demand, and require a
+deliberate confirmation before an authorized broadcast boundary.
+
+`npm run test:apps` passed **36 files / 157 tests** on this revision;
+`npm run typecheck:core`, `npm run lint:core -- --no-cache`, changed-file
+Prettier, and `git diff --check` also passed. Rendered mobile/desktop review,
+packaged native behavior, hardware approval, and live peer evidence remain
+open. No signing, spending, or broadcast was performed.
