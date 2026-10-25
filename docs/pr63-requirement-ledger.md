@@ -1879,4 +1879,6 @@ form IPFS icons through the configured gateway/data-URI path,
 the full core suite passed **318 files / 2,023 tests** (7 files and 10 tests
 skipped). Typecheck, lint and diff checks remained green. The previously
 recorded UI/apps suites and both production build configurations are unchanged
-by this service-only fix.
+by this service-only fix; both `npm run build` and
+`VITE_APP_SURFACE=desktop npm run build:web` were rerun successfully after the
+fix.
