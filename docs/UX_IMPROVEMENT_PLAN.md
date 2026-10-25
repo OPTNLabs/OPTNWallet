@@ -1156,3 +1156,19 @@ existing UI Vite config warning remains non-fatal. Live connector peers,
 packaged native dialogs, hardware confirmation and rendered compact Cauldron
 screens remain explicit verification gaps; no signing, spending, broadcast or
 push was performed. FundMe remains excluded by user direction.
+
+### Verification continuation — 2026-10-25
+
+The Arabic fallback catalog now includes the newly surfaced preview, explorer
+settings and history-effect labels, including the `{bytes}` interpolation used
+by Quantumroot recovery details. This keeps the review labels accessible without
+leaving English fallback text in Arabic. FundMe remains excluded.
+
+The post-change repository checks passed: `npm run test:core` (**317 passed / 7
+skipped files; 2,020 passed / 10 skipped tests**), `npm run test:ui` (**30 files /
+79 tests**), `npm run test:apps` (**36 files / 157 tests**),
+`npm run typecheck:core`, `npm run lint:core`, `npm run format:check`,
+`npm run deps:check`, `npm run addons:validate` (**1 test**),
+`npm run security:test` (**2 files / 6 tests**), `npm run build`,
+`VITE_APP_SURFACE=desktop npm run build:web`, and `git diff --check`. The Vite
+`configLoader: 'native'` message remains a non-fatal repository warning.

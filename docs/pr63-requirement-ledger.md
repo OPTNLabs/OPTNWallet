@@ -1777,3 +1777,20 @@ history UI paths. `npm run typecheck:core`, `npm run lint:core`, Prettier and
 `git diff --check` passed. No live connector, packaged native, hardware,
 mainnet signing/spending/broadcast, or push evidence was produced. The browser
 Vite config warning remains the repository's existing non-fatal warning.
+
+### 2026-10-25: preview localization and full verification
+
+Revision `ff7f87434` adds Arabic translations for the new transaction-preview,
+explorer-settings and history-effect labels, preserving the `{bytes}`
+interpolation used by Quantumroot recovery details. FundMe remained untouched.
+
+The full post-change gates passed: `npm run test:core` (**317 passed / 7 skipped
+files; 2,020 passed / 10 skipped tests**), `npm run test:ui` (**30 files / 79
+tests**), `npm run test:apps` (**36 files / 157 tests**),
+`npm run typecheck:core`, `npm run lint:core`, `npm run format:check`,
+`npm run deps:check`, `npm run addons:validate` (**1 test**),
+`npm run security:test` (**2 files / 6 tests**), standard `npm run build`,
+`VITE_APP_SURFACE=desktop npm run build:web`, and `git diff --check`. The
+existing Vite native-config-loader warning remains non-fatal. No live connector,
+packaged native, hardware or mainnet signing/spending/broadcast evidence was
+produced.
