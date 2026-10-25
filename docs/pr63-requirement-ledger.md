@@ -1721,3 +1721,11 @@ the BCMR service keeps cached metadata and falls back without treating those
 404s as wallet failures. Rendered, packaged, live contract, hardware, and
 native confirmation evidence remain unavailable. FundMe was intentionally
 excluded.
+
+The read-only RiftenLabs parity check was repeated against the deployed
+endpoints: both `https://indexer.riften.net/health` and
+`https://indexer-chipnet.riften.net/health` returned `status=healthy`,
+`indexed_height=chain_tip`, and `version=0.2.0`. The local reference checkout
+is already at the matching upstream `master` revision (`25bf5a2`); it was not
+modified. No wallet-side Cauldron endpoint or schema upgrade is required by
+this check.
