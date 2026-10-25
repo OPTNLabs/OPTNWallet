@@ -17,6 +17,7 @@ import { showWalletNotification } from '../../utils/copyWithFeedback';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import { transactionPreview } from '../../services/connect/transactionPreview';
 import ConnectorWalletEffectSummary from '../connect/ConnectorWalletEffectSummary';
+import ConnectorTransactionSummary from '../connect/ConnectorTransactionSummary';
 
 type TxAmountCarrier = { valueSatoshis: unknown };
 type TxToken = {
@@ -170,21 +171,12 @@ export default function WizardSignTransactionModal() {
             </div>
           )}
 
-          {canApprove && (
-            <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 text-sm space-y-2">
-              <div className="font-semibold">
-                {network === 'chipnet' ? 'Chipnet' : 'Mainnet'} transaction
-              </div>
-              <p>
-                The wallet will sign and return the transaction to this app. The
-                app may broadcast it later.
-              </p>
-              <p className="wallet-muted">
-                The totals describe the whole transaction, including other
-                participants. The verified wallet effect is calculated
-                separately from outputs matching this wallet.
-              </p>
-            </div>
+          {canApprove && connectorPreview && (
+            <ConnectorTransactionSummary
+              network={network}
+              operation="sign-and-return"
+              preview={connectorPreview}
+            />
           )}
 
           {canApprove && connectorPreview && (
@@ -318,26 +310,6 @@ export default function WizardSignTransactionModal() {
                   })}
                 </div>
               </details>
-
-              <div className="text-sm border-t border-[var(--wallet-border)] pt-2">
-                <div className="font-semibold">Whole transaction</div>
-                <div>
-                  {t('wizard.totalInput')}: {Number(totalInput) / SATSINBITCOIN}{' '}
-                  BCH
-                </div>
-                <div>
-                  {t('wizard.totalOutput')}:{' '}
-                  {Number(totalOutput) / SATSINBITCOIN} BCH
-                </div>
-                <div className="font-semibold">
-                  {t('wizard.estimatedFee')}:{' '}
-                  {Number(totalInput - totalOutput) / SATSINBITCOIN} BCH
-                </div>
-                <div>
-                  App requested broadcast:{' '}
-                  {payload.broadcast ? t('wizard.yes') : t('wizard.no')}
-                </div>
-              </div>
             </>
           )}
         </div>

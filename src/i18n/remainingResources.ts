@@ -7,6 +7,17 @@ import type { BaseLocale } from './types';
  */
 export const remainingTranslations = {
   en: {
+    'txReview.requestSummary': 'Review this transaction request',
+    'txReview.network': 'Network',
+    'txReview.action': 'Wallet action',
+    'txReview.signAndBroadcast': 'Sign and broadcast',
+    'txReview.signAndReturn': 'Sign and return to the app',
+    'txReview.estimatedNetworkFee': 'Estimated network fee',
+    'txReview.feeScope':
+      'This fee is calculated from the complete request. Your wallet effect below identifies the inputs and change that belong to this wallet.',
+    'txReview.technicalTotals': 'Technical transaction totals',
+    'txReview.totalInput': 'Total input',
+    'txReview.totalOutput': 'Total output',
     'wc.noActiveSessions': 'No active WalletConnect sessions yet.',
     'wc.activeSessions': 'Active WalletConnect Sessions',
     'wc.noSessions': 'No active sessions.',

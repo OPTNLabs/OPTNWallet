@@ -23,6 +23,7 @@ import { normalizeExternalUrl } from '../../utils/externalUrl';
 import { toErrorMessage } from '../../utils/errorHandling';
 import { useI18n } from '../../i18n/useI18n';
 import ConnectorWalletEffectSummary from '../connect/ConnectorWalletEffectSummary';
+import ConnectorTransactionSummary from '../connect/ConnectorTransactionSummary';
 
 function isStaleWalletConnectError(error: unknown): boolean {
   const message = toErrorMessage(error).toLowerCase();
@@ -50,7 +51,7 @@ export function SignTransactionModal() {
   const { hasUnresolved } = useOutboundTransactions(walletId);
 
   const [inputsExpanded, setInputsExpanded] = useState(false);
-  const [outputsExpanded, setOutputsExpanded] = useState(true);
+  const [outputsExpanded, setOutputsExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
 
@@ -275,21 +276,13 @@ export function SignTransactionModal() {
           )}
 
           {preview && (
-            <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 text-sm space-y-2">
-              <div className="font-semibold">
-                {network === 'chipnet' ? 'Chipnet' : 'Mainnet'} transaction
-              </div>
-              <p>
-                {shouldBroadcast
-                  ? 'The wallet will sign and attempt to broadcast. The app also receives the signed transaction.'
-                  : 'The wallet will sign and return the transaction to the app. The app may broadcast it later.'}
-              </p>
-              <p className="wallet-muted">
-                Amounts below describe the whole transaction, including other
-                participants. The verified wallet effect is calculated
-                separately from outputs matching this wallet.
-              </p>
-            </div>
+            <ConnectorTransactionSummary
+              network={network}
+              operation={
+                shouldBroadcast ? 'sign-and-broadcast' : 'sign-and-return'
+              }
+              preview={preview}
+            />
           )}
 
           {preview && (
@@ -429,27 +422,6 @@ export function SignTransactionModal() {
               </div>
             )}
           </div>
-
-          {preview && (
-            <div className="text-sm border-t border-[var(--wallet-border)] pt-2">
-              <div>
-                {t('wc.totalInput')}:{' '}
-                {Number(preview.totalInput) / SATSINBITCOIN} BCH
-              </div>
-              <div>
-                {t('wc.totalOutput')}:{' '}
-                {Number(preview.totalOutput) / SATSINBITCOIN} BCH
-              </div>
-              <div className="font-semibold">
-                {t('wc.estimatedFee')}: {Number(preview.fee) / SATSINBITCOIN}{' '}
-                BCH
-              </div>
-              <div>
-                Wallet broadcast requested:{' '}
-                {shouldBroadcast ? t('wc.yes') : t('wc.no')}
-              </div>
-            </div>
-          )}
         </div>
 
         <div className="flex justify-around pt-2">

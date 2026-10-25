@@ -1212,6 +1212,18 @@ Visible-page history hydration now isolates verbose Electrum failures per
 transaction. A failed lookup leaves that card's effect unknown without
 rejecting peer lookups or producing an unhandled browser rejection.
 
+### Connector preview consistency — 2026-10-25
+
+WalletConnect and WizardConnect now share a concise request summary at the top
+of their approval dialogs. It states the selected network, the actual wallet
+operation (sign and broadcast versus sign and return), and the complete-request
+network fee. Whole-transaction input/output totals remain available under a
+technical disclosure because they can include counterparty or contract inputs;
+the verified wallet-owned effect remains the separate decision-critical card.
+WalletConnect output rows start collapsed so a newcomer sees the wallet impact
+before scripts, addresses, and token identity. The existing exact preview
+validation and approval guards are unchanged.
+
 ### Verification continuation — 2026-10-25
 
 The Arabic fallback catalog now includes the newly surfaced preview, explorer

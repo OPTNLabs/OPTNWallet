@@ -80,12 +80,18 @@ it('shows Chipnet destinations and a verified wallet effect', async () => {
     },
   };
   render(<SignTransactionModal />);
-  expect(screen.getByText('Chipnet transaction')).toBeInTheDocument();
-  expect(screen.getByText(/bchtest:/)).toBeInTheDocument();
+  expect(
+    screen.getByRole('heading', { name: 'Review this transaction request' })
+  ).toBeInTheDocument();
+  expect(screen.getByText('Chipnet')).toBeInTheDocument();
+  expect(screen.getByText('Sign and return to the app')).toBeInTheDocument();
+  expect(screen.getByText('0.00001000 BCH')).toBeInTheDocument();
   expect(await screen.findByText('Verified wallet effect')).toBeInTheDocument();
   expect(screen.getByText('−0.00001000 BCH')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /Inputs/ }));
   expect(screen.getByText('Index: 3')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /Outputs/ }));
+  expect(screen.getByText(/bchtest:/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Sign' })).toBeEnabled();
 });
 

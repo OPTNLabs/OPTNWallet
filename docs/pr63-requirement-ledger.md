@@ -1836,3 +1836,10 @@ passed **1 file / 4 tests**.
 Visible history hydration now catches each verbose Electrum lookup separately;
 one failed transaction no longer rejects the page-wide effect hydration or
 surfaces an unhandled rejection.
+
+WalletConnect and WizardConnect now use the shared connector request summary:
+network, actual sign/broadcast behavior, and complete-request fee are visible
+first; whole-transaction totals and output rows are progressively disclosed.
+The verified wallet-owned effect remains prominent and exact preview validation
+and approval boundaries are unchanged. The focused WalletConnect UI regression
+was updated and passed **1 file / 2 tests**.
