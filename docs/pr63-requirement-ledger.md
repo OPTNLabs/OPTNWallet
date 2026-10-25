@@ -1870,3 +1870,13 @@ handed directly to a browser image element that can be blocked by CORP/CORS.
 the service regression. The log's extension transport warnings and historical
 Vite module-load failures are external/stale-environment evidence, not wallet
 runtime failures established by the current production build.
+
+### 2026-10-25: BCMR icon regression verification
+
+Revision `e89d66a2a` is the current source fingerprint. After routing gateway
+form IPFS icons through the configured gateway/data-URI path,
+`src/services/__tests__/BcmrService.test.ts` passed **1 file / 9 tests** and
+the full core suite passed **318 files / 2,023 tests** (7 files and 10 tests
+skipped). Typecheck, lint and diff checks remained green. The previously
+recorded UI/apps suites and both production build configurations are unchanged
+by this service-only fix.
