@@ -1820,3 +1820,8 @@ fixed-duration auto-hide, and remains visible until the React startup path
 mounts. The same sync added the installed `CapacitorApp` pod entry to the
 tracked iOS Podfile. Sync completed successfully; CocoaPods and Xcode were not
 available, so native compilation and device launch timing remain unverified.
+
+The shared explorer action was also tightened: blocked policy explanations now
+include a Settings → Explorer recovery link anywhere the reusable component is
+used, while available links still use the selected network and preset. The
+focused `ExplorerLink` UI regression passed **1 file / 2 tests**.

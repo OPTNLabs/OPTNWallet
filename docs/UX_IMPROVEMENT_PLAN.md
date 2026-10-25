@@ -1193,6 +1193,11 @@ React is ready, and includes the installed Capacitor App plugin. CocoaPods and
 Xcode are unavailable in this environment, so the native compile and launch
 timing remain an explicit verification gap.
 
+The shared `ExplorerLink` now gives every blocked-policy transaction action a
+direct Settings → Explorer recovery link, not only the history detail popup.
+The selected explorer action remains separate when a policy permits access.
+The focused UI regression covers both branches.
+
 ### Verification continuation — 2026-10-25
 
 The Arabic fallback catalog now includes the newly surfaced preview, explorer
