@@ -1658,3 +1658,17 @@ changed-file Prettier, `git diff --check`, standard production build, and
 `VITE_APP_SURFACE=desktop npm run build:web` passed. These are local
 source/component and React-bundle checks; no live Paryon contract action,
 mainnet signing, spending, or broadcast was performed.
+
+### 2026-10-24: Paryon review binding continuation
+
+Revision `efe6f7595` binds the Paryon confirmation modal to the exact current
+action preview. Borrow, Stake, and Redeem confirmation is disabled when the
+amount, metrics, details, warnings, readiness, or blocked reason changes while
+the modal is open; the user is told to close the review and prepare it again.
+The helper regression now passes **2 files / 6 tests**, and the full built-in-app
+suite passes **36 files / 157 tests**. Core typecheck, lint, changed-file
+Prettier, `git diff --check`, standard production build, and
+`VITE_APP_SURFACE=desktop npm run build:web` pass on this revision. These are
+local source/component and React-bundle checks; rendered, packaged, live
+contract, hardware, mainnet signing, spending, broadcast, and push evidence
+remain unavailable. FundMe remains excluded from this follow-up.
