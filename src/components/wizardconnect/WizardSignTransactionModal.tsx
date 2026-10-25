@@ -99,7 +99,7 @@ export default function WizardSignTransactionModal() {
     setBusy(true);
     try {
       await dispatch(approveWizardSignRequest()).unwrap();
-      await showWalletNotification(t('wizard.approved'));
+      await showWalletNotification(t('wizard.signedReturned'));
     } catch (error) {
       console.error(
         '[WizardConnect] Failed to approve transaction request',

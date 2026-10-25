@@ -1,11 +1,15 @@
 import { formatSegment } from '@cashconnect-js/nostr/wallet';
 import { useDispatch, useSelector } from 'react-redux';
+import { useRef, useState } from 'react';
 import type { AppDispatch, RootState } from '../../state/store';
 import {
   approveCashConnectActionAction,
   rejectCashConnectActionAction,
 } from '../../state/slices/cashconnectSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
+import { toErrorMessage } from '../../utils/errorHandling';
+import { showWalletNotification } from '../../utils/copyWithFeedback';
+import { useI18n } from '../../i18n/useI18n';
 import WalletPopupSheet from '../ui/WalletPopupSheet';
 
 function formatMeta(
@@ -30,6 +34,9 @@ function formatBalance(category: string, amount: bigint): string {
 
 export default function CashConnectExecuteActionModal() {
   const dispatch = useDispatch<AppDispatch>();
+  const { t } = useI18n();
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
   const pending = useSelector(
     (state: RootState) => state.cashconnect.pendingAction
   );
@@ -42,23 +49,63 @@ export default function CashConnectExecuteActionModal() {
   const balanceChanges = Object.entries(response.balanceChanges);
   const transactionCount = response.transactions.length;
 
+  const handleApprove = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      await dispatch(approveCashConnectActionAction()).unwrap();
+      await showWalletNotification(t('cashconnect.actionApproved'));
+    } catch (error) {
+      await showWalletNotification(
+        t('cashconnect.actionApprovalFailed', {
+          message: toErrorMessage(error),
+        })
+      );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      await dispatch(rejectCashConnectActionAction()).unwrap();
+      await showWalletNotification(t('cashconnect.actionRejected'));
+    } catch (error) {
+      await showWalletNotification(
+        t('cashconnect.actionRejectionFailed', {
+          message: toErrorMessage(error),
+        })
+      );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
+
   return (
     <WalletPopupSheet
       dismissLabel="Reject"
-      onDismiss={() => dispatch(rejectCashConnectActionAction())}
+      onDismiss={() => void handleReject()}
       footer={
         <div className="grid grid-cols-2 gap-3">
           <button
             type="button"
             className="wallet-btn-primary min-h-[44px] px-3 py-2"
-            onClick={() => dispatch(approveCashConnectActionAction())}
+            onClick={() => void handleApprove()}
+            disabled={busy}
           >
-            Approve request
+            {busy ? 'Working…' : 'Approve request'}
           </button>
           <button
             type="button"
             className="wallet-btn-danger min-h-[44px] px-3 py-2"
-            onClick={() => dispatch(rejectCashConnectActionAction())}
+            onClick={() => void handleReject()}
+            disabled={busy}
           >
             Reject
           </button>

@@ -1430,9 +1430,17 @@ export const localeOverrides = {
     'wizard.no': 'لا',
     'wizard.sign': 'توقيع',
     'wizard.approved': 'تمت الموافقة على معاملة WizardConnect وإرسالها.',
+    'wizard.signedReturned':
+      'تم توقيع المعاملة وإعادتها إلى التطبيق. قد يبثها التطبيق لاحقًا.',
     'wizard.approveFailed': 'فشلت معاملة WizardConnect: {message}',
     'wizard.rejected': 'رُفضت معاملة WizardConnect.',
     'wizard.rejectFailed': 'فشل رفض WizardConnect: {message}',
+    'cashconnect.actionApproved':
+      'تمت إعادة المعاملات المُعدّة إلى التطبيق. قد يرسلها التطبيق.',
+    'cashconnect.actionApprovalFailed':
+      'فشلت الموافقة على CashConnect: {message}',
+    'cashconnect.actionRejected': 'تم رفض طلب CashConnect.',
+    'cashconnect.actionRejectionFailed': 'فشل رفض CashConnect: {message}',
     'wizard.sessionDisconnectedOrExpired':
       'انقطعت جلسة WizardConnect أو انتهت صلاحيتها من جهة dApp.',
     'server.invalidHost': 'أدخل مضيفًا صالحًا:منفذ (مثل 192.168.0.129:50002).',

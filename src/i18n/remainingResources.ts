@@ -930,9 +930,18 @@ export const remainingTranslations = {
     'wizard.no': 'No',
     'wizard.sign': 'Sign',
     'wizard.approved': 'WizardConnect transaction approved and sent.',
+    'wizard.signedReturned':
+      'Signed transaction returned to the app. The app may broadcast it later.',
     'wizard.approveFailed': 'WizardConnect transaction failed: {message}',
     'wizard.rejected': 'WizardConnect transaction rejected.',
     'wizard.rejectFailed': 'WizardConnect rejection failed: {message}',
+    'cashconnect.actionApproved':
+      'Prepared transactions returned to the app. The app may submit them.',
+    'cashconnect.actionApprovalFailed':
+      'CashConnect approval failed: {message}',
+    'cashconnect.actionRejected': 'CashConnect request rejected.',
+    'cashconnect.actionRejectionFailed':
+      'CashConnect rejection failed: {message}',
     'wizard.sessionDisconnectedOrExpired':
       'A WizardConnect session disconnected or expired on the dApp side.',
 
