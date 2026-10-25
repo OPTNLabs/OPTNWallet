@@ -96,7 +96,11 @@ export default function CashConnectExecuteActionModal() {
         ) : null}
       </div>
       <div className="mt-4 text-sm space-y-1">
-        <p className="font-semibold">Estimated wallet balance change</p>
+        <p className="font-semibold">Balance change reported by this request</p>
+        <p className="wallet-muted">
+          CashConnect did not provide the source outputs needed for this wallet
+          to verify ownership and change independently.
+        </p>
         {balanceChanges.length === 0 ? (
           <p className="wallet-muted">
             No balance change was supplied for this request.

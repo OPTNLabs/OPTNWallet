@@ -76,6 +76,8 @@ export type ConnectorTransactionPreview = {
     outpointTransactionHash: Uint8Array;
     outpointIndex: number;
     valueSatoshis: bigint;
+    lockingBytecode: Uint8Array;
+    token?: ConnectorPreviewToken;
   }>;
   outputs: ConnectorPreviewOutput[];
   totalInput: bigint;
@@ -145,6 +147,8 @@ export function transactionPreview(
       outpointTransactionHash: bytes(input.outpointTransactionHash, 32),
       outpointIndex: uint32(input.outpointIndex),
       valueSatoshis: source.valueSatoshis,
+      lockingBytecode: source.lockingBytecode,
+      token: source.token,
     };
   });
   const outputs = tx.outputs.map(output);

@@ -14,6 +14,9 @@ import { toErrorMessage } from '../../utils/errorHandling';
 import { useI18n } from '../../i18n/useI18n';
 import { decodeWizardConnectTransaction } from '../../services/wizardconnect/transaction';
 import { showWalletNotification } from '../../utils/copyWithFeedback';
+import { selectWalletId } from '../../state/slices/walletSlice';
+import { transactionPreview } from '../../services/connect/transactionPreview';
+import ConnectorWalletEffectSummary from '../connect/ConnectorWalletEffectSummary';
 
 type TxAmountCarrier = { valueSatoshis: unknown };
 type TxToken = {
@@ -47,6 +50,7 @@ function parsePushData(bytecode: Uint8Array): string[] {
 export default function WizardSignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
   const { t } = useI18n();
+  const walletId = useSelector(selectWalletId);
   const network = useSelector(selectCurrentNetwork);
   const pending = useSelector(
     (state: RootState) => state.wizardconnect.pendingSignRequest
@@ -62,8 +66,13 @@ export default function WizardSignTransactionModal() {
   const connection = connections[pending.connectionId];
   const payload = pending.request.transaction;
   let decoded: ReturnType<typeof decodeWizardConnectTransaction> | null = null;
+  let connectorPreview: ReturnType<typeof transactionPreview> | null = null;
   try {
     decoded = decodeWizardConnectTransaction(payload);
+    connectorPreview = transactionPreview(
+      decoded.transaction,
+      decoded.sourceOutputs
+    );
   } catch {
     // A failed preview must never leave an approval button enabled.
   }
@@ -172,10 +181,17 @@ export default function WizardSignTransactionModal() {
               </p>
               <p className="wallet-muted">
                 The totals describe the whole transaction, including other
-                participants. This request does not identify your wallet’s exact
-                change or fee share.
+                participants. The verified wallet effect is calculated
+                separately from outputs matching this wallet.
               </p>
             </div>
+          )}
+
+          {canApprove && connectorPreview && (
+            <ConnectorWalletEffectSummary
+              preview={connectorPreview}
+              walletId={walletId}
+            />
           )}
 
           {tx && canApprove && (

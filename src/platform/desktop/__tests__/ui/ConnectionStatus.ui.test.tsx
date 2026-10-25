@@ -9,9 +9,17 @@ import { SessionList } from '../../../../components/walletconnect/SessionList';
 import WizardConnectPanel from '../../../../components/wizardconnect/WizardConnectPanel';
 import CashConnectPanel from '../../../../components/cashconnect/CashConnectPanel';
 import WizardSignTransactionModal from '../../../../components/wizardconnect/WizardSignTransactionModal';
-import { binToHex, encodeTransaction, hexToBin } from '@bitauth/libauth';
+import {
+  binToHex,
+  encodeTransaction,
+  hexToBin,
+  lockingBytecodeToCashAddress,
+} from '@bitauth/libauth';
 
-const mock = vi.hoisted(() => ({ state: {} as unknown }));
+const mock = vi.hoisted(() => ({
+  state: {} as unknown,
+  loadWalletPublicAddresses: vi.fn(),
+}));
 vi.mock('react-redux', () => ({
   useDispatch: () => vi.fn(),
   useSelector: (selector: (state: unknown) => unknown) => selector(mock.state),
@@ -40,11 +48,14 @@ vi.mock('../../../../components/wizardconnect/WizardDappAvatar', () => ({
 vi.mock('../../../../components/cashconnect/CashConnectPairCard', () => ({
   default: () => null,
 }));
+vi.mock('../../../../services/connect/walletPublicAddresses', () => ({
+  loadWalletPublicAddresses: mock.loadWalletPublicAddresses,
+}));
 
 afterEach(cleanup);
 
 describe('connection panels', () => {
-  it('previews raw WizardConnect transactions on Chipnet and blocks invalid previews', () => {
+  it('previews raw WizardConnect transactions on Chipnet and blocks invalid previews', async () => {
     const transaction = {
       version: 2,
       locktime: 0,
@@ -77,6 +88,12 @@ describe('connection panels', () => {
         ],
       },
     };
+    const address = lockingBytecodeToCashAddress({
+      prefix: 'bchtest',
+      bytecode: transaction.outputs[0].lockingBytecode,
+    });
+    if (typeof address === 'string') throw new Error(address);
+    mock.loadWalletPublicAddresses.mockResolvedValue([address.address]);
     mock.state = {
       wallet_id: { currentWalletId: 1, networkType: 'chipnet' },
       wizardconnect: {
@@ -92,6 +109,10 @@ describe('connection panels', () => {
     expect(
       screen.getByRole('button', { name: 'Sign', exact: true })
     ).toBeEnabled();
+    expect(
+      await screen.findByText('Verified wallet effect')
+    ).toBeInTheDocument();
+    expect(screen.getByText('−0.00001000 BCH')).toBeInTheDocument();
     request.transaction.sourceOutputs = [];
     view.rerender(<WizardSignTransactionModal />);
     expect(

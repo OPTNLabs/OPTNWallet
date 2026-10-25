@@ -22,6 +22,7 @@ import { FiChevronDown, FiChevronUp } from 'react-icons/fi';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 import { toErrorMessage } from '../../utils/errorHandling';
 import { useI18n } from '../../i18n/useI18n';
+import ConnectorWalletEffectSummary from '../connect/ConnectorWalletEffectSummary';
 
 function isStaleWalletConnectError(error: unknown): boolean {
   const message = toErrorMessage(error).toLowerCase();
@@ -285,10 +286,17 @@ export function SignTransactionModal() {
               </p>
               <p className="wallet-muted">
                 Amounts below describe the whole transaction, including other
-                participants. Your wallet’s exact change and fee share are not
-                identified in this request.
+                participants. The verified wallet effect is calculated
+                separately from outputs matching this wallet.
               </p>
             </div>
+          )}
+
+          {preview && (
+            <ConnectorWalletEffectSummary
+              preview={preview}
+              walletId={walletId}
+            />
           )}
 
           <div className="space-y-2">

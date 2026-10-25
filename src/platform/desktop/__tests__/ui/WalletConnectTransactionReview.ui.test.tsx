@@ -1,12 +1,15 @@
 /** @vitest-environment jsdom */
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { hexToBin } from '@bitauth/libauth';
-import { afterEach, expect, it, vi } from 'vitest';
+import { hexToBin, lockingBytecodeToCashAddress } from '@bitauth/libauth';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { translations } from '../../../../i18n/resources';
 import type { TranslationKey } from '../../../../i18n/resources';
 
-const mock = vi.hoisted(() => ({ state: {} as unknown }));
+const mock = vi.hoisted(() => ({
+  state: {} as unknown,
+  loadWalletPublicAddresses: vi.fn(),
+}));
 vi.mock('react-redux', () => ({
   useDispatch: () => vi.fn(),
   useSelector: (selector: (state: unknown) => unknown) => selector(mock.state),
@@ -17,6 +20,9 @@ vi.mock('../../../../hooks/useOutboundTransactions', () => ({
 vi.mock('../../../../components/ui/WalletTooltip', () => ({
   default: () => null,
 }));
+vi.mock('../../../../services/connect/walletPublicAddresses', () => ({
+  loadWalletPublicAddresses: mock.loadWalletPublicAddresses,
+}));
 vi.mock('../../../../i18n/useI18n', () => ({
   useI18n: () => ({ t: (key: TranslationKey) => translations.en[key] }),
 }));
@@ -24,6 +30,15 @@ vi.mock('../../../../i18n/useI18n', () => ({
 import { SignTransactionModal } from '../../../../components/walletconnect/SignTransactionModal';
 
 afterEach(cleanup);
+
+beforeEach(() => {
+  const address = lockingBytecodeToCashAddress({
+    prefix: 'bchtest',
+    bytecode: hexToBin('76a914751e76e8199196d454941c45d1b3a323f1433bd688ac'),
+  });
+  if (typeof address === 'string') throw new Error(address);
+  mock.loadWalletPublicAddresses.mockResolvedValue([address.address]);
+});
 
 function request() {
   const lockingBytecode = hexToBin(
@@ -56,7 +71,7 @@ function request() {
   };
 }
 
-it('shows Chipnet destinations and a valid input outpoint in the default review', () => {
+it('shows Chipnet destinations and a verified wallet effect', async () => {
   mock.state = {
     wallet_id: { currentWalletId: 1, networkType: 'chipnet' },
     walletconnect: {
@@ -67,6 +82,8 @@ it('shows Chipnet destinations and a valid input outpoint in the default review'
   render(<SignTransactionModal />);
   expect(screen.getByText('Chipnet transaction')).toBeInTheDocument();
   expect(screen.getByText(/bchtest:/)).toBeInTheDocument();
+  expect(await screen.findByText('Verified wallet effect')).toBeInTheDocument();
+  expect(screen.getByText('−0.00001000 BCH')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /Inputs/ }));
   expect(screen.getByText('Index: 3')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Sign' })).toBeEnabled();
