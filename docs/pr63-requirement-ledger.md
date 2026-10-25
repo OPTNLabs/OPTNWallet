@@ -1579,12 +1579,13 @@ needed further implementation at that revision, as marked in the UX plan.
 
 Checkout `/home/lightswarm/projects/OPTNWallet`, branch
 `codex/ux-basics-and-workflow`, Linux `7.0.0-38-generic` x86_64, Node
-`v24.14.1`, npm `11.11.0`. This continuation added four review-boundary
+`v24.14.1`, npm `11.11.0`. This continuation added five review-boundary
 commits after `6f7237e4f`: AuthGuard final reviews (`6125cdce6`), ordinary Send
 CashToken authority and final-output checks (`0796e9dbb`), Cauldron merchant net
-wallet effects (`a00f98516`), and verified WalletConnect/WizardConnect effects
-(`6b214d8bc`). FundMe source and verification were excluded at the user's
-direction. No push was performed.
+wallet effects (`a00f98516`), verified WalletConnect/WizardConnect effects
+(`6b214d8bc`), and persistent hardware-send progress (`1352c861b`). FundMe
+source and verification were excluded at the user's direction. No push was
+performed.
 
 AuthGuard now reviews the exact built inputs, final outputs and fee before each
 broadcast and rejects wallet/network drift. Ordinary Send displays the selected
@@ -1597,6 +1598,9 @@ outputs against the wallet's stored public locking bytecodes to show net BCH,
 token-atom and NFT-count changes separately from whole-transaction totals.
 CashConnect still lacks source outputs; its balance changes are labelled as
 request-reported and not independently verified.
+Simple Send now keeps the authorized plan visible while a hardware wallet signs
+and while the signed transaction is submitted; device/broadcast progress uses
+an accessible live status instead of disappearing with the mode transition.
 
 Focused checks passed for AuthGuard review data (**6 tests**), ordinary Send
 review UI (**3 tests**), Cauldron wallet-effect derivation (**2 tests**) and
@@ -1608,11 +1612,16 @@ and non-UI core passed **312 files / 2,008 tests**, with 7 files / 10 tests
 skipped. `npm run typecheck:core`, `npm run lint:core`, `npm run format:check`,
 explicit changed-file Prettier, `npm run build`,
 `VITE_APP_SURFACE=desktop npm run build:web`, and `git diff --check` passed.
+After `1352c861b`, the simple-send visibility/planner group passed **3 files /
+12 tests**, full UI remained **29 files / 77 tests**, and core typecheck, lint,
+standard production build, desktop React build, changed-file Prettier and diff
+checks passed. The full app and non-UI core suites were not repeated because
+the follow-up changes only the Simple Send render condition and status semantics.
 
 These results prove local source/component behavior and React bundle creation.
 No live connector peer, hardware signer, packaged Android/iOS/Tauri target,
 native touch/focus, mainnet signing, spending or broadcast was exercised. The
 browser inventory remained unavailable and no current-revision rendered
 screenshots were captured. CashConnect source-output verification, real peer
-result semantics, Simple Send hardware progress across mode transitions, and
-rendered/native transaction-review evidence remain open in the UX plan.
+result semantics, packaged hardware-wallet progress, and rendered/native
+transaction-review evidence remain open in the UX plan.
