@@ -2891,7 +2891,26 @@ export const localeOverrides = {
       'يؤدي تغيير مسار الاشتقاق إلى مسح العنوان والسجل وسجلات UTXO الحالية. ستعيد المحفظة بعد ذلك إنشاء المسار الجديد ومزامنته فقط. هل تريد المتابعة؟',
     'history.output': 'المخرج',
     'priceFeed.loading': 'جارٍ التحميل…',
+    'quantumroot.popup.reviewSweep': 'مراجعة تحويل BCH',
+    'quantumroot.popup.reviewRecovery': 'مراجعة الاسترداد',
+    'quantumroot.popup.reviewSweepTitle': 'مراجعة تحويل BCH',
+    'quantumroot.popup.reviewQuantumLockTitle': 'مراجعة استرداد Quantum Lock',
+    'quantumroot.popup.recoveryReviewSubtitle':
+      'تحقق من تفاصيل الاسترداد قبل المتابعة.',
+    'quantumroot.popup.recoveryInput': 'المدخلات',
+    'quantumroot.popup.recoveryAmount': 'المبلغ الذي ستستلمه',
+    'quantumroot.popup.protectedOutput': 'إرجاع إلى المسار المحمي',
+    'quantumroot.popup.networkFee': 'رسوم الشبكة',
+    'quantumroot.popup.inputsCount': 'مُدخل/مُدخلات',
+    'quantumroot.popup.recoveryReviewDetails':
+      'المعاملة المعدة: {bytes} بايت. سيتم بث هذه المعاملة نفسها بعد التأكيد.',
+    'quantumroot.popup.recoveryInputs': 'عرض مُدخلات الاسترداد',
+    'history.walletEffect': 'تأثير المحفظة',
+    'history.openExplorerSettings': 'فتح إعدادات المستكشف',
+    'settingsRows.explorer': 'المستكشف',
+    'settingsRows.explorerDescription': 'اختر مكان فتح روابط المعاملات',
   },
+
   fr: {
     'app.language': 'Langue',
     'app.languageDescription':
