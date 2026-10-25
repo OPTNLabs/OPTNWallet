@@ -710,7 +710,11 @@ export function ReviewCard({
         </div>
 
         <div className="px-4 pb-4 pt-3 wallet-surface border-t border-[var(--wallet-border)]">
-          <div className="text-[14px] wallet-muted mb-2.5 px-1">
+          <div
+            role="status"
+            aria-live="polite"
+            className="text-[14px] wallet-muted mb-2.5 px-1"
+          >
             {isSending
               ? sendStatus || t('send.sending')
               : slideCompleted

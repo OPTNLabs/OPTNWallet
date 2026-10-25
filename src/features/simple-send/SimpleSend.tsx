@@ -21,6 +21,7 @@ import { CoinControlSection } from '../../components/CoinControlSection';
 import { getReturnPath } from '../../utils/navigation';
 import { SATSINBITCOIN, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import { useI18n } from '../../i18n/useI18n';
+import { shouldShowSendReview } from './reviewVisibility';
 
 type SimpleSendLocationState = {
   amountBch?: string;
@@ -786,7 +787,7 @@ export default function SimpleSend() {
           {t('send.back')}
         </button>
 
-        {mode === 'review' && review && (
+        {shouldShowSendReview(mode, review !== null) && review && (
           <ReviewCard
             open={reviewModalOpen}
             review={review}
