@@ -196,121 +196,128 @@ export default function WizardSignTransactionModal() {
 
           {tx && canApprove && (
             <>
-              <details>
+              <details className="rounded-xl border border-[var(--wallet-border)] px-3 py-2">
                 <summary className="cursor-pointer font-semibold">
-                  Technical inputs ({sourceOutputs.length})
+                  Technical transaction details ({sourceOutputs.length} inputs,{' '}
+                  {outputs.length} outputs)
                 </summary>
-                {(sourceOutputs as TxInputSource[]).map((source, index) => (
-                  <div
-                    key={`${pending.request.sequence}-${index}`}
-                    className="ml-2"
-                  >
-                    <div>
-                      {t('wizard.txid')}:{' '}
-                      <span className="font-mono break-all">
-                        {binToHex(
-                          ensureUint8Array(
-                            tx.inputs[index].outpointTransactionHash
-                          )
-                        )}
-                      </span>
-                    </div>
-                    <div>
-                      {t('wizard.index')}: {tx.inputs[index].outpointIndex}
-                    </div>
-                    <div>
-                      {Number(parseSatoshis(source.valueSatoshis)) /
-                        SATSINBITCOIN}{' '}
-                      BCH
-                    </div>
-                  </div>
-                ))}
-              </details>
-
-              {(outputs as TxOutput[]).map((output, index) => {
-                const value = parseSatoshis(output.valueSatoshis);
-                const lockingBytecode = ensureUint8Array(
-                  output.lockingBytecode
-                );
-                const isOpReturn = lockingBytecode[0] === 0x6a;
-
-                if (isOpReturn) {
-                  const parsed = parsePushData(lockingBytecode);
-                  return (
+                <div className="mt-3 space-y-3">
+                  {(sourceOutputs as TxInputSource[]).map((source, index) => (
                     <div
-                      key={`${pending.request.sequence}-output-${index}`}
-                      className="ml-2 space-y-1 border-b border-[var(--wallet-border)] pb-2 text-sm"
+                      key={`${pending.request.sequence}-${index}`}
+                      className="ml-2"
                     >
-                      <strong>{t('wizard.opReturnOutput')}</strong>
-                      {parsed.map((line, lineIndex) => (
+                      <div>
+                        {t('wizard.txid')}:{' '}
+                        <span className="font-mono break-all">
+                          {binToHex(
+                            ensureUint8Array(
+                              tx.inputs[index].outpointTransactionHash
+                            )
+                          )}
+                        </span>
+                      </div>
+                      <div>
+                        {t('wizard.index')}: {tx.inputs[index].outpointIndex}
+                      </div>
+                      <div>
+                        {Number(parseSatoshis(source.valueSatoshis)) /
+                          SATSINBITCOIN}{' '}
+                        BCH
+                      </div>
+                    </div>
+                  ))}
+
+                  {(outputs as TxOutput[]).map((output, index) => {
+                    const value = parseSatoshis(output.valueSatoshis);
+                    const lockingBytecode = ensureUint8Array(
+                      output.lockingBytecode
+                    );
+                    const isOpReturn = lockingBytecode[0] === 0x6a;
+
+                    if (isOpReturn) {
+                      const parsed = parsePushData(lockingBytecode);
+                      return (
                         <div
-                          key={`${pending.request.sequence}-output-${index}-line-${lineIndex}`}
-                          className="font-mono wallet-muted break-words"
+                          key={`${pending.request.sequence}-output-${index}`}
+                          className="ml-2 space-y-1 border-b border-[var(--wallet-border)] pb-2 text-sm"
                         >
-                          {line}
+                          <strong>{t('wizard.opReturnOutput')}</strong>
+                          {parsed.map((line, lineIndex) => (
+                            <div
+                              key={`${pending.request.sequence}-output-${index}-line-${lineIndex}`}
+                              className="font-mono wallet-muted break-words"
+                            >
+                              {line}
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  );
-                }
+                      );
+                    }
 
-                const addressResult = lockingBytecodeToCashAddress({
-                  prefix: PREFIX[network],
-                  bytecode: lockingBytecode,
-                });
-                const address =
-                  typeof addressResult === 'string'
-                    ? addressResult
-                    : addressResult.address;
+                    const addressResult = lockingBytecodeToCashAddress({
+                      prefix: PREFIX[network],
+                      bytecode: lockingBytecode,
+                    });
+                    const address =
+                      typeof addressResult === 'string'
+                        ? addressResult
+                        : addressResult.address;
 
-                return (
-                  <div
-                    key={`${pending.request.sequence}-standard-output-${index}`}
-                    className="ml-2 border-b border-[var(--wallet-border)] pb-2 space-y-1"
-                  >
-                    <div>
-                      {t('wizard.address')}:{' '}
-                      <span className="font-mono wallet-link break-all">
-                        {address}
-                      </span>
-                    </div>
-                    <div>{Number(value) / SATSINBITCOIN} BCH</div>
-                    {output.token && (
-                      <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 space-y-1">
+                    return (
+                      <div
+                        key={`${pending.request.sequence}-standard-output-${index}`}
+                        className="ml-2 border-b border-[var(--wallet-border)] pb-2 space-y-1"
+                      >
                         <div>
-                          <strong>{t('wizard.tokenCategory')}:</strong>{' '}
-                          <span className="font-mono break-all">
-                            {binToHex(ensureUint8Array(output.token.category))}
+                          {t('wizard.address')}:{' '}
+                          <span className="font-mono wallet-link break-all">
+                            {address}
                           </span>
                         </div>
-                        {output.token.amount !== undefined &&
-                          output.token.amount !== null && (
+                        <div>{Number(value) / SATSINBITCOIN} BCH</div>
+                        {output.token && (
+                          <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 space-y-1">
                             <div>
-                              <strong>{t('wizard.fungibleAmount')}:</strong>{' '}
-                              {String(parseSatoshis(output.token.amount))}
-                            </div>
-                          )}
-                        {output.token.nft && (
-                          <>
-                            <div>
-                              <strong>NFT capability:</strong>{' '}
-                              {output.token.nft.capability}
-                            </div>
-                            <div>
-                              <strong>NFT commitment:</strong>{' '}
+                              <strong>{t('wizard.tokenCategory')}:</strong>{' '}
                               <span className="font-mono break-all">
                                 {binToHex(
-                                  ensureUint8Array(output.token.nft.commitment)
-                                ) || 'empty'}
+                                  ensureUint8Array(output.token.category)
+                                )}
                               </span>
                             </div>
-                          </>
+                            {output.token.amount !== undefined &&
+                              output.token.amount !== null && (
+                                <div>
+                                  <strong>{t('wizard.fungibleAmount')}:</strong>{' '}
+                                  {String(parseSatoshis(output.token.amount))}
+                                </div>
+                              )}
+                            {output.token.nft && (
+                              <>
+                                <div>
+                                  <strong>NFT capability:</strong>{' '}
+                                  {output.token.nft.capability}
+                                </div>
+                                <div>
+                                  <strong>NFT commitment:</strong>{' '}
+                                  <span className="font-mono break-all">
+                                    {binToHex(
+                                      ensureUint8Array(
+                                        output.token.nft.commitment
+                                      )
+                                    ) || 'empty'}
+                                  </span>
+                                </div>
+                              </>
+                            )}
+                          </div>
                         )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              </details>
 
               <div className="text-sm border-t border-[var(--wallet-border)] pt-2">
                 <div className="font-semibold">Whole transaction</div>

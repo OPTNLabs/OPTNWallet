@@ -761,6 +761,7 @@ export const coreTranslations = {
     'history.last': 'Last',
     'history.transaction': 'Transaction',
     'history.status': 'Status',
+    'history.walletEffect': 'Wallet effect',
     'history.fee': 'Fee',
     'history.timestamp': 'Timestamp',
     'history.openExplorer': 'Open in explorer',

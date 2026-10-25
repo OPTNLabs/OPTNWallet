@@ -1968,7 +1968,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const [selectedTokenSpotPriceSats, setSelectedTokenSpotPriceSats] = useState<
     number | null
   >(null);
-  const [quoteDetailsOpen, setQuoteDetailsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [merchantDetailsOpen, setMerchantDetailsOpen] = useState(false);
   const [reviewWarningsAccepted, setReviewWarningsAccepted] = useState(false);
@@ -6368,15 +6367,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
                 {quoteRateLabel ? (
                   <div className="wallet-card p-2.5">
-                    <div className="flex items-center justify-between gap-3 text-sm wallet-text-strong">
+                    <div className="text-sm wallet-text-strong">
                       <span className="min-w-0 truncate">{quoteRateLabel}</span>
-                      <button
-                        type="button"
-                        onClick={() => setQuoteDetailsOpen(true)}
-                        className="wallet-btn-secondary shrink-0 px-3 py-1.5 text-xs"
-                      >
-                        {addonT('module.details', 'Details')}
-                      </button>
                     </div>
                   </div>
                 ) : previewError ? (
@@ -7188,169 +7180,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             >
               Close
             </button>
-          </div>
-        </div>
-      ) : null}
-
-      {quoteDetailsOpen && quote ? (
-        <div className="absolute inset-0 z-30 flex items-end bg-black/50 px-4 pb-4 pt-10">
-          <div className="wallet-card flex max-h-[85vh] w-full flex-col rounded-[28px] p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
-                  {addonT('module.quoteDetails', 'Quote details')}
-                </div>
-                <h2 className="mt-1 text-lg font-semibold wallet-text-strong">
-                  {addonT(
-                    'module.currentQuoteBreakdown',
-                    'Current quote breakdown'
-                  )}
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => setQuoteDetailsOpen(false)}
-                className="wallet-btn-secondary px-3 py-1.5 text-xs"
-              >
-                {addonT('common.close', 'Close')}
-              </button>
-            </div>
-
-            <div className="mt-2 text-xs leading-5 wallet-muted">
-              {addonT('module.quotePreview', 'Quote preview.')}
-            </div>
-
-            <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm">
-              <div className="rounded-2xl border border-[var(--wallet-border)] px-3 py-2.5">
-                <div className="mb-2 text-[11px] uppercase tracking-[0.18em] wallet-muted">
-                  {addonT('module.trade', 'Trade')}
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.minReceive', 'Min receive')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {quote
-                        ? direction === 'bch_to_token'
-                          ? formatTokenDisplayAmount(
-                              quote.minReceive,
-                              effectiveDecimals,
-                              effectiveSymbol
-                            )
-                          : formatCompactBchAmount(quote.minReceive)
-                        : addonT('module.getQuote', 'Get quote')}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.priceImpact', 'Price impact')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {priceImpactLabel}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-[var(--wallet-border)] px-3 py-2.5">
-                <div className="mb-2 text-[11px] uppercase tracking-[0.18em] wallet-muted">
-                  {addonT('module.fees', 'Fees')}
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.lpFee', 'LP fee')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {direction === 'bch_to_token'
-                        ? formatCompactBchAmount(totalLpFee)
-                        : formatTokenDisplayAmount(
-                            totalLpFee,
-                            effectiveDecimals,
-                            effectiveSymbol
-                          )}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.platformFee', 'Platform fee')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      0 BCH
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.networkFee', 'Network fee')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {quote
-                        ? formatCompactBchAmount(quote.estimatedFeeSatoshis)
-                        : addonT('module.getQuote', 'Get quote')}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-[var(--wallet-border)] px-3 py-2.5">
-                <div className="mb-2 text-[11px] uppercase tracking-[0.18em] wallet-muted">
-                  {addonT('module.market', 'Market')}
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.pools', 'Pools')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {previewTradeCount}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.minRoute', 'Min route')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {visibleMarketLiquidity
-                        ? direction === 'bch_to_token'
-                          ? formatCompactBchAmount(minExecutableRouteInput)
-                          : formatTokenDisplayAmount(
-                              minExecutableRouteInput,
-                              effectiveDecimals,
-                              effectiveSymbol
-                            )
-                        : addonT('module.getQuote', 'Get quote')}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.maxBch', 'Max BCH')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {visibleMarketLiquidity
-                        ? formatCompactBchAmount(maxRoutableBchToToken)
-                        : addonT('module.getQuote', 'Get quote')}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.maxToken', 'Max {symbol}', {
-                        symbol: effectiveSymbol,
-                      })}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {visibleMarketLiquidity
-                        ? formatTokenDisplayAmount(
-                            maxRoutableTokenToBch,
-                            effectiveDecimals,
-                            effectiveSymbol
-                          )
-                        : addonT('module.getQuote', 'Get quote')}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       ) : null}

@@ -113,6 +113,9 @@ describe('connection panels', () => {
       await screen.findByText('Verified wallet effect')
     ).toBeInTheDocument();
     expect(screen.getByText('−0.00001000 BCH')).toBeInTheDocument();
+    expect(
+      screen.getByText('Technical transaction details (1 inputs, 1 outputs)')
+    ).toBeInTheDocument();
     request.transaction.sourceOutputs = [];
     view.rerender(<WizardSignTransactionModal />);
     expect(

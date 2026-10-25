@@ -22,8 +22,22 @@ import { FusionBadge } from '../../components/FusionBadge';
 import { isTxConfirmed } from '../../utils/txConfirmation';
 import { isMempoolLike } from '../../utils/transactionHistoryOrder';
 import { useI18n } from '../../i18n/useI18n';
+import { formatNumber } from '../../i18n/format';
+import ElectrumService from '../../services/ElectrumService';
+import { deriveWalletTransactionEffect } from './transactionEffect';
 
 const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
+const SATS_PER_BCH = 100_000_000;
+
+function formatWalletEffect(
+  amountSats: number,
+  locale: Parameters<typeof formatNumber>[1]
+): string {
+  const sign = amountSats > 0 ? '+' : amountSats < 0 ? '−' : '';
+  return `${sign}${formatNumber(Math.abs(amountSats) / SATS_PER_BCH, locale, {
+    maximumFractionDigits: 8,
+  })} BCH`;
+}
 
 type TransactionHistoryLocationState = {
   openTransaction?: {
@@ -40,7 +54,7 @@ const selectTransactions = createSelector(
 
 const TransactionHistory: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const location = useLocation();
   const { wallet_id } = useParams<{ wallet_id: string }>();
   const openTransaction = (
@@ -77,6 +91,9 @@ const TransactionHistory: React.FC = () => {
   const [walletAddresses, setWalletAddresses] = useState<Set<string>>(
     new Set()
   );
+  const [walletEffects, setWalletEffects] = useState<
+    Record<string, number | null>
+  >({});
 
   const {
     loading,
@@ -149,6 +166,35 @@ const TransactionHistory: React.FC = () => {
       cancelled = true;
     };
   }, [wallet_id]);
+
+  // Electrum address history only contains txid and height. Hydrate the
+  // visible page from verbose details so cards can show the wallet's actual
+  // net BCH movement without blocking the initial history paint.
+  useEffect(() => {
+    if (walletAddresses.size === 0 || paginatedTransactions.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(
+      paginatedTransactions.map(async (tx) => {
+        const details = await ElectrumService.getTransactionDetails(tx.tx_hash);
+        const effect = details
+          ? deriveWalletTransactionEffect(details, walletAddresses)
+          : null;
+        return [tx.tx_hash, effect?.bchDeltaSats ?? null] as const;
+      })
+    ).then((entries) => {
+      if (cancelled) return;
+      setWalletEffects((current) => {
+        const next = { ...current };
+        for (const [txid, amountSats] of entries) next[txid] = amountSats;
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [paginatedTransactions, walletAddresses]);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
@@ -288,6 +334,15 @@ const TransactionHistory: React.FC = () => {
                           </span>
                         )}
                       </div>
+                      {typeof walletEffects[tx.tx_hash] === 'number' ? (
+                        <div className="mt-2 font-semibold wallet-text-strong">
+                          {t('history.walletEffect')}:{' '}
+                          {formatWalletEffect(
+                            walletEffects[tx.tx_hash]!,
+                            locale
+                          )}
+                        </div>
+                      ) : null}
                     </button>
                   </li>
                 );
