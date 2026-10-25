@@ -78,9 +78,11 @@ available.
 Branches may pin different CashScript or other dependency versions. Always run
 `npm ci` after switching to a branch whose `package.json` or `package-lock.json`
 changed. `npm run dev` checks the installed packages against the active lockfile
-and stops with the exact mismatch instead of loading a stale API. The default
-Vite optimizer cache is also fingerprinted from those dependency files, so
-different branch dependency graphs do not reuse one another's optimized bundle.
+and starts Vite with forced dependency re-optimization. This avoids serving
+stale optimized modules after a branch switch or dependency reinstall. The
+default Vite optimizer cache is also fingerprinted from those dependency
+files, so different branch dependency graphs do not reuse one another's
+optimized bundle.
 
 If an older dev server is already running, stop it and start `npm run dev`
 again; then hard-refresh the browser.

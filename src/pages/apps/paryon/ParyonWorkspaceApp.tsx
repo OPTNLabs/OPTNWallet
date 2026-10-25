@@ -9,8 +9,9 @@ import {
   resolveParyonWorkspaceSnapshot,
 } from '../../../services/paryon/ParyonService';
 import {
-  executeBorrowLoan,
-  executeStakeLiquidity,
+  prepareBorrowLoan,
+  prepareStakeLiquidity,
+  type ParyonPreparedTransaction,
 } from '../../../services/paryon/transactions';
 import { buildParyonExecutionPlans } from '../../../services/paryon/execution';
 import {
@@ -132,7 +133,11 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     action: null,
   });
   const [confirmLoading, setConfirmLoading] = useState(false);
+  const [preparingReview, setPreparingReview] = useState(false);
+  const [preparedTransaction, setPreparedTransaction] =
+    useState<ParyonPreparedTransaction | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const prepareRequestRef = useRef(0);
   const lastDebugLogRef = useRef<string | null>(null);
 
   const writeEnabled = nativeSnapshot?.market.writeEnabled ?? false;
@@ -452,16 +457,50 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
   ]);
 
   const openPreview = (preview: ParyonActionPreview) => {
+    const requestId = ++prepareRequestRef.current;
     setConfirmError(null);
+    setPreparedTransaction(null);
     setConfirmState({
       open: true,
       preview,
       action:
         view === 'borrow' ? 'borrow' : view === 'stake' ? 'stake' : 'redeem',
     });
+    if (view === 'redeem' || !preview.canProceed || !nativeSnapshot) return;
+
+    setPreparingReview(true);
+    void (async () => {
+      try {
+        const prepared =
+          view === 'borrow'
+            ? await prepareBorrowLoan({
+                sdk,
+                snapshot,
+                nativeSnapshot,
+                borrowAmountText: borrowForm.borrowAmount,
+                collateralBchText: borrowForm.collateralBch,
+              })
+            : await prepareStakeLiquidity({
+                sdk,
+                snapshot,
+                nativeSnapshot,
+                stakeAmountText: stakeForm.stakeAmount,
+              });
+        if (prepareRequestRef.current !== requestId) return;
+        setPreparedTransaction(prepared);
+      } catch (error) {
+        if (prepareRequestRef.current !== requestId) return;
+        setConfirmError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (prepareRequestRef.current === requestId) setPreparingReview(false);
+      }
+    })();
   };
 
   const closePreview = () => {
+    prepareRequestRef.current += 1;
+    setPreparingReview(false);
+    setPreparedTransaction(null);
     setConfirmState({ open: false, preview: null, action: null });
   };
 
@@ -480,6 +519,13 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
 
   const confirmPreview = async () => {
     if (!confirmState.preview || confirmLoading) return;
+    if (
+      confirmState.action !== 'redeem' &&
+      (!preparedTransaction || preparingReview)
+    ) {
+      setConfirmError('The exact transaction is still being prepared.');
+      return;
+    }
     if (!reviewMatchesCurrentPreview) {
       setConfirmError(
         'Live market or wallet state changed. Close this review and prepare it again.'
@@ -510,16 +556,9 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       }
       try {
         setConfirmLoading(true);
-        setStatusMessage(
-          'Building and broadcasting the live borrow transaction…'
-        );
-        const result = await executeBorrowLoan({
-          sdk,
-          snapshot,
-          nativeSnapshot,
-          borrowAmountText: borrowForm.borrowAmount,
-          collateralBchText: borrowForm.collateralBch,
-        });
+        setStatusMessage('Broadcasting the reviewed borrow transaction…');
+        const result = await sdk.tx.broadcast(preparedTransaction!.hex);
+        if (result.errorMessage) throw new Error(result.errorMessage);
         setStatusMessage(
           `Borrow transaction broadcast${result.txid ? `: ${result.txid}` : ''}.`
         );
@@ -544,15 +583,9 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       }
       try {
         setConfirmLoading(true);
-        setStatusMessage(
-          'Building and broadcasting the live stake transaction…'
-        );
-        const result = await executeStakeLiquidity({
-          sdk,
-          snapshot,
-          nativeSnapshot,
-          stakeAmountText: stakeForm.stakeAmount,
-        });
+        setStatusMessage('Broadcasting the reviewed stake transaction…');
+        const result = await sdk.tx.broadcast(preparedTransaction!.hex);
+        if (result.errorMessage) throw new Error(result.errorMessage);
         setStatusMessage(
           `Stake transaction broadcast${result.txid ? `: ${result.txid}` : ''}.`
         );
@@ -1388,7 +1421,9 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
               writeEnabled
             ) &&
             reviewMatchesCurrentPreview &&
-            !confirmError
+            !confirmError &&
+            !preparingReview &&
+            (confirmState.action === 'redeem' || preparedTransaction != null)
           }
           loading={confirmLoading}
           confirmationMode={
@@ -1411,8 +1446,35 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
                   role="alert"
                   className="wallet-warning-panel rounded-xl p-3 text-sm"
                 >
-                  {confirmError} Check transaction history before trying again.
+                  {confirmError} No transaction was sent while this review was
+                  being prepared.
                 </p>
+              ) : null}
+              {preparingReview ? (
+                <p
+                  role="status"
+                  aria-live="polite"
+                  className="wallet-card p-3 text-sm"
+                >
+                  Preparing the exact transaction from the current wallet and
+                  live contract state…
+                </p>
+              ) : null}
+              {preparedTransaction ? (
+                <div className="wallet-card space-y-1 p-3 text-sm">
+                  <div className="font-semibold">Exact transaction ready</div>
+                  <div>
+                    Network fee: {formatBchSats(preparedTransaction.feeSats)}
+                  </div>
+                  <div>
+                    Wallet inputs:{' '}
+                    {formatBchSats(preparedTransaction.inputSats)}
+                  </div>
+                  <div>
+                    Outputs: {formatBchSats(preparedTransaction.outputSats)} ·{' '}
+                    {preparedTransaction.transactionByteLength} bytes
+                  </div>
+                </div>
               ) : null}
               <PreviewMetric
                 label={confirmState.preview.primaryMetricLabel}

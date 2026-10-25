@@ -7,7 +7,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "dev": "vite --host",
+    "dev": "vite --host --force",
     "predev": "npm run deps:check && node scripts/check-installed-dependencies.mjs",
     "test": "vitest run --testTimeout=15000",
     "test:core": "vitest run --exclude 'src/pages/apps/**' --exclude 'src/**/*.ui.test.*' --testTimeout=15000",
