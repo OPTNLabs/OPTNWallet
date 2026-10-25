@@ -10,6 +10,37 @@ afterEach(() => {
 });
 
 describe('cauldron api client cache', () => {
+  it('reads the deployed indexer health contract', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () =>
+        JSON.stringify({
+          chain_tip: 100,
+          indexed_height: 100,
+          status: 'healthy',
+          version: '0.2.0',
+        }),
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const client = new CauldronApiClient(
+      Network.MAINNET,
+      'https://example.test/cauldron'
+    );
+    await expect(client.getIndexerHealth()).resolves.toEqual({
+      chain_tip: 100,
+      indexed_height: 100,
+      status: 'healthy',
+      version: '0.2.0',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://example.test/health',
+      undefined
+    );
+  });
+
   it('reuses recent GET responses and refreshes after the ttl expires', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-01-01T00:00:00Z'));

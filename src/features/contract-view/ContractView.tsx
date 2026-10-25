@@ -31,13 +31,14 @@ import { parseConstructorArgs, validateConstructorArgsComplete } from './utils';
 import PageHeader from '../../components/ui/PageHeader';
 import SectionCard from '../../components/ui/SectionCard';
 import EmptyState from '../../components/ui/EmptyState';
+import ContractLoadFailure from './ContractLoadFailure';
 import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
 } from '../../utils/barcodeScanner';
 import WalletScreen from '../../components/ui/WalletScreen';
 import { useI18n } from '../../i18n/useI18n';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
 
 interface ContractArg {
   name: string;
@@ -103,6 +104,7 @@ const ContractView = () => {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [blockHeight, setBlockHeight] = useState<number | null>(null);
+  const [loadRetryKey, setLoadRetryKey] = useState(0);
 
   // datasig helpers
   const [selectedAddresses, setSelectedAddresses] = useState<{
@@ -197,7 +199,7 @@ const ContractView = () => {
 
     loadAvailableContracts();
     loadContractInstances();
-  }, [contractManager, t]);
+  }, [contractManager, t, loadRetryKey]);
 
   useEffect(() => {
     const loadContractDetails = async () => {
@@ -229,14 +231,7 @@ const ContractView = () => {
   };
 
   const handleCopyAddress = async (address: string) => {
-    try {
-      if (!(await copyToClipboard(address)))
-        throw new Error('clipboard write failed');
-      await Toast.show({ text: t('contractView.addressCopied') });
-    } catch (error) {
-      logError('ContractView.copyAddress', error, { address });
-      await Toast.show({ text: t('contractView.copyFailed') });
-    }
+    await copyWithFeedback(address);
   };
 
   const handleAddressSelect = async (address: string) => {
@@ -415,9 +410,20 @@ const ContractView = () => {
   if (error) {
     return (
       <WalletScreen maxWidthClassName="max-w-xl">
-        <PageHeader title={t('contractView.title')} compact />
-        <EmptyState
+        <PageHeader
+          title={t('contractView.title')}
+          subtitle={
+            currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+          }
+          compact
+        />
+        <ContractLoadFailure
           message={t('contractView.errorPrefix', { message: error })}
+          retryLabel={t('builder.tryAgain')}
+          onRetry={() => {
+            setError(null);
+            setLoadRetryKey((key) => key + 1);
+          }}
         />
       </WalletScreen>
     );
@@ -428,7 +434,13 @@ const ContractView = () => {
   return (
     <WalletScreen maxWidthClassName="max-w-xl">
       <div className="flex min-h-full flex-col gap-4">
-        <PageHeader title={t('contractView.title')} compact />
+        <PageHeader
+          title={t('contractView.title')}
+          subtitle={
+            currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+          }
+          compact
+        />
         <div className="space-y-4">
           <SectionCard title={t('contractView.create')} className="mb-4">
             <div className="space-y-3">

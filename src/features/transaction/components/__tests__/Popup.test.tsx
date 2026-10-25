@@ -1,13 +1,6 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import {
-  afterAll,
-  beforeAll,
-  describe,
-  expect,
-  it,
-  vi,
-} from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-dom', async () => {
   const actual = await vi.importActual<typeof import('react-dom')>('react-dom');
@@ -46,9 +39,15 @@ describe('Popup', () => {
     );
 
     expect(html).toContain('wallet-popup-panel');
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="true"');
+    expect(html).toContain('wallet-btn-secondary');
+    expect(html).not.toContain('wallet-btn-danger');
     expect(html).toContain('overflow-hidden');
     expect(html).toContain('overflow-y-auto');
     expect(html).toContain('overscroll-contain');
     expect(html).toContain('touch-pan-y');
+    expect(html).toContain('tabindex="-1"');
+    expect(html).toContain('>Close</button>');
   });
 });

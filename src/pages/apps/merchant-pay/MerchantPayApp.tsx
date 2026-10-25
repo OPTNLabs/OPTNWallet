@@ -17,7 +17,6 @@ import { getReturnPath } from '../../../utils/navigation';
 import {
   CauldronApiClient,
   fetchNormalizedCauldronPools,
-  type CauldronPool,
 } from '../../../services/cauldron';
 import { fetchCurrentLiquidityPoolsFromChain } from '../cauldron/preflight';
 import { parseDecimalToAtomic } from '../../../services/cauldron/amount';
@@ -43,7 +42,8 @@ import {
   type MerchantPaymentMonitorStatus,
   type MerchantPaymentObservation,
 } from './merchantPaymentMonitoring';
-import { copyToClipboard } from '../../../utils/clipboard';
+import { copyWithFeedback } from '../../../utils/copyWithFeedback';
+import { useMerchantPools } from './useMerchantPools';
 
 type MerchantPayAppProps = {
   sdk: AddonSDK;
@@ -280,17 +280,7 @@ function localizeMerchantPayError(
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
-  if (await copyToClipboard(text)) return;
-
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', 'true');
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  document.body.removeChild(textarea);
+  await copyWithFeedback(text);
 }
 
 function NoticeBanner({ notice }: { notice: Notice }) {
@@ -575,9 +565,6 @@ export default function MerchantPayApp({
     converted: SplitAmountDisplay;
     direct: SplitAmountDisplay;
   }>({ converted: 'target', direct: 'source' });
-  const [stablecoinPools, setStablecoinPools] = useState<CauldronPool[]>([]);
-  const [poolsLoading, setPoolsLoading] = useState(true);
-  const [poolLoadError, setPoolLoadError] = useState<string | null>(null);
   const [draftQuote, setDraftQuote] = useState<MerchantQuotePreview | null>(
     null
   );
@@ -618,6 +605,18 @@ export default function MerchantPayApp({
       ) ?? getDefaultMerchantStablecoin(currentNetwork)
     );
   }, [currentNetwork, merchantStablecoins, selectedStablecoinId]);
+
+  const {
+    pools: stablecoinPools,
+    setPools: setStablecoinPools,
+    loading: poolsLoading,
+    error: poolLoadError,
+    retry: retryPoolLoad,
+  } = useMerchantPools({
+    network: currentNetwork,
+    apiClient,
+    tokenId: selectedStablecoin?.tokenId,
+  });
 
   const selectedDecimals =
     merchantAsset === 'bch' ? 8 : selectedStablecoin?.decimals ?? 2;
@@ -723,54 +722,12 @@ export default function MerchantPayApp({
     setPaymentRequest(null);
     setPaymentMonitor(null);
     setRequestPreparing(false);
-    setPoolLoadError(null);
     setQuoteMessage({
       tone: 'muted',
       key: 'module.enterAmount',
       fallback: 'Enter amount.',
     });
   }, [currentNetwork, defaultConversionBps, merchantStablecoins]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!selectedStablecoin?.tokenId) {
-      setStablecoinPools([]);
-      setPoolsLoading(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    setPoolsLoading(true);
-    setPoolLoadError(null);
-    setStablecoinPools([]);
-
-    void (async () => {
-      try {
-        const pools = await fetchNormalizedCauldronPools(
-          currentNetwork,
-          apiClient,
-          selectedStablecoin.tokenId
-        );
-        if (cancelled) return;
-        setStablecoinPools(pools);
-      } catch (error) {
-        if (cancelled) return;
-        console.warn('[MerchantPay] failed to load merchant pools', error);
-        setStablecoinPools([]);
-        setPoolLoadError(
-          'Unable to load merchant pools right now. Try again in a moment.'
-        );
-      } finally {
-        if (!cancelled) setPoolsLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [apiClient, currentNetwork, selectedStablecoin?.tokenId]);
 
   // Warm the chain-derived LP outpoint cache while the merchant is entering
   // the amount. Request creation can then reuse the result instead of making
@@ -1782,6 +1739,15 @@ export default function MerchantPayApp({
                             )
                           : addonT('module.enterAmount', 'Enter amount.')}
                     </span>
+                    {poolLoadError && !poolsLoading ? (
+                      <button
+                        type="button"
+                        onClick={retryPoolLoad}
+                        className="wallet-btn-secondary min-h-11 shrink-0 px-3 py-2 text-xs"
+                      >
+                        {addonT('common.retry', 'Retry')}
+                      </button>
+                    ) : null}
                     {draftQuote ? (
                       <span className="font-semibold wallet-text-strong">
                         {draftQuote.customerPaysDisplay}

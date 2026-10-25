@@ -48,6 +48,7 @@ export default function CashConnectSessionProposalModal() {
 
   return (
     <WalletPopupSheet
+      dismissLabel="Reject"
       onDismiss={() => dispatch(rejectCashConnectProposalAction())}
       footer={
         <div className="space-y-2">
@@ -70,7 +71,9 @@ export default function CashConnectSessionProposalModal() {
         </div>
       }
     >
-      <h2 className="text-xl font-bold text-center mb-3">Approve CashConnect</h2>
+      <h2 className="text-xl font-bold text-center mb-3">
+        Approve CashConnect
+      </h2>
       {proposal.dapp.icon ? (
         <div className="flex justify-center mb-3">
           <img

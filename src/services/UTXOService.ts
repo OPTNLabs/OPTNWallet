@@ -19,7 +19,10 @@ import { logError } from '../utils/errorHandling';
 import { isWebPlatform } from '../utils/platform';
 import { binToHex, hexToBin } from '../utils/hex';
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
-import { setAddressDiscoveryInProgress } from '../state/slices/utxoSlice';
+import {
+  setAddressDiscoveryInProgress,
+  setWalletSyncStatus,
+} from '../state/slices/utxoSlice';
 
 const bcmrCache = new Map<
   string,
@@ -36,9 +39,7 @@ function setAddressDiscoveryState(inProgress: boolean): void {
 function getPrefix(networkOverride?: Network): string {
   try {
     const network = networkOverride ?? selectCurrentNetwork(store.getState());
-    return network === Network.MAINNET
-      ? 'bitcoincash'
-      : 'bchtest';
+    return network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
   } catch {
     return 'bitcoincash';
   }
@@ -280,7 +281,33 @@ type UTXOFetchOptions = {
    * the ETA extrapolate "2s left" while the fetch was actually mid-flight).
    */
   onProgress?: (completedCount: number, totalCount: number) => void;
+  /** Track freshness only for a complete refresh of the active wallet. */
+  trackWalletSync?: boolean;
 };
+
+function recordWalletSyncResult(
+  walletId: number,
+  result: 'checking' | 'current' | 'failed'
+): void {
+  if (!store.dispatch || !store.getState) return;
+  const state = store.getState();
+  if (state.wallet_id?.currentWalletId !== walletId) return;
+  if (result === 'failed') {
+    const previousSuccess = state.utxos?.lastSuccessfulWalletSyncAt;
+    store.dispatch(
+      setWalletSyncStatus({
+        status: previousSuccess ? 'stale' : 'unavailable',
+      })
+    );
+    return;
+  }
+  store.dispatch(
+    setWalletSyncStatus({
+      status: result,
+      ...(result === 'current' ? { checkedAt: Date.now() } : {}),
+    })
+  );
+}
 
 /**
  * Detected RPA payments, as ordinary spendable UTXOs.
@@ -350,6 +377,9 @@ const UTXOService = {
     addresses: string[],
     options: UTXOFetchOptions = {}
   ): Promise<Record<string, UTXO[]>> {
+    if (options.trackWalletSync) {
+      recordWalletSyncResult(walletId, 'checking');
+    }
     try {
       const currentNetwork =
         options.network ?? selectCurrentNetwork(store.getState());
@@ -392,7 +422,12 @@ const UTXOService = {
           ...discoveredAddresses.filter(Boolean),
         ])
       );
-      if (uniqueAddresses.length === 0) return {};
+      if (uniqueAddresses.length === 0) {
+        if (options.trackWalletSync) {
+          recordWalletSyncResult(walletId, 'failed');
+        }
+        return {};
+      }
 
       // Mark entry into the UTXO network phase immediately (manual Sync was
       // stuck on a phase marker until the first Electrum chunk completed).
@@ -415,6 +450,7 @@ const UTXOService = {
 
       const tFetch = performance.now();
       let utxosByAddress: Record<string, UTXO[]> = {};
+      let networkResultComplete = false;
       try {
         const onProgress = options.onProgress
           ? (done: number, total: number) => options.onProgress?.(done, total)
@@ -426,6 +462,9 @@ const UTXOService = {
               currentNetwork
             )
           : await ElectrumService.getUTXOsMany(uniqueAddresses, onProgress);
+        networkResultComplete = uniqueAddresses.every((address) =>
+          Object.prototype.hasOwnProperty.call(utxosByAddress, address)
+        );
       } catch (fetchError) {
         // Soft-fail on transport/backoff: keep last SQL so reconnect does not wipe.
         const msg =
@@ -447,6 +486,9 @@ const UTXOService = {
               ...(existingSnapshot.utxosMap[address] ?? []),
               ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
             ].filter((utxo) => !reservedOutpoints.has(outpointKey(utxo)));
+          }
+          if (options.trackWalletSync) {
+            recordWalletSyncResult(walletId, 'failed');
           }
           return fromDb;
         }
@@ -531,9 +573,7 @@ const UTXOService = {
           if (reservedOutpoints.has(outpointKey(pending))) continue;
           const existing = formattedByAddress[pending.address] ?? [];
           if (
-            !existing.some(
-              (utxo) => outpointKey(utxo) === outpointKey(pending)
-            )
+            !existing.some((utxo) => outpointKey(utxo) === outpointKey(pending))
           ) {
             formattedByAddress[pending.address] = [...existing, pending];
           }
@@ -560,8 +600,17 @@ const UTXOService = {
           totalSats,
         });
       }
+      if (options.trackWalletSync) {
+        recordWalletSyncResult(
+          walletId,
+          networkResultComplete ? 'current' : 'failed'
+        );
+      }
       return formattedByAddress;
     } catch (error) {
+      if (options.trackWalletSync) {
+        recordWalletSyncResult(walletId, 'failed');
+      }
       logError('UTXOService.fetchAndStoreUTXOsMany', error, {
         walletId,
         addressCount: addresses.length,

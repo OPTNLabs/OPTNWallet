@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite --host",
+    "predev": "npm run deps:check && node scripts/check-installed-dependencies.mjs",
     "test": "vitest run --testTimeout=15000",
     "test:core": "vitest run --exclude 'src/pages/apps/**' --exclude 'src/**/*.ui.test.*' --testTimeout=15000",
     "test:apps": "vitest run src/pages/apps --testTimeout=15000",

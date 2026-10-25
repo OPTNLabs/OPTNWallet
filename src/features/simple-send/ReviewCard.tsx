@@ -72,11 +72,80 @@ export function ReviewCard({
     return keys;
   }, [rpaRecord]);
   const HANDLE_SIZE = 56;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  const isSendingRef = useRef(isSending);
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragX, setDragX] = useState(0);
   const [maxX, setMaxX] = useState(0);
   const [slideCompleted, setSlideCompleted] = useState(false);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+
+  onCloseRef.current = onClose;
+  isSendingRef.current = isSending;
+
+  useEffect(() => {
+    if (!open) return;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const dialog = dialogRef.current;
+    const getFocusable = () =>
+      Array.from(
+        dialog?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter(
+        (element) =>
+          !element.closest('[hidden]') &&
+          element.getAttribute('aria-hidden') !== 'true'
+      );
+
+    if (closeButtonRef.current && !closeButtonRef.current.disabled) {
+      closeButtonRef.current.focus();
+    } else {
+      getFocusable()[0]?.focus();
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (!isSendingRef.current) {
+          event.preventDefault();
+          onCloseRef.current();
+        }
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+      const focusable = getFocusable();
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog?.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!dialog?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus();
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -239,26 +308,37 @@ export function ReviewCard({
 
   return (
     <div
+      ref={dialogRef}
       className="wallet-popup-backdrop z-[1100] p-4"
       role="dialog"
       aria-modal="true"
+      aria-labelledby="send-review-title"
+      aria-describedby="send-review-guidance"
+      tabIndex={-1}
     >
       <div className="wallet-popup-panel w-full max-w-xl p-0 overflow-hidden">
         <div className="px-5 pt-4 pb-4 wallet-surface border-b border-[var(--wallet-border)]">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xl font-bold wallet-text-strong">
+              <h2
+                id="send-review-title"
+                className="text-xl font-bold wallet-text-strong"
+              >
                 {t('send.reviewTitle')}
-              </div>
-              <div className="text-sm wallet-muted mt-1">
+              </h2>
+              <p
+                id="send-review-guidance"
+                className="text-sm wallet-muted mt-1"
+              >
                 {t('send.verifySlide')}
-              </div>
+              </p>
             </div>
             <button
+              ref={closeButtonRef}
               type="button"
               onClick={onClose}
               disabled={isSending}
-              className="wallet-btn-secondary px-3 py-1.5 text-xs"
+              className="wallet-btn-secondary min-h-[44px] px-3 py-1.5 text-xs"
             >
               {t('receive.close')}
             </button>

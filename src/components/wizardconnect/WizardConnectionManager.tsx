@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
-import { Toast } from '@capacitor/toast';
 import { useDispatch, useSelector } from 'react-redux';
 import type { AppDispatch, RootState } from '../../state/store';
 import {
@@ -14,6 +13,7 @@ import {
 import { toErrorMessage } from '../../utils/errorHandling';
 import ConnectionUriScanCard from '../connect/ConnectionUriScanCard';
 import { useI18n } from '../../i18n/useI18n';
+import { showWalletNotification } from '../../utils/copyWithFeedback';
 
 function isWizardUri(value: string): boolean {
   const normalized = value.trim().toLowerCase();
@@ -42,7 +42,7 @@ export default function WizardConnectionManager() {
   const connectToUri = async (value: string) => {
     const nextUri = value.trim();
     if (!isWizardUri(nextUri)) {
-      await Toast.show({ text: t('wizard.validUri') });
+      await showWalletNotification(t('wizard.validUri'));
       return;
     }
 
@@ -59,14 +59,14 @@ export default function WizardConnectionManager() {
       }
 
       await dispatch(wizardConnectPair(nextUri)).unwrap();
-      await Toast.show({ text: t('wizard.pairingStarted') });
+      await showWalletNotification(t('wizard.pairingStarted'));
       setUri('');
       setPendingUri(null);
     } catch (error) {
       console.error('[WizardConnectionManager] Error pairing:', error);
-      await Toast.show({
-        text: t('wizard.errorPrefix', { message: toErrorMessage(error) }),
-      });
+      await showWalletNotification(
+        t('wizard.errorPrefix', { message: toErrorMessage(error) })
+      );
     } finally {
       setSubmitting(false);
     }
@@ -75,7 +75,7 @@ export default function WizardConnectionManager() {
   const requestConnect = async (value: string) => {
     const nextUri = value.trim();
     if (!isWizardUri(nextUri)) {
-      await Toast.show({ text: t('wizard.validUri') });
+      await showWalletNotification(t('wizard.validUri'));
       return;
     }
 
@@ -92,21 +92,21 @@ export default function WizardConnectionManager() {
 
       const scanned = result?.ScanResult?.trim() ?? '';
       if (!scanned) {
-        await Toast.show({ text: t('wizard.noQr') });
+        await showWalletNotification(t('wizard.noQr'));
         return;
       }
 
       if (!isWizardUri(scanned)) {
-        await Toast.show({ text: t('wizard.invalidQr') });
+        await showWalletNotification(t('wizard.invalidQr'));
         return;
       }
 
       setPendingUri(scanned);
     } catch (error) {
       console.error('[WizardConnectionManager] Scan error:', error);
-      await Toast.show({
-        text: `${t('wizard.scanFailed')} ${getBarcodeScannerErrorMessage(error)}`,
-      });
+      await showWalletNotification(
+        `${t('wizard.scanFailed')} ${getBarcodeScannerErrorMessage(error)}`
+      );
     } finally {
       setScanning(false);
     }

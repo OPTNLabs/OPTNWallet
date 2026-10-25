@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import { QrStreamDisplay } from '../components/qr/QrStreamDisplay';
 import { QrStreamScanner } from '../components/qr/QrStreamScanner';
 import PageHeader from '../components/ui/PageHeader';
@@ -15,6 +16,8 @@ import {
   type PartiallySignedTransaction,
 } from '../services/partiallySignedTransaction';
 import { useI18n } from '../i18n/useI18n';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
+import { Network } from '../state/slices/networkSlice';
 
 type DemoMode = 'requester' | 'signer';
 
@@ -23,6 +26,7 @@ const formatBytes = (value: Uint8Array) => `${value.length} bytes`;
 const QrSigningDemo: React.FC = () => {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const [mode, setMode] = useState<DemoMode>('requester');
   const [localRequest, setLocalRequest] =
     useState<PartiallySignedTransaction | null>(null);
@@ -120,7 +124,11 @@ const QrSigningDemo: React.FC = () => {
       <div className="space-y-4">
         <PageHeader
           title={t('qrSigning.title')}
-          subtitle={t('qrSigning.subtitle')}
+          subtitle={
+            currentNetwork === Network.CHIPNET
+              ? t('network.chipnet')
+              : undefined
+          }
           compact
         />
 

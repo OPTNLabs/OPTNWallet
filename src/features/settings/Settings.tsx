@@ -447,34 +447,33 @@ const Settings: React.FC = () => {
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
-        <PageHeader title={t('app.settings')} compact />
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 -mt-8">
-          <div aria-hidden="true" />
-          <h1 className="justify-self-center text-[1.6rem] font-bold tracking-[-0.04em] wallet-text-strong">
-            {t('app.settings')}
-          </h1>
-          <button
-            onClick={toggleMode}
-            className="justify-self-end flex items-center gap-2 rounded-full wallet-surface-strong border border-[var(--wallet-border)] px-2 py-1.5 text-sm font-semibold wallet-text-strong whitespace-nowrap"
-            aria-label={t('app.toggleTheme')}
-          >
-            <MdSunny className="text-[12px] wallet-muted" />
-            <span
-              className={`relative inline-flex h-5 w-10 items-center rounded-full border transition-colors ${
-                mode === 'dark'
-                  ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
-                  : 'wallet-surface border-[var(--wallet-border)]'
-              }`}
+        <PageHeader
+          title={t('app.settings')}
+          compact
+          titleAction={
+            <button
+              onClick={toggleMode}
+              className="flex shrink-0 items-center gap-1 rounded-full wallet-surface-strong border border-[var(--wallet-border)] px-1.5 py-1 text-sm font-semibold wallet-text-strong whitespace-nowrap"
+              aria-label={t('app.toggleTheme')}
             >
+              <MdSunny className="text-[12px] wallet-muted" />
               <span
-                className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                  mode === 'dark' ? 'translate-x-5' : 'translate-x-0'
+                className={`relative inline-flex h-5 w-9 items-center rounded-full border transition-colors ${
+                  mode === 'dark'
+                    ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
+                    : 'wallet-surface border-[var(--wallet-border)]'
                 }`}
-              />
-            </span>
-            <MdModeNight className="text-[12px] wallet-muted" />
-          </button>
-        </div>
+              >
+                <span
+                  className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                    mode === 'dark' ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </span>
+              <MdModeNight className="text-[12px] wallet-muted" />
+            </button>
+          }
+        />
 
         <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-hidden">
           {!selectedOption ? (
@@ -499,7 +498,7 @@ const Settings: React.FC = () => {
 
                 <button
                   onClick={() => setIsLogoutPopupOpen(true)}
-                  className="wallet-btn-danger w-full py-3 text-base"
+                  className="wallet-btn-secondary w-full py-3 text-base"
                 >
                   {t('app.logOut')}
                 </button>
@@ -531,7 +530,7 @@ const Settings: React.FC = () => {
               </SectionCard>
               <div className="mt-auto pb-2 pt-3">
                 <button
-                  className="wallet-btn-danger w-full py-3 text-base font-semibold"
+                  className="wallet-btn-secondary w-full py-3 text-base font-semibold"
                   onClick={handleBack}
                 >
                   {t('app.back')}

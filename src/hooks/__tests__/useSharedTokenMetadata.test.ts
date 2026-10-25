@@ -51,7 +51,8 @@ describe('useSharedTokenMetadata web preload', () => {
       name: 'Alpha Token',
       description: '',
       token: {
-        category: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        category:
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         symbol: 'ALPHA',
         decimals: 0,
       },
@@ -173,6 +174,27 @@ describe('useSharedTokenMetadata web preload', () => {
     });
   });
 
+  it('caches missing BCMR responses briefly instead of retrying on every render', async () => {
+    const category =
+      'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
+    bcmrInstance.getSnapshot.mockResolvedValue(null);
+    bcmrInstance.getCategoryAuthbase.mockResolvedValue(category);
+    bcmrInstance.resolveIdentityRegistry.mockRejectedValue(
+      new Error('No BCMR registry found for category')
+    );
+
+    const first = await resolveTokenMetadata(category);
+    const second = await resolveTokenMetadata(category);
+
+    expect(first).toMatchObject({
+      status: 'error',
+      freshness: 'unavailable',
+      name: category,
+    });
+    expect(second).toEqual(first);
+    expect(bcmrInstance.resolveIdentityRegistry).toHaveBeenCalledTimes(1);
+  });
+
   it('builds a stable category key from duplicate or reordered input', () => {
     const first = buildSharedTokenCategoriesKey([
       'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
@@ -185,12 +207,14 @@ describe('useSharedTokenMetadata web preload', () => {
     ]);
 
     expect(first).toBe(second);
-    expect(normalizeSharedTokenCategories([
-      'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
-      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      '',
-      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    ])).toEqual([
+    expect(
+      normalizeSharedTokenCategories([
+        'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        '',
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ])
+    ).toEqual([
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     ]);

@@ -31,6 +31,7 @@ import { getReturnPath } from '../utils/navigation';
 import { useI18n } from '../i18n/useI18n';
 import { AddonModuleI18nProvider } from '../i18n/AddonModuleI18nProvider';
 import { useAddonI18n } from '../i18n/useAddonI18n';
+import PaperWalletSweepError from './PaperWalletSweepError';
 
 const BASE58_WIF_PATTERN =
   /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
@@ -304,7 +305,13 @@ function PaperWalletSweepScreen() {
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col">
-        <PageHeader title={addonT('module.title', t('paper.title'))} compact />
+        <PageHeader
+          title={addonT('module.title', t('paper.title'))}
+          subtitle={
+            currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+          }
+          compact
+        />
         <p className="mt-2 text-sm wallet-muted">
           {addonT('module.description', t('paper.description'))}
         </p>
@@ -322,7 +329,7 @@ function PaperWalletSweepScreen() {
                 </div>
               </div>
               <button
-                className="wallet-btn-primary flex items-center gap-2 px-4 py-2"
+                className="wallet-btn-primary flex min-h-[44px] items-center gap-2 px-4 py-2"
                 onClick={handleScan}
                 disabled={loading}
               >
@@ -332,7 +339,7 @@ function PaperWalletSweepScreen() {
 
             <div className="mt-4 flex items-center gap-2">
               <button
-                className="wallet-btn-primary flex items-center gap-2 px-4 py-2"
+                className="wallet-btn-primary flex min-h-[44px] items-center gap-2 px-4 py-2"
                 onClick={handleSweep}
                 disabled={loading || paperWalletUtxos.length === 0}
               >
@@ -345,7 +352,7 @@ function PaperWalletSweepScreen() {
               )}
             </div>
 
-            {error && <div className="mt-3 wallet-danger-text">{error}</div>}
+            {error && <PaperWalletSweepError message={error} />}
           </SectionCard>
 
           <SectionCard className="p-4">
@@ -396,7 +403,7 @@ function PaperWalletSweepScreen() {
           <button
             type="button"
             onClick={() => navigate(backTarget)}
-            className="wallet-btn-danger w-full py-3 font-semibold"
+            className="wallet-btn-secondary min-h-[44px] w-full py-3 font-semibold"
           >
             {addonT('common.back', t('paper.back'))}
           </button>
@@ -420,6 +427,7 @@ function PaperWalletSweepScreen() {
       >
         {pendingSweep ? (
           <div className="space-y-2 text-sm wallet-text-strong">
+            {error && <PaperWalletSweepError message={error} compact />}
             <div className="flex items-center justify-between gap-3">
               <span>
                 {addonT('module.paperWalletInputs', t('paper.paperInputs'))}

@@ -4,7 +4,6 @@ import { useSelector } from 'react-redux';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { RootState } from '../state/store';
 import KeyService from '../services/KeyService';
-import { Toast } from '@capacitor/toast';
 import { shortenTxHash } from '../utils/shortenHash';
 import { PREFIX, SATSINBITCOIN } from '../utils/constants';
 import { getBchAddressPath } from '../services/HdWalletService';
@@ -14,6 +13,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { hexString } from '../utils/hex';
 import { encodePrivateKeyWif } from '@bitauth/libauth';
 import { Network } from '../state/slices/networkSlice';
+import { MdContentCopy } from 'react-icons/md';
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import EmptyState from '../components/ui/EmptyState';
@@ -34,8 +34,14 @@ import { RpaReceiveCard } from '../features/rpa/RpaReceiveCard';
 import { isDesktopPlatform } from '../utils/platform';
 import { WalletType } from '../types/wallet';
 import { useI18n } from '../i18n/useI18n';
-import { copyToClipboard } from '../utils/clipboard';
+import ReceiveAddressSetupAction from './ReceiveAddressSetupAction';
+import { copyWithFeedback } from '../utils/copyWithFeedback';
 import { canSignLocally } from '../services/watchOnlyWallet';
+import {
+  buildBchPaymentUri,
+  isValidBchPaymentAmount,
+  normalizeBchPaymentAmountInput,
+} from './receivePaymentUri';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
@@ -109,6 +115,9 @@ const Receive: React.FC = () => {
   const backTarget = getReturnPath(location, '/apps');
   const [mainKeyPairs, setMainKeyPairs] = useState<WalletKeyPair[]>([]);
   const [changeKeyPairs, setChangeKeyPairs] = useState<WalletKeyPair[]>([]);
+  const [addressSetupBusy, setAddressSetupBusy] = useState(false);
+  const [addressSetupError, setAddressSetupError] = useState(false);
+  const addressSetupInFlight = useRef(false);
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
   const [selectedPubKey, setSelectedPubKey] = useState<string | null>(null);
   const [selectedPKH, setSelectedPKH] = useState<string | null>(null);
@@ -122,10 +131,12 @@ const Receive: React.FC = () => {
   const [addressType, setAddressType] = useState<'main' | 'change'>('main');
   const [pubKeyTapCount, setPubKeyTapCount] = useState(0);
   const [isPrivKeyUnlocked, setIsPrivKeyUnlocked] = useState(false);
+  const [privKeyError, setPrivKeyError] = useState<string | null>(null);
   const [showBip21Popup, setShowBip21Popup] = useState(false);
   const [showAddressListPopup, setShowAddressListPopup] = useState(false);
   const [showQrPopup, setShowQrPopup] = useState(false);
   const [bip21Amount, setBip21Amount] = useState('');
+  const [bip21AmountError, setBip21AmountError] = useState(false);
   const [bip21Label, setBip21Label] = useState('');
   const [bip21Message, setBip21Message] = useState('');
   const [selectedWalletKey, setSelectedWalletKey] =
@@ -155,11 +166,21 @@ const Receive: React.FC = () => {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const activeWalletIdRef = useRef(currentWalletId);
+  activeWalletIdRef.current = currentWalletId;
   const walletType = useSelector(
     (state: RootState) => state.wallet_id.walletType
   );
   const canRevealPrivateKey =
     ALLOW_PRIVATE_KEY_VIEW && canSignLocally(walletType);
+  const privateKeyRevealApproved =
+    canRevealPrivateKey &&
+    isPrivKeyUnlocked &&
+    pubKeyTapCount >= PRIVKEY_UNLOCK_TAPS;
+  const visibleQrCodeType: QRCodeType =
+    qrCodeType === 'privkey' && !privateKeyRevealApproved
+      ? 'pubKey'
+      : qrCodeType;
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
@@ -170,7 +191,41 @@ const Receive: React.FC = () => {
     (state: RootState) => state.wallet_id.currentWalletId
   );
 
+  // Treat every navigation into Receive as a fresh sensitive-key disclosure
+  // session. A route may remain mounted while the app changes location, so
+  // resetting only when the wallet changes would leave the previous unlock
+  // available when the user returns.
+  useLayoutEffect(() => {
+    setPubKeyTapCount(0);
+    setIsPrivKeyUnlocked(false);
+    setSelectedPrivKey(null);
+    setPrivKeyError(null);
+    setPrivKeyUnlockToastVisible(false);
+    setPrivKeyUnlockToastMessage('');
+    setQrCodeType('address');
+  }, [location.key]);
+
+  useLayoutEffect(() => {
+    if (qrCodeType === 'privkey' && !privateKeyRevealApproved) {
+      setQrCodeType('pubKey');
+    }
+  }, [privateKeyRevealApproved, qrCodeType]);
+
   useEffect(() => {
+    let cancelled = false;
+    setMainKeyPairs([]);
+    setChangeKeyPairs([]);
+    setSelectedAddress(null);
+    setSelectedAddressPair(null);
+    setSelectedWalletKey(null);
+    setSelectedPubKey(null);
+    setSelectedPKH(null);
+    setSelectedPrivKey(null);
+    setIsPrivKeyUnlocked(false);
+    setPrivKeyError(null);
+    setPrivKeyUnlockToastVisible(false);
+    setPrivKeyUnlockToastMessage('');
+
     const fetchKeys = async () => {
       if (!currentWalletId) return;
 
@@ -178,6 +233,7 @@ const Receive: React.FC = () => {
         let existingKeys = (await KeyService.retrieveKeys(
           currentWalletId
         )) as WalletKeyPair[];
+        if (cancelled) return;
 
         // A desktop wallet can reach this shared screen from a restored
         // session before the landing-page bootstrap has completed. Repair only
@@ -189,9 +245,11 @@ const Receive: React.FC = () => {
           walletType === WalletType.STANDARD
         ) {
           await KeyService.bootstrapInitialAddressBatch(currentWalletId, 0, 20);
+          if (cancelled) return;
           existingKeys = (await KeyService.retrieveKeys(
             currentWalletId
           )) as WalletKeyPair[];
+          if (cancelled) return;
         }
 
         const mainKeys = existingKeys
@@ -222,35 +280,51 @@ const Receive: React.FC = () => {
             setSelectedPrivKey(null);
             setIsPrivKeyUnlocked(false);
             setPubKeyTapCount(0);
+            setPrivKeyUnlockToastVisible(false);
+            setPrivKeyUnlockToastMessage('');
           }
         } else {
           console.error('No keys found for the current wallet');
         }
       } catch (error) {
-        console.error('Failed to fetch keys:', error);
+        if (!cancelled) console.error('Failed to fetch keys:', error);
       }
     };
 
-    fetchKeys();
+    void fetchKeys();
+    return () => {
+      cancelled = true;
+    };
   }, [currentWalletId, currentNetwork, walletType]);
 
   const handleInitializeReceiveAddresses = async () => {
-    if (!currentWalletId) return;
+    if (!currentWalletId || addressSetupInFlight.current) return;
+    const walletId = currentWalletId;
+    addressSetupInFlight.current = true;
+    setAddressSetupBusy(true);
+    setAddressSetupError(false);
 
     try {
       console.log('[Receive] initializing receive addresses', {
         walletId: currentWalletId,
       });
-      await KeyService.bootstrapInitialAddressBatch(currentWalletId, 0, 20);
+      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 20);
+      if (activeWalletIdRef.current !== walletId) return;
       const existingKeys = (await KeyService.retrieveKeys(
-        currentWalletId
+        walletId
       )) as WalletKeyPair[];
+      if (activeWalletIdRef.current !== walletId) return;
       const mainKeys = existingKeys
         .filter((key) => key.changeIndex === 0)
         .sort((a, b) => a.addressIndex - b.addressIndex);
       const changeKeys = existingKeys
         .filter((key) => key.changeIndex === 1)
         .sort((a, b) => a.addressIndex - b.addressIndex);
+      if (mainKeys.length === 0) {
+        throw new Error(
+          'Receive address initialization returned no addresses.'
+        );
+      }
       setMainKeyPairs(mainKeys);
       setChangeKeyPairs(changeKeys);
       if (mainKeys.length > 0) {
@@ -265,15 +339,21 @@ const Receive: React.FC = () => {
         setSelectedPrivKey(null);
         setIsPrivKeyUnlocked(false);
         setPubKeyTapCount(0);
+        setPrivKeyUnlockToastVisible(false);
+        setPrivKeyUnlockToastMessage('');
       }
       console.log('[Receive] initialization completed', {
         mainKeys: mainKeys.length,
         changeKeys: changeKeys.length,
       });
     } catch (error) {
+      if (activeWalletIdRef.current === walletId) setAddressSetupError(true);
       logError('Receive.handleInitializeReceiveAddresses', error, {
-        walletId: currentWalletId,
+        walletId,
       });
+    } finally {
+      addressSetupInFlight.current = false;
+      setAddressSetupBusy(false);
     }
   };
 
@@ -298,6 +378,8 @@ const Receive: React.FC = () => {
     setSelectedPubKey(pubkey);
     setSelectedPKH(pkh);
     setSelectedPrivKey(null); // WIF only after explicit privkey unlock
+    setPrivKeyUnlockToastVisible(false);
+    setPrivKeyUnlockToastMessage('');
     setIsTokenAddress(false);
     setQrCodeType('address');
     setShowBip21Popup(false);
@@ -450,41 +532,51 @@ const Receive: React.FC = () => {
     if (!isPrivKeyUnlocked) {
       const nextTapCount = pubKeyTapCount + 1;
       setPubKeyTapCount(nextTapCount);
-
       if (nextTapCount >= PRIVKEY_UNLOCK_TAPS) {
         setIsPrivKeyUnlocked(true);
         setQrCodeType('privkey');
         return;
       }
     }
-
     setQrCodeType('pubKey');
+  };
+
+  const handlePrivKeyTabClick = () => {
+    if (!privateKeyRevealApproved) return;
+    setPrivKeyError(null);
+    setQrCodeType('privkey');
   };
 
   // Load WIF only when the user has unlocked the private-key view (password
   // re-prompt is intentional for reveal). Never on plain Receive / address pick.
   useEffect(() => {
-    if (!isPrivKeyUnlocked || !selectedAddress || !canRevealPrivateKey) return;
+    if (!privateKeyRevealApproved || !selectedAddress) return;
     let cancelled = false;
     void (async () => {
       const wif = await fetchAddressWif(selectedAddress, currentNetwork);
-      if (!cancelled) setSelectedPrivKey(wif);
+      if (!cancelled) {
+        setSelectedPrivKey(wif);
+        setPrivKeyError(
+          wif
+            ? null
+            : 'Private key could not be loaded. Unlock the wallet and try again.'
+        );
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [canRevealPrivateKey, isPrivKeyUnlocked, selectedAddress, currentNetwork]);
+  }, [privateKeyRevealApproved, selectedAddress, currentNetwork]);
 
-  const handleCopy = async (text: string) => {
-    try {
-      if (!(await copyToClipboard(text)))
-        throw new Error('clipboard write failed');
-      await Toast.show({ text: t('receive.copied') });
-    } catch (error) {
-      console.error('Failed to copy:', error);
-      await Toast.show({ text: t('receive.copyFailed') });
-    }
-  };
+  const handleCopy = (text: string) =>
+    copyWithFeedback(
+      text,
+      visibleQrCodeType !== 'address'
+        ? 'receive.valueCopied'
+        : showBip21Popup
+          ? 'receive.paymentRequestCopied'
+          : 'receive.addressCopied'
+    );
 
   const toggleAddressType = () => {
     const sourcePair = selectedAddressPair ?? primaryKeyPair;
@@ -503,11 +595,11 @@ const Receive: React.FC = () => {
   };
 
   const handleBip21AmountChange = (value: string) => {
-    const normalized = value.replace(',', '.').replace(/[^0-9.]/g, '');
-    const parts = normalized.split('.');
-    const whole = parts[0] || '';
-    const decimal = parts.slice(1).join('').slice(0, 8);
-    setBip21Amount(parts.length > 1 ? `${whole}.${decimal}` : whole);
+    const normalized = normalizeBchPaymentAmountInput(value);
+    setBip21Amount(normalized);
+    setBip21AmountError(
+      normalized.trim().length > 0 && !isValidBchPaymentAmount(normalized)
+    );
   };
 
   const keyPairsToDisplay =
@@ -518,41 +610,36 @@ const Receive: React.FC = () => {
   const addressPrefixLength =
     PREFIX[currentNetwork]?.length ?? PREFIX.mainnet.length;
   const receiveAddressLabelMaskLength = 6;
-  const bip21Uri = (() => {
-    if (!activeAddress) return '';
-    const params = new URLSearchParams();
-    const amount = bip21Amount.trim();
-    const label = bip21Label.trim();
-    const message = bip21Message.trim();
-    if (amount) params.set('amount', amount);
-    if (label) params.set('label', label);
-    if (message) params.set('message', message);
-    const query = params.toString();
-    return query
-      ? `bitcoincash:${activeAddress}?${query}`
-      : `bitcoincash:${activeAddress}`;
-  })();
-  const addressPayload = showBip21Popup && bip21Uri ? bip21Uri : activeAddress;
+  const bip21Uri = buildBchPaymentUri(activeAddress, {
+    amount: bip21Amount,
+    label: bip21Label,
+    message: bip21Message,
+  });
+  const addressPayload = showBip21Popup
+    ? bip21AmountError
+      ? ''
+      : bip21Uri || activeAddress
+    : activeAddress;
   const activeQrPayload =
-    qrCodeType === 'address'
+    visibleQrCodeType === 'address'
       ? addressPayload
-      : qrCodeType === 'pubKey'
+      : visibleQrCodeType === 'pubKey'
         ? selectedPubKey || ''
-        : qrCodeType === 'pkh'
+        : visibleQrCodeType === 'pkh'
           ? selectedPKH || ''
           : selectedPrivKey || '';
   const activeLabel =
-    qrCodeType === 'address'
+    visibleQrCodeType === 'address'
       ? addressPayload
-      : qrCodeType === 'pubKey'
+      : visibleQrCodeType === 'pubKey'
         ? selectedPubKey ||
           (primaryKeyPair ? hexString(primaryKeyPair.publicKey) : '')
-        : qrCodeType === 'pkh'
+        : visibleQrCodeType === 'pkh'
           ? selectedPKH ||
             (primaryKeyPair ? hexString(primaryKeyPair.pubkeyHash) : '')
           : selectedPrivKey || '';
   const activeLabelDisplay =
-    qrCodeType === 'address'
+    visibleQrCodeType === 'address'
       ? shortenTxHash(
           activeLabel,
           addressPrefixLength,
@@ -637,20 +724,20 @@ const Receive: React.FC = () => {
       hasSelectedAddress: !!selectedAddress,
       keyPairsToDisplay: keyPairsToDisplay.length,
       isTokenAddress,
-      qrCodeType,
+      visibleQrCodeType,
       showAddressListPopup,
     });
   }, [
     isTokenAddress,
     keyPairsToDisplay.length,
-    qrCodeType,
+    visibleQrCodeType,
     selectedAddress,
     showAddressListPopup,
   ]);
 
   useEffect(() => {
     if (!modeTabsScrollRef.current) return;
-    if (qrCodeType === 'privkey') {
+    if (visibleQrCodeType === 'privkey') {
       privkeyTabRef.current?.scrollIntoView({
         behavior: 'smooth',
         inline: 'center',
@@ -660,10 +747,10 @@ const Receive: React.FC = () => {
     }
 
     modeTabsScrollRef.current.scrollTo({ left: 0, behavior: 'smooth' });
-  }, [qrCodeType]);
+  }, [visibleQrCodeType]);
 
   useEffect(() => {
-    if (!canRevealPrivateKey || isPrivKeyUnlocked) {
+    if (!canRevealPrivateKey || privateKeyRevealApproved) {
       setPrivKeyUnlockToastVisible(false);
       return;
     }
@@ -684,7 +771,7 @@ const Receive: React.FC = () => {
     }, 4000);
 
     return () => window.clearTimeout(timer);
-  }, [canRevealPrivateKey, isPrivKeyUnlocked, pubKeyTapCount, t]);
+  }, [canRevealPrivateKey, privateKeyRevealApproved, pubKeyTapCount, t]);
 
   const renderAddressTypeToggle = () => {
     return (
@@ -697,7 +784,7 @@ const Receive: React.FC = () => {
         <button
           type="button"
           onClick={toggleAddressType}
-          className={`relative flex h-6 w-12 items-center rounded-full border border-[var(--wallet-border)] transition-colors duration-300 ${
+          className={`relative flex min-h-[44px] min-w-[64px] items-center rounded-full border border-[var(--wallet-border)] px-1 transition-colors duration-300 ${
             isTokenAddress
               ? 'bg-[var(--wallet-accent)]'
               : 'wallet-surface-strong'
@@ -731,13 +818,14 @@ const Receive: React.FC = () => {
           />
           <div className="space-y-3">
             <EmptyState message={t('receive.noAddressesLoaded')} />
-            <button
-              type="button"
-              className="wallet-btn-secondary w-full"
-              onClick={() => void handleInitializeReceiveAddresses()}
-            >
-              {t('receive.prepareAddresses')}
-            </button>
+            <ReceiveAddressSetupAction
+              busy={addressSetupBusy}
+              error={addressSetupError}
+              label={t('receive.prepareAddresses')}
+              loadingLabel={t('receive.preparingAddresses')}
+              errorLabel={t('receive.prepareAddressesFailed')}
+              onPrepare={() => void handleInitializeReceiveAddresses()}
+            />
           </div>
         </SectionCard>
       );
@@ -772,20 +860,27 @@ const Receive: React.FC = () => {
               <button
                 type="button"
                 data-testid="receive-address"
-                className={`min-w-0 overflow-hidden wallet-surface-strong rounded-[12px] px-3 py-2 text-left hover:brightness-[0.97] ${
-                  qrCodeType === 'address' ? 'flex-1' : 'w-full'
+                aria-label={t('receive.copyAddress')}
+                className={`flex min-h-[44px] min-w-0 items-center gap-2 overflow-hidden wallet-surface-strong rounded-[12px] px-3 py-2 text-left hover:brightness-[0.97] ${
+                  visibleQrCodeType === 'address' ? 'flex-1' : 'w-full'
                 }`}
                 onClick={() => handleCopy(activeQrPayload)}
               >
-                {qrCodeType === 'address' ? (
-                  <span className="block min-w-0 overflow-hidden whitespace-nowrap text-sm">
+                {visibleQrCodeType === 'address' ? (
+                  <span className="block min-w-0 flex-1 overflow-hidden whitespace-nowrap text-sm">
                     {activeLabelDisplay}
                   </span>
                 ) : (
-                  renderMaskedLabel(activeLabelDisplay, 7, 7)
+                  <span className="min-w-0 flex-1">
+                    {renderMaskedLabel(activeLabelDisplay, 7, 7)}
+                  </span>
                 )}
+                <MdContentCopy
+                  aria-hidden="true"
+                  className="shrink-0 text-base wallet-muted"
+                />
               </button>
-              {qrCodeType === 'address' && (
+              {visibleQrCodeType === 'address' && (
                 <button
                   type="button"
                   className={`wallet-btn-secondary shrink-0 whitespace-nowrap rounded-[12px] px-2.5 py-1.5 text-[11px] ${
@@ -839,8 +934,8 @@ const Receive: React.FC = () => {
         >
           <button
             type="button"
-            className={`min-h-[38px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
-              qrCodeType === 'address'
+            className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
+              visibleQrCodeType === 'address'
                 ? 'wallet-segment-active'
                 : 'wallet-segment-inactive'
             }`}
@@ -850,8 +945,8 @@ const Receive: React.FC = () => {
           </button>
           <button
             type="button"
-            className={`min-h-[38px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
-              qrCodeType === 'pubKey'
+            className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
+              visibleQrCodeType === 'pubKey'
                 ? 'wallet-segment-active'
                 : 'wallet-segment-inactive'
             }`}
@@ -861,8 +956,8 @@ const Receive: React.FC = () => {
           </button>
           <button
             type="button"
-            className={`min-h-[38px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
-              qrCodeType === 'pkh'
+            className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
+              visibleQrCodeType === 'pkh'
                 ? 'wallet-segment-active'
                 : 'wallet-segment-inactive'
             }`}
@@ -870,24 +965,16 @@ const Receive: React.FC = () => {
           >
             PKH
           </button>
-          {canRevealPrivateKey && (
+          {privateKeyRevealApproved && (
             <button
               ref={privkeyTabRef}
               type="button"
-              className={`min-h-[38px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
-                qrCodeType === 'privkey'
+              className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
+                visibleQrCodeType === 'privkey'
                   ? 'wallet-segment-active'
                   : 'wallet-segment-inactive'
               }`}
-              onClick={() => {
-                // First open of PrivKey still requires the tap unlock (or we
-                // re-prompt via reveal when WIF is loaded after unlock).
-                if (!isPrivKeyUnlocked) {
-                  handlePubKeyTabClick();
-                  return;
-                }
-                setQrCodeType('privkey');
-              }}
+              onClick={handlePrivKeyTabClick}
             >
               PrivKey
             </button>
@@ -910,7 +997,7 @@ const Receive: React.FC = () => {
             ref={addressTypeToggleRef}
             className="flex min-h-[34px] items-center justify-center"
           >
-            {qrCodeType === 'address' ? renderAddressTypeToggle() : null}
+            {visibleQrCodeType === 'address' ? renderAddressTypeToggle() : null}
           </div>
           {qrSection}
           {!selectedAddress && (
@@ -922,13 +1009,14 @@ const Receive: React.FC = () => {
               />
               <div className="mt-3 space-y-3">
                 <EmptyState message={t('receive.noAddressesLoaded')} />
-                <button
-                  type="button"
-                  className="wallet-btn-secondary w-full"
-                  onClick={() => void handleInitializeReceiveAddresses()}
-                >
-                  {t('receive.prepareAddresses')}
-                </button>
+                <ReceiveAddressSetupAction
+                  busy={addressSetupBusy}
+                  error={addressSetupError}
+                  label={t('receive.prepareAddresses')}
+                  loadingLabel={t('receive.preparingAddresses')}
+                  errorLabel={t('receive.prepareAddressesFailed')}
+                  onPrepare={() => void handleInitializeReceiveAddresses()}
+                />
               </div>
             </SectionCard>
           )}
@@ -953,9 +1041,7 @@ const Receive: React.FC = () => {
                     {privKeyUnlockToastMessage}
                   </div>
                   <div className="mt-0.5 text-xs wallet-muted">
-                    {isPrivKeyUnlocked
-                      ? t('receive.privKeyReady')
-                      : t('receive.tapPubKey')}
+                    {t('receive.tapPubKey')}
                   </div>
                 </div>
                 <button
@@ -975,7 +1061,7 @@ const Receive: React.FC = () => {
             <button
               type="button"
               onClick={() => navigate(backTarget)}
-              className="wallet-btn-danger w-full py-3 font-semibold shadow-xl"
+              className="wallet-btn-secondary w-full py-3 font-semibold shadow-xl"
             >
               {t('receive.back')}
             </button>
@@ -989,7 +1075,15 @@ const Receive: React.FC = () => {
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
         <div ref={receiveHeaderRef}>
-          <PageHeader title={t('receive.title')} compact />
+          <PageHeader
+            title={t('receive.title')}
+            subtitle={
+              currentNetwork === Network.CHIPNET
+                ? t('network.chipnet')
+                : undefined
+            }
+            compact
+          />
         </div>
 
         {renderReceiveContent()}
@@ -1125,7 +1219,7 @@ const Receive: React.FC = () => {
               </button>
             </div>
             <div className="rounded-[18px] bg-[var(--wallet-surface-strong)] px-4 py-3 text-center">
-              {qrCodeType === 'address' ? (
+              {visibleQrCodeType === 'address' ? (
                 <span className="block min-w-0 overflow-hidden whitespace-nowrap text-sm">
                   {activeLabelDisplay}
                 </span>
@@ -1149,52 +1243,89 @@ const Receive: React.FC = () => {
           />
           <div className="mt-3 space-y-3">
             <div>
-              <label className="mb-1 block text-xs font-semibold wallet-muted">
+              <label
+                htmlFor="receive-bip21-amount"
+                className="mb-1 block text-xs font-semibold wallet-muted"
+              >
                 {t('receive.amountBch')}
               </label>
               <input
+                id="receive-bip21-amount"
                 value={bip21Amount}
                 onChange={(e) => handleBip21AmountChange(e.target.value)}
+                maxLength={32}
+                aria-invalid={bip21AmountError}
+                aria-describedby={
+                  bip21AmountError ? 'receive-bip21-amount-error' : undefined
+                }
                 inputMode="decimal"
                 placeholder={t('receive.optionalExample')}
-                className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
+                className="min-h-[44px] w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
               />
+              {bip21AmountError && (
+                <p
+                  id="receive-bip21-amount-error"
+                  className="mt-1 text-xs wallet-danger-text"
+                  role="alert"
+                >
+                  {t('receive.invalidBchAmount')}
+                </p>
+              )}
             </div>
             <div>
-              <label className="mb-1 block text-xs font-semibold wallet-muted">
+              <label
+                htmlFor="receive-bip21-label"
+                className="mb-1 block text-xs font-semibold wallet-muted"
+              >
                 {t('receive.label')}
               </label>
               <input
+                id="receive-bip21-label"
                 value={bip21Label}
                 onChange={(e) => setBip21Label(e.target.value)}
                 placeholder={t('receive.optional')}
-                className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
+                className="min-h-[44px] w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-semibold wallet-muted">
+              <label
+                htmlFor="receive-bip21-message"
+                className="mb-1 block text-xs font-semibold wallet-muted"
+              >
                 {t('receive.message')}
               </label>
               <input
+                id="receive-bip21-message"
                 value={bip21Message}
                 onChange={(e) => setBip21Message(e.target.value)}
                 placeholder={t('receive.optional')}
-                className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
+                className="min-h-[44px] w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
               />
             </div>
             <div className="flex items-center justify-between gap-2">
               <button
                 type="button"
-                className="wallet-btn-secondary px-3 py-1.5 text-xs"
-                onClick={() => void handleCopy(bip21Uri || activeAddress)}
+                disabled={bip21AmountError}
+                className="wallet-btn-secondary min-h-[44px] px-3 py-1.5 text-xs disabled:opacity-50"
+                onClick={() =>
+                  bip21AmountError
+                    ? undefined
+                    : void copyWithFeedback(
+                        bip21Uri || activeAddress,
+                        bip21Uri
+                          ? 'receive.paymentRequestCopied'
+                          : 'receive.addressCopied'
+                      )
+                }
               >
                 {t('receive.copyBip21')}
               </button>
               <button
                 type="button"
-                className="wallet-link text-xs underline"
+                className="wallet-link min-h-[44px] min-w-[64px] rounded-md px-2 text-xs underline"
                 onClick={() => {
                   setBip21Amount('');
+                  setBip21AmountError(false);
                   setBip21Label('');
                   setBip21Message('');
                 }}
@@ -1209,6 +1340,14 @@ const Receive: React.FC = () => {
               </p>
             )}
           </div>
+          {visibleQrCodeType === 'privkey' && privKeyError ? (
+            <div
+              className="rounded-xl border border-[var(--wallet-danger-border)] bg-[var(--wallet-danger-bg)] px-3 py-2 text-xs"
+              role="alert"
+            >
+              {privKeyError}
+            </div>
+          ) : null}
         </Popup>
       )}
 

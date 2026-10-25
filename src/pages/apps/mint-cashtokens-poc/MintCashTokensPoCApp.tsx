@@ -30,7 +30,7 @@ import {
 } from '../../../services/IpfsService';
 import TransactionService from '../../../services/TransactionService';
 import UTXOService from '../../../services/UTXOService';
-import { copyToClipboard } from '../../../utils/clipboard';
+import { copyWithFeedback } from '../../../utils/copyWithFeedback';
 import { sha256 } from '../../../utils/hash';
 import BcmrService, {
   isBcmrRegistryNotFoundError,
@@ -554,7 +554,7 @@ const MintCashTokensPoCApp: React.FC = () => {
 
   const copyText = useCallback(
     async (txt: string, label = 'Copied') => {
-      const ok = await copyToClipboard(txt);
+      const ok = await copyWithFeedback(txt);
       showToast(ok ? label : 'Copy failed');
     },
     [showToast]

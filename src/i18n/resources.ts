@@ -60,8 +60,15 @@ const baseTranslations = {
     'home.title': 'Home',
     'home.portfolio': 'Portfolio',
     'home.walletOverview': 'Wallet overview',
+    'home.balanceNotVerified':
+      'This balance has not been checked with the network yet. Sync before relying on it.',
+    'home.balanceMayBeOutdated':
+      'Could not confirm the current balance. It may be out of date. Try Sync or check your server settings.',
+    'home.serverSettings': 'Server settings',
     'home.syncing': 'Syncing…',
     'home.sync': 'Sync',
+    'home.refreshFailed':
+      'Could not refresh wallet data. Check your connection and try again.',
     'home.usdUnavailable': 'USD unavailable',
     'home.usdPriceUnavailable': 'USD price unavailable',
     'home.toggleBalance': 'Toggle BCH and USD balance',
@@ -119,7 +126,7 @@ const baseTranslations = {
     'onboarding.toggleTheme': 'Toggle theme',
     'onboarding.welcomeAlt': 'OPTN Wallet',
     'onboarding.closeHelp': 'Close help',
-    'onboarding.poweredBy': 'Powered with Bitcoin Covenants for Bitcoin Cash',
+    'onboarding.poweredBy': 'Your Bitcoin Cash wallet',
     'onboarding.helpCreateTitle': 'Create Wallet',
     'onboarding.helpCreateDescription':
       'Use this if you want a new wallet with a fresh seed phrase on this device.',
@@ -227,8 +234,15 @@ const baseTranslations = {
     'home.title': 'Inicio',
     'home.portfolio': 'Cartera',
     'home.walletOverview': 'Resumen de la billetera',
+    'home.balanceNotVerified':
+      'Este saldo aún no se ha comprobado en la red. Sincroniza antes de confiar en él.',
+    'home.balanceMayBeOutdated':
+      'No se pudo confirmar el saldo actual. Puede estar desactualizado. Intenta sincronizar o revisa los servidores.',
+    'home.serverSettings': 'Servidores',
     'home.syncing': 'Sincronizando…',
     'home.sync': 'Sincronizar',
+    'home.refreshFailed':
+      'No se pudieron actualizar los datos de la billetera. Comprueba la conexión e inténtalo de nuevo.',
     'home.usdUnavailable': 'USD no disponible',
     'home.usdPriceUnavailable': 'Precio en USD no disponible',
     'home.toggleBalance': 'Cambiar entre saldo BCH y USD',
@@ -398,8 +412,13 @@ const baseTranslations = {
     'home.title': '首页',
     'home.portfolio': '资产总览',
     'home.walletOverview': '钱包概览',
+    'home.balanceNotVerified': '此余额尚未通过网络核实。请先同步再依赖此余额。',
+    'home.balanceMayBeOutdated':
+      '无法确认当前余额，余额可能已过期。请尝试同步或检查服务器设置。',
+    'home.serverSettings': '服务器设置',
     'home.syncing': '同步中…',
     'home.sync': '同步',
+    'home.refreshFailed': '无法刷新钱包数据。请检查连接后重试。',
     'home.usdUnavailable': 'USD 不可用',
     'home.usdPriceUnavailable': 'USD 价格不可用',
     'home.toggleBalance': '切换 BCH 和 USD 余额',

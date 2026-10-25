@@ -60,6 +60,15 @@ pub const PRESETS: &[ExplorerPreset] = &[
         chipnet_address: Some("https://chipnet.bch.ninja/address/{address}"),
     },
     ExplorerPreset {
+        id: "selene",
+        label: "Selene Explorer (explorer.selene.cash)",
+        tx: "https://explorer.selene.cash/tx/{txid}",
+        address: "https://explorer.selene.cash/address/{address}",
+        block: None,
+        chipnet_tx: None,
+        chipnet_address: None,
+    },
+    ExplorerPreset {
         id: "imaginary",
         label: "explorer.imaginary.cash",
         tx: "https://explorer.imaginary.cash/tx/{txid}",

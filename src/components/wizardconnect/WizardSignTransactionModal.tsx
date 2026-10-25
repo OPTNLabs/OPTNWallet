@@ -1,5 +1,4 @@
 import { useDispatch, useSelector } from 'react-redux';
-import { Toast } from '@capacitor/toast';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import type { AppDispatch, RootState } from '../../state/store';
 import {
@@ -13,6 +12,7 @@ import { wizardConnectionStatus } from '../../utils/connectionStatus';
 import { toErrorMessage } from '../../utils/errorHandling';
 import { useI18n } from '../../i18n/useI18n';
 import { decodeWizardConnectTransaction } from '../../services/wizardconnect/transaction';
+import { showWalletNotification } from '../../utils/copyWithFeedback';
 
 type TxAmountCarrier = { valueSatoshis: unknown };
 type TxToken = {
@@ -85,30 +85,30 @@ export default function WizardSignTransactionModal() {
     if (!canApprove) return;
     try {
       await dispatch(approveWizardSignRequest()).unwrap();
-      await Toast.show({ text: t('wizard.approved') });
+      await showWalletNotification(t('wizard.approved'));
     } catch (error) {
       console.error(
         '[WizardConnect] Failed to approve transaction request',
         error
       );
-      await Toast.show({
-        text: t('wizard.approveFailed', { message: toErrorMessage(error) }),
-      });
+      await showWalletNotification(
+        t('wizard.approveFailed', { message: toErrorMessage(error) })
+      );
     }
   };
 
   const handleReject = async () => {
     try {
       await dispatch(rejectWizardSignRequest()).unwrap();
-      await Toast.show({ text: t('wizard.rejected') });
+      await showWalletNotification(t('wizard.rejected'));
     } catch (error) {
       console.error(
         '[WizardConnect] Failed to reject transaction request',
         error
       );
-      await Toast.show({
-        text: t('wizard.rejectFailed', { message: toErrorMessage(error) }),
-      });
+      await showWalletNotification(
+        t('wizard.rejectFailed', { message: toErrorMessage(error) })
+      );
     }
   };
 

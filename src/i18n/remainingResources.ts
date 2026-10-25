@@ -786,6 +786,7 @@ export const remainingTranslations = {
     'apps.loadFailed': 'Failed to load addon apps',
     'apps.empty': 'No apps in this category.',
     'apps.addonLoadFailed': 'Addon failed to load',
+    'apps.retryAddon': 'Retry loading addon',
     'apps.loadingAddon': 'Loading addon…',
     'apps.unsupportedAppKind': 'Unsupported app kind:',
     'apps.unsupportedDeclarativeApp': 'Unsupported declarative app:',

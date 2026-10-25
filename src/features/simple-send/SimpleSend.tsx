@@ -142,6 +142,7 @@ export default function SimpleSend() {
   }, [dbUtxos, t]);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [pendingReviewFlow, setPendingReviewFlow] = useState(false);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const isReviewBusy = reviewBusy || pendingReviewFlow;
 
   const categorySummaries = categories as CategorySummary[];
@@ -335,7 +336,13 @@ export default function SimpleSend() {
   return (
     <WalletScreen maxWidthClassName="max-w-xl" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
-        <PageHeader title={t('send.title')} compact />
+        <PageHeader
+          title={t('send.title')}
+          subtitle={
+            currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+          }
+          compact
+        />
         {quantumrootPrefillLabel ? (
           <div className="wallet-surface-strong rounded-[18px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_26%,transparent)] p-3">
             <div className="flex items-start gap-3">
@@ -366,7 +373,7 @@ export default function SimpleSend() {
           <div className="flex h-full flex-col">
             <div className="mb-3 wallet-section shrink-0">
               <div className="mb-1 wallet-kicker">{t('send.transferMode')}</div>
-              <div className="mt-2 grid grid-cols-3 gap-2">
+              <div className="mt-2 grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   className={`min-h-[42px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
@@ -392,7 +399,7 @@ export default function SimpleSend() {
                 <Link
                   to="/apps/optn.builtin.events:airdropsApp"
                   state={{ returnTo: '/send' }}
-                  className="wallet-btn-secondary flex min-h-[42px] items-center justify-center rounded-[16px] px-3 py-2 text-sm font-semibold"
+                  className="wallet-btn-secondary col-span-2 flex min-h-[42px] items-center justify-center rounded-[16px] px-3 py-2 text-sm font-semibold"
                   title={t('send.openAirdrops')}
                 >
                   {t('send.airdrops')}
@@ -419,10 +426,11 @@ export default function SimpleSend() {
                     type="button"
                     onClick={handleScanRecipient}
                     disabled={scanBusy}
+                    aria-label={t('send.scanQr')}
                     title={t('send.scanQr')}
-                    className="wallet-btn-primary shrink-0 min-w-[42px] px-3"
+                    className="wallet-btn-primary flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center px-3"
                   >
-                    <FaCamera />
+                    <FaCamera aria-hidden="true" />
                   </button>
                 </div>
                 {!!recipient && (
@@ -613,23 +621,49 @@ export default function SimpleSend() {
                 </div>
               )}
 
-              <CoinControlSection
-                walletId={walletId}
-                utxos={dbUtxos}
-                enabled={coinControlEnabled}
-                onEnabledChange={setCoinControlEnabled}
-                selectedKeys={selectedCoinKeys}
-                onSelectedKeysChange={setSelectedCoinKeys}
-                disabled={isSending || maxBusy}
-              />
+              <button
+                type="button"
+                aria-expanded={showAdvancedOptions}
+                className="wallet-section flex min-h-[44px] w-full items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left"
+                onClick={() => setShowAdvancedOptions((open) => !open)}
+              >
+                <span>
+                  <span className="block font-semibold wallet-text-strong">
+                    {t('send.advanced')}
+                  </span>
+                  <span className="block text-xs wallet-muted">
+                    {t('send.changeAddress')}
+                  </span>
+                </span>
+                <span
+                  aria-hidden="true"
+                  className="text-lg font-semibold wallet-accent-icon"
+                >
+                  {showAdvancedOptions ? '⌃' : '⌄'}
+                </span>
+              </button>
 
-              <ChangeAddressSection
-                selectedChangeAddress={selectedChangeAddress}
-                setSelectedChangeAddress={setSelectedChangeAddress}
-                selectClass={selectClass}
-                addresses={addresses}
-                mask={mask}
-              />
+              {showAdvancedOptions ? (
+                <div className="space-y-3">
+                  <CoinControlSection
+                    walletId={walletId}
+                    utxos={dbUtxos}
+                    enabled={coinControlEnabled}
+                    onEnabledChange={setCoinControlEnabled}
+                    selectedKeys={selectedCoinKeys}
+                    onSelectedKeysChange={setSelectedCoinKeys}
+                    disabled={isSending || maxBusy}
+                  />
+
+                  <ChangeAddressSection
+                    selectedChangeAddress={selectedChangeAddress}
+                    setSelectedChangeAddress={setSelectedChangeAddress}
+                    selectClass={selectClass}
+                    addresses={addresses}
+                    mask={mask}
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -715,7 +749,7 @@ export default function SimpleSend() {
                 hasUnresolved
                   ? t('send.waitPrevious')
                   : isReviewBusy
-                    ? t('send.sending')
+                    ? t('send.preparingReview')
                     : !canReview
                       ? t('send.fillRequired')
                       : t('send.review')
@@ -724,7 +758,7 @@ export default function SimpleSend() {
               {hasUnresolved
                 ? t('send.pending')
                 : isReviewBusy
-                  ? t('send.sending')
+                  ? t('send.preparingReview')
                   : t('send.review')}
             </button>
             <button
@@ -737,12 +771,17 @@ export default function SimpleSend() {
               {t('send.reset')}
             </button>
           </div>
+          {!canReview && !hasUnresolved && !isSending && !isReviewBusy && (
+            <p className="mt-2 px-1 text-center text-xs wallet-muted">
+              {t('send.fillRequired')}
+            </p>
+          )}
         </div>
 
         <button
           type="button"
           onClick={() => navigate(backTarget)}
-          className="wallet-btn-danger w-full py-3 font-semibold"
+          className="wallet-btn-secondary min-h-11 w-full py-3 font-semibold"
         >
           {t('send.back')}
         </button>

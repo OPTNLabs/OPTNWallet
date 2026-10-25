@@ -532,6 +532,7 @@ export async function bootstrapAllUTXOs(
         // derivation discovery; desktop/manual Sync performs that pass.
         discover: false,
         force: true,
+        trackWalletSync: true,
         onProgress: (done, total) => {
           if (total <= 0) return;
           const pct = 20 + Math.round(50 * (done / total));

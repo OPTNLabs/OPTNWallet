@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../state/store';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import { createSelector } from 'reselect';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
@@ -25,6 +25,13 @@ import { useI18n } from '../../i18n/useI18n';
 
 const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
 
+type TransactionHistoryLocationState = {
+  openTransaction?: {
+    txid?: string;
+    height?: number;
+  };
+};
+
 const selectTransactions = createSelector(
   (state: RootState) => state.transactions.transactions,
   (_: RootState, wallet_id: string) => wallet_id,
@@ -34,7 +41,11 @@ const selectTransactions = createSelector(
 const TransactionHistory: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
   const { t } = useI18n();
+  const location = useLocation();
   const { wallet_id } = useParams<{ wallet_id: string }>();
+  const openTransaction = (
+    location.state as TransactionHistoryLocationState | null | undefined
+  )?.openTransaction;
   const walletIdNum = Number(wallet_id);
   const fusionDepthRev = useFusionDepthRevision(
     Number.isFinite(walletIdNum) && walletIdNum > 0 ? walletIdNum : 0
@@ -55,12 +66,23 @@ const TransactionHistory: React.FC = () => {
   const [selectedTx, setSelectedTx] = useState<{
     txid: string;
     height: number;
-  } | null>(null);
+  } | null>(() =>
+    openTransaction?.txid
+      ? {
+          txid: openTransaction.txid,
+          height: openTransaction.height ?? 0,
+        }
+      : null
+  );
   const [walletAddresses, setWalletAddresses] = useState<Set<string>>(
     new Set()
   );
 
-  const { loading, fetchTransactionHistory } = useTransactionHistoryFetch({
+  const {
+    loading,
+    error: historyError,
+    fetchTransactionHistory,
+  } = useTransactionHistoryFetch({
     walletIdParam: wallet_id,
     isInitialized: IsInitialized,
     transactionCount: transactions.length,
@@ -134,9 +156,7 @@ const TransactionHistory: React.FC = () => {
         <PageHeader
           title={t('history.title')}
           subtitle={
-            hasTransactions
-              ? t('history.recorded', { count: transactions.length })
-              : t('history.noActivity')
+            currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
           }
           compact
         />
@@ -152,6 +172,7 @@ const TransactionHistory: React.FC = () => {
                 : t('history.newestFirst')}
             </button>
             <select
+              aria-label={t('history.perPageLabel')}
               value={transactionsPerPage}
               onChange={handleTransactionsPerPageChange}
               className="wallet-input col-span-4 py-1.5 px-3 text-sm"
@@ -164,9 +185,14 @@ const TransactionHistory: React.FC = () => {
               onClick={fetchTransactionHistory}
               className="wallet-btn-secondary col-span-2 py-1.5 px-3 text-sm"
               disabled={loading}
+              aria-label={loading ? t('history.syncing') : t('history.sync')}
+              aria-busy={loading}
             >
               {loading ? (
-                <span className="flex items-center justify-center">
+                <span
+                  className="flex items-center justify-center"
+                  aria-hidden="true"
+                >
                   <span className="wallet-spinner" aria-hidden="true" />
                 </span>
               ) : (
@@ -178,7 +204,28 @@ const TransactionHistory: React.FC = () => {
 
         <div className="flex-1 min-h-0 overflow-hidden">
           {!hasTransactions ? (
-            <EmptyState message={t('history.noTransactions')} />
+            loading ? (
+              <div
+                className="wallet-card p-4 text-center wallet-muted"
+                role="status"
+                aria-live="polite"
+              >
+                {t('history.loading')}
+              </div>
+            ) : historyError ? (
+              <div className="wallet-card p-4 text-center" role="alert">
+                <p className="wallet-text-strong">{t('history.loadFailed')}</p>
+                <button
+                  type="button"
+                  onClick={fetchTransactionHistory}
+                  className="wallet-btn-secondary mt-3 min-h-[44px] px-4 py-2"
+                >
+                  {t('builder.tryAgain')}
+                </button>
+              </div>
+            ) : (
+              <EmptyState message={t('history.noTransactions')} />
+            )
           ) : (
             <ul className="h-full space-y-3 overflow-y-auto overscroll-contain pr-1">
               {paginatedTransactions.map((tx, id) => {
@@ -252,31 +299,33 @@ const TransactionHistory: React.FC = () => {
         <div className="wallet-card shrink-0 p-3 flex items-center justify-between gap-2 mb-[calc(var(--safe-bottom)+1rem)]">
           <button
             onClick={handleFirstPage}
-            className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
+            className="wallet-btn-secondary min-h-[44px] py-2 px-3 text-sm font-bold"
             disabled={!hasTransactions || currentPage === 1}
           >
             {t('history.first')}
           </button>
           <button
             onClick={handlePreviousPage}
-            className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
+            className="wallet-btn-secondary min-h-[44px] min-w-[44px] py-2 px-3 text-sm font-bold"
             disabled={!hasTransactions || currentPage === 1}
+            aria-label={t('history.previousPage')}
           >
-            {'<'}
+            <span aria-hidden="true">{'<'}</span>
           </button>
           <div className="py-2 text-sm wallet-text-strong min-w-[56px] text-center">
             {hasTransactions ? `${currentPage}/${totalPages}` : '0/0'}
           </div>
           <button
             onClick={handleNextPage}
-            className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
+            className="wallet-btn-secondary min-h-[44px] min-w-[44px] py-2 px-3 text-sm font-bold"
             disabled={!hasTransactions || currentPage === totalPages}
+            aria-label={t('history.nextPage')}
           >
-            {'>'}
+            <span aria-hidden="true">{'>'}</span>
           </button>
           <button
             onClick={handleLastPage}
-            className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
+            className="wallet-btn-secondary min-h-[44px] py-2 px-3 text-sm font-bold"
             disabled={!hasTransactions || currentPage === totalPages}
           >
             {t('history.last')}

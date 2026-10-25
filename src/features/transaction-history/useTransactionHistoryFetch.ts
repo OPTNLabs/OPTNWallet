@@ -27,6 +27,7 @@ export function useTransactionHistoryFetch({
 }: UseTransactionHistoryFetchParams) {
   const [progress, setProgress] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
   const [fetchedAddresses, setFetchedAddresses] = useState<Set<string>>(
     new Set()
   );
@@ -38,6 +39,7 @@ export function useTransactionHistoryFetch({
       if (Number.isNaN(walletIdNum)) return;
 
       setLoading(true);
+      setError(false);
       setProgress(0);
       try {
         const { scannedAddresses } = await refreshWalletTransactionHistory({
@@ -61,6 +63,7 @@ export function useTransactionHistoryFetch({
         }
       } catch (error) {
         console.error('Failed to fetch transaction history:', error);
+        setError(true);
       } finally {
         setLoading(false);
       }
@@ -77,6 +80,7 @@ export function useTransactionHistoryFetch({
   return {
     progress,
     loading,
+    error,
     /** Manual refresh: always a full pass, so it cannot no-op on a scanned set. */
     fetchTransactionHistory: useCallback(
       () => fetchTransactionHistory({ full: true }),

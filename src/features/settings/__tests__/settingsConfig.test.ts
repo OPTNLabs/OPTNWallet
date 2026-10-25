@@ -50,8 +50,8 @@ describe('settingsConfig', () => {
     const row = WALLET_ROWS.find((entry) => entry.key === 'pending-outbox');
 
     expect(row).toMatchObject({
-      title: 'Pending Tx Locks',
-      description: 'Review outgoing transaction locks',
+      title: 'Pending outgoing transactions',
+      description: 'Review outgoing transactions still being checked',
       action: 'navigate',
       target: '/outbox',
     });

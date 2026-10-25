@@ -27,7 +27,7 @@ import DeviceIntegrityService from '../../services/DeviceIntegrityService';
 import { WATCH_ONLY_WALLET_TYPE } from '../../platform/desktop/onboarding/watchOnlyWallet';
 import { HARDWARE_WALLET_TYPE } from '../../platform/desktop/onboarding/hardwareWallet';
 import { WalletType, type ExtendedWalletType } from '../../types/wallet';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
 
 type WalletInfoSnapshot = {
   name: string;
@@ -279,20 +279,11 @@ function CopyRow({
   mono?: boolean;
   secret?: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
   const display = value && value.trim() ? value : '—';
   const canCopy = Boolean(value && value.trim());
 
-  const onCopy = async () => {
-    if (!canCopy || !value) return;
-    try {
-      if (!(await copyToClipboard(value)))
-        throw new Error('clipboard write failed');
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* ignore */
-    }
+  const onCopy = () => {
+    if (canCopy && value) void copyWithFeedback(value);
   };
 
   return (
@@ -305,11 +296,12 @@ function CopyRow({
           <button
             type="button"
             onClick={() => void onCopy()}
-            className="inline-flex items-center gap-1 text-xs wallet-link"
+            className="inline-flex min-h-[44px] items-center gap-1 px-2 text-xs wallet-link"
             title="Copy"
+            aria-label={`Copy ${label}`}
           >
             <MdContentCopy className="text-sm" />
-            {copied ? 'Copied' : 'Copy'}
+            Copy
           </button>
         )}
       </div>
@@ -487,7 +479,11 @@ export const WalletInfoSettings: React.FC = () => {
         </p>
       </div>
 
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && (
+        <p className="text-xs wallet-danger-text" role="alert">
+          {error}
+        </p>
+      )}
       {busy && !info && (
         <p className="text-xs wallet-muted">Loading wallet info…</p>
       )}
@@ -511,14 +507,14 @@ export const WalletInfoSettings: React.FC = () => {
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    className="wallet-btn-primary flex-1 py-2 text-sm"
+                    className="wallet-btn-primary min-h-[44px] flex-1 py-2 text-sm"
                     onClick={() => void saveName()}
                   >
                     Save
                   </button>
                   <button
                     type="button"
-                    className="wallet-btn-secondary flex-1 py-2 text-sm"
+                    className="wallet-btn-secondary min-h-[44px] flex-1 py-2 text-sm"
                     onClick={() => {
                       setEditingName(false);
                       setNameDraft(info.name);
@@ -538,14 +534,22 @@ export const WalletInfoSettings: React.FC = () => {
                 </p>
                 <button
                   type="button"
-                  className="text-xs wallet-link"
+                  className="min-h-[44px] px-2 text-xs wallet-link"
                   onClick={() => setEditingName(true)}
                 >
                   Rename
                 </button>
               </div>
             )}
-            {nameMsg && <p className="text-xs wallet-muted">{nameMsg}</p>}
+            {nameMsg && (
+              <p
+                className="text-xs wallet-muted"
+                role="status"
+                aria-live="polite"
+              >
+                {nameMsg}
+              </p>
+            )}
           </div>
 
           <CopyRow label="Type" value={info.walletType} />
@@ -558,10 +562,11 @@ export const WalletInfoSettings: React.FC = () => {
               {info.walletFilePath && (
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 text-xs wallet-link"
+                  className="inline-flex min-h-[44px] items-center gap-1 px-2 text-xs wallet-link"
                   title="Copy path"
+                  aria-label="Copy wallet file path"
                   onClick={() => {
-                    void copyToClipboard(info.walletFilePath ?? '');
+                    void copyWithFeedback(info.walletFilePath ?? '');
                   }}
                 >
                   <MdContentCopy className="text-sm" />
@@ -595,7 +600,7 @@ export const WalletInfoSettings: React.FC = () => {
                 type="button"
                 onClick={() => void toggleReveal()}
                 disabled={busy}
-                className="shrink-0 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--wallet-border)] wallet-surface-strong text-[var(--wallet-accent-strong)] hover:brightness-[1.04] disabled:opacity-50"
+                className="shrink-0 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border border-[var(--wallet-border)] wallet-surface-strong text-[var(--wallet-accent-strong)] hover:brightness-[1.04] disabled:opacity-50"
                 title={
                   revealed
                     ? 'Hide xPub and identity fields'
@@ -625,7 +630,7 @@ export const WalletInfoSettings: React.FC = () => {
                   type="button"
                   disabled={busy}
                   onClick={() => void toggleReveal()}
-                  className="wallet-btn-secondary px-4 py-2 text-sm font-semibold"
+                  className="wallet-btn-secondary min-h-[44px] px-4 py-2 text-sm font-semibold"
                 >
                   {busy ? 'Checking…' : 'Unlock with password / biometric'}
                 </button>
@@ -686,7 +691,7 @@ export const WalletInfoSettings: React.FC = () => {
                   type="button"
                   disabled={busy || mnemonicBusy}
                   onClick={() => void revealMnemonic()}
-                  className="wallet-btn-danger w-full py-2 text-sm font-semibold disabled:opacity-50"
+                  className="wallet-btn-danger min-h-[44px] w-full py-2 text-sm font-semibold disabled:opacity-50"
                 >
                   {mnemonicBusy ? 'Checking…' : 'Reveal recovery phrase'}
                 </button>
@@ -705,7 +710,7 @@ export const WalletInfoSettings: React.FC = () => {
                   <button
                     type="button"
                     onClick={hideMnemonic}
-                    className="wallet-btn-primary w-full py-2 text-sm font-semibold"
+                    className="wallet-btn-secondary min-h-[44px] w-full py-2 text-sm font-semibold"
                   >
                     Hide recovery phrase
                   </button>

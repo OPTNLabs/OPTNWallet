@@ -12,7 +12,7 @@ import Paryon from '../pages/Paryon';
 import Outbox from '../pages/Outbox';
 import PaperWalletSweep from '../pages/PaperWalletSweep';
 import MintCashTokensPoC from '../pages/MintCashTokensPoC';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import Layout from '../components/Layout';
 import RootHandler from '../pages/RootHandler';
@@ -110,6 +110,7 @@ type AppShellProps = {
 
 function AppContent({ viewerOnly = false }: AppShellProps) {
   usePrices();
+  const location = useLocation();
   const dispatch = useDispatch<AppDispatch>();
   const desktop = isDesktopPlatform();
   const walletId = useSelector(selectWalletId);
@@ -186,7 +187,14 @@ function AppContent({ viewerOnly = false }: AppShellProps) {
                     path={ROUTE_PATHS.assets}
                     element={<Assets viewerOnly={viewerOnly} />}
                   />
-                  <Route path={ROUTE_PATHS.receive} element={<Receive />} />
+                  <Route
+                    path={ROUTE_PATHS.receive}
+                    element={
+                      <Receive
+                        key={`${location.key}:${location.pathname}:${location.search}`}
+                      />
+                    }
+                  />
                   <Route
                     path={ROUTE_PATHS.transactions}
                     element={<TransactionHistory />}

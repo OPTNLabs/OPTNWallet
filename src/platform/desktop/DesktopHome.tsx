@@ -210,6 +210,7 @@ const Home: React.FC = () => {
         undefined,
         {
           discover: true,
+          trackWalletSync: true,
           // Statuses were cleared above; force still short-circuits any race
           // where a concurrent path rewrote a status before listunspent.
           force: true,
@@ -279,7 +280,9 @@ const Home: React.FC = () => {
         <PageHeader
           title={t('home.title')}
           subtitle={
-            currentNetwork === Network.CHIPNET ? t('assets.chipnet') : undefined
+            currentNetwork === Network.CHIPNET
+              ? t('network.chipnet')
+              : undefined
           }
           compact
         />

@@ -9,6 +9,8 @@ import {
   FaQrcode,
 } from 'react-icons/fa';
 import { RootState } from '../../state/store';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
+import { Network } from '../../state/slices/networkSlice';
 import PageHeader from '../../components/ui/PageHeader';
 import SectionCard from '../../components/ui/SectionCard';
 import SectionHeader from '../../components/ui/SectionHeader';
@@ -114,6 +116,7 @@ const Actions: React.FC = () => {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const quantumrootEnabled = useSelector(selectQuantumrootEnabled);
   const desktop = isDesktopPlatform();
   // Quantumroot is on by default; hide its action when the user disables it in
@@ -152,7 +155,11 @@ const Actions: React.FC = () => {
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader
           title={t('actions.title')}
-          subtitle={t('actions.subtitle')}
+          subtitle={
+            currentNetwork === Network.CHIPNET
+              ? t('network.chipnet')
+              : undefined
+          }
           compact
         />
 

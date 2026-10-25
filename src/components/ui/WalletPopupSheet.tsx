@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 type WalletPopupSheetProps = {
@@ -6,6 +6,7 @@ type WalletPopupSheetProps = {
   footer: ReactNode;
   maxWidthClassName?: string;
   onDismiss?: () => void;
+  dismissLabel?: string;
 };
 
 export default function WalletPopupSheet({
@@ -13,15 +14,68 @@ export default function WalletPopupSheet({
   footer,
   maxWidthClassName = 'max-w-md',
   onDismiss,
+  dismissLabel = 'Close',
 }: WalletPopupSheetProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onDismissRef = useRef(onDismiss);
+
   useEffect(() => {
-    if (!onDismiss) return;
+    onDismissRef.current = onDismiss;
+  }, [onDismiss]);
+
+  useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const panel = panelRef.current;
+    const focusableSelector =
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const getFocusable = () =>
+      panel
+        ? Array.from(panel.querySelectorAll<HTMLElement>(focusableSelector))
+        : [];
+    (getFocusable()[0] ?? panel)?.focus();
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onDismiss();
+      if (event.key === 'Escape') {
+        if (onDismissRef.current) {
+          event.preventDefault();
+          onDismissRef.current();
+        }
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = getFocusable();
+      if (!focusable.length) {
+        event.preventDefault();
+        panel?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (
+        event.shiftKey &&
+        (document.activeElement === first ||
+          !panel?.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === last ||
+          !panel?.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onDismiss]);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
+  }, []);
 
   const sheet = (
     <div
@@ -30,7 +84,9 @@ export default function WalletPopupSheet({
       role="presentation"
     >
       <div
+        ref={panelRef}
         className={`wallet-popup-panel ${maxWidthClassName} flex w-full min-w-0 flex-col overflow-hidden`}
+        tabIndex={-1}
         style={{
           maxHeight: 'calc(100dvh - var(--safe-bottom, 0px) - 1.5rem)',
         }}
@@ -44,9 +100,9 @@ export default function WalletPopupSheet({
               type="button"
               className="wallet-btn-secondary px-3 py-1.5 text-sm"
               onClick={onDismiss}
-              aria-label="Close"
+              aria-label={dismissLabel}
             >
-              Close
+              {dismissLabel}
             </button>
           </div>
         ) : null}

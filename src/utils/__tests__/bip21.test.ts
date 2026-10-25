@@ -1,17 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildBip21Uri,
-  parseBip21Uri,
-  recipientNetworkError,
-} from '../bip21';
+import { buildBip21Uri, parseBip21Uri, recipientNetworkError } from '../bip21';
 import { Network } from '../../state/slices/networkSlice';
 
-const VALID_CASHADDR =
-  'bitcoincash:qrx6fypj230kpgvghmyje089sphvl4jnfqq4aduatz';
+const VALID_CASHADDR = 'bitcoincash:qrx6fypj230kpgvghmyje089sphvl4jnfqq4aduatz';
 const VALID_BASE58 = '1BpEi6DfDAUFd7GtittLSdBeYJvcoaVggu';
 // Same payload as VALID_CASHADDR but chipnet prefix (for mismatch tests).
-const CHIPNET_FORM =
-  'bchtest:qrx6fypj230kpgvghmyje089sphvl4jnfqq4aduatz';
+const CHIPNET_FORM = 'bchtest:qrx6fypj230kpgvghmyje089sphvl4jnfqq4aduatz';
 
 describe('parseBip21Uri', () => {
   it('normalizes duplicate prefixes and parses amount', () => {
@@ -36,6 +30,26 @@ describe('parseBip21Uri', () => {
     expect(parsed.isBase58Address).toBe(true);
     expect(parsed.normalizedAddress).toBe(VALID_BASE58);
     expect(parsed.amount).toBe(0.01);
+  });
+
+  it.each(['1e-3', '13abc', '0', '1.123456789'])(
+    'flags invalid BIP21 amount %s instead of parsing a numeric prefix',
+    (amount) => {
+      const parsed = parseBip21Uri(
+        `bitcoincash:${VALID_CASHADDR}?amount=${encodeURIComponent(amount)}`,
+        Network.MAINNET
+      );
+      expect(parsed.invalidAmount).toBe(true);
+      expect(parsed.amountRaw).toBeUndefined();
+    }
+  );
+
+  it('rejects ambiguous duplicate amount parameters', () => {
+    const parsed = parseBip21Uri(
+      `bitcoincash:${VALID_CASHADDR}?amount=1&amount=2`,
+      Network.MAINNET
+    );
+    expect(parsed.invalidAmount).toBe(true);
   });
 
   it('rejects mainnet cashaddr when wallet is on chipnet', () => {

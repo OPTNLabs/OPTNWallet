@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { createQrTransport } from './QrTransport';
+import Popup from '../transaction/components/Popup';
 
 export function QrScanDialog(props: {
   onFrame: (frame: string) => void;
@@ -25,12 +26,12 @@ export function QrScanDialog(props: {
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4"
-      role="dialog"
-      aria-modal="true"
+    <Popup
+      closePopups={props.onClose}
+      closeButtonText="Done"
+      ariaLabel="Scan QR frame"
     >
-      <div className="w-full max-w-sm space-y-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
+      <div className="space-y-3 p-1">
         <h2 className="font-semibold wallet-text-strong">Scan QR frame</h2>
         <p className="text-xs wallet-muted">
           Use the camera on mobile or the desktop image/file fallback. Scan each
@@ -43,20 +44,13 @@ export function QrScanDialog(props: {
         )}
         <button
           type="button"
-          className="wallet-btn-primary w-full"
+          className="wallet-btn-primary min-h-[44px] w-full"
           onClick={() => void scan()}
           disabled={busy}
         >
           {busy ? 'Scanning…' : 'Scan frame'}
         </button>
-        <button
-          type="button"
-          className="wallet-btn-secondary w-full"
-          onClick={props.onClose}
-        >
-          Done
-        </button>
       </div>
-    </div>
+    </Popup>
   );
 }

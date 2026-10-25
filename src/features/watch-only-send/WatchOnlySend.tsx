@@ -51,7 +51,7 @@ import {
   refreshMultisigWalletUtxos,
   refreshWatchOnlyWalletUtxos,
 } from '../../services/WalletUtxoRefreshService';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
 import {
@@ -118,6 +118,10 @@ import { getReturnPath } from '../../utils/navigation';
 import { isDesktopPlatform } from '../../utils/platform';
 import { QrScanDialog } from '../multisig/QrScanDialog';
 import { loadMultisigPolicy } from '../../services/multisig/MultisigStorageService';
+import {
+  noSpendableBchCoinsHint,
+  unsignedBuildAvailability,
+} from './sendEmptyState';
 import {
   advanceMultisigSpendSession,
   createMultisigSpendSession,
@@ -1446,7 +1450,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
 
   const handleCopyQrText = async () => {
     if (!qrUri) return;
-    setQrTextCopied(await copyToClipboard(qrUri));
+    setQrTextCopied(await copyWithFeedback(qrUri));
   };
 
   const handleScanFrame = (text: string) => {
@@ -1627,6 +1631,13 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
     mobile && !!multisigPolicy && !proposalState && multisigSpendMode === null;
   const spendFormEnabled =
     !mobile || !multisigPolicy || multisigSpendMode !== null;
+  const buildAvailability = unsignedBuildAvailability({
+    busy,
+    networkRefreshing,
+    networkRefreshFailed,
+    selectedInputCount: selectedInputs.length,
+    availableInputCount: inputs.length,
+  });
 
   return (
     <WalletScreen
@@ -1791,8 +1802,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                 {inputs.length === 0 ? (
                   <div className="space-y-2">
                     <p className="text-xs wallet-muted">
-                      No spendable BCH coins found. Refresh the multisig address
-                      inventory and make sure it holds BCH (not only tokens).
+                      {noSpendableBchCoinsHint(Boolean(multisigPolicy))}
                     </p>
                     <button
                       type="button"
@@ -2053,7 +2063,12 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                   data-testid="watch-only-build-unsigned"
                   onClick={() => void handleBuild()}
                   className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
-                  disabled={busy || networkRefreshing || networkRefreshFailed}
+                  disabled={buildAvailability.disabled}
+                  aria-describedby={
+                    buildAvailability.reason
+                      ? 'watch-only-build-disabled-reason'
+                      : undefined
+                  }
                 >
                   {networkRefreshing
                     ? 'Waiting for network refresh…'
@@ -2061,6 +2076,14 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                       ? 'Network refresh required'
                       : 'Build unsigned transaction'}
                 </button>
+                {buildAvailability.reason && (
+                  <p
+                    id="watch-only-build-disabled-reason"
+                    className="text-center text-xs wallet-muted"
+                  >
+                    {buildAvailability.reason}
+                  </p>
+                )}
               </section>
 
               {/* Step 3: static QR for ordinary PSBTs, stream for larger ones */}

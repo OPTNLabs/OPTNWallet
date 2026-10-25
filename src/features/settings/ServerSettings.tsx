@@ -440,7 +440,7 @@ export const ServerSettings: React.FC<{
       <div className="flex gap-2">
         <button
           onClick={() => handleAutoToggle(true)}
-          className={`flex-1 rounded-xl border py-2 text-sm font-semibold transition-colors ${
+          className={`min-h-[44px] flex-1 rounded-xl border py-2 text-sm font-semibold transition-colors ${
             autoMode
               ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
               : 'border-[var(--wallet-border)] wallet-muted'
@@ -450,7 +450,7 @@ export const ServerSettings: React.FC<{
         </button>
         <button
           onClick={() => handleAutoToggle(false)}
-          className={`flex-1 rounded-xl border py-2 text-sm font-semibold transition-colors ${
+          className={`min-h-[44px] flex-1 rounded-xl border py-2 text-sm font-semibold transition-colors ${
             !autoMode
               ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
               : 'border-[var(--wallet-border)] wallet-muted'
@@ -480,13 +480,21 @@ export const ServerSettings: React.FC<{
         </div>
       )}
 
-      {error && <p className="text-xs text-red-400">{error}</p>}
-      {status && <p className="text-xs text-green-400">{status}</p>}
+      {error && (
+        <p className="text-xs wallet-danger-text" role="alert">
+          {error}
+        </p>
+      )}
+      {status && (
+        <p className="text-xs text-green-400" role="status" aria-live="polite">
+          {status}
+        </p>
+      )}
 
       <button
         onClick={() => void handleConnect()}
         disabled={connecting || (!autoMode && !customServer.trim())}
-        className="w-full rounded-xl py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+        className="min-h-[44px] w-full rounded-xl py-2.5 text-sm font-semibold text-white disabled:opacity-50"
         style={{ background: 'var(--wallet-accent, #6366f1)' }}
       >
         {connecting ? t('server.connecting') : t('server.connect')}

@@ -2025,6 +2025,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     tokenSource: 'api' | 'pools' | 'mixed';
     liveUpdatesEnabled: boolean;
     liveUpdatedAt: number | null;
+    indexerStatus: string | null;
+    indexerVersion: string | null;
+    indexerLag: number | null;
   } | null>(null);
   const pendingWalletPoolsStorageKey = useMemo(
     () =>
@@ -2581,13 +2584,14 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               .filter((tokenId): tokenId is string => Boolean(tokenId))
           ),
         ];
-        const [tokenRows, walletTokenRows] = await Promise.all([
+        const [tokenRows, walletTokenRows, indexerHealth] = await Promise.all([
           apiClient.listCachedTokens({
             limit: 500,
             by: 'score',
             order: 'desc',
           }),
           apiClient.listCachedTokensByIds(walletNftTokenIds),
+          apiClient.getIndexerHealth().catch(() => null),
         ]);
 
         if (cancelled) return;
@@ -2604,6 +2608,14 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           tokenSource: walletTokenRows.length > 0 ? 'mixed' : 'api',
           liveUpdatesEnabled: false,
           liveUpdatedAt: null,
+          indexerStatus: indexerHealth?.status ?? null,
+          indexerVersion: indexerHealth?.version ?? null,
+          indexerLag: indexerHealth
+            ? Math.max(
+                0,
+                indexerHealth.chain_tip - indexerHealth.indexed_height
+              )
+            : null,
         });
       } catch (error) {
         if (!cancelled) {
@@ -4717,14 +4729,39 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         currentNetwork,
         apiClient
       );
+      const indexerHealthPromise = apiClient
+        .getIndexerHealth()
+        .catch(() => null);
 
-      const [refreshedPools, walletUtxos, userPools, walletCreatedPools] =
-        await Promise.all([
-          refreshedPoolsPromise,
-          walletUtxosPromise,
-          userPoolsPromise,
-          walletCreatedPoolsPromise,
-        ]);
+      const [
+        refreshedPools,
+        walletUtxos,
+        userPools,
+        walletCreatedPools,
+        indexerHealth,
+      ] = await Promise.all([
+        refreshedPoolsPromise,
+        walletUtxosPromise,
+        userPoolsPromise,
+        walletCreatedPoolsPromise,
+        indexerHealthPromise,
+      ]);
+
+      if (indexerHealth) {
+        setApiStatus((current) =>
+          current
+            ? {
+                ...current,
+                indexerStatus: indexerHealth.status,
+                indexerVersion: indexerHealth.version,
+                indexerLag: Math.max(
+                  0,
+                  indexerHealth.chain_tip - indexerHealth.indexed_height
+                ),
+              }
+            : current
+        );
+      }
 
       if (selectedTokenId) {
         setPools(refreshedPools);
@@ -7727,6 +7764,17 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             </div>
 
             <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+              {apiStatus?.indexerStatus ? (
+                <div className="rounded-xl border border-[var(--wallet-border)] px-3 py-2 text-xs wallet-muted">
+                  Indexer {apiStatus.indexerStatus}
+                  {apiStatus.indexerVersion
+                    ? ` · v${apiStatus.indexerVersion}`
+                    : ''}
+                  {apiStatus.indexerLag && apiStatus.indexerLag > 0
+                    ? ` · ${apiStatus.indexerLag} blocks behind`
+                    : ''}
+                </div>
+              ) : null}
               <div className="sticky top-0 z-10 pb-2">
                 <input
                   type="text"

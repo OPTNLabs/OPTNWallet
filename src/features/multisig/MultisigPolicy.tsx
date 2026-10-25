@@ -6,13 +6,13 @@ import {
 } from '../../services/multisig/MultisigStorageService';
 import type { MultisigPolicy } from '../../services/psbt/multisigWallet';
 import MultisigPage from './MultisigPage';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
 
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
-    if (!(await copyToClipboard(value))) return;
+    if (!(await copyWithFeedback(value))) return;
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1800);
   };

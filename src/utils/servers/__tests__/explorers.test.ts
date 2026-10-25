@@ -134,6 +134,7 @@ describe('the preset list comes from the core', () => {
     expect(getExplorerPresets().map((preset) => preset.id)).toEqual([
       'bchexplorer',
       'bch-ninja',
+      'selene',
       'imaginary',
       'blockchair',
       '3xpl',

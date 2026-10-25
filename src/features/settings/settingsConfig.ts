@@ -99,8 +99,8 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   },
   {
     key: 'pending-outbox',
-    title: 'Pending Tx Locks',
-    description: 'Review outgoing transaction locks',
+    title: 'Pending outgoing transactions',
+    description: 'Review outgoing transactions still being checked',
     action: 'navigate',
     target: ROUTE_PATHS.outbox,
   },

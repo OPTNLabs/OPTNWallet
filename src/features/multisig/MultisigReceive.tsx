@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useParams } from 'react-router-dom';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
 import MultisigPage from './MultisigPage';
 import {
   getMultisigPolicyStatus,
@@ -23,7 +23,7 @@ export default function MultisigReceive() {
   );
 
   const copyAddress = async (kind: 'bch' | 'token', address: string) => {
-    if (!(await copyToClipboard(address))) return;
+    if (!(await copyWithFeedback(address))) return;
     setCopiedAddress(kind);
     window.setTimeout(() => {
       setCopiedAddress((current) => (current === kind ? null : current));

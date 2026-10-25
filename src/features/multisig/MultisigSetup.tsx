@@ -30,7 +30,7 @@ import { deriveLocalWalletCosignerMetadata } from '../../services/WalletPublicMe
 import { multisigRoute } from '../../navigation/routes';
 import MultisigCosignerQr from './MultisigCosignerQr';
 import BottomNavBar from '../../components/BottomNavBar';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
 import MultisigBackButton from './MultisigBackButton';
 
 type CosignerDraft = {
@@ -172,7 +172,7 @@ export default function MultisigSetup() {
   };
 
   const copyValue = async (value: string) => {
-    const copied = await copyToClipboard(value);
+    const copied = await copyWithFeedback(value);
     if (!copied) return;
     setCopiedValue(value);
     window.setTimeout(() => {

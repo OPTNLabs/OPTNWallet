@@ -73,7 +73,8 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const [, setWalletContractAddresses] = useState<ContractAddressRecord[]>([]);
   const [, setWalletContractUtxos] = useState<UTXO[]>([]);
   const [, setDefaultChangeAddress] = useState<string>('');
-  const [, setWalletError] = useState<string | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const [walletDataRetryKey, setWalletDataRetryKey] = useState(0);
   const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
   const reduxTokenUtxos = useMemo(
     () => dedupeTokenUtxos(Object.values(reduxUTXOs).flat()),
@@ -102,8 +103,12 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
     setWalletContractUtxos,
     setDefaultChangeAddress,
     setWalletError,
-    { deferAfterPaint: true }
+    { deferAfterPaint: true, retryKey: walletDataRetryKey }
   );
+
+  useEffect(() => {
+    if (utxoSnapshotInitialized) setWalletError(null);
+  }, [utxoSnapshotInitialized]);
 
   const entries = useMemo(() => {
     const tokenTotals: Record<
@@ -234,7 +239,9 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
         <PageHeader
           title={t('assets.title')}
           subtitle={
-            currentNetwork === Network.CHIPNET ? t('assets.chipnet') : ''
+            currentNetwork === Network.CHIPNET
+              ? t('network.chipnet')
+              : undefined
           }
           compact
         />
@@ -246,7 +253,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                 key={name}
                 type="button"
                 onClick={() => setTab(name)}
-                className={`rounded-2xl border px-3 py-2 text-sm font-semibold transition ${
+                className={`min-h-[44px] rounded-2xl border px-3 py-2 text-sm font-semibold transition ${
                   tab === name
                     ? 'wallet-segment-active border-[var(--wallet-accent)]'
                     : 'wallet-segment-inactive border-[var(--wallet-border)]'
@@ -261,6 +268,26 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
             ))}
           </div>
         </SectionCard>
+
+        {walletError && !utxoSnapshotInitialized && (
+          <SectionCard className="shrink-0 border border-[var(--wallet-danger-border)] p-3">
+            <div role="alert" className="space-y-3">
+              <p className="text-sm text-[var(--wallet-danger-text)]">
+                {t('assets.loadFailed')}
+              </p>
+              <button
+                type="button"
+                className="wallet-btn-secondary min-h-[44px] px-4"
+                onClick={() => {
+                  setWalletError(null);
+                  setWalletDataRetryKey((key) => key + 1);
+                }}
+              >
+                {t('builder.tryAgain')}
+              </button>
+            </div>
+          </SectionCard>
+        )}
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1">
           {tab === 'BCH' && (

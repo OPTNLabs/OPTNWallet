@@ -604,24 +604,26 @@ export default function MemoCashReaderApp({ sdk }: Props) {
         </button>
         <button
           onClick={handlePreviousPage}
-          className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
+          className="wallet-btn-secondary min-h-[44px] min-w-[44px] py-2 px-3 text-sm font-bold"
           disabled={loading || currentPage === 1}
+          aria-label={addonT('common.previousPage', 'Previous page')}
         >
-          {'<'}
+          <span aria-hidden="true">{'<'}</span>
         </button>
         <div className="py-2 text-sm wallet-text-strong min-w-[70px] text-center">
           {pages.length === 0 ? '0/0' : `${currentPage}/${pages.length}`}
         </div>
         <button
           onClick={() => void handleNextPage()}
-          className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
+          className="wallet-btn-secondary min-h-[44px] min-w-[44px] py-2 px-3 text-sm font-bold"
           disabled={
             loading ||
             pages.length === 0 ||
             (currentPage === pages.length && !pages[pages.length - 1]?.hasMore)
           }
+          aria-label={addonT('common.nextPage', 'Next page')}
         >
-          {'>'}
+          <span aria-hidden="true">{'>'}</span>
         </button>
         <button
           onClick={handleLastLoadedPage}

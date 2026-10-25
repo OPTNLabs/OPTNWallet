@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import { MdChatBubbleOutline } from 'react-icons/md';
+import { FaCoins, FaCogs, FaThLarge, FaTools, FaWallet } from 'react-icons/fa';
 import AddonsRegistry from '../../services/AddonsRegistry';
 import type { AddonAppDefinition, AddonManifest } from '../../types/addons';
 import PageHeader from '../../components/ui/PageHeader';
@@ -22,6 +24,8 @@ import {
 import { Capacitor } from '@capacitor/core';
 import { hasCapability } from '../../platform/capabilities';
 import { useI18n } from '../../i18n/useI18n';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
+import { Network } from '../../state/slices/networkSlice';
 import {
   getLocalizedAddonAppDescription,
   getLocalizedAddonAppName,
@@ -46,6 +50,7 @@ const FILTERS: Filter[] = ['All', 'Wallet', 'Token', 'Utils', 'Advanced'];
 const AppsView = () => {
   const navigate = useNavigate();
   const { t, locale } = useI18n();
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const devMode = import.meta.env.DEV;
   const isNativeRuntime = Capacitor.isNativePlatform();
   const cashFusionEnabled = hasCapability('cashFusion');
@@ -157,7 +162,11 @@ const AppsView = () => {
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader
           title={t('apps.title')}
-          subtitle={t('apps.subtitle')}
+          subtitle={
+            currentNetwork === Network.CHIPNET
+              ? t('network.chipnet')
+              : undefined
+          }
           compact
         />
 
@@ -172,6 +181,18 @@ const AppsView = () => {
             onChange={setFilter}
             options={FILTERS.map((value) => ({
               value,
+              icon:
+                value === 'Wallet' ? (
+                  <FaWallet />
+                ) : value === 'Token' ? (
+                  <FaCoins />
+                ) : value === 'Advanced' ? (
+                  <FaCogs />
+                ) : value === 'Utils' ? (
+                  <FaTools />
+                ) : (
+                  <FaThLarge />
+                ),
               label:
                 value === 'Wallet'
                   ? t('apps.wallet')

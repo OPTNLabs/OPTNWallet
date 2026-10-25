@@ -19,3 +19,10 @@
 ## Notes
 
 <!-- Follow-up work, known limitations, screenshots, or release notes. -->
+
+## UI evidence (when applicable)
+
+- Affected routes, panels and dialogs reviewed:
+- Evidence proportional to the change (source/component, rendered mobile/desktop, keyboard/touch, packaged native):
+- Copy/action feedback and unavailable-action recovery checked:
+- Native verification and remaining gaps:

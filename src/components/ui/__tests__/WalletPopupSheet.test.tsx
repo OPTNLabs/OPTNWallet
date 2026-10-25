@@ -21,6 +21,8 @@ describe('WalletPopupSheet', () => {
     );
 
     expect(html).toContain('wallet-popup-panel');
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="true"');
     expect(html).toContain('overflow-y-auto');
     expect(html).toContain('overscroll-contain');
     expect(html).toContain('100dvh');

@@ -15,20 +15,33 @@ const PageHeader: React.FC<PageHeaderProps> = ({
 }) => {
   return (
     <header className={`w-full ${compact ? 'mb-3' : 'mb-4'}`}>
-      <div className={`flex justify-center ${compact ? 'mt-1 mb-2' : 'mt-2 mb-3'}`}>
+      <div
+        className={`grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 ${compact ? 'mt-1 mb-2' : 'mt-2 mb-3'}`}
+      >
+        <div className="min-w-0">
+          <h1
+            className="truncate text-left text-lg font-bold tracking-[-0.02em] wallet-text-strong"
+            title={title}
+          >
+            {title}
+          </h1>
+        </div>
         <img
           src="/assets/images/OPTNWelcome1.png"
           alt="OPTN"
-          className={`${compact ? 'w-1/2' : 'w-3/4'} h-auto opacity-95`}
+          className={`wallet-page-header-logo ${compact ? 'w-32 sm:w-44' : 'w-44 sm:w-56'} h-auto opacity-95`}
         />
-      </div>
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-        <div aria-hidden="true" />
-        <div className="sr-only">
-          <h1>{title}</h1>
-          {subtitle ? <p>{subtitle}</p> : null}
+        <div className="flex min-w-0 flex-col items-end gap-1 text-right">
+          {subtitle ? (
+            <p
+              className="max-w-full truncate text-xs wallet-muted"
+              title={subtitle}
+            >
+              {subtitle}
+            </p>
+          ) : null}
+          {titleAction}
         </div>
-        <div className="justify-self-end">{titleAction}</div>
       </div>
     </header>
   );

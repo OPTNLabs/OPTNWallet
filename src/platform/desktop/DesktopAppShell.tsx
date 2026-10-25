@@ -1,3 +1,4 @@
+import { openExternal } from './openExternal';
 // Desktop wrapper around the real app. Swapped in via vite.desktop.config.ts's
 // desktopModuleSwapPlugin (replaces src/app/AppShell.tsx for desktop builds
 // only) so the upstream AppShell.tsx stays byte-identical and untouched.
@@ -24,7 +25,6 @@ import {
   hasWatchOnlySession,
 } from './WalletKeyCache';
 import { persistor } from '../../state/store';
-import { invoke } from '@tauri-apps/api/core';
 import { pruneDesktopCache } from './filesystem';
 
 const DesktopAppShell: React.FC = () => {
@@ -192,7 +192,7 @@ const DesktopAppShell: React.FC = () => {
       const href = anchor?.getAttribute('href');
       if (href && /^https?:\/\//i.test(href)) {
         e.preventDefault();
-        void invoke('open_external', { url: href }).catch(() => {});
+        void openExternal(href);
       }
     };
     document.addEventListener('click', onClick);

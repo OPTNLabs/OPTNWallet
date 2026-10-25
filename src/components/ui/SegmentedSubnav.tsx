@@ -6,12 +6,13 @@ type SegmentedSubnavProps<T extends string> = {
   options: Array<{
     value: T;
     label: string;
+    icon?: React.ReactNode;
   }>;
   className?: string;
   stretch?: boolean;
 };
 
-const SegmentedSubnav = <T extends string,>({
+const SegmentedSubnav = <T extends string>({
   value,
   onChange,
   options,
@@ -21,7 +22,9 @@ const SegmentedSubnav = <T extends string,>({
   return (
     <div
       className={`${
-        stretch ? 'grid grid-cols-2 gap-2' : 'flex gap-2 overflow-x-auto overscroll-contain pb-1'
+        stretch
+          ? 'grid grid-cols-2 gap-2'
+          : 'flex gap-2 overflow-x-auto overscroll-contain pb-1'
       } ${className}`.trim()}
     >
       {options.map((option) => (
@@ -31,12 +34,17 @@ const SegmentedSubnav = <T extends string,>({
           onClick={() => onChange(option.value)}
           className={`${
             stretch ? 'w-full' : 'shrink-0 whitespace-nowrap'
-          } rounded-2xl border px-3 py-2 text-sm font-semibold leading-tight transition ${
+          } ${option.icon ? 'flex min-w-[4.5rem] flex-col items-center gap-0.5 px-3 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'} rounded-2xl border font-semibold leading-tight transition ${
             value === option.value
               ? 'wallet-segment-active border-[var(--wallet-accent)]'
               : 'wallet-segment-inactive border-[var(--wallet-border)]'
           }`}
         >
+          {option.icon ? (
+            <span className="text-lg leading-none" aria-hidden="true">
+              {option.icon}
+            </span>
+          ) : null}
           {option.label}
         </button>
       ))}

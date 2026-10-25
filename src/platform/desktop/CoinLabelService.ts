@@ -44,7 +44,7 @@ export async function setCoinLabel(
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
-  if (!db) return;
+  if (!db) throw new Error('Wallet database is unavailable.');
 
   const cleaned = normalizeLabel(label);
   try {
@@ -65,7 +65,12 @@ export async function setCoinLabel(
       [walletId, kind, refKey, cleaned, nowIso()]
     );
   } catch (error) {
-    logError('CoinLabelService.setCoinLabel', error, { walletId, kind, refKey });
+    logError('CoinLabelService.setCoinLabel', error, {
+      walletId,
+      kind,
+      refKey,
+    });
+    throw error;
   }
 }
 

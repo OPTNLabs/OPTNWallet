@@ -151,3 +151,11 @@ through the shared Rust runtime in GUI and CLI. Distinguish component tests,
 application integration, live workflow evidence and packaged-platform evidence;
 one does not substitute for another. Record revision, environment and remaining
 gaps in the existing requirement ledger rather than creating competing trackers.
+
+For UI changes, apply the canonical UI/UX skill’s basic interaction review.
+Preserve useful follow-up actions, verify success/failure feedback, and report
+rendered mobile, desktop and native evidence separately. Match evidence to the
+claim: use source/component checks for state logic, rendered screenshots for
+layout, keyboard/touch exercise for interaction, and a packaged target for
+native behavior. Review the full affected route/panel/menu/dialog inventory in
+the existing UX plan; mark inaccessible or untested states as explicit gaps.

@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import { Toast } from '@capacitor/toast';
 
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
@@ -20,7 +19,7 @@ import WalletScreen from '../components/ui/WalletScreen';
 import { useI18n } from '../i18n/useI18n';
 import { formatDate } from '../i18n/format';
 import type { SupportedLocale } from '../i18n/types';
-import { copyToClipboard } from '../utils/clipboard';
+import { copyWithFeedback } from '../utils/copyWithFeedback';
 
 function formatBch(sats: number) {
   return `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
@@ -57,19 +56,9 @@ const Quantumroot: React.FC = () => {
     [currentNetwork]
   );
 
-  const handleCopy = useCallback(
-    async (text: string) => {
-      try {
-        if (!(await copyToClipboard(text)))
-          throw new Error('clipboard write failed');
-        await Toast.show({ text: t('receive.copied') });
-      } catch (error) {
-        console.error('Failed to copy Quantumroot value:', error);
-        await Toast.show({ text: t('receive.copyFailed') });
-      }
-    },
-    [t]
-  );
+  const handleCopy = useCallback(async (text: string) => {
+    await copyWithFeedback(text);
+  }, []);
 
   const {
     vaults,
@@ -113,7 +102,9 @@ const Quantumroot: React.FC = () => {
         <div className="flex-1 min-h-0">
           <PageHeader
             title={t('assets.quantumroot')}
-            subtitle={t('quantumroot.subtitle')}
+            subtitle={
+              currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+            }
             compact
             titleAction={
               <StatusChip tone="neutral">

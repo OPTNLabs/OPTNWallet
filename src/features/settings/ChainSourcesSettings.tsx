@@ -1774,13 +1774,10 @@ export function ChainSourcesSettings({
       {page === 'explorer' && (
         <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3">
           <p className="text-xs font-semibold wallet-text-strong">
-            Explorer links follow the current network policy
+            Choose your block explorer
           </p>
           <p className="text-xs wallet-muted">
-            Choose the explorer and custom link formats used by this wallet.
-          </p>
-          <p className="text-[11px] wallet-muted">
-            Current routing: {CHAIN_POLICY_LABELS[view.policy]}
+            Select which explorer opens from transaction details.
           </p>
           {explorerSettings ?? (
             <p className="text-xs wallet-muted">

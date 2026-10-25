@@ -49,8 +49,19 @@ export type CauldronTokenListItemCached = {
   change_24h_usd_bp?: number | null;
   change_7d_usd_bp?: number | null;
   apy_30d_bp?: number | null;
+  change_24h_anchor_ts?: number | null;
+  change_7d_anchor_ts?: number | null;
+  first_pool_ts?: number | null;
+  price_series_7d?: Array<number | null> | null;
   bcmr?: Record<string, unknown> | null;
   bcmr_well_known?: Array<Record<string, unknown>>;
+};
+
+export type CauldronIndexerHealth = {
+  chain_tip: number;
+  indexed_height: number;
+  status: string;
+  version: string;
 };
 
 export type CauldronPoolParameters = {

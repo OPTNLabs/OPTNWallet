@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import Popup from '../../components/transaction/Popup';
 import StatusChip from '../../components/ui/StatusChip';
@@ -8,22 +8,18 @@ import type {
 } from '../../types/types';
 import ElectrumService from '../../services/ElectrumService';
 import TransactionManager from '../../apis/TransactionManager/TransactionManager';
-import {
-  getCoinLabel,
-  setCoinLabel,
-} from '../../platform/desktop/CoinLabelService';
 import { addTransactions } from '../../state/slices/transactionSlice';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import { isTxConfirmed } from '../../utils/txConfirmation';
 import { useI18n } from '../../i18n/useI18n';
 import { formatDate, formatNumber } from '../../i18n/format';
 import type { SupportedLocale } from '../../i18n/types';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
 
 type Props = {
   txid: string;
   txHeight: number;
-  // `null` when the chain policy permits no explorer for this wallet. Not an
-  // error state: see utils/servers/useExplorerLink.
+  // `null` only when the selected explorer template cannot produce a URL.
   explorerUrl: string | null;
   walletAddresses: Set<string>;
   onClose: () => void;
@@ -131,7 +127,7 @@ export default function TransactionDetailPopup({
   const [details, setDetails] = useState<TransactionDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [txLabel, setTxLabel] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,33 +184,7 @@ export default function TransactionDetailPopup({
     return () => {
       cancelled = true;
     };
-  }, [txid, walletId, dispatch, t]);
-
-  useEffect(() => {
-    if (walletId <= 0 || !txid) {
-      setTxLabel(null);
-      return;
-    }
-    let cancelled = false;
-    void getCoinLabel(walletId, 'txid', txid).then((label) => {
-      if (!cancelled) setTxLabel(label);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [walletId, txid]);
-
-  const editTxLabel = useCallback(async () => {
-    if (walletId <= 0) return;
-    const next = window.prompt(
-      'Label this transaction (empty to clear). Personal note only.',
-      txLabel ?? ''
-    );
-    if (next === null) return;
-    await setCoinLabel(walletId, 'txid', txid, next);
-    const cleaned = next.trim();
-    setTxLabel(cleaned ? cleaned.slice(0, 200) : null);
-  }, [walletId, txid, txLabel]);
+  }, [txid, walletId, dispatch, t, retryCount]);
 
   const markedInputs = useMemo(
     () => markWalletParticipants(details?.inputs ?? [], walletAddresses),
@@ -232,24 +202,16 @@ export default function TransactionDetailPopup({
           <div className="text-xs wallet-muted mb-1">
             {t('history.transaction')}
           </div>
-          <div className="font-mono text-sm break-all wallet-text-strong">
+          <button
+            type="button"
+            className="block w-full text-left font-mono text-sm break-all wallet-text-strong underline decoration-[var(--wallet-border)] underline-offset-4 hover:decoration-current"
+            aria-label={t('history.copyTransaction')}
+            onClick={() =>
+              void copyWithFeedback(txid, 'history.transactionCopied')
+            }
+          >
             {txid}
-          </div>
-          {walletId > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-xs wallet-muted">Label</span>
-              <span className="wallet-text-strong">
-                {txLabel || <span className="wallet-muted italic">none</span>}
-              </span>
-              <button
-                type="button"
-                className="text-xs underline wallet-muted hover:wallet-text-strong"
-                onClick={() => void editTxLabel()}
-              >
-                Edit
-              </button>
-            </div>
-          )}
+          </button>
         </div>
 
         <section className="wallet-card p-4">
@@ -337,7 +299,16 @@ export default function TransactionDetailPopup({
             {t('history.loadingDetails')}
           </div>
         ) : error ? (
-          <div className="wallet-card p-4 text-sm wallet-muted">{error}</div>
+          <div className="wallet-card p-4" role="alert">
+            <p className="text-sm wallet-danger-text">{error}</p>
+            <button
+              type="button"
+              className="wallet-btn-secondary mt-3 min-h-[44px] px-4 py-2 text-sm"
+              onClick={() => setRetryCount((count) => count + 1)}
+            >
+              {t('builder.tryAgain')}
+            </button>
+          </div>
         ) : (
           <>
             <Section title={t('history.senders')} rows={markedInputs} />

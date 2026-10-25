@@ -2,6 +2,8 @@ import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import PageHeader from '../components/ui/PageHeader';
 import { selectWalletId } from '../state/slices/walletSlice';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
+import { Network } from '../state/slices/networkSlice';
 import useOutboundTransactions from '../hooks/useOutboundTransactions';
 import EmptyState from '../components/ui/EmptyState';
 import {
@@ -11,7 +13,7 @@ import {
 import WalletScreen from '../components/ui/WalletScreen';
 import { useI18n } from '../i18n/useI18n';
 import type { TranslationKey } from '../i18n/resources';
-import { copyToClipboard } from '../utils/clipboard';
+import { copyWithFeedback } from '../utils/copyWithFeedback';
 
 type Translate = (
   key: TranslationKey,
@@ -38,12 +40,19 @@ export default function Outbox() {
   const navigate = useNavigate();
   const { t } = useI18n();
   const walletId = useSelector(selectWalletId);
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const { outboundTransactions, canClear, reconciling, refresh, release } =
     useOutboundTransactions(walletId);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" className="pt-4">
-      <PageHeader title={t('outbox.title')} compact />
+      <PageHeader
+        title={t('outbox.title')}
+        subtitle={
+          currentNetwork === Network.CHIPNET ? t('network.chipnet') : undefined
+        }
+        compact
+      />
 
       <div className="wallet-card p-4 mt-3">
         <div className="flex items-start justify-between gap-3">
@@ -51,9 +60,11 @@ export default function Outbox() {
             <div className="font-semibold wallet-text-strong">
               {t('outbox.pendingOutgoing')}
             </div>
-            <div className="text-sm wallet-muted mt-1">
-              {t('outbox.description')}
-            </div>
+            {outboundTransactions.length > 0 ? (
+              <div className="text-sm wallet-muted mt-1">
+                {t('outbox.description')}
+              </div>
+            ) : null}
           </div>
           <button
             type="button"
@@ -61,7 +72,7 @@ export default function Outbox() {
               void refresh();
             }}
             disabled={reconciling}
-            className="wallet-btn-secondary px-3 py-2 text-sm shrink-0"
+            className="wallet-btn-secondary min-h-[44px] px-3 py-2 text-sm shrink-0"
           >
             {reconciling ? t('home.syncing') : t('home.sync')}
           </button>
@@ -88,7 +99,7 @@ export default function Outbox() {
                   </div>
                   <div className="text-xs wallet-muted capitalize">
                     {isFusionVerificationPending(record)
-                      ? 'Fusion verification pending'
+                      ? t('outbox.fusionVerificationPending')
                       : record.state.replaceAll('_', ' ')}
                   </div>
                 </div>
@@ -152,7 +163,7 @@ export default function Outbox() {
                     <div>
                       <div className="text-xs wallet-muted">
                         {isFusionVerificationPending(record)
-                          ? 'Verification status'
+                          ? t('outbox.verificationStatus')
                           : t('outbox.lastNetworkIssue')}
                       </div>
                       <div className="wallet-text-strong">
@@ -165,8 +176,8 @@ export default function Outbox() {
                 <div className="mt-4 flex items-center justify-between gap-3">
                   <button
                     type="button"
-                    onClick={() => void copyToClipboard(record.txid)}
-                    className="wallet-btn-secondary px-3 py-2 text-sm"
+                    onClick={() => void copyWithFeedback(record.txid)}
+                    className="wallet-btn-secondary min-h-[44px] px-3 py-2 text-sm"
                   >
                     {t('outbox.copyTxid')}
                   </button>
@@ -176,10 +187,15 @@ export default function Outbox() {
                       void release(record.txid);
                     }}
                     disabled={!canClear(record.txid)}
-                    className="wallet-btn-secondary px-3 py-2 text-sm"
+                    className="wallet-btn-secondary min-h-[44px] px-3 py-2 text-sm"
+                    aria-describedby={
+                      isFusionVerificationPending(record)
+                        ? `outbox-verification-${record.txid}`
+                        : undefined
+                    }
                     title={
                       isFusionVerificationPending(record)
-                        ? 'Wallet sync must verify this Fusion transaction before its inputs can be reused'
+                        ? t('outbox.verificationWaitDescription')
                         : record.state === 'submitted'
                           ? t('outbox.clearPendingTitle')
                           : t('outbox.releaseStaleTitle', {
@@ -190,12 +206,20 @@ export default function Outbox() {
                     }
                   >
                     {isFusionVerificationPending(record)
-                      ? 'Awaiting verification'
+                      ? t('outbox.awaitingVerification')
                       : record.state === 'submitted'
                         ? t('outbox.clearPending')
                         : t('outbox.releaseStale')}
                   </button>
                 </div>
+                {isFusionVerificationPending(record) && (
+                  <p
+                    id={`outbox-verification-${record.txid}`}
+                    className="mt-2 text-xs wallet-muted"
+                  >
+                    {t('outbox.verificationWaitDescription')}
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -206,7 +230,7 @@ export default function Outbox() {
         <button
           type="button"
           onClick={() => navigate(-1)}
-          className="wallet-btn-danger w-full py-3 text-base font-semibold shadow-xl"
+          className="wallet-btn-secondary w-full py-3 text-base font-semibold shadow-xl"
         >
           {t('send.back')}
         </button>

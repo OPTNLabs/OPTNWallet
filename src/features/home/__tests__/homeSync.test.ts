@@ -28,4 +28,14 @@ describe('Home manual sync', () => {
       'force: true'
     );
   });
+
+  it('announces refresh failures and keeps the retry action touch-sized', () => {
+    expect(source).toContain('setRefreshFailed(true)');
+    expect(source).toContain('setRefreshFailed(false)');
+    expect(source).toContain("t('home.refreshFailed')");
+    expect(source).toContain('role="alert"');
+    expect(source).toContain(
+      'wallet-btn-secondary min-h-[44px] px-3 py-1.5 text-sm'
+    );
+  });
 });

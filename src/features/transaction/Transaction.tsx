@@ -409,7 +409,13 @@ const Transaction: React.FC = () => {
     <ErrorBoundary>
       <WalletScreen maxWidthClassName="max-w-xl" scrollable={false}>
         <div className="flex h-full min-h-0 flex-col gap-3">
-          <PageHeader title={t('builder.customSend')} compact />
+          <PageHeader
+            title={t('builder.customSend')}
+            subtitle={
+              currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+            }
+            compact
+          />
 
           <SectionCard className="mb-2 p-3 wallet-step-card">
             <div className="flex items-center justify-between gap-3">

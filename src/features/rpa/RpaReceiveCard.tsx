@@ -5,7 +5,6 @@
 import React, { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { QRCodeSVG } from 'qrcode.react';
-import { Toast } from '@capacitor/toast';
 import { selectRpaEnabled } from '../../state/slices/experimentalSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import {
@@ -17,7 +16,7 @@ import WalletManager from '../../apis/WalletManager/WalletManager';
 import { Network } from '../../state/slices/networkSlice';
 import { selectWalletDerivationPath } from '../../state/slices/walletSlice';
 import { useI18n } from '../../i18n/useI18n';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
 
 type RpaReceiveCardProps = {
   walletId: number;
@@ -71,13 +70,7 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
   if (!rpaEnabled) return null;
 
   const handleCopy = async (text: string) => {
-    try {
-      if (!(await copyToClipboard(text)))
-        throw new Error('clipboard write failed');
-      await Toast.show({ text: t('rpa.copySuccess') });
-    } catch {
-      await Toast.show({ text: t('rpa.copyFailed') });
-    }
+    await copyWithFeedback(text);
   };
 
   const networkLabel =

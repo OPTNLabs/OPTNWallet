@@ -622,7 +622,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
             <button
               type="button"
               onClick={() => setShowProtocolInfo((v) => !v)}
-              className="text-[10px] text-blue-400 underline-offset-2 hover:underline"
+              className="min-h-[44px] px-2 text-left text-[10px] text-blue-400 underline-offset-2 hover:underline"
             >
               {showProtocolInfo ? t('fusion.hide') : t('fusion.howWorks')}
             </button>
@@ -674,7 +674,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
               <button
                 onClick={() => dispatch(setCashFusionEnabled(!enabled))}
                 disabled={anyFusing}
-                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+                className={`relative inline-flex min-h-[44px] min-w-[56px] shrink-0 items-center rounded-full border transition-colors ${
                   enabled
                     ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                     : 'wallet-surface-strong border-[var(--wallet-border)]'
@@ -716,7 +716,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                       type="button"
                       onClick={() => dispatch(setP2pFusionEnabled(false))}
                       disabled={anyFusing}
-                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
+                      className={`relative inline-flex min-h-[44px] min-w-[56px] shrink-0 items-center rounded-full border transition-colors ${
                         !p2pFusionEnabled
                           ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                           : 'wallet-surface-strong border-[var(--wallet-border)]'
@@ -743,7 +743,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                       type="button"
                       onClick={() => dispatch(setP2pFusionEnabled(true))}
                       disabled={anyFusing}
-                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
+                      className={`relative inline-flex min-h-[44px] min-w-[56px] shrink-0 items-center rounded-full border transition-colors ${
                         p2pFusionEnabled
                           ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                           : 'wallet-surface-strong border-[var(--wallet-border)]'

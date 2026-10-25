@@ -92,6 +92,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
   );
+  const walletSyncStatus = useSelector(
+    (state: RootState) => state.utxos.walletSyncStatus
+  );
   const sessionGeneration = useSelector(
     (state: RootState) => state.wallet_id.sessionGeneration ?? 0
   );
@@ -113,10 +116,18 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   );
   const unit = unitFor(currentNetwork);
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const homeConnect = useHomeConnect();
   const totalBch = (totalBalance + stealthSats) / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
+  const syncNotice = fetchingUTXOsRedux
+    ? null
+    : walletSyncStatus === 'unverified'
+      ? t('home.balanceNotVerified')
+      : walletSyncStatus === 'stale' || walletSyncStatus === 'unavailable'
+        ? t('home.balanceMayBeOutdated')
+        : null;
   // Sort by height / unconfirmed — not array index (Electrum merge order).
   const recentTransactions = useMemo(
     () => takeRecentTransactions(transactions, 3),
@@ -131,6 +142,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     if (!walletSession) return;
 
     dispatch(setFetchingUTXOs(true));
+    setRefreshFailed(false);
 
     try {
       await ElectrumService.ensureFreshConnection();
@@ -141,7 +153,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
       const walletUtxos = await fetchActiveWalletUtxos(
         walletSession,
         undefined,
-        { discover: false, force: true }
+        { discover: false, force: true, trackWalletSync: true }
       );
       if (!walletUtxos) return;
       if (import.meta.env.DEV) {
@@ -216,6 +228,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
         });
       });
     } catch (error) {
+      setRefreshFailed(true);
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
     } finally {
       // Always clear Syncing for this click — even if the session ended mid-flight.
@@ -235,13 +248,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
         <PageHeader
           title={t('home.title')}
           subtitle={
-            viewerOnly
-              ? currentNetwork === Network.CHIPNET
-                ? `${t('assets.chipnet')} - Browser viewer`
-                : 'Browser viewer'
-              : currentNetwork === Network.CHIPNET
-                ? t('assets.chipnet')
-                : undefined
+            currentNetwork === Network.CHIPNET
+              ? t('network.chipnet')
+              : undefined
           }
           compact
         />
@@ -271,8 +280,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                   <button
                     type="button"
                     onClick={handleRefresh}
-                    className="wallet-btn-secondary px-3 py-1.5 text-sm"
+                    className="wallet-btn-secondary min-h-[44px] px-3 py-1.5 text-sm"
                     disabled={fetchingUTXOsRedux}
+                    aria-busy={fetchingUTXOsRedux}
                   >
                     {fetchingUTXOsRedux ? t('home.syncing') : t('home.sync')}
                   </button>
@@ -322,6 +332,28 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                 <FaBitcoin className="text-2xl" />
               </button>
             </div>
+            {syncNotice && (
+              <div
+                className="mt-2 text-xs wallet-muted"
+                role="status"
+                aria-live="polite"
+              >
+                <span>{syncNotice}</span>
+                {walletSyncStatus !== 'unverified' && (
+                  <a className="ml-1 underline" href="#/settings?panel=server">
+                    {t('home.serverSettings')}
+                  </a>
+                )}
+              </div>
+            )}
+            {refreshFailed && !fetchingUTXOsRedux && (
+              <p
+                className="mt-2 text-xs text-[var(--wallet-danger-text)]"
+                role="alert"
+              >
+                {t('home.refreshFailed')}
+              </p>
+            )}
           </SectionCard>
 
           <SectionCard className="shrink-0 p-3">
@@ -433,7 +465,14 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                       }
                       compact
                       onClick={() =>
-                        navigate(`/transactions/${currentWalletId}`)
+                        navigate(`/transactions/${currentWalletId}`, {
+                          state: {
+                            openTransaction: {
+                              txid: tx.tx_hash,
+                              height: tx.height,
+                            },
+                          },
+                        })
                       }
                     />
                   );

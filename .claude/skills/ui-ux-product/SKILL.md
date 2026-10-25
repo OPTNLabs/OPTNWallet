@@ -137,6 +137,35 @@ Never hide important wallet state. Users should be able to tell whether the wall
 - Failed
 - Waiting for confirmation
 
+For sensitive key views, use explicit progressive disclosure rather than hidden
+gestures. Show a clearly labelled private-key action only when the active wallet
+can reveal keys locally; require the existing wallet authentication/reveal
+boundary before loading the key; mask sensitive values in the default display;
+keep copy and QR actions explicit; never log the key or include it in
+notifications; zeroize raw key bytes as soon as encoding is complete; and show a
+wallet-owned error with recovery guidance when retrieval fails. Watch-only and
+otherwise non-signing wallets must not expose the action.
+
+Reset the sensitive-key unlock, tap counter, loaded key value, and selected view
+on every navigation entry to Receive, including when the route remains mounted
+across location changes. Returning to Receive must always begin at the masked
+address view and require the approved ten PubKey taps again. Only the PubKey
+control advances that counter; the PrivKey tab cannot bypass it.
+Keep the PrivKey tab absent from the interface until the tenth PubKey tap;
+showing a disabled or nonfunctional PrivKey tab still reveals it too early.
+Treat the counter as the authorization state: private-key rendering, loading,
+copying, and QR generation must fail closed unless the counter is at least 10.
+
+When the approved receive flow uses the existing ten-tap reveal boundary, keep
+that exact interaction, show the private key masked by default, and require an
+explicit user action to copy or inspect it. Never replace the masked state with
+an automatic full reveal or expose the value in screenshots, logs, toasts, or
+analytics.
+From the fifth PubKey tap through the ninth, provide a short wallet-owned
+progress notification with the remaining tap count so the deliberate reveal
+boundary is understandable. Hide that notice when the tenth tap unlocks the
+view, and never include the private-key value in its message.
+
 Mainnet should be the default when appropriate, but the network choice must remain clear and reversible.
 
 Do not make users infer whether a balance of zero means "no funds" or "the wallet has not synced yet."
@@ -253,3 +282,37 @@ required platform workflows are demonstrated.
 The work is successful when the wallet feels easier to understand, requires fewer unnecessary decisions, communicates state clearly, and remains maintainable through modular, reusable code.
 
 When in doubt, choose the simpler interface, the clearer label, the shallower flow, and the more explicit user feedback.
+
+## Basic interaction review
+
+Inspect the approved screen image and existing theme tokens before changing layout.
+Preserve useful actions during refactors, including transaction explorer links.
+Review all affected routes, panels, menus and dialogs, including desktop overrides
+and built-in apps. Record source inspection separately from rendered and native evidence.
+
+Every user-triggered copy must check the clipboard result and provide visible,
+accessible success or failure feedback. Never include copied contents in notifications
+or logs. Keep clipboard operations separate from notification presentation; a failed
+notification does not mean a successful copy failed. Native transient toasts are
+appropriate for mobile feedback. Destructive approvals stay in wallet-owned dialogs.
+
+Use optional contextual help and progressive disclosure without hiding common actions.
+Unavailable actions need an explanation and a recovery destination. Explorer links
+must obey shared Rust privacy/network policy; never restore access by bypassing it.
+Use consistent typography, spacing and button hierarchy from existing components,
+44px mobile targets, visible keyboard focus, and accessible status announcements.
+Preparing a review must not say that funds are being sent or confirmed.
+
+For visual changes, inspect rendered mobile and desktop layouts, dialog layering,
+safe areas, keyboard focus and long translated labels. Verify native notifications
+in a native package. Record unchecked surfaces as gaps in the existing UX plan and
+requirement ledger; source inspection alone cannot establish usability or parity.
+
+Startup gates must retain a themed native splash or branded web startup surface
+until the runtime is ready. Do not expose a white WebView between splash dismissal
+and React mount. If initialization has multiple asynchronous gates, show short
+phase labels such as preparing, loading security, and opening the wallet; keep
+retry and failure states explicit.
+
+References: [Progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/)
+and [Accessible status messages](https://www.w3.org/WAI/WCAG22/Understanding/status-messages.html).

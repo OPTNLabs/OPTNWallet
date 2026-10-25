@@ -65,11 +65,13 @@ const CashTokenView: React.FC<CashTokenViewProps> = ({
           className="wallet-input p-2 w-full break-words whitespace-normal"
         />
         <button
+          type="button"
           onClick={scanBarcode}
-          className="ml-2 wallet-btn-primary p-2"
+          className="ml-2 flex min-h-[44px] min-w-[44px] items-center justify-center wallet-btn-primary p-2"
+          aria-label={t('builder.scanQrCode')}
           title={t('builder.scanQrCode')}
         >
-          <FaCamera />
+          <FaCamera aria-hidden="true" />
         </button>
       </div>
       <div className="mb-2">
