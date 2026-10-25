@@ -337,6 +337,7 @@ const TransactionHistory: React.FC = () => {
             txid={selectedTx.txid}
             txHeight={selectedTx.height}
             explorerUrl={explorer.tx(currentNetwork, selectedTx.txid)}
+            explorerReason={explorer.reason}
             walletAddresses={walletAddresses}
             onClose={() => setSelectedTx(null)}
           />

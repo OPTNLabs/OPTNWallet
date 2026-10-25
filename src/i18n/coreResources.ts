@@ -764,6 +764,7 @@ export const coreTranslations = {
     'history.fee': 'Fee',
     'history.timestamp': 'Timestamp',
     'history.openExplorer': 'Open in explorer',
+    'history.openExplorerSettings': 'Open explorer settings',
     'history.copyTransaction': 'Copy transaction ID',
     'history.transactionCopied': 'Transaction ID copied',
     'history.loadingDetails': 'Loading transaction details…',
@@ -854,7 +855,9 @@ export const coreTranslations = {
     'settingsRows.nostrDescription': 'Private messages · Identity · Relay pool',
     'settingsRows.server': 'Servers',
     'settingsRows.serverDescription':
-      'Electrum · Block explorer · Transaction fees',
+      'Electrum connections and transaction fees',
+    'settingsRows.explorer': 'Explorer',
+    'settingsRows.explorerDescription': 'Choose where transaction links open',
     'settingsRows.console': 'Console',
     'settingsRows.consoleDescription': 'App log · Electrum RPC',
     'settingsRows.experimental': 'Experimental Features',

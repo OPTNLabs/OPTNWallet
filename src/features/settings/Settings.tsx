@@ -13,6 +13,7 @@ import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { NetworkSettings } from './NetworkSettings';
 import { DerivationPathSettings } from './DerivationPathSettings';
 import { ServerSettings } from './ServerSettings';
+import ExplorerSettings from './ExplorerSettings';
 import { ConsolePanel } from './ConsolePanel';
 import { ExperimentalSettings } from './ExperimentalSettings';
 import { NostrSettings } from '../nostr/NostrSettings';
@@ -141,6 +142,7 @@ const Settings: React.FC = () => {
       'rebuild-wallet': 'settingsRows.rebuildWallet',
       nostr: 'settingsRows.nostr',
       server: 'settingsRows.server',
+      explorer: 'settingsRows.explorer',
       console: 'settingsRows.console',
       experimental: 'settingsRows.experimental',
       addons: 'settingsRows.addons',
@@ -170,6 +172,7 @@ const Settings: React.FC = () => {
       'rebuild-wallet': 'settingsRows.rebuildWalletDescription',
       nostr: 'settingsRows.nostrDescription',
       server: 'settingsRows.serverDescription',
+      explorer: 'settingsRows.explorerDescription',
       console: 'settingsRows.consoleDescription',
       experimental: 'settingsRows.experimentalDescription',
       addons: 'settingsRows.addonsDescription',
@@ -299,6 +302,8 @@ const Settings: React.FC = () => {
         return <DerivationPathSettings />;
       case 'server':
         return <ServerSettings backRef={serverBack} />;
+      case 'explorer':
+        return <ExplorerSettings />;
       case 'console':
         return <ConsolePanel />;
       case 'experimental':
@@ -346,6 +351,8 @@ const Settings: React.FC = () => {
         return t('settingsPanels.rebuildWallet');
       case 'server':
         return desktop ? 'Network' : t('settingsPanels.server');
+      case 'explorer':
+        return t('settingsRows.explorer');
       case 'wallet-info':
         return t('settingsPanels.walletInfo');
       case 'birthday':

@@ -8,6 +8,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -102,4 +103,29 @@ it('copies the transaction ID from the header', async () => {
     'b'.repeat(64),
     'history.transactionCopied'
   );
+});
+
+it('explains unavailable explorer access and links to explorer settings', async () => {
+  mocks.fetchDetails.mockResolvedValue({
+    inputs: [],
+    outputs: [],
+    confirmations: 0,
+    height: 0,
+  });
+  render(
+    <MemoryRouter>
+      <TransactionDetailPopup
+        txid={'c'.repeat(64)}
+        txHeight={0}
+        explorerUrl={null}
+        explorerReason="Explorer access is unavailable."
+        walletAddresses={new Set()}
+        onClose={vi.fn()}
+      />
+    </MemoryRouter>
+  );
+
+  expect(
+    await screen.findByRole('link', { name: 'history.openExplorerSettings' })
+  ).toHaveAttribute('href', '/settings?panel=explorer');
 });

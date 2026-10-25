@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { Link } from 'react-router-dom';
 import Popup from '../../components/transaction/Popup';
 import StatusChip from '../../components/ui/StatusChip';
 import type {
@@ -21,6 +22,7 @@ type Props = {
   txHeight: number;
   // `null` only when the selected explorer template cannot produce a URL.
   explorerUrl: string | null;
+  explorerReason?: string | null;
   walletAddresses: Set<string>;
   onClose: () => void;
 };
@@ -118,6 +120,7 @@ export default function TransactionDetailPopup({
   txid,
   txHeight,
   explorerUrl,
+  explorerReason,
   walletAddresses,
   onClose,
 }: Props) {
@@ -289,6 +292,16 @@ export default function TransactionDetailPopup({
                 >
                   {t('history.openExplorer')}
                 </a>
+              ) : explorerReason ? (
+                <p className="text-sm wallet-muted" role="status">
+                  {explorerReason}{' '}
+                  <Link
+                    to="/settings?panel=explorer"
+                    className="underline wallet-text-strong"
+                  >
+                    {t('history.openExplorerSettings')}
+                  </Link>
+                </p>
               ) : null}
             </div>
           </div>

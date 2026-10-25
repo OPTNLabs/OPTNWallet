@@ -9,16 +9,11 @@ import {
   getPreferredStorage,
 } from '../../utils/browserStorage';
 import {
-  selectExplorerId,
-  selectExplorerCustom,
-  setExplorerId,
-  setExplorerCustom,
   selectFeeMode,
   selectCustomFeeSatPerByte,
   setFeeMode,
   setCustomFeeSatPerByte,
 } from '../../state/slices/preferencesSlice';
-import { getExplorerPresets } from '../../utils/servers/explorers';
 import {
   getUserServers,
   addUserServer,
@@ -77,12 +72,8 @@ export const ServerSettings: React.FC<{
   const currentNetwork = useSelector(selectCurrentNetwork);
   const walletId = useSelector(selectWalletId);
   const defaultServers = getElectrumServers(currentNetwork);
-  const explorerId = useSelector(selectExplorerId);
-  const explorerCustom = useSelector(selectExplorerCustom);
   const feeMode = useSelector(selectFeeMode);
   const customFeeSatPerByte = useSelector(selectCustomFeeSatPerByte);
-  const [customTx, setCustomTx] = useState(explorerCustom.tx);
-  const [customAddr, setCustomAddr] = useState(explorerCustom.address);
 
   const [autoMode, setAutoMode] = useState(true);
   const [customServer, setCustomServer] = useState('');
@@ -263,58 +254,6 @@ export const ServerSettings: React.FC<{
     }
   };
 
-  const explorerSettings = (
-    <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
-      <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
-        {t('server.blockExplorer')}
-      </p>
-      <p className="text-xs wallet-muted">{t('server.explorerDescription')}</p>
-      <select
-        value={explorerId}
-        onChange={(e) => dispatch(setExplorerId(e.target.value))}
-        className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-      >
-        {getExplorerPresets().map((e) => (
-          <option key={e.id} value={e.id}>
-            {e.label}
-          </option>
-        ))}
-        <option value="custom">{t('server.custom')}</option>
-      </select>
-
-      {explorerId === 'custom' && (
-        <div className="flex flex-col gap-2">
-          <input
-            type="text"
-            value={customTx}
-            onChange={(e) => setCustomTx(e.target.value)}
-            placeholder={t('server.txUrlPlaceholder')}
-            className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-          />
-          <input
-            type="text"
-            value={customAddr}
-            onChange={(e) => setCustomAddr(e.target.value)}
-            placeholder={t('server.addressUrlPlaceholder')}
-            className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-          />
-          <p className="text-[10px] wallet-muted">
-            {t('server.placeholderHelp')}
-          </p>
-          <button
-            onClick={() =>
-              dispatch(setExplorerCustom({ tx: customTx, address: customAddr }))
-            }
-            disabled={!customTx.includes('{txid}')}
-            className="self-start rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
-          >
-            {t('server.saveCustom')}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-
   const feeSettings = (
     <>
       {/* Transaction fee */}
@@ -370,7 +309,6 @@ export const ServerSettings: React.FC<{
     return (
       <ChainSourcesSettings
         initialPage={initialPage}
-        explorerSettings={explorerSettings}
         feeSettings={feeSettings}
         fusionSettings={<CashFusionSettings variant="servers" />}
         nostrSettings={<NostrSettings key={walletId} />}
@@ -594,8 +532,6 @@ export const ServerSettings: React.FC<{
         </div>
         {addError && <p className="text-[10px] text-red-400">{addError}</p>}
       </div>
-
-      {!desktop && explorerSettings}
 
       {feeSettings}
     </div>

@@ -25,7 +25,7 @@ export type ExplorerLinks = {
 
 const REASONS: Record<string, string> = {
   'user-owned-only':
-    'Explorer links are off because this wallet is set to use only your own infrastructure. Add your own explorer in Settings → Servers to turn them back on.',
+    'Explorer links are unavailable because this wallet is restricted to your own infrastructure. Choose an allowed explorer in Settings → Explorer, or change the network privacy policy.',
   disabled: 'Explorer links are turned off.',
 };
 
@@ -35,7 +35,7 @@ export function useExplorerLink(): ExplorerLinks {
 
   return useMemo(() => {
     const tx = (network: Network, txid: string) =>
-      buildTxUrl(choice, network, txid, 'auto');
+      buildTxUrl(choice, network, txid, policy);
     const address = (network: Network, value: string) =>
       buildAddressUrl(choice, network, value, policy);
     const resolved = explorerPolicyFor(policy);
