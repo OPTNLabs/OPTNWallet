@@ -1811,3 +1811,12 @@ deliberate confirmation before an authorized broadcast boundary.
 Prettier, and `git diff --check` also passed. Rendered mobile/desktop review,
 packaged native behavior, hardware approval, and live peer evidence remain
 open. No signing, spending, or broadcast was performed.
+
+### 2026-10-25: iOS startup configuration reconciliation
+
+`npm run capacitor:sync:ios` regenerated the ignored iOS Capacitor config from
+the canonical `capacitor.config.ts`: the splash now uses `#0d2a1fff`, has no
+fixed-duration auto-hide, and remains visible until the React startup path
+mounts. The same sync added the installed `CapacitorApp` pod entry to the
+tracked iOS Podfile. Sync completed successfully; CocoaPods and Xcode were not
+available, so native compilation and device launch timing remain unverified.

@@ -1186,6 +1186,13 @@ Prettier, and `git diff --check` passed. Rendered compact layouts, packaged
 native notifications, hardware approval, and live connector peers remain
 verification gaps; no signing, spending, or broadcast evidence was produced.
 
+The native startup configuration was reconciled from the canonical
+`capacitor.config.ts` with `npm run capacitor:sync:ios`. The generated iOS
+configuration now uses the wallet green splash, keeps the splash visible until
+React is ready, and includes the installed Capacitor App plugin. CocoaPods and
+Xcode are unavailable in this environment, so the native compile and launch
+timing remain an explicit verification gap.
+
 ### Verification continuation — 2026-10-25
 
 The Arabic fallback catalog now includes the newly surfaced preview, explorer
