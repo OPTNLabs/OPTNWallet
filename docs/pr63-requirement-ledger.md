@@ -1699,3 +1699,25 @@ lint, changed-file Prettier, `git diff --check`, standard production build,
 and `VITE_APP_SURFACE=desktop npm run build:web` passed. These are local
 source/component and React-bundle checks. Rendered mobile/native, live-chain,
 hardware, and packaged evidence remain unavailable. FundMe remains excluded.
+
+### 2026-10-24: Paryon exact transaction review and dev-cache follow-up
+
+Revision `bc0456d91` prepares Paryon Borrow and Stake transactions before the
+final confirmation. The review now retains the exact raw transaction and shows
+the computed network fee, wallet-input total, output total, and byte length;
+confirmation broadcasts those retained bytes. Preparation failures remain in
+the review with an explicit “No transaction was sent” message. Redeem remains
+preview-only. The pure prepared-transaction accounting regression passed **1
+file / 2 tests**, the focused Paryon suite passed **5 files / 22 tests**, and
+the built-in-app suite passed **36 files / 157 tests**.
+
+`npm run typecheck:core`, `npm run lint:core`, targeted ESLint, Prettier,
+`git diff --check`, `npm run build`, and the desktop web build passed. The dev
+script now starts Vite with `--force` after the attached stale optimizer-cache
+module failures; a fresh forced server returned HTTP 200 for the previously
+failed source modules. The browser-extension listener/session warnings and
+TokenIndex BCMR 404s remain external or expected unavailable-metadata states;
+the BCMR service keeps cached metadata and falls back without treating those
+404s as wallet failures. Rendered, packaged, live contract, hardware, and
+native confirmation evidence remain unavailable. FundMe was intentionally
+excluded.
