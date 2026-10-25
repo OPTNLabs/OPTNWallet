@@ -1750,3 +1750,30 @@ unverified. FundMe was not touched.
 The follow-up full suites also passed `npm run test:ui` (**30 files / 79
 tests**) and `npm run test:apps` (**36 files / 157 tests**); the standard and
 desktop web builds passed on the same checkout.
+
+### 2026-10-25: connector, Cauldron and history preview tightening
+
+Revision `1b7d7949d` on `codex/ux-basics-and-workflow` keeps FundMe out of scope
+and tightens the remaining transaction-preview surfaces. WizardConnect now uses
+one collapsed technical-details disclosure for inputs, outputs, scripts and
+CashToken identity, matching WalletConnect's progressive disclosure while
+leaving the verified wallet effect and whole-transaction totals visible. The
+review still distinguishes sign-and-return from broadcast behavior.
+
+Cauldron's separate quote-details overlay was removed from the normal path so a
+fresh quote leads directly to one final review. The review retains pay/receive,
+minimum receive, network fee, LP fee, route/risk warnings and the existing
+rebuild/stale-liquidity checks. Technical route and market-depth details remain
+available without another navigation step.
+
+History cards now lazily hydrate visible transactions from the existing
+Electrum verbose-details cache/in-flight requests and show a signed wallet BCH
+effect only when owned inputs or outputs can be matched. Unknown ownership is
+left blank. A pure helper regression covers outgoing change, incoming value and
+unknown ownership.
+
+Focused checks passed **3 files / 10 tests** for the new helper and connector /
+history UI paths. `npm run typecheck:core`, `npm run lint:core`, Prettier and
+`git diff --check` passed. No live connector, packaged native, hardware,
+mainnet signing/spending/broadcast, or push evidence was produced. The browser
+Vite config warning remains the repository's existing non-fatal warning.

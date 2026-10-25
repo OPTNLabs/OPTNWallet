@@ -1129,3 +1129,30 @@ All proposed fixes must preserve explicit transaction authorization and must not
 treat component tests or React builds as proof of native, live-chain or release
 readiness. The full affected flow inventory remains in this plan; inaccessible
 peer/hardware/native states are verification gaps rather than passes.
+
+### Transaction-preview follow-up — 2026-10-25
+
+Revision `1b7d7949d` on `codex/ux-basics-and-workflow` continues the in-scope
+preview review while leaving FundMe untouched. WizardConnect now groups inputs,
+outputs, token identity and scripts under one collapsed “Technical transaction
+details” disclosure, matching WalletConnect's progressive disclosure while
+keeping the whole-transaction totals and verified wallet effect prominent.
+Cauldron's optional quote-details overlay was removed from the healthy path; the
+composer now leads directly to the final review, where pay/receive, minimum
+receive, network fee, LP fee and risk acknowledgement remain visible. Route and
+market-depth information stays available in the review's technical sections.
+
+Transaction history cards now hydrate only the visible page from cached/in-flight
+verbose Electrum details and derive wallet-owned outputs minus wallet-owned
+inputs. A signed BCH effect is shown when ownership is proven; unresolved
+participants remain undisclosed rather than appearing as a misleading zero. The
+pure derivation helper covers outgoing change, incoming payments and unknown
+ownership.
+
+Focused verification passed the transaction-effect helper and connector/history
+UI regressions: **3 files / 10 tests**. `npm run typecheck:core`,
+`npm run lint:core`, Prettier and `git diff --check` also passed. The repository's
+existing UI Vite config warning remains non-fatal. Live connector peers,
+packaged native dialogs, hardware confirmation and rendered compact Cauldron
+screens remain explicit verification gaps; no signing, spending, broadcast or
+push was performed. FundMe remains excluded by user direction.
