@@ -1208,6 +1208,10 @@ by history cards, so confirmed participant data also shows the wallet's net BCH
 movement. When no wallet-owned input or output can be matched, the value stays
 unknown rather than displaying zero.
 
+Visible-page history hydration now isolates verbose Electrum failures per
+transaction. A failed lookup leaves that card's effect unknown without
+rejecting peer lookups or producing an unhandled browser rejection.
+
 ### Verification continuation — 2026-10-25
 
 The Arabic fallback catalog now includes the newly surfaced preview, explorer

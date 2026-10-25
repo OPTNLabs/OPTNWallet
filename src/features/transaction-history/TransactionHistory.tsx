@@ -15,7 +15,10 @@ import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import TransactionDetailPopup from './TransactionDetailPopup';
 import QuantumrootTrackingService from '../../services/QuantumrootTrackingService';
 import WalletScreen from '../../components/ui/WalletScreen';
-import type { TransactionHistoryItem } from '../../types/types';
+import type {
+  TransactionDetails,
+  TransactionHistoryItem,
+} from '../../types/types';
 import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
 import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
 import { FusionBadge } from '../../components/FusionBadge';
@@ -177,7 +180,13 @@ const TransactionHistory: React.FC = () => {
     let cancelled = false;
     void Promise.all(
       paginatedTransactions.map(async (tx) => {
-        const details = await ElectrumService.getTransactionDetails(tx.tx_hash);
+        let details: TransactionDetails | null = null;
+        try {
+          details = await ElectrumService.getTransactionDetails(tx.tx_hash);
+        } catch {
+          // One unavailable verbose lookup must not reject the whole visible
+          // page. Leave this card's effect unknown and keep hydrating peers.
+        }
         const effect = details
           ? deriveWalletTransactionEffect(details, walletAddresses)
           : null;

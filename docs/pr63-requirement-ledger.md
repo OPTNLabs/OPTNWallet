@@ -1832,3 +1832,7 @@ system-browser adapter.
 Transaction details now show the same verified wallet-owned BCH effect as the
 history card, with unknown ownership remaining explicit. The detail regression
 passed **1 file / 4 tests**.
+
+Visible history hydration now catches each verbose Electrum lookup separately;
+one failed transaction no longer rejects the page-wide effect hydration or
+surfaces an unhandled rejection.
