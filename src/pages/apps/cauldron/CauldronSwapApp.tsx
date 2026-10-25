@@ -64,6 +64,7 @@ import {
   type NormalizedCauldronToken,
 } from '../../../services/cauldron';
 import { classifyCauldronQuoteFailure } from '../../../services/cauldron/quoteFailure';
+import { deriveCauldronWalletEffect } from '../../../services/cauldron/walletEffect';
 import type { UTXO } from '../../../types/types';
 import {
   parseBchInputToSats,
@@ -2997,15 +2998,35 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         .filter((value): value is string => Boolean(value))
         .join(' + ')
     : null;
-  const merchantAdditionalBchSats =
+  const merchantWalletEffect =
     merchantPaymentProposal && quote
-      ? quote.built.walletInputs.reduce(
-          (total, input) =>
-            total +
-            (!input.utxo.token
-              ? parseSatoshis(input.utxo.amount ?? input.utxo.value ?? 0)
-              : 0n),
-          0n
+      ? deriveCauldronWalletEffect(quote.built, selectedTokenId)
+      : null;
+  const merchantNetBchSats = merchantWalletEffect?.netBchDebitSats ?? null;
+  const merchantNetTokenAtomic =
+    merchantWalletEffect?.netTokenDebitAtomic ?? null;
+  const merchantBchEffectLabel =
+    merchantNetBchSats != null && merchantNetBchSats < 0n
+      ? 'Wallet BCH credit'
+      : 'Wallet BCH debit';
+  const merchantBchEffectDisplay =
+    merchantNetBchSats != null
+      ? formatCompactBchAmount(
+          merchantNetBchSats < 0n ? -merchantNetBchSats : merchantNetBchSats
+        )
+      : null;
+  const merchantTokenEffectLabel =
+    merchantNetTokenAtomic != null && merchantNetTokenAtomic < 0n
+      ? `Wallet ${effectiveSymbol} credit`
+      : `Wallet ${effectiveSymbol} debit`;
+  const merchantTokenEffectDisplay =
+    merchantNetTokenAtomic != null
+      ? formatTokenDisplayAmount(
+          merchantNetTokenAtomic < 0n
+            ? -merchantNetTokenAtomic
+            : merchantNetTokenAtomic,
+          effectiveDecimals,
+          effectiveSymbol
         )
       : null;
 
@@ -5781,17 +5802,33 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                           {formatCompactBchAmount(quote.estimatedFeeSatoshis)}
                         </span>
                       </div>
-                      {merchantTerms?.incomingAsset === 'token' &&
-                      merchantAdditionalBchSats != null ? (
+                      {merchantBchEffectDisplay ? (
                         <div className="flex items-center justify-between gap-3">
                           <span className="wallet-muted">
-                            Additional BCH input
+                            {merchantBchEffectLabel}
                           </span>
                           <span className="wallet-text-strong">
-                            {formatCompactBchAmount(merchantAdditionalBchSats)}
+                            {merchantBchEffectDisplay}
                           </span>
                         </div>
                       ) : null}
+                      {merchantNetTokenAtomic != null &&
+                      merchantNetTokenAtomic !== 0n &&
+                      merchantTokenEffectDisplay ? (
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="wallet-muted">
+                            {merchantTokenEffectLabel}
+                          </span>
+                          <span className="wallet-text-strong">
+                            {merchantTokenEffectDisplay}
+                          </span>
+                        </div>
+                      ) : null}
+                      <div className="text-xs wallet-muted">
+                        Net wallet effects are calculated after change and
+                        include the network fee and BCH attached to token
+                        outputs.
+                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -6743,15 +6780,32 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                       {formatCompactBchAmount(quote.estimatedFeeSatoshis)}
                     </span>
                   </div>
-                  {merchantTerms.incomingAsset === 'token' &&
-                  merchantAdditionalBchSats != null ? (
+                  {merchantBchEffectDisplay ? (
                     <div className="mt-2 flex items-center justify-between gap-3">
-                      <span className="wallet-muted">Additional BCH input</span>
+                      <span className="wallet-muted">
+                        {merchantBchEffectLabel}
+                      </span>
                       <span className="font-medium wallet-text-strong">
-                        {formatCompactBchAmount(merchantAdditionalBchSats)}
+                        {merchantBchEffectDisplay}
                       </span>
                     </div>
                   ) : null}
+                  {merchantNetTokenAtomic != null &&
+                  merchantNetTokenAtomic !== 0n &&
+                  merchantTokenEffectDisplay ? (
+                    <div className="mt-2 flex items-center justify-between gap-3">
+                      <span className="wallet-muted">
+                        {merchantTokenEffectLabel}
+                      </span>
+                      <span className="font-medium wallet-text-strong">
+                        {merchantTokenEffectDisplay}
+                      </span>
+                    </div>
+                  ) : null}
+                  <div className="mt-2 text-xs wallet-muted">
+                    Net wallet effects are calculated after change and include
+                    the network fee and BCH attached to token outputs.
+                  </div>
                 </>
               ) : (
                 <div className="flex items-center justify-between gap-3">
@@ -7085,14 +7139,23 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     : `${formatTokenAmount(merchantPaymentProposal.route.summary.supply, effectiveDecimals)} ${effectiveSymbol}`}
                 </span>
               </div>
-              {merchantTerms?.incomingAsset === 'token' &&
-              merchantTerms.merchantBchAmountSatoshis > 0n ? (
+              {merchantBchEffectDisplay ? (
                 <div className="flex items-center justify-between gap-3">
-                  <span className="wallet-muted">Additional BCH input</span>
+                  <span className="wallet-muted">{merchantBchEffectLabel}</span>
                   <span className="text-right font-medium wallet-text-strong">
-                    {merchantAdditionalBchSats != null
-                      ? formatCompactBchAmount(merchantAdditionalBchSats)
-                      : 'Required for fees'}
+                    {merchantBchEffectDisplay}
+                  </span>
+                </div>
+              ) : null}
+              {merchantNetTokenAtomic != null &&
+              merchantNetTokenAtomic !== 0n &&
+              merchantTokenEffectDisplay ? (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="wallet-muted">
+                    {merchantTokenEffectLabel}
+                  </span>
+                  <span className="text-right font-medium wallet-text-strong">
+                    {merchantTokenEffectDisplay}
                   </span>
                 </div>
               ) : null}
