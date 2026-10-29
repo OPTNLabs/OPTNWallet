@@ -16,6 +16,7 @@ type ReviewCardProps = {
   open: boolean;
   review: ReviewState;
   recipient: string;
+  networkLabel?: string;
   assetType: AssetType;
   amountBch: string;
   fiatSummary: { amountUsd: number; feeUsd: number; totalUsd: number };
@@ -38,6 +39,7 @@ export function ReviewCard({
   open,
   review,
   recipient,
+  networkLabel,
   assetType,
   amountBch,
   fiatSummary,
@@ -424,6 +426,20 @@ export function ReviewCard({
               <div className="wallet-kicker">{t('send.summary')}</div>
             </div>
             <div className="text-sm space-y-2">
+              <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-3 py-2.5">
+                <div className="text-xs font-semibold wallet-text-strong">
+                  {t('send.walletEffect')}
+                </div>
+                <div className="mt-1 text-xs wallet-muted">
+                  {t('send.walletEffectDescription')}
+                </div>
+              </div>
+              {networkLabel ? (
+                <div className="wallet-stat-row">
+                  <span className="font-medium">{t('send.network')}</span>
+                  <span className="wallet-text-strong">{networkLabel}</span>
+                </div>
+              ) : null}
               <div className="wallet-stat-row">
                 <span className="font-medium">{t('send.to')}</span>
                 <span

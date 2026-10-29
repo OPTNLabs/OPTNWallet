@@ -50,7 +50,7 @@ export default function ConnectorTransactionSummary({
           </dd>
         </div>
         <div className="flex items-center justify-between gap-3">
-          <dt className="wallet-muted">{t('txReview.estimatedNetworkFee')}</dt>
+          <dt className="wallet-muted">{t('txReview.requestFee')}</dt>
           <dd className="font-medium wallet-text-strong">
             {formatBch(preview.fee)}
           </dd>

@@ -459,6 +459,9 @@ export const coreTranslations = {
     'receive.optional': 'Optional',
     'receive.copyBip21': 'Copy BIP21 URI',
     'receive.copyAddress': 'Copy address',
+    'receive.shareAddress': 'Share address',
+    'receive.receiveGuidance':
+      'Give this address to the person paying you. Nothing is sent from your wallet.',
     'receive.clear': 'Clear',
     'receive.bip21Help':
       'When enabled, the QR and copied payload use a BIP21-style `bitcoincash:` URI so compatible wallets can autofill request details.',
@@ -472,6 +475,8 @@ export const coreTranslations = {
       'No saved addresses are available in this wallet yet.',
     'receive.copied': 'Copied to clipboard!',
     'receive.addressCopied': 'Address copied',
+    'receive.addressShared': 'Address ready to share',
+    'receive.shareFailed': 'Sharing is unavailable. Copy the address instead.',
     'receive.paymentRequestCopied': 'Payment request copied',
     'receive.valueCopied': 'Value copied',
     'receive.copyFailed': 'Failed to copy.',
@@ -563,7 +568,12 @@ export const coreTranslations = {
     'send.reset': 'Reset',
     'send.back': 'Back',
     'send.reviewTitle': 'Review Transaction',
-    'send.verifySlide': 'Verify details and slide to send.',
+    'send.verifySlide':
+      'Check who receives the payment, what leaves your wallet, and the network before signing.',
+    'send.network': 'Network',
+    'send.walletEffect': 'Wallet effect',
+    'send.walletEffectDescription':
+      'Review the amount and fee together. Nothing is signed until you confirm.',
     'send.summary': 'Summary',
     'send.to': 'To',
     'send.amount': 'Amount',
@@ -571,7 +581,7 @@ export const coreTranslations = {
     'send.attachedBch': 'Attached BCH',
     'send.tokenChange': 'Token change',
     'send.fee': 'Fee',
-    'send.totalBch': 'Total (BCH)',
+    'send.totalBch': 'Wallet total (BCH)',
     'send.technicalDetails': 'Technical details',
     'send.hide': 'Hide',
     'send.show': 'Show',

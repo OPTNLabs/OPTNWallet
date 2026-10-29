@@ -41,6 +41,49 @@ export async function showWalletNotification(text: string): Promise<void> {
   showWalletStatus(text);
 }
 
+/**
+ * Share a public wallet value with the platform share sheet when available.
+ * Cancellation is a user choice, not an error; genuine failures receive the
+ * same accessible/native feedback path as clipboard actions.
+ */
+export async function shareWithFeedback(
+  data: ShareData,
+  successMessageKey: TranslationKey = 'receive.addressShared',
+  failureMessageKey: TranslationKey = 'receive.shareFailed'
+): Promise<boolean> {
+  const notify = async (key: TranslationKey) => {
+    const locale = detectSupportedLocale(
+      typeof document === 'undefined' ? 'en' : document.documentElement.lang
+    );
+    try {
+      await showWalletNotification(translate(locale, key));
+    } catch {
+      // Share success/failure is authoritative even if the presenter fails.
+    }
+  };
+
+  if (
+    typeof navigator === 'undefined' ||
+    typeof navigator.share !== 'function'
+  ) {
+    await notify(failureMessageKey);
+    return false;
+  }
+
+  try {
+    await navigator.share(data);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return false;
+    }
+    await notify(failureMessageKey);
+    return false;
+  }
+
+  await notify(successMessageKey);
+  return true;
+}
+
 /** Notification failure never changes the outcome of the clipboard operation. */
 export async function copyWithFeedback(
   text: string,

@@ -7,6 +7,8 @@ type WalletPopupSheetProps = {
   maxWidthClassName?: string;
   onDismiss?: () => void;
   dismissLabel?: string;
+  showDismissButton?: boolean;
+  ariaLabelledBy?: string;
 };
 
 export default function WalletPopupSheet({
@@ -15,6 +17,8 @@ export default function WalletPopupSheet({
   maxWidthClassName = 'max-w-md',
   onDismiss,
   dismissLabel = 'Close',
+  showDismissButton = true,
+  ariaLabelledBy,
 }: WalletPopupSheetProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onDismissRef = useRef(onDismiss);
@@ -93,8 +97,9 @@ export default function WalletPopupSheet({
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={ariaLabelledBy}
       >
-        {onDismiss ? (
+        {onDismiss && showDismissButton ? (
           <div className="mb-2 flex justify-end shrink-0">
             <button
               type="button"

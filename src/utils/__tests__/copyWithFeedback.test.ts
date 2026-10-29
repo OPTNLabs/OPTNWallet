@@ -12,6 +12,7 @@ vi.mock('@capacitor/core', () => ({
 vi.mock('@capacitor/toast', () => ({ Toast: { show: mocks.toast } }));
 import {
   copyWithFeedback,
+  shareWithFeedback,
   showWalletNotification,
   showWalletStatus,
 } from '../copyWithFeedback';
@@ -63,6 +64,62 @@ describe('copy feedback', () => {
     expect(document.body.textContent).not.toContain(
       'disposable receive address'
     );
+  });
+  it('shares a public value and reports success without exposing it in the toast', async () => {
+    mocks.native.mockReturnValue(false);
+    vi.stubGlobal('navigator', {
+      share: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(
+      shareWithFeedback(
+        { title: 'Receive', text: 'disposable receive address' },
+        'receive.addressShared'
+      )
+    ).resolves.toBe(true);
+    expect(document.querySelector('[role=status]')?.textContent).toBe(
+      'Address ready to share'
+    );
+    expect(document.body.textContent).not.toContain(
+      'disposable receive address'
+    );
+  });
+  it('reports share unavailability without throwing', async () => {
+    mocks.native.mockReturnValue(false);
+    vi.stubGlobal('navigator', {});
+
+    await expect(shareWithFeedback({ text: 'public address' })).resolves.toBe(
+      false
+    );
+    expect(document.querySelector('[role=status]')?.textContent).toContain(
+      'Sharing is unavailable'
+    );
+  });
+  it('preserves share success when the notification presenter fails', async () => {
+    mocks.native.mockReturnValue(false);
+    vi.stubGlobal('navigator', {
+      share: vi.fn().mockResolvedValue(undefined),
+    });
+    vi.spyOn(document.body, 'appendChild').mockImplementationOnce(() => {
+      throw new Error('presenter unavailable');
+    });
+
+    await expect(shareWithFeedback({ text: 'public address' })).resolves.toBe(
+      true
+    );
+  });
+  it('does not show an error when the user cancels sharing', async () => {
+    mocks.native.mockReturnValue(false);
+    vi.stubGlobal('navigator', {
+      share: vi
+        .fn()
+        .mockRejectedValue(new DOMException('cancelled', 'AbortError')),
+    });
+
+    await expect(shareWithFeedback({ text: 'public address' })).resolves.toBe(
+      false
+    );
+    expect(document.querySelector('[role=status]')).toBeNull();
   });
   it('uses the native toast for transient notifications when available', async () => {
     mocks.native.mockReturnValue(true);

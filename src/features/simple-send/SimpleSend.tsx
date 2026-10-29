@@ -8,7 +8,7 @@ import { FaCamera, FaQrcode, FaShieldAlt } from 'react-icons/fa';
 import { ReviewCard } from './ReviewCard';
 import { ChangeAddressSection } from './ChangeAddressSection';
 import { CategorySummary } from './types';
-import { copyTextToClipboard, formatFtAmount } from './utils';
+import { formatFtAmount } from './utils';
 import { useTokenMetadata } from './useTokenMetadata';
 import { useRecipientScanner } from './useRecipientScanner';
 import { useSimpleSendViewModel } from './useSimpleSendViewModel';
@@ -22,6 +22,7 @@ import { getReturnPath } from '../../utils/navigation';
 import { SATSINBITCOIN, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import { useI18n } from '../../i18n/useI18n';
 import { shouldShowSendReview } from './reviewVisibility';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
 
 type SimpleSendLocationState = {
   amountBch?: string;
@@ -344,6 +345,9 @@ export default function SimpleSend() {
           }
           compact
         />
+        <p className="-mt-2 text-sm wallet-muted">
+          {t('send.guidedDescription')}
+        </p>
         {quantumrootPrefillLabel ? (
           <div className="wallet-surface-strong rounded-[18px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_26%,transparent)] p-3">
             <div className="flex items-start gap-3">
@@ -439,7 +443,12 @@ export default function SimpleSend() {
                     <span className="truncate">{mask(recipient)}</span>
                     <button
                       className="wallet-link underline shrink-0"
-                      onClick={() => copyTextToClipboard(recipient)}
+                      onClick={() =>
+                        void copyWithFeedback(
+                          recipient,
+                          'receive.addressCopied'
+                        )
+                      }
                     >
                       {t('send.copy')}
                     </button>
@@ -792,6 +801,11 @@ export default function SimpleSend() {
             open={reviewModalOpen}
             review={review}
             recipient={recipient}
+            networkLabel={t(
+              currentNetwork === 'chipnet'
+                ? 'network.chipnet'
+                : 'network.mainnet'
+            )}
             assetType={assetType}
             amountBch={amountBch}
             fiatSummary={fiatSummary}

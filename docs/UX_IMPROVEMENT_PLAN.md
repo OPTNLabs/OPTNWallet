@@ -1265,3 +1265,80 @@ derived from exact locking-bytecode matches. The focused fixture covers
 `0.00999962 BCH → PUSD`, token labeling, and the closed technical disclosure.
 Live peer, packaged native, and BCMR decimal-display evidence remain gaps.
 FundMe is excluded from this review.
+
+### Connector token identity from BCMR — 2026-10-25
+
+Connector wallet-effect cards now resolve CashToken names, symbols, decimals,
+and identity status through the existing shared `useSharedTokenMetadata` path.
+The verified BCMR name is the primary label when available; the raw category is
+still available under Token identity, and an app-supplied label is shown only
+as secondary context when it differs or BCMR is unavailable. Token amounts use
+BCMR decimals while retaining the atomic amount for auditability. This keeps a
+Cauldron prompt such as `PUSD` useful without treating the dApp's text as
+proof of token identity.
+
+The WalletConnect fixture supplies a verified PUSD BCMR snapshot and asserts
+the PUSD label, BCMR status, wallet BCH effect, and collapsed technical
+details. Focused connector UI and app suites pass; actual Rust identity
+projection, remote BCMR availability, decimal-bearing tokens, and packaged
+native rendering remain explicit runtime gaps.
+
+### Broadcast error recovery — 2026-10-26
+
+The supplied v1.7.4 Simple Send capture showed `Error sending transaction:`
+with no reason. Source tracing found that blank provider/engine exception
+messages could pass through `toErrorMessage` unchanged; the send hook then
+rendered an empty diagnostic even though the transaction had not been
+confirmed as broadcast. The shared error boundary now supplies a safe fallback,
+normalizes blank broadcast result strings, and treats blank engine rejection
+messages as explicit failures rather than silently proceeding.
+
+The user-facing send state remains retryable and does not clear the reviewed
+transaction on failure. Existing classification still distinguishes known
+ambiguous network outcomes from deterministic rejection messages. Focused
+regressions cover blank provider errors, blank TransactionService results, and
+the Simple Send error state. No live transaction was signed or broadcast while
+diagnosing this capture.
+
+### Full-flow visual capture — 2026-10-28
+
+Rendered capture evidence was collected from the current working tree at
+`http://127.0.0.1:5173` using a disposable generated wallet fixture. The
+temporary image set is in `screenshots/` (mobile 411×843 and desktop 1280×900
+captures where applicable). It covers onboarding, Home, Assets, Actions,
+Receive locked/five-tap/unlocked-masked states, Send, custom transaction entry,
+history card/detail/copy feedback, Outbox, Settings and its panels, Chat,
+Contracts, Quantumroot, Airdrops, Cauldron swap/pool, Merchant Pay, QR signing,
+paper-wallet/mint entry points, and the app directory. WalletConnect,
+WizardConnect, and CashConnect approval captures use local synthetic fixtures so
+the approval hierarchy can be reviewed without a live peer or funds.
+
+The captures are evidence for rendered layout only; they do not prove native
+toasts, hardware flows, live indexer data, signing, broadcast, mempool or
+confirmation. No seed, private key, or unmasked sensitive value was stored in
+the images. The folder is intentionally untracked and should be removed after
+visual analysis.
+
+### Send/Receive newcomer pass — 2026-10-28
+
+Discovery found that the ordinary Receive surface already had reliable
+clipboard feedback and BIP21 support, but the primary copy affordance was an
+icon-only address row and sharing was not available from the receive card.
+Receive now explains that the address is for the payer, exposes labelled
+Copy address and Share address actions, reports share success/failure through
+the shared native/browser presenter, and treats share cancellation as a
+non-error. The ten-tap private-key gate, reset-on-navigation behavior, and
+masked key presentation are unchanged.
+
+The ordinary Send flow already retained BCH as the default and kept token,
+NFT, Airdrops, coin-control, change-address, and custom-transaction paths.
+The page now surfaces the existing guided-flow explanation, and its review
+card explicitly shows the network and wallet effect before the technical
+disclosure. Recipient copy uses the shared contextual address feedback. No
+transaction construction, authorization, or connector request semantics were
+changed.
+
+Focused share feedback tests cover success, unavailable share surfaces, and
+user cancellation. Rendered browser verification still cannot establish
+native Android/iOS share sheets, hardware approval, live providers, signing,
+broadcast, or confirmation.

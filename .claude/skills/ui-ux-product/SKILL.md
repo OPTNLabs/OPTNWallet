@@ -333,3 +333,89 @@ retry and failure states explicit.
 
 References: [Progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/)
 and [Accessible status messages](https://www.w3.org/WAI/WCAG22/Understanding/status-messages.html).
+
+## Engineering workflow integration
+
+This file is the canonical UI/UX skill discovered by Codex and Claude through
+`.claude/skills/ui-ux-product/SKILL.md`. Apply it to any change that alters a
+route, screen, component, dialog, menu, notification, copy/share action,
+transaction review, or user-visible state. A backend-only change may mark this
+review not applicable, with a reason, unless its behavior changes a user-facing
+state.
+
+Use the existing repository workflow and evidence documents; do not create a
+parallel UX framework or tracker:
+
+1. **Scope:** state the intended user, task, risk, affected surfaces and the
+   usability outcome. Include the relevant route, settings panel, desktop menu,
+   dialog, connector request and built-in app.
+2. **Plan and architecture:** map one complete journey depth-first before
+   broadening the change. Identify navigation, primary action, decisions,
+   loading, empty, pending, offline, stale, error, retry, cancel, recovery and
+   platform states. Keep business rules in the shared Rust/application layers.
+3. **Develop:** reuse the approved references, tokens and components. Use one
+   clear primary action, plain language, progressive disclosure, comfortable
+   touch targets, visible focus and accessible status announcements. Preserve
+   wallet authority, privacy policy and transaction authorization boundaries.
+4. **Verify:** run the affected app and inspect rendered mobile and desktop
+   layouts, safe areas, long labels, keyboard focus and dialog layering. Runtime
+   and screenshot evidence are required for visual claims; tests alone do not
+   establish usability or packaged-native behavior.
+5. **Test:** exercise success, validation, duplicate activation, interruption,
+   offline/stale state, pending/unknown/failed submission, retry, cancel,
+   recovery, accessibility, wrong-network and token/fee/authorization edge
+   cases. Re-review the exact transaction if any reviewed input, quote, output,
+   fee or signed bytes change.
+6. **Review:** perform a dedicated UX pass with the acceptance checklist below,
+   including the complete affected-flow inventory and a new-user perspective.
+7. **Document and sync:** update the existing `docs/UX_IMPROVEMENT_PLAN.md`,
+   `docs/pr63-requirement-ledger.md` and PR evidence when applicable. Record
+   revision, environment, evidence type, remaining gaps and why a check is not
+   applicable. Do not add third-party analytics or capture seeds, keys, wallet
+   data or private transaction details; any outcome measurement must be
+   privacy-preserving and local/manual.
+
+### UX acceptance checklist
+
+Before calling a user-facing change complete, record a pass or an explicit
+not-applicable reason for each item:
+
+1. The intended user and task are clear at the entry point.
+2. The primary action and its consequence are obvious.
+3. Labels and supporting copy use plain, consistent language.
+4. Advanced or technical detail is progressively disclosed, not removed.
+5. Loading, empty, pending, offline, stale and error states explain what is
+   happening and what the user can do next.
+6. Invalid input, duplicate activation, cancellation, retry and recovery are
+   safe and understandable.
+7. Financial effect, network, authorization, fee, token/NFT identity and
+   uncertainty are truthful before approval.
+8. The flow preserves the approved wallet security and privacy boundaries.
+9. Mobile touch targets, safe areas, back navigation and repeated actions work.
+10. Desktop resizing, keyboard navigation, focus visibility and screen-reader
+    status announcements work.
+11. Visual hierarchy, spacing, contrast, icons, translations and component reuse
+    match the approved product references.
+12. Evidence is proportional to the claim, and remaining gaps are recorded.
+
+For measurable UX outcomes, use disposable fixtures and manual or local test
+evidence for task completion, interaction count, mistakes, recovery time and
+support-causing confusion where practical. Never make a successful automated
+test, screenshot, or browser run stand in for a native-device claim.
+
+Example workflow: a Cauldron BCH-to-PUSD approval is scoped as a newcomer
+decision about what leaves and returns; its journey maps quote, review,
+cancel/retry, approval and uncertain broadcast states; development keeps the
+verified wallet effect above technical inputs; verification checks mobile and
+desktop dialog behavior; tests bind approval to the exact reviewed bytes; review
+applies all twelve items; and the ledger records the revision and any live-peer
+or packaged-native gap.
+
+Reference basis: the phase-oriented, state-in-files workflow is informed by
+[JS Mastery Agentic Development skills](https://github.com/jsmastery-pro/skills),
+its [journey approach](https://github.com/jsmastery-pro/skills/blob/main/skills/scope/approaches/journey.md),
+and its [runtime verification guidance](https://github.com/jsmastery-pro/skills/blob/main/skills/check/modes/verify.md).
+Mobile-specific touch, context, connectivity and recovery concerns were
+cross-checked against the [UXCam mobile UX guide](https://uxcam.com/blog/mobile-ux/).
+These references inform the workflow only; OPTN keeps its existing wallet
+architecture, security boundaries and local/manual evidence policy.

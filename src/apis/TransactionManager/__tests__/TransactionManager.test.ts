@@ -269,6 +269,23 @@ describe('TransactionManager', () => {
     expect(fail.errorMessage).toContain('broadcast failed');
   });
 
+  it('keeps blank provider errors actionable', async () => {
+    const sendTransaction = vi.fn().mockRejectedValue(new Error(''));
+
+    mockedTxBuilderHelper.mockReturnValue({
+      sendTransaction,
+      buildTransaction: vi.fn(),
+    } as never);
+
+    const tm = TransactionManager();
+    const result = await tm.sendTransaction('00ab');
+
+    expect(result.txid).toBeNull();
+    expect(result.errorMessage).toBe(
+      'Error sending transaction: Broadcast failed without a reason.'
+    );
+  });
+
   it('uses an explicit wallet scope for route-owned broadcast tracking', async () => {
     const sendTransaction = vi.fn().mockResolvedValue('txid-scoped');
 

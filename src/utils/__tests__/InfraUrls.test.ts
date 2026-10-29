@@ -33,4 +33,14 @@ describe('InfraUrls', () => {
       'https://bcmr-chipnet.paytaca.com/api',
     ]);
   });
+
+  it('keeps only live Chipnet WSS routes in the browser pool', () => {
+    const servers = getInfraUrlPools(Network.CHIPNET).electrumServers;
+    expect(servers).toEqual([
+      'electrum-chipnet.optnlabs.com',
+      'chipnet.imaginary.cash',
+      'chipnet.c3-soft.com:64004',
+    ]);
+    expect(servers).not.toContain('chipnet.bch.ninja');
+  });
 });

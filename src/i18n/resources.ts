@@ -641,6 +641,13 @@ export const translations = {
     'connection.attempts': 'محاولات الاتصال',
     'connection.attemptStarted': 'بدء المحاولة',
     'connection.failed': 'فشلت محاولة الاتصال. أعد الاقتران للمحاولة مجددًا.',
+    'txReview.requestFee': 'رسوم المعاملة (الطلب بالكامل)',
+    'txReview.appLabel': 'تسمية التطبيق',
+    'wc.rejectRequest': 'رفض الطلب',
+    'wc.inputNumber': 'الإدخال {number}',
+    'wc.outputNumber': 'المخرج {number}',
+    'wc.previousTransaction': 'المعاملة السابقة',
+    'wc.outputIndex': 'فهرس المخرج',
   },
   fr: {
     ...baseTranslations.en,

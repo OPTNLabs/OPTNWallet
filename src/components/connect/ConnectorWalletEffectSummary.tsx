@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import {
   deriveConnectorWalletEffect,
   type ConnectorWalletEffect,
@@ -6,6 +6,14 @@ import {
 import type { ConnectorTransactionPreview } from '../../services/connect/transactionPreview';
 import { loadWalletPublicAddresses } from '../../services/connect/walletPublicAddresses';
 import { useI18n } from '../../i18n/useI18n';
+import useSharedTokenMetadata, {
+  type SharedTokenMetadata,
+} from '../../hooks/useSharedTokenMetadata';
+import {
+  formatAtomicTokenAmount,
+  shortTokenCategory,
+} from '../../utils/tokenPresentation';
+import { getBcmrMetadataStatusLabel } from '../../types/bcmr';
 
 type Props = {
   preview: ConnectorTransactionPreview;
@@ -23,6 +31,16 @@ function tokenEffect(value: bigint): string {
   return `${absolute.toString()} atoms`;
 }
 
+function hasVerifiedTokenName(
+  category: string,
+  metadata?: SharedTokenMetadata
+): boolean {
+  const name = metadata?.name?.trim();
+  return Boolean(
+    metadata?.snapshot && name && name.toLowerCase() !== category.toLowerCase()
+  );
+}
+
 export default function ConnectorWalletEffectSummary({
   preview,
   walletId,
@@ -34,6 +52,23 @@ export default function ConnectorWalletEffectSummary({
   const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable'>(
     'loading'
   );
+  const tokenCategories = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...preview.inputs, ...preview.outputs]
+            .map((item) => item.token?.category)
+            .filter((category): category is Uint8Array => category != null)
+            .map((category) =>
+              Array.from(category)
+                .map((byte) => byte.toString(16).padStart(2, '0'))
+                .join('')
+            )
+        )
+      ),
+    [preview]
+  );
+  const tokenMetadata = useSharedTokenMetadata(tokenCategories);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,49 +144,106 @@ export default function ConnectorWalletEffectSummary({
           </div>
         )}
 
-        {effect.tokenEffects.map((token) => (
-          <div
-            key={token.category}
-            className="rounded-xl border border-[var(--wallet-border)] p-3"
-          >
-            <div className="text-xs wallet-muted">
-              {(
-                token.fungibleDelta !== 0n
-                  ? token.fungibleDelta < 0n
-                  : token.nftDelta < 0
-              )
-                ? t('txReview.spend')
-                : t('txReview.receive')}{' '}
-              {tokenLabel ?? t('txReview.token')}
-            </div>
-            {token.fungibleDelta !== 0n && (
-              <div className="mt-1 text-base font-semibold wallet-text-strong">
-                {tokenEffect(token.fungibleDelta)}
+        {effect.tokenEffects.map((token) =>
+          (() => {
+            const metadata = tokenMetadata[token.category];
+            const verifiedName = hasVerifiedTokenName(token.category, metadata)
+              ? metadata?.name.trim()
+              : null;
+            const verifiedSymbol = metadata?.symbol?.trim() || null;
+            const displayLabel =
+              verifiedName || verifiedSymbol || t('txReview.token');
+            const appLabelDiffers = Boolean(
+              tokenLabel &&
+                (!verifiedName ||
+                  tokenLabel.trim().toLowerCase() !==
+                    verifiedName.toLowerCase())
+            );
+            const decimals = metadata?.decimals ?? 0;
+            const absoluteAmount =
+              token.fungibleDelta < 0n
+                ? -token.fungibleDelta
+                : token.fungibleDelta;
+            const formattedAmount =
+              decimals > 0
+                ? `${formatAtomicTokenAmount(absoluteAmount, decimals)} ${displayLabel} (${tokenEffect(token.fungibleDelta)})`
+                : `${tokenEffect(token.fungibleDelta)} ${displayLabel}`;
+
+            return (
+              <div
+                key={token.category}
+                className="rounded-xl border border-[var(--wallet-border)] p-3"
+              >
+                <div className="text-xs wallet-muted">
+                  {(
+                    token.fungibleDelta !== 0n
+                      ? token.fungibleDelta < 0n
+                      : token.nftDelta < 0
+                  )
+                    ? t('txReview.spend')
+                    : t('txReview.receive')}{' '}
+                  {displayLabel}
+                </div>
+                {token.fungibleDelta !== 0n && (
+                  <div className="mt-1 text-base font-semibold wallet-text-strong">
+                    {formattedAmount}
+                  </div>
+                )}
+                {token.nftDelta !== 0 && (
+                  <div className="mt-1 font-medium wallet-text-strong">
+                    {Math.abs(token.nftDelta)} {t('txReview.nft')}
+                    {Math.abs(token.nftDelta) === 1 ? '' : 's'}
+                  </div>
+                )}
+                <div className="mt-2 text-xs wallet-muted">
+                  {metadata
+                    ? `BCMR: ${getBcmrMetadataStatusLabel(metadata)}`
+                    : 'BCMR: Identifying token…'}
+                  {appLabelDiffers ? (
+                    <span className="ml-2">
+                      {t('txReview.appLabel')}: {tokenLabel}
+                    </span>
+                  ) : null}
+                </div>
               </div>
-            )}
-            {token.nftDelta !== 0 && (
-              <div className="mt-1 font-medium wallet-text-strong">
-                {Math.abs(token.nftDelta)} {t('txReview.nft')}
-                {Math.abs(token.nftDelta) === 1 ? '' : 's'}
-              </div>
-            )}
-          </div>
-        ))}
+            );
+          })()
+        )}
       </div>
 
-      {effect.tokenEffects.map((token) => (
-        <details
-          key={`identity-${token.category}`}
-          className="rounded-xl border border-[var(--wallet-border)] px-3 py-2"
-        >
-          <summary className="cursor-pointer font-semibold wallet-text-strong">
-            {t('txReview.tokenIdentity')}
-          </summary>
-          <div className="mt-2 break-all font-mono text-xs wallet-muted">
-            {token.category}
-          </div>
-        </details>
-      ))}
+      {effect.tokenEffects.map((token) =>
+        (() => {
+          const metadata = tokenMetadata[token.category];
+          const verifiedName = hasVerifiedTokenName(token.category, metadata)
+            ? metadata?.name.trim()
+            : null;
+          const verifiedSymbol = metadata?.symbol?.trim() || null;
+          const label = verifiedName || verifiedSymbol || t('txReview.token');
+
+          return (
+            <details
+              key={`identity-${token.category}`}
+              className="rounded-xl border border-[var(--wallet-border)] px-3 py-2"
+            >
+              <summary className="cursor-pointer font-semibold wallet-text-strong">
+                {t('txReview.tokenIdentity')} · {label}
+              </summary>
+              <div className="mt-2 space-y-1 text-xs wallet-muted">
+                <div>
+                  BCMR:{' '}
+                  {metadata
+                    ? getBcmrMetadataStatusLabel(metadata)
+                    : 'Identifying token…'}
+                </div>
+                <div>
+                  {t('wc.tokenCategory')}: {shortTokenCategory(token.category)}
+                </div>
+                <div className="break-all font-mono">{token.category}</div>
+              </div>
+            </details>
+          );
+        })()
+      )}
 
       <p className="text-xs wallet-muted">
         Matched {effect.ownedInputCount} wallet input

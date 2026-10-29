@@ -1902,3 +1902,114 @@ label, and the collapsed technical disclosure. Live WalletConnect peer,
 native-device rendering, and BCMR decimal-display evidence remain open; the
 app-supplied prompt is context only and does not replace wallet-verified
 transaction effects. FundMe remains excluded.
+
+### 2026-10-25: UX workflow integration
+
+The existing `.claude/skills/ui-ux-product/SKILL.md` is now the explicit
+workflow entry point for user-facing changes. It maps scope, journey-first
+planning, shared-layer architecture, development, rendered verification,
+state/error testing, dedicated UX review, and documentation sync without adding
+a competing skill or tracker. Its twelve-item acceptance checklist covers
+new-user clarity, primary action, progressive disclosure, recovery, truthful
+wallet effects, security/privacy boundaries, touch and keyboard behavior,
+visual consistency and proportional evidence. `AGENTS.md` points to the same
+normative checklist, and the pull-request template requests the corresponding
+evidence and explicit gaps.
+
+The workflow was checked against a hypothetical Cauldron BCH-to-PUSD approval:
+scope the user decision, map quote → review → cancel/retry → approval →
+uncertain broadcast, preserve verified wallet effects above raw transaction
+details, bind approval to exact reviewed bytes, exercise responsive dialog
+states, and record live-peer or packaged-native gaps in this ledger. No code,
+wallet authority, transaction behavior or third-party analytics were changed
+by this documentation update.
+
+Validation: skill discovery path, referenced repository documents and PR
+template links were inspected; `git diff --check` and the repository formatting
+check passed after the documentation edits. Runtime/native/connector evidence
+remains governed by the existing surface-specific entries above.
+
+### 2026-10-25: connector BCMR identity and approval hierarchy
+
+WalletConnect approval now uses the shared wallet popup shell for focus
+containment, Escape/cancel behavior, safe-area-aware action placement, and a
+scrolling request body. The first view presents the requester context, selected
+network, actual sign/return or sign/broadcast operation, complete-request fee,
+and the wallet-owned BCH/token/NFT effect. Raw inputs, outputs, addresses,
+scripts, and token categories remain available under one technical disclosure.
+
+`ConnectorWalletEffectSummary` now consumes the existing shared BCMR resolver
+(`useSharedTokenMetadata`) for connector token categories. A verified BCMR name
+and symbol replace the category as the primary user-facing identity; BCMR
+decimals format fungible amounts while atomic amounts remain visible. When BCMR
+is unavailable, the UI says so and keeps any dApp label explicitly secondary;
+the app prompt never determines wallet effect or token identity. WizardConnect
+uses the same effect/technical summary and retains sign-and-return semantics.
+
+Verification on the current working tree: focused WalletConnect/WizardConnect
+UI checks passed (**2 files / 7 tests**), the full UI suite passed (**31 files /
+83 tests**), the app suite passed (**36 files / 157 tests**), core typecheck and
+core lint passed, and Prettier was applied to changed files. The UI Vite
+`configLoader: 'native'` extension warning is non-fatal. Live connector peers,
+remote BCMR failure/recovery, decimal-bearing token fixtures, hardware approval,
+and packaged mobile/native rendering remain open evidence gaps. No signing,
+spending, broadcast, or FundMe work was performed.
+
+### 2026-10-26: Simple Send blank broadcast error recovery
+
+The supplied v1.7.4 Android capture showed a red error panel containing only
+`Error sending transaction:`. Source review traced this to blank provider or
+engine exception messages reaching `useSimpleSend` and `toErrorMessage` without
+a fallback. The shared error formatter now rejects blank `Error.message`
+values, provider-like `{ message }` objects are normalized, and broadcast
+classification/transaction results provide an actionable fallback instead of
+an empty string. Desktop engine responses also reject blank refusal messages.
+
+Regression coverage passed for `TransactionManager`, `TransactionService`,
+shared error/classification helpers, and the Simple Send hook. The reviewed
+transaction remains available for retry after a failed send; success/clear
+behavior is unchanged. This is source/component evidence only: no live
+provider, device, signing, mempool, or confirmation evidence was produced.
+
+### 2026-10-28: Full-flow visual capture
+
+Revision: current working tree on `codex/ux-basics-and-workflow`. Environment:
+local Vite development server at `127.0.0.1:5173`, disposable generated wallet,
+headless Chrome capture at mobile 411×843 and desktop 1280×900. Temporary
+screenshots are stored under `screenshots/` for visual analysis and are not
+part of the source deliverable. Rendered routes and panels include onboarding,
+wallet navigation, transaction/send/custom-send/history/outbox, receive
+progressive disclosure, settings panels, built-in apps and Cauldron, plus
+WalletConnect/WizardConnect/CashConnect approval sheets. Connector sheets use
+synthetic local fixtures; history card/detail uses a synthetic txid fixture.
+
+Evidence status: rendered browser screenshots pass for the listed surfaces.
+Native notification behavior, packaged Android/iOS rendering, live connector
+peers, live Fulcrum/indexer data, hardware signing, broadcast, mempool and
+confirmation remain unverified. Images contain no unmasked private key or seed.
+
+### 2026-10-28: Send/Receive newcomer pass
+
+Source revision: current uncommitted `codex/ux-basics-and-workflow` checkout.
+Receive keeps the intentional ten-PubKey-tap private-key disclosure gate and
+resets it on every route entry. The public receive card now explains the
+purpose of the address and provides labelled Copy address and Share address
+actions. Sharing uses the same safe-area-aware native/browser notification
+path as copy; cancellation is silent, while unsupported or failed sharing is
+actionable. The Send page keeps BCH default, token/NFT/Airdrops, coin control,
+change address, and custom builder paths. Its review card now puts network and
+wallet-effect context before technical inputs/outputs, and recipient copying
+uses contextual address feedback.
+
+Focused evidence: `src/utils/__tests__/copyWithFeedback.test.ts` covers share
+success, unavailable share, and cancellation. Remaining gaps are packaged
+native share-sheet rendering, live provider/indexer data, hardware approval,
+signing, broadcast, mempool and confirmation. No funds were signed or spent.
+
+Validation continuation: focused Send/Receive/feedback checks passed (**3 files /
+15 tests**); core passed (**319 files / 2,032 tests**, 7 skipped files and 10
+skipped tests); UI passed (**31 files / 84 tests**); apps passed (**36 files /
+157 tests**); security passed (**2 files / 6 tests**); add-on validation passed
+(**1 test**); dependency policy, typecheck, lint, formatting, `git diff
+--check`, the web build, and the desktop-surface build all passed. The Vite
+`configLoader: 'native'` message remains a non-fatal warning.

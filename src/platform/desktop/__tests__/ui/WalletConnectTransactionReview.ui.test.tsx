@@ -20,6 +20,28 @@ vi.mock('../../../../hooks/useOutboundTransactions', () => ({
 vi.mock('../../../../components/ui/WalletTooltip', () => ({
   default: () => null,
 }));
+vi.mock('../../../../hooks/useSharedTokenMetadata', () => ({
+  default: (categories: string[]) =>
+    Object.fromEntries(
+      categories.map((category) => [
+        category,
+        {
+          status: 'ready',
+          freshness: 'fresh',
+          name: 'PUSD',
+          symbol: 'PUSD',
+          decimals: 0,
+          identityStatus: 'verified',
+          iconUri: null,
+          snapshot: {
+            name: 'PUSD',
+            token: { category, symbol: 'PUSD', decimals: 0 },
+          },
+          isRefreshing: false,
+        },
+      ])
+    ),
+}));
 vi.mock('../../../../services/connect/walletPublicAddresses', () => ({
   loadWalletPublicAddresses: mock.loadWalletPublicAddresses,
 }));
@@ -84,7 +106,9 @@ it('shows Chipnet destinations and a verified wallet effect', async () => {
     screen.getByRole('heading', { name: 'Review this transaction request' })
   ).toBeInTheDocument();
   expect(screen.getByText('Chipnet')).toBeInTheDocument();
-  expect(screen.getByText('Sign and return to the app')).toBeInTheDocument();
+  expect(
+    screen.getByRole('button', { name: 'Sign and return to the app' })
+  ).toBeInTheDocument();
   expect(
     await screen.findByText('What changes in this wallet')
   ).toBeInTheDocument();
@@ -92,9 +116,11 @@ it('shows Chipnet destinations and a verified wallet effect', async () => {
     (await screen.findAllByText('0.00001000 BCH')).length
   ).toBeGreaterThanOrEqual(2);
   fireEvent.click(screen.getByText(/Technical transaction details/));
-  expect(screen.getByText('Index: 3')).toBeInTheDocument();
+  expect(screen.getByText('Output index: 3')).toBeInTheDocument();
   expect(screen.getByText(/bchtest:/)).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Sign' })).toBeEnabled();
+  expect(
+    screen.getByRole('button', { name: 'Sign and return to the app' })
+  ).toBeEnabled();
 });
 
 it('blocks an incomplete request without displaying a negative fee', () => {
@@ -108,7 +134,9 @@ it('blocks an incomplete request without displaying a negative fee', () => {
   expect(screen.getByRole('alert')).toHaveTextContent(
     translations.en['wc.unsupportedTransaction']
   );
-  expect(screen.getByRole('button', { name: 'Sign' })).toBeDisabled();
+  expect(
+    screen.getByRole('button', { name: 'Sign and return to the app' })
+  ).toBeDisabled();
   expect(screen.queryByText(/-0\.00009 BCH/)).not.toBeInTheDocument();
 });
 
@@ -134,7 +162,10 @@ it('surfaces a Cauldron swap prompt and token label before technical details', a
   ).toBeInTheDocument();
   expect(screen.getByText('0.00999962 BCH → PUSD')).toBeInTheDocument();
   expect(await screen.findByText('You receive PUSD')).toBeInTheDocument();
-  expect(screen.getByText('267 atoms')).toBeInTheDocument();
+  expect(screen.getByText('267 atoms PUSD')).toBeInTheDocument();
+  expect(screen.getAllByText('BCMR: Verified').length).toBeGreaterThanOrEqual(
+    1
+  );
   const technicalDetails = screen.getByText(/Technical transaction details/);
   expect(technicalDetails.closest('details')).not.toHaveAttribute('open');
 });

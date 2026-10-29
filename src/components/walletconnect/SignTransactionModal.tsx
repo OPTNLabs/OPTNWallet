@@ -1,6 +1,6 @@
 // inside src/components/walletconnect/SignTransactionModal.tsx
 
-import { useId, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '../../state/store';
 import {
@@ -24,6 +24,7 @@ import { useI18n } from '../../i18n/useI18n';
 import ConnectorWalletEffectSummary from '../connect/ConnectorWalletEffectSummary';
 import ConnectorTransactionSummary from '../connect/ConnectorTransactionSummary';
 import { describeConnectorRequest } from '../../services/connect/requestDescription';
+import WalletPopupSheet from '../ui/WalletPopupSheet';
 
 function isStaleWalletConnectError(error: unknown): boolean {
   const message = toErrorMessage(error).toLowerCase();
@@ -54,22 +55,27 @@ export function SignTransactionModal() {
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
 
+  const tx = signTxRequest?.params?.request?.params?.transaction;
+  const rawSourceOutputs =
+    signTxRequest?.params?.request?.params?.sourceOutputs;
+  const preview = useMemo(() => {
+    if (!tx) return null;
+    try {
+      return transactionPreview(tx, rawSourceOutputs ?? []);
+    } catch {
+      // Keep malformed requests visible so the user can reject them.
+      return null;
+    }
+  }, [rawSourceOutputs, tx]);
+
   if (!signTxRequest) return null;
 
   const { topic, params } = signTxRequest;
   const { request } = params;
-  const tx = request.params?.transaction;
-  const sourceOutputs = request.params?.sourceOutputs ?? [];
   const userPrompt = request.params?.userPrompt ?? '';
   const requestDescription = describeConnectorRequest(userPrompt);
   const shouldBroadcast = !!request.params?.broadcast;
   const dappMetadata = activeSessions?.[topic]?.peer?.metadata;
-  let preview: ReturnType<typeof transactionPreview> | null = null;
-  try {
-    preview = transactionPreview(tx, sourceOutputs);
-  } catch {
-    // Keep malformed requests visible so the user can reject them.
-  }
   const inputs = preview?.inputs ?? [];
   const outputs = preview?.outputs ?? [];
 
@@ -222,14 +228,42 @@ export function SignTransactionModal() {
   };
 
   return (
-    <div className="wallet-popup-backdrop p-3 sm:p-4">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="wallet-popup-panel max-w-2xl w-full flex max-h-[calc(100dvh-1.5rem)] min-h-0 flex-col overflow-hidden p-0"
-      >
-        <header className="shrink-0 border-b border-[var(--wallet-border)] px-4 pb-3 pt-4 sm:px-5 sm:pt-5">
+    <WalletPopupSheet
+      maxWidthClassName="max-w-2xl"
+      onDismiss={busy ? undefined : handleCancel}
+      dismissLabel={t('wc.rejectRequest')}
+      showDismissButton={false}
+      ariaLabelledBy={titleId}
+      footer={
+        <div className="grid grid-cols-2 gap-3 pb-[var(--safe-bottom)]">
+          <button
+            type="button"
+            onClick={handleCancel}
+            className="wallet-btn-danger min-h-[48px] w-full"
+            disabled={busy}
+          >
+            {t('wc.rejectRequest')}
+          </button>
+          <button
+            type="button"
+            onClick={handleSign}
+            className="wallet-btn-primary min-h-[48px] w-full"
+            disabled={broadcastLocked || !preview || busy}
+            title={broadcastLocked ? t('wc.waitPrevious') : undefined}
+          >
+            {broadcastLocked && shouldBroadcast
+              ? t('wc.waitingForSync')
+              : busy
+                ? t('wc.working')
+                : shouldBroadcast
+                  ? t('txReview.signAndBroadcast')
+                  : t('txReview.signAndReturn')}
+          </button>
+        </div>
+      }
+    >
+      <div className="-mx-6 -mt-6">
+        <header className="sticky top-0 z-10 border-b border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-6 pb-4 pt-5">
           <h3
             id={titleId}
             className="text-xl font-bold text-center wallet-text-strong"
@@ -241,46 +275,41 @@ export function SignTransactionModal() {
           </p>
           {(requestDescription.detail || dappMetadata) && (
             <div className="mt-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-3 py-2 text-sm">
-              {requestDescription.detail && (
+              {dappMetadata && (
                 <div className="font-semibold wallet-text-strong">
-                  {requestDescription.detail}
+                  {dappMetadata.name || t('wc.unknownDapp')}
                 </div>
               )}
-              {dappMetadata && (
+              {dappMetadata?.url && (
                 <div className="mt-1 text-xs wallet-muted">
                   <span>{t('txReview.requestedBy')} </span>
-                  <strong className="wallet-text-strong">
-                    {dappMetadata.name}
-                  </strong>
-                  {dappMetadata.url && (
-                    <>
-                      {' · '}
-                      {dappUrl ? (
-                        <a
-                          href={dappUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="wallet-link underline"
-                        >
-                          {dappMetadata.url}
-                        </a>
-                      ) : (
-                        <span className="break-all">{dappMetadata.url}</span>
-                      )}
-                    </>
+                  {dappUrl ? (
+                    <a
+                      href={dappUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="wallet-link break-all underline"
+                    >
+                      {dappMetadata.url}
+                    </a>
+                  ) : (
+                    <span className="break-all">{dappMetadata.url}</span>
                   )}
                 </div>
               )}
               {requestDescription.detail && (
-                <div className="mt-1 text-[11px] wallet-muted">
-                  {t('txReview.appDescription')}
+                <div className="mt-2 text-xs wallet-muted">
+                  <span className="font-semibold">
+                    {t('txReview.appDescription')}:
+                  </span>{' '}
+                  {requestDescription.detail}
                 </div>
               )}
             </div>
           )}
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto space-y-4 px-4 py-4 sm:px-5">
+        <div className="space-y-4 px-6 py-4">
           {broadcastLocked && (
             <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 wallet-text-strong">
               {t('wc.broadcastLocked')}
@@ -329,18 +358,24 @@ export function SignTransactionModal() {
                 >
                   {t('wc.inputs', { count: inputs.length })}
                 </h4>
-                <div className="mt-2 space-y-1">
+                <div className="mt-2 space-y-2">
                   {inputs.map((source, i: number) => {
                     const txid = binToHex(source.outpointTransactionHash);
                     const value = source.valueSatoshis;
                     return (
-                      <div key={i} className="ml-2">
-                        <div>
-                          {t('wc.txid')}:{' '}
+                      <div
+                        key={i}
+                        className="rounded-xl border border-[var(--wallet-border)] p-3 text-sm"
+                      >
+                        <div className="font-semibold wallet-text-strong">
+                          {t('wc.inputNumber', { number: i + 1 })}
+                        </div>
+                        <div className="mt-1">
+                          {t('wc.previousTransaction')}:{' '}
                           <span className="font-mono break-all">{txid}</span>
                         </div>
                         <div>
-                          {t('wc.index')}: {source.outpointIndex}
+                          {t('wc.outputIndex')}: {source.outpointIndex}
                         </div>
                         <div>{Number(value) / SATSINBITCOIN} BCH</div>
                       </div>
@@ -356,7 +391,7 @@ export function SignTransactionModal() {
                 >
                   {t('wc.outputs', { count: outputs.length })}
                 </h4>
-                <div className="mt-2 space-y-1">
+                <div className="mt-2 space-y-2">
                   {outputs.map((output, i: number) => {
                     const value = output.valueSatoshis;
                     const lockingBytecode = output.lockingBytecode;
@@ -368,13 +403,13 @@ export function SignTransactionModal() {
                       return (
                         <div
                           key={i}
-                          className="ml-2 space-y-1 border-b border-[var(--wallet-border)] pb-2 text-sm"
+                          className="rounded-xl border border-[var(--wallet-border)] p-3 text-sm"
                         >
                           <strong>{t('wc.opReturnOutput')}</strong>
                           {parsed.map((data, j) => (
                             <div
                               key={j}
-                              className="font-mono wallet-muted break-words"
+                              className="mt-1 font-mono wallet-muted break-words"
                             >
                               {data}
                             </div>
@@ -387,8 +422,11 @@ export function SignTransactionModal() {
                     return (
                       <div
                         key={i}
-                        className="ml-2 border-b border-[var(--wallet-border)] pb-2 space-y-1"
+                        className="rounded-xl border border-[var(--wallet-border)] p-3 text-sm space-y-1"
                       >
+                        <div className="font-semibold wallet-text-strong">
+                          {t('wc.outputNumber', { number: i + 1 })}
+                        </div>
                         <div>
                           {t('wc.address')}:{' '}
                           <span
@@ -447,31 +485,7 @@ export function SignTransactionModal() {
             </div>
           </details>
         </div>
-
-        <footer className="sticky bottom-0 flex shrink-0 justify-center gap-4 border-t border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-4 py-3 pb-[calc(var(--safe-bottom)+0.75rem)] sm:px-5">
-          <button
-            type="button"
-            onClick={handleSign}
-            className="wallet-btn-primary min-w-28"
-            disabled={broadcastLocked || !preview || busy}
-            title={broadcastLocked ? t('wc.waitPrevious') : undefined}
-          >
-            {broadcastLocked && shouldBroadcast
-              ? t('wc.waitingForSync')
-              : busy
-                ? t('wc.working')
-                : t('wc.sign')}
-          </button>
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="wallet-btn-danger min-w-28"
-            disabled={busy}
-          >
-            {t('wc.cancel')}
-          </button>
-        </footer>
       </div>
-    </div>
+    </WalletPopupSheet>
   );
 }

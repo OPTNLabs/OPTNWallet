@@ -35,7 +35,7 @@ import { isDesktopPlatform } from '../utils/platform';
 import { WalletType } from '../types/wallet';
 import { useI18n } from '../i18n/useI18n';
 import ReceiveAddressSetupAction from './ReceiveAddressSetupAction';
-import { copyWithFeedback } from '../utils/copyWithFeedback';
+import { copyWithFeedback, shareWithFeedback } from '../utils/copyWithFeedback';
 import { canSignLocally } from '../services/watchOnlyWallet';
 import {
   buildBchPaymentUri,
@@ -578,6 +578,18 @@ const Receive: React.FC = () => {
           : 'receive.addressCopied'
     );
 
+  const handleShareAddress = () => {
+    if (!activeAddress) return;
+    return shareWithFeedback(
+      {
+        title: t('receive.title'),
+        text: activeAddress,
+      },
+      'receive.addressShared',
+      'receive.shareFailed'
+    );
+  };
+
   const toggleAddressType = () => {
     const sourcePair = selectedAddressPair ?? primaryKeyPair;
     if (!sourcePair) return;
@@ -856,6 +868,11 @@ const Receive: React.FC = () => {
             />
           </button>
           <div ref={qrMetaRef} className="w-full space-y-3">
+            {visibleQrCodeType === 'address' && (
+              <p className="text-center text-xs wallet-muted">
+                {t('receive.receiveGuidance')}
+              </p>
+            )}
             <div className="w-full flex items-center gap-1.5">
               <button
                 type="button"
@@ -892,6 +909,24 @@ const Receive: React.FC = () => {
                 </button>
               )}
             </div>
+            {visibleQrCodeType === 'address' && (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  className="wallet-btn-secondary min-h-[44px] px-3 py-2 text-sm font-semibold"
+                  onClick={() => void handleCopy(activeAddress)}
+                >
+                  {t('receive.copyAddress')}
+                </button>
+                <button
+                  type="button"
+                  className="wallet-btn-secondary min-h-[44px] px-3 py-2 text-sm font-semibold"
+                  onClick={() => void handleShareAddress()}
+                >
+                  {t('receive.shareAddress')}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </SectionCard>

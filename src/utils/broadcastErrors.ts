@@ -9,8 +9,12 @@ export function isAmbiguousBroadcastError(message: string): boolean {
   );
 }
 
-export function classifyBroadcastFailure(message: string): BroadcastFailureInfo {
-  if (isAmbiguousBroadcastError(message)) {
+export function classifyBroadcastFailure(
+  message: string
+): BroadcastFailureInfo {
+  const detail = message.trim() || 'Broadcast failed without a reason.';
+
+  if (isAmbiguousBroadcastError(detail)) {
     return {
       ambiguous: true,
       userMessage:
@@ -18,7 +22,7 @@ export function classifyBroadcastFailure(message: string): BroadcastFailureInfo 
     };
   }
 
-  if (/bad-txns-inputs-duplicate/i.test(message)) {
+  if (/bad-txns-inputs-duplicate/i.test(detail)) {
     return {
       ambiguous: false,
       userMessage:
@@ -26,7 +30,11 @@ export function classifyBroadcastFailure(message: string): BroadcastFailureInfo 
     };
   }
 
-  if (/mandatory-script-verify-flag-failed|script evaluated without error/i.test(message)) {
+  if (
+    /mandatory-script-verify-flag-failed|script evaluated without error/i.test(
+      detail
+    )
+  ) {
     return {
       ambiguous: false,
       userMessage:
@@ -34,7 +42,11 @@ export function classifyBroadcastFailure(message: string): BroadcastFailureInfo 
     };
   }
 
-  if (/min relay fee not met|insufficient fee|mempool min fee not met|insufficient priority/i.test(message)) {
+  if (
+    /min relay fee not met|insufficient fee|mempool min fee not met|insufficient priority/i.test(
+      detail
+    )
+  ) {
     return {
       ambiguous: false,
       userMessage:
@@ -42,7 +54,7 @@ export function classifyBroadcastFailure(message: string): BroadcastFailureInfo 
     };
   }
 
-  if (/dust/i.test(message)) {
+  if (/dust/i.test(detail)) {
     return {
       ambiguous: false,
       userMessage:
@@ -50,7 +62,11 @@ export function classifyBroadcastFailure(message: string): BroadcastFailureInfo 
     };
   }
 
-  if (/txn-mempool-conflict|already spent|missing inputs|bad-txns-inputs-missingorspent/i.test(message)) {
+  if (
+    /txn-mempool-conflict|already spent|missing inputs|bad-txns-inputs-missingorspent/i.test(
+      detail
+    )
+  ) {
     return {
       ambiguous: false,
       userMessage:
@@ -60,11 +76,13 @@ export function classifyBroadcastFailure(message: string): BroadcastFailureInfo 
 
   return {
     ambiguous: false,
-    userMessage: `Error sending transaction: ${message}`,
+    userMessage: `Error sending transaction: ${detail}`,
   };
 }
 
-export function isDeterministicBroadcastError(message: string | null | undefined): boolean {
+export function isDeterministicBroadcastError(
+  message: string | null | undefined
+): boolean {
   if (!message) return false;
   return !classifyBroadcastFailure(message).ambiguous;
 }

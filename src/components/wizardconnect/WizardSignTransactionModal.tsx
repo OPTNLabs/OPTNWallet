@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import type { AppDispatch, RootState } from '../../state/store';
@@ -63,24 +63,30 @@ export default function WizardSignTransactionModal() {
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
 
-  if (!pending) return null;
-
-  const connection = connections[pending.connectionId];
-  const payload = pending.request.transaction;
-  const requestDescription = describeConnectorRequest(payload.userPrompt);
+  const payload = pending?.request.transaction;
   let decoded: ReturnType<typeof decodeWizardConnectTransaction> | null = null;
-  let connectorPreview: ReturnType<typeof transactionPreview> | null = null;
-  try {
-    decoded = decodeWizardConnectTransaction(payload);
-    connectorPreview = transactionPreview(
-      decoded.transaction,
-      decoded.sourceOutputs
-    );
-  } catch {
-    // A failed preview must never leave an approval button enabled.
+  if (payload) {
+    try {
+      decoded = decodeWizardConnectTransaction(payload);
+    } catch {
+      // A failed preview must never leave an approval button enabled.
+    }
   }
   const tx = decoded?.transaction;
   const sourceOutputs = decoded?.sourceOutputs ?? [];
+  const connectorPreview = useMemo(() => {
+    if (!decoded) return null;
+    try {
+      return transactionPreview(decoded.transaction, decoded.sourceOutputs);
+    } catch {
+      return null;
+    }
+  }, [decoded]);
+
+  if (!pending || !payload) return null;
+
+  const connection = connections[pending.connectionId];
+  const requestDescription = describeConnectorRequest(payload.userPrompt);
   const outputs = tx?.outputs ?? [];
   const totalInput = (sourceOutputs as TxInputSource[]).reduce(
     (sum, output) => sum + parseSatoshis(output.valueSatoshis),

@@ -28,11 +28,13 @@ vi.mock('../../../../i18n/useI18n', () => ({
   useI18n: () => ({ t: (key: TranslationKey) => translations.en[key] }),
 }));
 vi.mock('../../../../state/slices/wizardconnectSlice', () => ({
+  default: (state: Record<string, unknown> = {}) => state,
   disconnectWizardConnection: vi.fn(),
   approveWizardSignRequest: vi.fn(),
   rejectWizardSignRequest: vi.fn(),
 }));
 vi.mock('../../../../state/slices/cashconnectSlice', () => ({
+  default: (state: Record<string, unknown> = {}) => state,
   disconnectCashConnectThunk: vi.fn(),
 }));
 vi.mock('../../../../components/wizardconnect/WizardConnectionManager', () => ({
