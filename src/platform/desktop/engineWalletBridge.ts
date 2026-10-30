@@ -170,6 +170,89 @@ async function importLegacyHdInventory(
   }
 }
 
+type EngineWalletStatus = EngineWalletSession & {
+  legacy_source_id?: number | null;
+  wallets?: Array<{ handle: string; legacy_source_id?: number | null }>;
+};
+
+const PUBLIC_KEY_WALLET_TYPES = new Set(['watch-only', 'hardware']);
+
+/**
+ * Watch-only and hardware wallets have no seed file to share. The engine keeps
+ * its own encrypted public-account file for each, tied to this wallet id and
+ * sealed with the same password; without it their externally signed sends
+ * could never pass the engine's session checks.
+ */
+async function openPublicKeyWalletInEngine(
+  walletId: number,
+  password: string,
+  autoLockMinutes?: number
+): Promise<{ opened: boolean; reason?: string }> {
+  const { default: DatabaseService } = await import(
+    '../../apis/DatabaseManager/DatabaseService'
+  );
+  const db = DatabaseService().getDatabase();
+  if (!db) throw new Error('Public wallet database is unavailable.');
+  const query = db.prepare(
+    `SELECT wallet_name, networkType, walletType, derivation_path,
+       account_xpub, master_fingerprint
+     FROM wallets WHERE id = ? LIMIT 1`
+  );
+  let row: Record<string, unknown> | null;
+  try {
+    query.bind([walletId]);
+    row = query.step() ? query.getAsObject() : null;
+  } finally {
+    query.free();
+  }
+  if (!row || !PUBLIC_KEY_WALLET_TYPES.has(String(row.walletType))) {
+    return { opened: false, reason: 'no wallet file for this wallet' };
+  }
+  if (typeof row.account_xpub !== 'string' || !row.account_xpub) {
+    // A multisig policy has no single account; its spends need their own coverage.
+    return {
+      opened: false,
+      reason: 'The shared engine does not cover multisig wallets yet.',
+    };
+  }
+  if (typeof autoLockMinutes === 'number') {
+    await shareAutoLockChoice(autoLockMinutes);
+  }
+  const status = await invoke<EngineWalletStatus>('optn_wallet_security', {
+    request: { command: 'status' },
+  });
+  const existing = status?.wallets?.find(
+    (wallet) => wallet.legacy_source_id === walletId
+  );
+  const opened = await invoke<EngineWalletStatus>('optn_wallet_security', {
+    request: existing
+      ? { command: 'open', handle: existing.handle, password }
+      : {
+          command: 'import_watch_only',
+          name: String(row.wallet_name ?? ''),
+          account_xpub: row.account_xpub,
+          master_fingerprint:
+            typeof row.master_fingerprint === 'string'
+              ? row.master_fingerprint
+              : '',
+          password,
+          confirmation: password,
+          network: String(row.networkType ?? ''),
+          account_path: String(row.derivation_path ?? ''),
+          legacy_source_id: walletId,
+        },
+  });
+  if (
+    !opened?.active ||
+    opened.legacy_source_id !== walletId ||
+    !Number.isSafeInteger(opened.epoch) ||
+    opened.epoch < 0
+  ) {
+    throw new Error('The engine did not open the selected wallet session.');
+  }
+  return { opened: true };
+}
+
 export async function openWalletInEngine(
   walletId: number,
   password: string,
@@ -180,8 +263,12 @@ export async function openWalletInEngine(
   try {
     const handle = await engineHandleFor(walletId);
     if (!handle) {
-      // Watch-only and hardware wallets may have no file mirror; nothing to open.
-      return { opened: false, reason: 'no wallet file for this wallet' };
+      failureContext = 'Engine watch-only wallet open failed';
+      return await openPublicKeyWalletInEngine(
+        walletId,
+        password,
+        autoLockMinutes
+      );
     }
     if (typeof autoLockMinutes === 'number') {
       await shareAutoLockChoice(autoLockMinutes);

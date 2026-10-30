@@ -1,6 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { store } from '../../state/store';
 
+/** A refusal before handoff whose wording is ours, safe to show as is. */
+class NotSubmitted extends Error {}
+
 type BroadcastResponse = {
   txid: string;
   status: 'accepted' | 'uncertain' | 'rejected' | 'deferred';
@@ -25,7 +28,9 @@ export async function submitSignedTransaction(
   };
   try {
     if (!walletId || !stillSelected()) {
-      throw new Error('Wallet session changed. Review the transaction again.');
+      throw new NotSubmitted(
+        'Wallet session changed. Review the transaction again.'
+      );
     }
     const session = await invoke<{
       active: string | null;
@@ -39,7 +44,9 @@ export async function submitSignedTransaction(
       !Number.isSafeInteger(session.epoch) ||
       session.epoch < 0
     ) {
-      throw new Error('Open this wallet in the shared engine before sending.');
+      throw new NotSubmitted(
+        'This wallet is not open in the shared engine. Lock it and open it again with its password before sending.'
+      );
     }
     submitted = true;
     const response = await invoke<BroadcastResponse>('optn_wallet_broadcast', {
@@ -60,7 +67,7 @@ export async function submitSignedTransaction(
       throw new Error('Invalid broadcast response.');
     }
     return response;
-  } catch {
+  } catch (error) {
     // An IPC failure after handoff cannot prove that the transaction was not sent.
     // Never fall back to CashScript's independent network connection.
     return {
@@ -68,7 +75,9 @@ export async function submitSignedTransaction(
       status: submitted ? 'uncertain' : 'deferred',
       message: submitted
         ? 'Network broadcast outcome is unknown. Refresh history before retrying.'
-        : 'Wallet session is unavailable or changed. Reopen this wallet before sending.',
+        : error instanceof NotSubmitted
+          ? error.message
+          : 'Wallet session is unavailable or changed. Reopen this wallet before sending.',
     };
   }
 }

@@ -326,7 +326,11 @@ describe('legacy public HD inventory handoff', () => {
     expect(await openWalletInEngine(7, 'test-password')).toMatchObject({
       opened: false,
     });
-    expect(mocks.getDatabase).not.toHaveBeenCalled();
+    // Without a seed file only the wallet's type is looked up, to find a
+    // watch-only or hardware wallet; its address inventory is never read.
+    expect(queries.some((query) => query.sql.includes('FROM keys'))).toBe(
+      false
+    );
     expect(mocks.invoke).toHaveBeenCalledOnce();
   });
 

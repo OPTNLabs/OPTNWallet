@@ -106,6 +106,7 @@ async fn chipnet_hd_account_reaches_shared_runtime_and_transport() {
     let runtime = managed_runtime();
     let imported = runtime
         .wallet_security(Request::ImportWatchOnly {
+            legacy_source_id: None,
             name: "Live Chipnet HD account".into(),
             account_xpub: SecretText::new(xpub.clone()),
             master_fingerprint: String::new(),

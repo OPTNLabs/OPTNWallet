@@ -280,9 +280,18 @@ const MAX_WATCH_ONLY_PLAINTEXT: usize = 4 * 1024;
 pub struct WatchOnlyFile {
     pub format: String,
     pub version: u32,
+    /// The desktop wallet this public account belongs to, as `WalletFile`'s
+    /// `source_id` is for seed records; 0 when none. Omitted at 0, so records
+    /// without an owner keep their exact bytes.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub source_id: u64,
     pub name: String,
     encrypted_payload: String,
     kdf_salt: String,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl std::fmt::Debug for WatchOnlyFile {
@@ -428,6 +437,7 @@ impl WatchOnlyFile {
         let mut file = Self {
             format: WATCH_ONLY_FORMAT.into(),
             version: 1,
+            source_id: 0,
             name: name.trim().into(),
             encrypted_payload: String::new(),
             kdf_salt: String::new(),
@@ -541,7 +551,6 @@ impl WatchOnlyFile {
 mod watch_only_file_tests {
     use super::*;
     use crate::hd::BIP39_TEST_VECTOR_MNEMONIC;
-    use k256::elliptic_curve::rand_core::{OsRng, RngCore};
 
     // Drawn a byte at a time rather than zero-initialised and then overwritten.
     // The two are identical at runtime -- `fill_bytes` replaces every byte --
@@ -551,7 +560,7 @@ mod watch_only_file_tests {
     // placeholder answers the finding without weakening the rule: a real
     // constant reaching a salt or nonce would still be reported.
     fn random_bytes<const N: usize>() -> [u8; N] {
-        std::array::from_fn(|_| OsRng.next_u32() as u8)
+        std::array::from_fn(|_| getrandom_04::u32().expect("the OS has entropy") as u8)
     }
 
     fn entropy() -> [u8; 56] {
@@ -695,6 +704,23 @@ mod watch_only_file_tests {
         .unwrap();
         assert!(WatchOnlyFile::parse(&seed.encode().unwrap()).is_err());
         assert_eq!(file.encode().unwrap(), original);
+    }
+
+    #[test]
+    fn watch_only_owner_is_an_optional_header_that_keeps_ownerless_bytes() {
+        let password = password();
+        let file = create(&password, &random_bytes());
+        let ownerless = file.encode().unwrap();
+        assert!(!String::from_utf8_lossy(&ownerless).contains("sourceId"));
+        assert_eq!(WatchOnlyFile::parse(&ownerless).unwrap().source_id, 0);
+
+        let mut owned = file;
+        owned.source_id = 7;
+        let bytes = owned.encode().unwrap();
+        let parsed = WatchOnlyFile::parse(&bytes).unwrap();
+        assert_eq!(parsed.source_id, 7);
+        assert_eq!(parsed.encode().unwrap(), bytes);
+        assert!(parsed.unlock(&password).is_ok());
     }
 
     #[test]
@@ -878,7 +904,7 @@ mod watch_only_file_tests {
         )
         .is_err());
         let private =
-            bip32::XPrv::derive_from_path(random_bytes::<32>(), &account.path().parse().unwrap())
+            bip32::XPrv::derive_from_path(&random_bytes::<32>(), &account.path().parse().unwrap())
                 .unwrap();
         assert!(make(
             &private.to_string(bip32::Prefix::XPRV),

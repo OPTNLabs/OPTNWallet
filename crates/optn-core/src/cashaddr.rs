@@ -47,6 +47,14 @@ impl AddressKind {
             AddressKind::P2sh | AddressKind::P2shToken => AddressKind::P2shToken,
         }
     }
+
+    /// The same key or script, expressed as its plain form.
+    pub fn without_tokens(self) -> Self {
+        match self {
+            AddressKind::P2pkh | AddressKind::P2pkhToken => AddressKind::P2pkh,
+            AddressKind::P2sh | AddressKind::P2shToken => AddressKind::P2sh,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

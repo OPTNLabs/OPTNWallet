@@ -101,6 +101,10 @@ pub enum WalletSecurityRequest {
         confirmation: SecretText,
         network: String,
         account_path: String,
+        /// The desktop wallet this account already exists as, so the opened
+        /// session can authenticate that wallet's sends. One file per owner.
+        #[serde(default)]
+        legacy_source_id: Option<u32>,
     },
     Open {
         handle: String,
@@ -154,4 +158,7 @@ pub struct WalletSecurityStatus {
 pub struct StoredWallet {
     pub handle: String,
     pub name: String,
+    /// The desktop wallet a file belongs to, read from its unencrypted header.
+    #[serde(default)]
+    pub legacy_source_id: Option<u32>,
 }
