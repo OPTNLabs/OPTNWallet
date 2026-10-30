@@ -858,6 +858,16 @@ async function protectPublicKeyWalletWithPassword(
   await dbService.flushDatabaseToFile(walletId);
   setCachedPassword(password, salt, walletId);
   markWatchOnlySession(walletId);
+  // The new wallet opens next from this cached credential, without another
+  // prompt. Give the shared engine its account now, or this first session
+  // could not broadcast what the external signer returns.
+  const engine = await openWalletInEngine(walletId, password);
+  if (!engine.opened) {
+    console.warn(
+      '[DesktopWalletManager] engine wallet not opened after create:',
+      engine.reason
+    );
+  }
 }
 
 export async function protectWatchOnlyWithPassword(
