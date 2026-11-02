@@ -9,6 +9,10 @@ import WizardDappAvatar from './WizardDappAvatar';
 import { useI18n } from '../../i18n/useI18n';
 import { wizardConnectionStatus } from '../../utils/connectionStatus';
 import InfoButton from '../ui/InfoButton';
+import {
+  selectWizardSignInProofsEnabled,
+  setEnableWizardSignInProofs,
+} from '../../state/slices/preferencesSlice';
 
 type WizardConnectView = RelayConnectionState & {
   dappDescription?: string | null;
@@ -23,6 +27,7 @@ export default function WizardConnectPanel() {
   const connectionEntries = Object.values(connections).sort(
     (left, right) => right.connectedAt - left.connectedAt
   );
+  const signInProofsEnabled = useSelector(selectWizardSignInProofsEnabled);
   const [settingsConnectionId, setSettingsConnectionId] = useState<
     string | null
   >(null);
@@ -41,6 +46,26 @@ export default function WizardConnectPanel() {
   return (
     <div className="p-4 space-y-4">
       <WizardConnectionManager />
+
+      <label className="wallet-card p-4 flex items-start justify-between gap-3 cursor-pointer">
+        <span className="min-w-0">
+          <span className="block font-semibold wallet-text-strong">
+            {t('wizard.signInProofSetting')}
+          </span>
+          <span className="block text-sm wallet-muted">
+            {t('wizard.signInProofSettingDescription')}
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          checked={signInProofsEnabled}
+          onChange={(event) =>
+            dispatch(setEnableWizardSignInProofs(event.target.checked))
+          }
+          className="mt-1 h-4 w-4 shrink-0 accent-[var(--wallet-accent)]"
+          data-testid="wizard-sign-in-proof-setting"
+        />
+      </label>
 
       <div className="wallet-card p-4 space-y-3">
         {connectionEntries.length === 0 ? (

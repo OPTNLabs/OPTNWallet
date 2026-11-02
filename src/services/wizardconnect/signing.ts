@@ -16,6 +16,12 @@ import { zeroize } from '../../utils/secureMemory';
 import { derivePrivateKeyForPath } from './derivation';
 import { decodeWizardConnectTransaction } from './transaction';
 import {
+  SignInProofError,
+  findClaimedSignInProofScheme,
+  signCanonicalSignInProof,
+  type ValidatedSignInProof,
+} from './signInProof';
+import {
   CONNECT_ALL_OUTPUTS_ALL_UTXOS,
   connectorPublicKey,
   signConnectorInput,
@@ -29,7 +35,7 @@ type WalletSeedMaterial = {
   accountPath?: string;
 };
 
-function pathNameToDerivationPath(
+export function pathNameToDerivationPath(
   pathName: 'receive' | 'change' | 'defi'
 ): DerivationPath {
   switch (pathName) {
@@ -50,6 +56,14 @@ export async function signWizardConnectTransaction(
 ): Promise<string> {
   const { transaction: txDetails, sourceOutputs } =
     decodeWizardConnectTransaction(request.transaction);
+
+  // A request carrying a sign-in proof tag must go through the proof path,
+  // which rebuilds the transaction itself. Never sign it as a payment.
+  if (findClaimedSignInProofScheme(txDetails.outputs)) {
+    throw new SignInProofError(
+      'sign-in proof requests are not signed as payments'
+    );
+  }
 
   const txTemplate = {
     ...txDetails,
@@ -171,5 +185,30 @@ export async function signWizardConnectTransaction(
     for (const key of usedKeys) {
       zeroize(key);
     }
+  }
+}
+
+/**
+ * Sign a validated sign-in proof with the key for the proven address. Signs
+ * the wallet-built canonical transaction, never the dApp's object.
+ */
+export async function signWizardConnectSignInProof(
+  validated: ValidatedSignInProof,
+  wallet: WalletSeedMaterial
+): Promise<string> {
+  const signerKey = await derivePrivateKeyForPath(
+    wallet.mnemonic,
+    wallet.passphrase,
+    wallet.network,
+    pathNameToDerivationPath(validated.path),
+    BigInt(validated.addressIndex),
+    wallet.accountPath
+  );
+  try {
+    return signCanonicalSignInProof(validated, (context, sighash) =>
+      signConnectorP2pkh(context as CompilationContextBCH, signerKey, sighash)
+    );
+  } finally {
+    zeroize(signerKey);
   }
 }

@@ -6,6 +6,9 @@ import {
   approveWizardSignRequest,
   rejectWizardSignRequest,
 } from '../../state/slices/wizardconnectSlice';
+import { previewWizardSignInProof } from '../../services/wizardconnect/signInProofPreview';
+import { selectWizardSignInProofsEnabled } from '../../state/slices/preferencesSlice';
+import WizardSignInProofView from './WizardSignInProofView';
 import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
 import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
@@ -65,6 +68,7 @@ export default function WizardSignTransactionModal() {
   const connections = useSelector(
     (state: RootState) => state.wizardconnect.activeConnections
   );
+  const signInProofsEnabled = useSelector(selectWizardSignInProofsEnabled);
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
 
@@ -91,6 +95,7 @@ export default function WizardSignTransactionModal() {
   if (!pending || !payload) return null;
 
   const connection = connections[pending.connectionId];
+  const signInProof = previewWizardSignInProof(pending.request);
   const requestDescription = describeConnectorRequest(payload.userPrompt);
   const outputs = tx?.outputs ?? [];
   const totalInput = (sourceOutputs as TxInputSource[]).reduce(
@@ -162,6 +167,53 @@ export default function WizardSignTransactionModal() {
       setBusy(false);
     }
   };
+
+  if (signInProof.kind !== 'none') {
+    const proofApprove = async () => {
+      if (
+        isUiFixtureEnabled() ||
+        signInProof.kind !== 'proof' ||
+        !signInProofsEnabled ||
+        inFlight.current
+      ) {
+        return;
+      }
+      inFlight.current = true;
+      setBusy(true);
+      try {
+        await dispatch(approveWizardSignRequest()).unwrap();
+        await showWalletNotification(t('wizard.signedReturned'));
+      } catch (error) {
+        console.error(
+          '[WizardConnect] Failed to sign the sign-in proof',
+          error
+        );
+        await showWalletNotification(
+          t('wizard.approveFailed', { message: toErrorMessage(error) })
+        );
+      } finally {
+        inFlight.current = false;
+        setBusy(false);
+      }
+    };
+    return (
+      <WizardSignInProofView
+        dappName={
+          connection?.dappName ?? connection?.label ?? t('wizard.unknownDapp')
+        }
+        schemeLabel={
+          signInProof.kind === 'proof' ? signInProof.schemeLabel : undefined
+        }
+        address={signInProof.kind === 'proof' ? signInProof.address : undefined}
+        code={signInProof.kind === 'proof' ? signInProof.code : undefined}
+        error={signInProof.kind === 'invalid' ? signInProof.message : undefined}
+        disabledBySetting={!signInProofsEnabled}
+        busy={busy}
+        onApprove={() => void proofApprove()}
+        onReject={() => void handleReject()}
+      />
+    );
+  }
 
   return (
     <div className="wallet-popup-backdrop">

@@ -12,6 +12,7 @@
  */
 
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
+import { isSignInProofTransaction } from './wizardconnect/signInProof';
 import { RequestResponse } from '@electrum-cash/network';
 import {
   TransactionDetails,
@@ -586,6 +587,13 @@ const ElectrumService = {
 
   /** Broadcast a raw transaction */
   async broadcastTransaction(txHex: string): Promise<string> {
+    // Hard guard: a WizardConnect sign-in proof spends a made-up outpoint and
+    // must never leave the wallet as a broadcast, whatever path produced it.
+    if (isSignInProofTransaction(txHex)) {
+      const message = 'Refusing to broadcast a WizardConnect sign-in proof';
+      logError('ElectrumService.broadcastTransaction', new Error(message));
+      return message;
+    }
     const server = ElectrumServer();
     try {
       const txHash: RequestResponse = await server.request(
