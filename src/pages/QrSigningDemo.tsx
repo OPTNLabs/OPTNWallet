@@ -18,6 +18,7 @@ import {
 import { useI18n } from '../i18n/useI18n';
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { Network } from '../state/slices/networkSlice';
+import NetworkContextBanner from '../components/ui/NetworkContextBanner';
 
 type DemoMode = 'requester' | 'signer';
 
@@ -131,6 +132,8 @@ const QrSigningDemo: React.FC = () => {
           }
           compact
         />
+
+        <NetworkContextBanner network={currentNetwork} />
 
         <SectionCard>
           <div className="flex gap-2">

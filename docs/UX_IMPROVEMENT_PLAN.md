@@ -259,6 +259,299 @@ After these changes, the app should feel:
 - more confident in its primary actions
 - less like a feature dump
 
+## Frontend redesign implementation pass — 2026-10-29
+
+This pass is on the existing checkout branch `codex/frontend-redesign`. It
+implements the first shared safety and comprehension layer from the approved
+wallet references, while keeping transaction construction, authorization,
+signing, broadcast and wallet authority unchanged.
+
+### Implemented in source
+
+- A reusable, high-contrast network context banner is now present on Home,
+  Actions, Assets, Send, Send review, Receive, History, Outbox, Network
+  settings, and the create/import onboarding derivation step. Mainnet and
+  Chipnet use different semantic colors and explicit live/test wording.
+- Shared WalletConnect/WizardConnect transaction reviews now use the same
+  network banner, and technical transaction IDs and participant addresses use
+  the same masked long-press disclosure instead of exposing raw values by
+  default.
+- Connector review loading, fallback, BCMR identity and wallet-match copy now
+  comes from the shared translation catalog, including the Arabic overrides;
+  CashConnect approval and WizardConnect technical-detail labels follow the
+  same localized path instead of adding new hardcoded English UI.
+- BCH/USD segmented controls replaced the balance and send amount icon toggles.
+  Send spendable balance follows the active unit, while Max remains available
+  under Advanced options as a secondary action.
+- Incoming funds can leave a highlighted portfolio flag and Receive attention
+  state visible for 15 seconds, with an explicit dismiss control instead of
+  relying on a transient toast alone.
+- Transaction IDs and participant addresses use first-four/last-four masking.
+  Copy remains available, while long-press/context-menu disclosure opens the
+  full value in a focused sheet with an explicit copy action. This now includes
+  the successful Send state as well as History, Outbox, watch-only/multisig
+  send, the custom builder and paper-wallet sweep.
+- The custom builder, watch-only/multisig send and paper-wallet sweep now carry
+  the same network context and review disclosure pattern; recoverable lock and
+  broadcast states expose the same contextual explanations without changing
+  signing or broadcast authority.
+- Ordinary and multisig Send review now gives the same long-press/copy access to
+  recipient, stealth, input and output addresses inside the review’s technical
+  disclosure.
+- Custom transaction source-selection, selected-UTXO and pending-outbound rows
+  now use the same masked address/transaction-ID treatment, with keyboard
+  selection preserved and full-value disclosure available on demand.
+- The dedicated desktop Home renderer now mirrors the same network context,
+  BCH/USD, incoming-funds attention, and masked recent-activity behavior while
+  retaining its desktop-only sync progress and connector popup behavior.
+- The Apps directory, marketplace host, Contracts, Quantumroot and CashFusion
+  entry points now repeat the active network context; Merchant Pay and Cauldron
+  result/history cards also use masked transaction IDs with on-demand full
+  disclosure.
+- The remaining direct wallet-adjacent routes now follow the same boundary:
+  Nostr Chat, the standalone CashTokens mint flow, and the legacy FundMe
+  campaign detail route repeat the active network context. Mint's broadcast
+  result also masks its transaction ID while retaining copy and long-press
+  disclosure.
+- Transaction History rows now expose status help without nesting an info
+  control inside the row action, and use the shared localized waiting/confirmed
+  vocabulary. History cards now lead with status before the masked technical
+  identifier and show the wallet-owned net BCH effect when verbose details are
+  available. WalletConnect and WizardConnect place network context at the
+  modal boundary, so unsupported and broadcast-locked requests are labeled too.
+- CashTokens mint failures now lead with the same plain-language error panel as
+  Send, with raw exception text available only under Technical details.
+- Cauldron's merchant auto-prepare effect now invokes the latest quote workflow
+  without recreating the effect on every render, preserving the guided review
+  path while keeping the app-specific lint gate clean.
+- Home now has a secondary wallet-tools tier for Assets and Apps beneath the
+  primary Receive/Send actions, with the same navigation return context on the
+  web/mobile and desktop renderers.
+- Apps now groups the All view into Wallet, Token, Utils and Advanced intent
+  sections while retaining category filters, app-specific descriptions,
+  coming-soon labels and existing navigation routes. Each group now has a
+  localized “best for” subtitle, and dense filters wrap on mobile instead of
+  clipping the Advanced option.
+- Home portfolio money cards now repeat the network distinction with a
+  Mainnet/Chipnet semantic border and tint on both mobile and desktop, in
+  addition to the centered context banner.
+- The primary Send heading now uses the shorter localized `Send` label so it
+  remains legible beside the wallet mark at mobile widths.
+- Back in watch-only/multisig send now closes broadcast confirmation, clears a
+  recoverable error, or returns to the editable build step before leaving the
+  route, preserving the correction path after a failure.
+- Send errors map common failures to plain language and use a safe generic
+  fallback rather than exposing transaction-builder diagnostics. The error
+  state now includes an explicit Edit payment action that returns focus to the
+  retained form instead of forcing the user to re-enter the payment.
+- Outbox payment states use plain-language labels and touch/keyboard-accessible
+  `(i)` explanations for pending outgoing transactions, network visibility and
+  release/clear-lock actions. Send now explains the recipient field, pending
+  outgoing protection and Advanced options at the point of use.
+- Transaction detail status now has an inline explanation, and lookup failures
+  announce a friendly retry message while the technical cause stays in the
+  application log.
+- Onboarding Help now behaves as a guided walkthrough: one step is visible at
+  a time, progress is explicit, Back/Next are reversible, and Done closes the
+  popup. This is the interaction pattern to carry into future wallet tours.
+- Network switching now opens a confirmation sheet that names the target
+  network, repeats the real-funds/test-funds warning, explains resynchronization,
+  and supports cancellation. Reload and switch failures are visible and
+  retryable; a failed switch retries through the confirmation sheet rather than
+  silently changing network state.
+
+### Evidence recorded for this pass
+
+Source/component evidence currently covers TypeScript, formatting, the shared
+UI suite, the core suite, the build, the mask utility, onboarding,
+connector-review, custom-builder, watch-only-send, paper-wallet-sweep, the
+direct app-route audit, history status help, connector unsupported-state
+coverage and
+transaction-detail regressions, and the Network settings
+confirmation/recovery tests. A disposable local headless Chrome render was
+inspected at 390×844 and
+1440×1000; a disposable Firefox WebDriver session at 390×844 opened the Help
+walkthrough, advanced through Steps 1–4, and closed it with Done. The same
+session verified a LIVE Mainnet banner on the create-wallet network step.
+This is not yet a claim of packaged desktop, Android, iOS, native notification,
+or full wallet-state parity. The connected browser surface was unavailable,
+so the browser evidence came from local headless tooling rather than the
+connected browser interface. The untracked `screenshots/` directory remains
+user-owned evidence and is not modified by this work.
+The local preview returned `200 OK`, `Content-Type: text/html` and a 5,118-byte
+shell response at `127.0.0.1:5174`.
+
+### Twelve-item acceptance checklist
+
+The revised surfaces are source/test-covered as follows; “open” means the
+remaining verification or route work is deliberately not being claimed as
+complete.
+
+1. **Task entry:** covered for the revised Home, Send, Receive, History, Outbox
+   and grouped Apps fixture routes at mobile size, plus Network settings,
+   create/import onboarding, direct app routes, and onboarding entry points;
+   full route inventory remains open.
+2. **Primary action/consequence:** covered for BCH/USD selection, network
+   confirmation, and History status/effect hierarchy; full send/receive visual
+   hierarchy remains open.
+3. **Plain language:** covered for common send, switch and reload failures,
+   including an oversized Send amount resolving to “Not enough funds in your
+   wallet”; broader technical copy cleanup remains open.
+4. **Progressive disclosure:** covered for masked raw identifiers, Receive
+   long-press full-value disclosure, copy confirmation, connector technical
+   details, history status help, and Send/Mint technical details; other
+   technical states remain open.
+5. **State feedback:** covered for the persistent incoming flag and pending
+   transaction/outbox fixture states, plus switch, reload and send error
+   states; Home stale/unavailable, History empty/error, and Outbox stale,
+   unknown-network, empty and seen fixture variants are now available; the
+   full route-state matrix remains open.
+6. **Safe recovery:** covered for Send error → Edit payment with entered fields
+   retained, Receive back navigation, network cancel/retry, Outbox release
+   explanations and repeated-action guards; full cancellation/retry matrix
+   remains open.
+7. **Financial/network truth:** covered for explicit Mainnet/Chipnet context on
+   wallet, create/import onboarding, and connector review screens; active
+   BCH/USD spendable units and Send review network labeling are covered; live
+   provider and broadcast evidence remains open.
+8. **Security/privacy boundary:** preserved; this pass changes presentation and
+   disclosure only, and does not add signing or broadcast authority.
+9. **Mobile behavior:** the onboarding and authenticated fixture surfaces were
+   rendered at 390×844, and 44px controls/safe-area classes are retained;
+   Outbox Back no longer overlays the first transaction card; full wallet
+   touch/back verification is open.
+10. **Desktop/keyboard/status:** onboarding was rendered at 1440×1000, and the
+    walkthrough’s keyboard-capable controls were exercised through WebDriver;
+    packaged desktop and screen-reader verification are open.
+11. **Visual system:** shared components and approved network hierarchy were
+    inspected in the mobile/desktop onboarding renders and the mobile
+    Home/Send/Receive/History/Outbox/Apps fixtures, including stale/empty/error
+    states; full route-level contrast/translation/layout comparison is open.
+12. **Evidence proportionality:** source and component evidence is recorded;
+    packaged-platform and live-chain claims remain explicitly out of scope.
+
+### Next implementation order
+
+1. Render the remaining revised core journeys with disposable fixtures at the
+   approved mobile, compact-desktop and wide-desktop sizes, then repair layout
+   findings.
+2. Extend contextual help to the remaining sent, stale, freshness and
+   connector states, keeping raw technical detail behind disclosure.
+3. Exercise Send → Review → error → edit/retry and Receive → copy/share/back,
+   ensuring the previous step and entered values survive recoverable failures.
+4. Complete History/Outbox pending, stale, unknown-broadcast and cancellation
+   states with the same user-facing status vocabulary.
+5. Re-run the onboarding and connector approval screens on packaged targets
+   against the same network, effect-summary, focus and disclosure rules; live
+   peer and packaged approval evidence remains open.
+6. Repeat the acceptance checklist on packaged desktop and Android/iOS targets
+   when those surfaces are available, and keep platform evidence separate from
+   source/component evidence.
+
+### Disposable authenticated fixture harness — 2026-10-30
+
+Added a development-only `VITE_UI_FIXTURE=1` entry point gated by the
+`ui-fixture` query parameter. It creates a fixture-owned, non-persisted screen
+store and mounts the real LandingPage, Home, Send, Receive, History, Outbox,
+Apps, and Settings routes with synthetic Chipnet balances, a confirmed and pending transaction, an incoming
+payment notification, and an unresolved outbox record. The fixture screen
+store is non-persisted and contains no mnemonic or private key; no signing,
+tracker operation, or live provider is used. Receive, Send and Outbox
+data-loading boundaries explicitly short-circuit to public fixture data, so
+fixture screen actions cannot mutate a user's wallet.
+
+To open it locally, run `VITE_UI_FIXTURE=1 npm run dev -- --host
+127.0.0.1`, then use `/?ui-fixture&screen=home#/fixture/home` (the screen
+value can be `onboarding`, `watch-only`, `send`, `receive`, `history`,
+`outbox`, `apps`, `settings`, `walletconnect`, `wizardconnect`, `cashconnect`,
+or `builder`;
+`send-review` and `builder-review` open display-only review states;
+`wizardconnect-invalid`, `cashconnect-empty`, `cashconnect-multi`, and
+`builder-token-error` cover guarded/error variants; state variants include
+`home-stale`, `home-unavailable`, `history-empty`, `history-error`,
+`outbox-stale`, `outbox-unknown`, `outbox-seen`, and `outbox-empty`.
+
+Local headless Chrome rendered the core routes at 390×844. The captures showed
+the persistent incoming-money flag on the Home portfolio and Receive action,
+the Chipnet context banner, the BCH/USD spendable balance control, masked
+transaction IDs and addresses, pending/confirmed History states, and the
+outbox verification-pending disclosure. This is source plus browser layout
+evidence; native touch, screen-reader, packaged-platform, live-provider,
+signing, broadcast, mempool, and confirmation evidence remain open.
+
+### Fixture interaction exercise — 2026-10-30
+
+A Chrome DevTools Protocol exercise against the real fixture routes verified:
+
+- Receive address long-press opens the full public address in the existing
+  disclosure sheet.
+- Receive copy uses the clipboard path and announces `Address copied` through
+  the wallet-owned live status presenter.
+- Home → Receive → Back returns to the fixture Home route when entered through
+  the fixture navigation state.
+- Send with a 2 BCH amount against the 1 BCH fixture preserves the recipient
+  and amount fields and shows the user-facing insufficient-funds message.
+- History retains both pending and confirmed transactions, while Outbox shows
+  the verification-pending record with masked identifiers.
+- `send-review` opens the production ReviewCard with Chipnet context, wallet
+  effect, masked recipient, Technical details, and a display-only confirmation
+  affordance; closing it retains the recipient and amount fields.
+
+This closes the core fixture interaction slice for the feedback review. Full
+native touch, screen-reader, packaged-platform, live-provider, signing,
+broadcast, mempool, confirmation, and broader route-state matrices remain
+separate evidence requirements.
+
+### Fixture state-matrix exercise — 2026-10-30
+
+The fixture now exposes Home freshness, History empty/error, and Outbox
+stale/unknown-network/empty/seen scenarios through the real route components.
+Headless Chrome confirmed the stale Home explanation and Server settings link,
+History's empty and retryable error states, Outbox's `Release if stale` and
+network-error/Technical-details states, and the absence of pending cards for
+the empty scenario. The populated History fixture now shows pending/confirmed
+status before masked IDs and synthetic wallet-owned BCH effects. The mobile
+Outbox render also confirmed that the in-flow
+Back action no longer covers the first transaction card.
+
+The Apps fixture route also confirms the grouped Wallet, Token, Utils and
+Advanced sections and the wrapped mobile filter row. These are browser fixture
+renders, not packaged native evidence.
+
+The Settings fixture confirms the active network banner, Quick access, grouped
+Wallet & security / Connections & features / About & support destinations, and
+the focused Wallet & security panel with an in-flow Back action. The onboarding
+fixture confirms Help → four walkthrough steps → Done. The `send-review`
+fixture confirms the production ReviewCard's network context, wallet effect,
+masked recipient, Technical details disclosure, full-value long-press path, and
+form-value retention after closing. These fixture branches are display-only.
+The WizardConnect, CashConnect, and custom-builder fixtures now add the
+connector status/effect hierarchy, request-reported balance ambiguity,
+prepared-transaction count, exact fee/output review, drag confirmation, and
+unaccounted-token failure state.
+
+### Wide desktop fixture render — 2026-10-30
+
+The fixture routes were also rendered at 1280×900. The centered wallet
+column remains readable without stretching the transaction controls; the
+history header now wraps `Transaction History` instead of hiding it behind an
+ellipsis, while the network banner, persistent incoming disclosure, masked
+identifiers and Outbox verification state remain visible. This is browser
+layout evidence, not packaged desktop or native touch evidence.
+
+### Validation pass — 2026-10-30
+
+Source and web validation passed: `npm run test:core` reported 328 test files
+and 2,060 passing tests with 7 skipped files and 10 skipped tests;
+`npm run test:ui` reported 38 files and 98 passing tests; `npm run test:apps`
+reported 38 files and 161 passing tests; typecheck, web build, core lint,
+formatting, dependency policy, security (6/6), add-on validation (1/1), and
+`git diff --check` passed. The UI-suite Vite native-config extension message
+remains non-fatal. The Tauri build reached the Rust compilation step but is
+currently blocked by missing host `glib-2.0` and `gobject-2.0` pkg-config
+metadata; `WebKitWebDriver` is also unavailable. No packaged-native claim is
+made from this pass.
+
 ## 2026-10-23 app-wide interaction review
 
 Branch: `codex/ux-basics-and-workflow`; baseline `ac2da1cee`. Scope: shipped
@@ -744,7 +1037,7 @@ source findings explicitly identified.
 | ID    | Priority | Finding and evidence                                                                                                                                                                                                                                       | Proposed correction / acceptance                                                                                                                                                                                                                      |
 | ----- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | UX-01 | P1       | At 780×493, `authenticated-send.png` hides recipient/amount, `authenticated-receive.png` hides QR/address, and Assets/Settings retain secondary controls over their content. Shared header and constrained flex/scroll regions are candidate contributors. | Reduce nonessential compact-window header space and prevent footer/secondary controls from collapsing the main task. Reproduce with DOM measurements and verify scrolling, keyboard, zoom and native keyboard-reduced viewports; retain 44px targets. |
-| UX-02 | P1       | Source-confirmed: `InfoTooltipIcon.tsx` returns `null`, discarding the recovery-phrase warning passed by Create, plus Import/network help.                                                                                                                 | Render accessible optional help and keep essential recovery guidance inline. Verify content, keyboard/touch and cancellation without recording recovery words. A new backup gate would be a separate product behavior change.                         |
+| UX-02 | P1       | Historical source finding: `InfoTooltipIcon.tsx` previously returned `null`, discarding the recovery-phrase warning passed by Create, plus Import/network help. Current source renders the help, and Create also keeps the safety instruction inline.      | Keep accessible optional help and essential recovery guidance inline. Verify content, keyboard/touch and cancellation without recording recovery words. A new backup gate remains a separate product behavior change.                                 |
 | UX-03 | P1       | Apps/Outbox navigation uses white labels over light green. Adjacent captured pixels give about 2.02:1 against white; other gradient positions are lower.                                                                                                   | Correct existing foreground/background tokens and measure rendered active/inactive/focus and translated states. This is a contrast finding, not a complete accessibility certification.                                                               |
 | UX-04 | P1       | Home lacks visible active-network context; shared `PageHeader` hides supplied titles/subtitles with `sr-only`. A Sync action is not a readiness label.                                                                                                     | Show a compact task title and canonical network/freshness status as in the approved references. Never infer readiness from zero balance or provider HTTP health.                                                                                      |
 | UX-05 | P2       | Home places a BTC/USD ticker before BCH portfolio and quick actions, particularly costly in the short-window capture.                                                                                                                                      | Lead with wallet balance/status and Receive/Send. Put unrelated market data lower or in an optional view; preserve existing wallet actions.                                                                                                           |
@@ -1342,3 +1635,683 @@ Focused share feedback tests cover success, unavailable share surfaces, and
 user cancellation. Rendered browser verification still cannot establish
 native Android/iOS share sheets, hardware approval, live providers, signing,
 broadcast, or confirmation.
+
+### Advanced address and transaction disclosure continuation — 2026-10-29
+
+The remaining user-visible raw-value audit found three advanced surfaces that
+were still showing full identifiers without the redesign interaction: the two
+multisig receive-address variants, the multisig cosigner unsigned-transaction
+hash, and Quantumroot's receive and quantum-lock address cards. These now use
+the shared masked-value control with click-to-copy, long-press/context-menu full
+disclosure, and the existing QR or explicit Copy action preserved. No signing,
+address reservation, PSBT validation, or transaction behavior changed.
+
+The audit intentionally left technical input fields and transient application
+diagnostics as raw values where editing or debugging requires the exact value;
+the user-facing wallet identifiers are the disclosure boundary. Focused UI
+verification passed **34 files / 88 tests**; TypeScript, core lint, Prettier,
+`git diff --check`, the web build, and the desktop-surface build also passed.
+An isolated Chrome/CDP fixture rendered the revised Home at 390×844 in
+Mainnet and Chipnet states, and the revised Send screen at 390×844; the
+shortened Send heading, network banner, and money-card color distinction were
+visually confirmed. Rendered re-capture of the advanced multisig and
+Quantumroot states, packaged native behavior, live providers, signing,
+broadcast, mempool, and confirmation remain open evidence gaps.
+
+### Address disclosure continuation — 2026-10-30
+
+The remaining active wallet-adjacent address displays in Contract View and
+Merchant Pay were shortened but did not offer the approved full-value path.
+They now use the shared masked-value control with copy feedback and
+long-press/context-menu disclosure. Contract input and signing values remain
+exact where they are editable or technical. Merchant Pay tests passed **7/7**;
+core typecheck, lint, formatting, and `git diff --check` passed. Packaged and
+live-provider evidence remains separate and open.
+
+The same audit also covered Quantumroot recovery destinations/outpoints and
+Cauldron merchant-review address displays. Those now use the shared disclosure
+control as well; the focused Cauldron and Merchant Pay app suites passed
+**43/43** tests combined.
+Paryon broadcast success now keeps the status copy plain and renders the
+returned transaction ID as a masked, copyable disclosure. Memo Cash Reader
+activity rows apply the same boundary to author addresses and transaction IDs.
+The complete app suite passed **36 files / 157 tests** after these changes.
+The same boundary now covers the add-on Paper Wallet Sweep result, CashFusion
+result banners, UTXO cards, watch-only address previews, and the address
+selection popup. Exact transaction values remain available through the shared
+copy and long-press/context-menu disclosure. A documented desktop build
+attempt reached Rust compilation but stopped before producing a binary because
+the host lacks `glib-2.0`/`gobject-2.0` development metadata; WebKitWebDriver
+is also not installed, so packaged desktop evidence remains unavailable.
+Quantumroot vault lists and Coin Control outpoint rows now use the same
+interactive disclosure for their visible wallet identifiers. Core verification
+after this continuation passed **320 files / 2,037 tests** and UI verification
+passed **34 files / 88 tests**.
+AuthGuard mint/broadcast status and error strings now split visible transaction
+IDs into the same masked, copyable disclosure without changing its reviewed
+transaction or broadcast authority.
+Cauldron broadcast status sentences and result-modal copy now use the same
+masked transaction-ID disclosure as their standalone result row.
+Receive’s secondary address chooser now uses the same embedded masked address
+control while retaining its tap-to-select action.
+Token details now apply the same disclosure to the visible token ID and
+authority-head transaction hash; technical contract inputs remain exact.
+The persistent pending-outbound panel now explains each send state beside its
+label, including the difference between submission, network visibility, and
+confirmation, without changing release or clear behavior.
+Paryon thread freshness now has an adjacent explanation, and preferred
+contract outpoints use the same copy/long-press disclosure as other visible
+wallet identifiers; write gating remains unchanged.
+The persistent incoming-funds flag now renders structured amount, address, and
+Transaction ID fields in both mobile and desktop Home, so the notification
+does not lose its copy/full-value path when the toast is missed.
+Quantumroot recovery broadcasts now keep a persistent result notice in the
+vault popup with a masked, copyable Transaction ID; the native toast is reduced
+to a plain awaiting-confirmation message.
+Transient UTXO and server notification cards now use the same interactive
+address and Transaction ID disclosures. Simple Send recipient previews,
+CashToken review recipients, custom-builder output recipients, and contract
+function address selections now preserve the full-value copy/long-press path.
+The enlarged Receive QR preview now uses the same interactive disclosure for
+address and BIP21 payload values instead of rendering a shortened-only label.
+The Receive Quantumroot status popup now applies the same disclosure to its
+receive and Quantum Lock addresses.
+Core typecheck, the core suite (**324 files / 2,041 tests**), UI verification
+(**34 files / 88 tests**), app verification (**36 files / 157 tests**), the web
+build, lint, and Prettier passed after this continuation.
+
+### Pending-send and rendered interaction continuation — 2026-10-29
+
+The blocking pending-send sheet now uses the same plain-language Outbox state
+vocabulary as the full Outbox. A broadcasted payment is no longer presented
+as “syncing,” and a Tor-only Fusion record awaiting independent visibility is
+explicitly labelled as awaiting verification with the reason its inputs remain
+locked. The sheet's Outbox, Sync, Dismiss, release and clear controls now meet
+the 44px touch-target rule. A focused static-render regression covers the
+verification lock, recovery copy and target sizing.
+
+The Outbox now labels the identifier as “Transaction ID,” preserves the
+first-four/last-four disclosure, and wraps long masked identifiers inside the
+mobile card instead of clipping them horizontally. Expanding Advanced on Send
+now scrolls the newly revealed controls into the inner form viewport, so Max,
+coin control and change-address options are immediately discoverable on a
+390px screen. No transaction construction, signing, broadcast or outbox
+authority changed.
+
+A clean disposable generated-wallet Chrome/CDP pass rendered Home, Send,
+expanded Send Advanced, empty Outbox and submitted Outbox states at 390x844,
+plus submitted Outbox at 1280x900. The network-switch confirmation sheet was
+also rendered at 390x844. The capture directories were temporary and contained
+only masked public identifiers; they are not source deliverables. The revised
+mobile layouts were visually inspected after the source changes. Native
+packaged behavior, live providers, signing, broadcast, mempool and confirmation
+remain separate evidence gaps.
+
+Focused pending-panel/Send/Outbox checks passed. Current repository validation
+after this continuation is **324 core files / 2,043 tests**, **34 UI files / 89
+tests**, and **36 app files / 157 tests**, with core typecheck, web build, lint,
+Prettier and `git diff --check` passing. The non-fatal Vite native-config
+extension warning remains unchanged.
+
+The same visual pass moved the market-price ticker below Portfolio, Quick
+Actions, Advanced Actions and Recent Activity on both Home renderers. This
+keeps wallet balance and the Receive/Send tasks as the first meaningful content
+after the network banner while leaving the ticker available lower on the page.
+A source regression protects the ordering, and a clean 390x844 Chrome render
+confirmed that Portfolio is the first card after the banner. Desktop source
+parity is covered; packaged desktop/native rendering remains open.
+
+### Send recovery and review accessibility continuation — 2026-10-29
+
+The Send error path now keeps the payment form mounted and preserves the
+entered recipient and amount while the friendly error remains visible. The
+Edit payment action focuses the recipient for address errors and the amount
+field for insufficient-funds errors, so the user can correct the failed input
+without re-entering the payment. The English balance message now explicitly
+says that there are not enough funds in the wallet; technical provider text
+remains behind the user-facing classification.
+
+The Review card's Technical details disclosure now has an explicit 44px target
+and retains keyboard focus containment, masked address/transaction disclosure,
+and the network context banner. Focused Send/Review regressions passed **3
+files / 18 tests**. The full repository gates then passed **324 core files /
+2,044 tests** (10 skipped), **34 UI files / 89 tests**, and **36 app files /
+157 tests**; typecheck, web build, lint, dependency policy, security,
+add-on validation, Prettier, and `git diff --check` also passed. The existing
+non-fatal Vite native-config extension warning remains unchanged.
+
+This is browser/source evidence for the redesign branch. Native packaged
+dialogs, mobile share/sheets, hardware approval, live providers, signing,
+broadcast, mempool and confirmation remain separate evidence gaps.
+
+### Outbox state-matrix continuation — 2026-10-29
+
+The Outbox UI now has focused coverage for every supported tracker state:
+broadcasting, submitted, sent to network, and seen by network. Each state
+renders its matching plain-language explanation through the adjacent info
+control. Stale release and unknown-broadcast recovery remain guarded actions
+rather than new tracker states, so no transaction authority or release timing
+was changed.
+
+The full UI lane now passes **34 files / 92 tests**. Core remains **324 files /
+2,044 tests** (10 skipped), and apps remains **36 files / 157 tests**. The
+existing Vite native-config extension warning is non-fatal; packaged native,
+live-provider, signing, broadcast, mempool and confirmation evidence remains
+open.
+
+### Home parity and Outbox diagnostic continuation — 2026-10-29
+
+Desktop Home now mirrors the mobile renderer's stale/unverified balance
+guidance, including an explanatory info control, a Server settings recovery
+link, and an announced refresh failure. Recent Home activity cards on both
+renderers now explain pending/confirmed status beside the visible label. Home
+utility links and QR entry actions use the 44px touch-target rule, as do the
+Send mode, Advanced and Airdrops controls.
+
+Outbox now classifies common provider diagnostics into friendly balance/network
+copy and keeps the raw error behind Technical details. The entered BCH, FT and
+NFT correction fields are all reachable from Send's insufficient-funds recovery
+action, while the existing recipient recovery remains intact.
+
+The final current validation passed **324 core files / 2,049 tests** (10
+skipped), **34 UI files / 93 tests**, and **36 app files / 157 tests**. Build,
+typecheck, lint, dependency policy, security, add-on validation, formatting and
+`git diff --check` passed. Native packaged rendering, hardware, live providers,
+signing, broadcast, mempool and confirmation remain evidence gaps.
+
+The final Home status-help review keeps recent-activity navigation and status
+explanation as sibling controls rather than nesting an info button inside the
+row button. Connector technical-detail disclosures use the same explicit 44px
+summary target. Focused connector, Home and Outbox checks remain green after
+that structural correction.
+
+### Custom builder error disclosure continuation — 2026-10-29
+
+The custom transaction builder's error popup now defaults to actionable
+wallet-language for insufficient funds, network failures, and other build or
+broadcast failures. The exact provider or builder diagnostic remains available
+under a keyboard-reachable Technical details disclosure, while the existing
+Back/Try again path keeps the user in the builder instead of returning home.
+The review-before-send dialog continues to show masked transaction IDs and
+addresses, input/output totals, fee information, and token-accounting checks
+before the drag confirmation. No transaction construction, signing, broadcast,
+release, or clear authority changed.
+
+The new builder disclosure regression and existing popup/transaction-summary
+checks passed **3 files / 3 tests** in the focused UI run. Final repository
+validation passed **324 core files / 2,049 tests** (10 skipped), **35 UI files /
+94 tests**, and **36 app files / 157 tests**. Core typecheck, core lint, web
+build, dependency policy, security (**6/6**), add-on validation (**1/1**),
+formatting, and `git diff --check` also passed. The Vite native-config
+extension warning remains non-fatal. Packaged desktop/mobile, hardware,
+live-provider, signing, broadcast, mempool, confirmation, and latest custom
+builder browser-render evidence remain separate follow-up work.
+
+### Add-on identifier disclosure continuation — 2026-10-29
+
+The active AuthGuard UTXO selector and Paryon execution-plan target now use
+the shared masked transaction-ID control with copy feedback and
+long-press/context-menu full-value disclosure. This closes two remaining
+plain-text shortened transaction-ID displays without changing add-on
+transaction preparation, signing, broadcast, or protocol authority.
+
+The app suite passed **37 files / 159 tests** after the change; the production
+web build and targeted Prettier/diff checks also passed. Packaged add-on/native
+rendering, live providers, hardware, signing, broadcast, mempool and
+confirmation remain separate evidence gaps.
+
+### Shared destructive-action target continuation — 2026-10-30
+
+The shared `wallet-btn-danger` style now enforces the same 44px minimum
+touch target as the primary and secondary wallet actions. This covers clear,
+release, retry, and other destructive/recovery controls across routes without
+changing their behavior. A UI regression protects the shared CSS rule.
+
+Final current UI validation passed **36 files / 95 tests**; the production web
+build, core lint, targeted formatting, and `git diff --check` also passed. Core
+and app counts remain **324 files / 2,049 tests** (10 skipped) and **37 files /
+159 tests** respectively. Packaged desktop/mobile, screen-reader, hardware,
+live-provider, signing, broadcast, mempool, confirmation, and full route
+fixture evidence remain open.
+
+### Error disclosure, network context, and app-surface continuation — 2026-10-30
+
+Watch-only send, paper-wallet sweep, custom-builder, and multisig failures now
+default to actionable wallet language while retaining the exact diagnostic
+behind a keyboard-reachable Technical details disclosure. The paper-wallet
+classifier is kept in a pure helper module so Fast Refresh and lint boundaries
+remain clean. Existing back/retry and transaction authority were not changed.
+
+Multisig Home, Receive, Policy, and Cosigner Workspace now show the active
+network context when the policy knows it. Paryon, Cauldron, Merchant Pay,
+Paper Wallet Sweep, and Airdrops now show the active network context at their
+app boundary; nullable provider context is omitted rather than guessed.
+AuthGuard and Paryon execution-plan transaction IDs use the shared masked
+copy/long-press disclosure. Outbox diagnostic details and the shared
+destructive-action control now meet the 44px touch-target rule.
+
+Post-fix validation passed **324 core files / 2,050 tests** with 7 skipped
+files and 10 skipped tests, **38 UI files / 97 tests**, and **38 app files /
+160 tests**. Typecheck, production web build, core lint, dependency policy,
+security (**6/6**), add-on validation (**1/1**), Prettier, and
+`git diff --check` passed. The existing non-fatal Vite native-config warning
+remains. Packaged desktop/mobile, screen-reader, hardware, live-provider,
+signing, broadcast, mempool, confirmation, and full route-fixture evidence
+remain separate follow-up work.
+
+### Multisig setup and Home currency continuation — 2026-10-30
+
+Multisig setup and QR-import failures now use the shared friendly-error panel
+with Technical details disclosure, and the setup banner follows the policy
+network being created rather than only the standard wallet's network. This
+keeps a Chipnet policy visibly distinct even when the open mnemonic wallet is
+on Mainnet.
+
+Home and Desktop Home now express the spendable/stealth balance breakdown in
+the selected BCH or USD unit. When USD pricing is unavailable, USD mode says
+so instead of silently presenting BCH values. English and Arabic labels are
+covered, and a source regression protects both renderers.
+
+Final validation passed **326 core files / 2,052 tests** with 7 skipped files
+and 10 skipped tests, **38 UI files / 97 tests**, and **38 app files / 160
+tests**. Typecheck, production web build, core lint, dependency policy,
+security (**6/6**), add-on validation (**1/1**), Prettier, and
+`git diff --check` passed. The existing non-fatal Vite native-config warning
+remains. Packaged desktop/mobile, screen-reader, hardware, live-provider,
+signing, broadcast, mempool, confirmation, and full route-fixture evidence
+remain separate follow-up work.
+
+### Connector and app error-disclosure continuation — 2026-10-30
+
+CashConnect pending-approval and connection-failure states now expose
+wallet-owned explanatory info buttons. WalletConnect and WizardConnect session
+status rows and the WizardConnect sign request status use the same contextual
+help pattern. Connector status copy now has Arabic overrides.
+
+Contract loading and add-on registry failures now show a user-facing recovery
+message first, with the provider/registry diagnostic behind a 44px Technical
+details disclosure. Existing retry and navigation behavior remains unchanged.
+The local headless preview also rendered the current onboarding shell at
+390x844 and 1280x900 after startup, with Create Wallet, Import Wallet, and
+Create Watch-Only Wallet present in the DOM. This is browser evidence only;
+connected browser, packaged native, screen-reader, live-provider, signing,
+broadcast, mempool, confirmation, and full route-fixture evidence remain open.
+
+Final validation passed **327 core files / 2,053 tests** with 7 skipped files
+and 10 skipped tests, **38 UI files / 97 tests**, and **38 app files / 160
+tests**. Typecheck, production web build, core lint, dependency policy,
+security (**6/6**), add-on validation (**1/1**), Prettier, and
+`git diff --check` passed. The existing non-fatal Vite native-config warning
+remains.
+
+### Fixture-harness boundary audit — 2026-10-30
+
+The repository's deterministic desktop smoke specs cover app launch and
+onboarding validation without persisting wallet data. The create/lock/reopen
+scenario is intentionally mutation-gated and runs only through the native
+Tauri/WebDriver harness with an isolated data directory. No non-mutating
+authenticated fixture currently mounts Home, Send, Receive, History, or
+Outbox with disposable balances and transaction states. Browser onboarding
+renders therefore remain layout evidence only; core-wallet route evidence
+must be added through disposable fixtures before the remaining interaction
+acceptance items can be closed. No wallet credentials, seed phrases, signing,
+broadcast, or live-chain state were used in this audit.
+
+### Home recent-activity hierarchy continuation — 2026-10-30
+
+Home and Desktop Home recent-activity cards now lead with a Pending or
+Confirmed status chip, followed by the block or pending-confirmation context,
+then the masked `Transaction ID`. The row keeps navigation and contextual help
+as sibling controls so the info button does not become nested inside the row
+action. A disposable 390x844 Chrome fixture render confirmed both pending and
+confirmed cards remain readable with the network banner above them.
+
+The source regression and browser fixture evidence cover this hierarchy only;
+native touch, screen-reader, packaged-platform, live-provider, signing,
+broadcast, mempool, and confirmation evidence remain separate gaps. The
+current UI lane remains **38 files / 98 tests**, and the production build
+passes.
+
+### Settings hierarchy fixture continuation — 2026-10-30
+
+The disposable authenticated fixture now also mounts the real Settings root.
+At 390x844, browser evidence confirms the active Chipnet banner, Quick access,
+and the grouped Wallet & security, Connections & features, and About & support
+destinations. Entering Wallet & security shows the focused panel with Wallet
+info, Derivation Path, Recovery Phrase, and an in-flow Back action. This
+extends visual/interaction evidence for the settings redesign without
+persisting wallet data or invoking logout, recovery, or network mutation.
+
+The fixture still does not prove native touch, screen-reader, packaged
+platform, or live-provider behavior.
+
+### Onboarding fixture continuation — 2026-10-30
+
+The disposable fixture now mounts the real LandingPage and Watch-Only page
+alongside the authenticated routes. At 390x844, the current onboarding render
+keeps Create Wallet, Import Wallet, and Create Watch-Only Wallet visible
+beneath the branded hero. Chrome exercised Help → four walkthrough steps →
+Done, including the reversible Next progression and modal close. The
+Watch-Only route is a public-only form fixture; it does not create a wallet or
+persist xPub data.
+
+Native touch, screen-reader, packaged-platform, and create/import persistence
+flows remain separate evidence gaps.
+
+### Send review fixture continuation — 2026-10-30
+
+The fixture now supports `screen=send-review`, which mounts the production
+Simple Send and ReviewCard with a deterministic, display-only BCH review. At
+390x844, Chrome confirmed the Review Transaction dialog leads with Chipnet
+context and the wallet effect, shows amount and fee, masks the recipient,
+expands Technical details, and preserves the slide-to-confirm interaction.
+Long-press disclosure revealed the full public recipient. Closing the review
+returned to the form with the recipient and `0.1` BCH amount retained.
+
+The fixture branch explicitly blocks signing and broadcast; no provider or
+wallet authority is reached. Native touch, screen-reader, packaged-platform,
+hardware, live-provider, signing, broadcast, mempool, and confirmation
+evidence remain separate gaps.
+
+### WalletConnect review fixture continuation — 2026-10-30
+
+The fixture now mounts the production WalletConnect sign-request modal with a
+public-only request. At 390x844, Chrome confirmed the app-provided request
+description, Chipnet banner, wallet-owned fee effect, sign/return action, and
+collapsed technical totals. Expanding the technical section showed masked
+transaction IDs and addresses; long-press revealed the full transaction ID.
+No peer, signing key, or broadcast authority is available in this fixture.
+
+### WizardConnect and CashConnect review fixture continuation — 2026-10-30
+
+The disposable fixture now mounts the production WizardConnect sign-request
+modal and CashConnect execute-action modal. WizardConnect renders the dApp
+status, Chipnet context, sign-and-return operation, whole-request fee, wallet
+effect, and collapsed technical details for a public-only transaction. The
+CashConnect review renders the dApp description, request action, prepared
+transaction count, and its request-reported BCH/PUSD balance changes while
+explicitly explaining that source outputs are unavailable for independent
+ownership verification.
+
+Chrome rendered both routes at 390x844. The fixture data contains no wallet
+keys and no provider authority; the approval and rejection handlers explicitly
+no-op while the fixture flag is active, so the visible buttons remain safe
+layout/interaction affordances rather than live signing or broadcast controls.
+Native touch, screen-reader, packaged-platform, live-peer, hardware, signing,
+broadcast, mempool, and confirmation evidence remain open.
+
+The browser exercise also clicked the visible approval controls on all three
+connector fixture routes. Each modal remained open with the fixture banner;
+the fixture guard prevented a live thunk, signing key, peer, or broadcast from
+being reached. Current validation after this addition is **328 core files /
+2,060 tests** with 7 skipped files and 10 skipped tests, and **38 UI files /
+99 tests**. Build, typecheck, core lint, Prettier, and `git diff --check` pass.
+
+The same fixture data supports `wizardconnect-invalid`,
+`cashconnect-empty`, and `cashconnect-multi`. Chrome confirmed the invalid
+WizardConnect state disables approval while retaining Cancel, the empty
+CashConnect state explains that no balance change was reported, and the
+multi-transaction state surfaces the multiple-transaction warning.
+
+### Custom builder review fixture continuation — 2026-10-30
+
+The fixture now wraps the production `TransactionActions` component at
+`screen=builder-review`. Chrome opened the real Send TX → Confirm Transaction
+path at 390x844. The review exposes masked input/output identifiers, input and
+output totals, fee, fee rate, transaction size, the warning copy, and the
+drag-to-confirm affordance. `builder-token-error` adds a synthetic input token
+without a corresponding output; the warning is visible and the accessible
+Confirm and send transaction control is disabled.
+
+The builder callbacks are display-only and never build, sign, or broadcast.
+Native touch, screen-reader, packaged-platform, live UTXO, signing, broadcast,
+mempool, and confirmation evidence remain open.
+
+### Watch-only onboarding help continuation — 2026-10-30
+
+The Watch-Only onboarding route and desktop Watch-Only preview now give the
+network, account xPub, and optional master-fingerprint fields the same
+keyboard/touch-accessible contextual-help affordance as Create and Import.
+The xPub explanation makes
+the public-only boundary explicit: it derives receive/change addresses but
+cannot spend funds by itself. The fingerprint explanation identifies it as
+optional public metadata rather than private key material. English, Spanish,
+Chinese, and Arabic copy is present in the locale catalogs.
+
+The source regression opens the xPub help and verifies the explanatory note;
+the shared tooltip regression covers collapsed/expanded keyboard-accessible
+behavior. This closes the onboarding contextual-help source item without
+claiming that a recovery phrase, private key, or watch-only wallet was saved.
+Native touch, screen-reader, packaged-platform, and persisted onboarding
+evidence remain separate gaps.
+
+### Create-wallet recovery guidance continuation — 2026-10-30
+
+Create Wallet now keeps the recovery-safety instruction visible inline beside
+the generated phrase, while retaining the optional info control for the same
+context. The guidance tells the user to write the words down, keep them safe,
+and never share or store them digitally. This improves the safety boundary
+without adding an unapproved backup-confirmation gate or changing wallet
+creation behavior.
+
+The focused Create Wallet regression waits for the generated phrase and
+asserts that the visible note includes the spend-authority warning. Native
+screen-reader, packaged onboarding, and persistence evidence remain open.
+
+### Contextual-help dismissal continuation — 2026-10-30
+
+The shared info controls now close their contextual note on Escape after it is
+opened, preserving focus on the trigger. This applies to both the general
+wallet `InfoButton` and the onboarding tooltip variant, with focused
+regressions covering the expanded and dismissed states. When open, the note
+is also associated with its trigger through `aria-describedby`.
+
+Current validation after the recovery/help pass is **330 core files / 2,062
+tests** with 7 skipped files and 10 skipped tests, and **39 UI files / 100
+tests**. Typecheck, production build, core lint, focused desktop onboarding
+coverage, Prettier, and `git diff --check` pass. The existing Vite native-config
+extension warning remains non-fatal.
+
+### Outbox release confirmation continuation — 2026-10-30
+
+Eligible Outbox clear/release actions now open the wallet confirmation sheet
+before removing the local pending record. The existing tracker eligibility
+gate is unchanged; the added confirmation acknowledges the risk that a
+transaction may still confirm, while Cancel leaves the record and its input
+lock untouched. The same confirmation now covers the compact pending-send
+panel in the shared app layout, so the recovery action cannot bypass the
+acknowledgement when it is invoked from Home or Send. The focused Outbox UI
+regression verifies the dialog, duplicate-click guard, and confirmed release
+path.
+
+### Pending-lock release parity continuation — 2026-10-30
+
+The remaining pending-lock recovery entry points now use the same confirmation
+boundary. The Send screen's inline pending-outgoing card and the multisig
+workspace panel both confirm before releasing eligible records, preserve the
+tracker's stale/clear eligibility rules, and guard duplicate clicks while the
+confirmation or release is in flight. The shared compact panel now awaits the
+release before clearing its in-flight guard. No transaction construction,
+signing, broadcast, or chain-state behavior changed.
+
+Final source validation passed **330 core files / 2,062 tests** with 7 skipped
+files and 10 skipped tests, **39 UI files / 100 tests**, and **38 app files /
+161 tests**. Typecheck, production web build, core lint, dependency policy,
+security (**6/6**), add-on validation (**1/1**), Prettier, and
+`git diff --check` passed. Packaged desktop/mobile, screen-reader, hardware,
+live-provider, signing, broadcast, mempool, confirmation, and full route
+fixture evidence remain separate follow-up work.
+
+### Send recovery fixture continuation — 2026-10-30
+
+The disposable fixture now supports `screen=send-error`. It opens the real
+Simple Send form with a public Chipnet recipient and an oversized BCH amount,
+then routes Review through the existing friendly insufficient-funds error path.
+The fixture remains display-only: no transaction is built, signed, broadcast,
+or sent to a provider. This makes the retained-form Edit payment interaction
+available for repeatable browser review alongside `send-review`.
+
+The source regression covers the guarded fixture branch and friendly error
+string. Component-level checks pass; native touch, screen-reader, packaged
+platform, hardware, live-provider, signing, broadcast, mempool, and
+confirmation evidence remain separate gaps.
+
+### Connector uncertainty disclosure continuation — 2026-10-30
+
+Connector wallet-effect loading and unavailable states now expose the same
+contextual help affordance as the ready effect summary. The disclosure keeps
+the uncertainty explicit: the wallet-owned inputs/change could not yet be
+verified or were unavailable from the request, so the user should review the
+whole transaction before signing. A focused source regression protects both
+state-specific controls.
+
+Current core validation is **331 files / 2,064 tests** with 7 skipped files
+and 10 skipped tests. Typecheck, core lint, and the focused connector test pass;
+the packaged/native and live-provider evidence gaps remain unchanged.
+
+### FundMe broadcast disclosure continuation — 2026-10-30
+
+FundMe campaign action results no longer interpolate a full broadcast
+transaction ID into the status message. The app now keeps the human status
+separate and renders the ID through the shared masked/copyable disclosure,
+consistent with the wallet's other recent-activity and send-result surfaces.
+The app regression protects the separation. Core transaction authority and
+the FundMe broadcast flow are unchanged.
+
+Current app validation is **39 files / 162 tests**; the source, packaged,
+hardware, and live-chain evidence boundaries remain unchanged.
+
+### Paper-wallet UTXO disclosure continuation — 2026-10-30
+
+The app-hosted paper-wallet sweep UTXO list now masks each source transaction
+ID while retaining the full value behind the shared long-press/copy action.
+This brings the duplicate app route into the same privacy boundary as the
+standalone sweep screen. A focused app regression protects the rendering
+contract; transaction authority is unchanged.
+
+Current app validation is **40 files / 163 tests**.
+
+### Custom builder identifier disclosure continuation — 2026-10-30
+
+CashToken and NFT genesis-input selectors now show masked transaction IDs while
+retaining the raw hash as the option value used by transaction construction.
+This closes the remaining raw-hash presentation in those builder selectors
+without changing selection or signing behavior. A focused source regression
+covers both token-input views.
+
+Current core validation is **332 files / 2,065 tests** with 7 skipped files
+and 10 skipped tests.
+
+The production web build, core lint, Prettier, and `git diff --check` also pass
+after this builder disclosure change. Packaged/native, hardware, screen-reader,
+touch, and live-chain evidence remain separate.
+
+### Mint-result identifier disclosure continuation — 2026-10-30
+
+The CashToken mint result now labels its identifier as localized `Transaction
+ID`, keeps the value masked with the shared long-press/copy sheet, and uses the
+localized copy-success message. A focused app regression protects the result
+surface; minting authority and broadcast behavior are unchanged.
+
+Current app validation is **41 files / 164 tests**.
+
+### Legacy FundMe toast identifier disclosure — 2026-10-30
+
+The compatibility FundMe campaign screen now masks transaction IDs in its
+Capacitor toast messages instead of displaying raw hashes. The full value is
+still retained for the existing action-result disclosure path; this change is
+presentation-only and does not alter signing or broadcast behavior.
+
+App validation is **41 files / 165 tests**; production build, formatting, and
+diff checks pass. Packaged/native, screen-reader, touch, hardware, and live
+chain evidence remain separate gaps.
+
+### Cauldron broadcast-message disclosure — 2026-10-30
+
+Cauldron swap, merchant-payment, pool-deposit, and pool-withdraw status copy
+now masks transaction IDs before interpolation. The raw ID remains available to
+the dedicated result card, explorer action, and application state, where the
+shared long-press/copy disclosure is used. The change does not alter broadcast
+or confirmation behavior.
+
+App validation remains **41 files / 165 tests** and the production build passes.
+
+### AuthGuard broadcast-status disclosure — 2026-10-30
+
+AuthGuard’s genesis, AuthKey, and token-mint progress/error copy now masks
+transaction IDs before showing them to the user. Raw IDs remain available for
+UTXO refresh, matching, and transaction-state handling; the change is limited
+to user-facing status text. The identifier-disclosure regression and
+production build pass.
+
+### Contextual-help long-press behavior — 2026-10-30
+
+The shared `InfoButton` now opens its explanation after a 500 ms touch hold as
+well as a normal tap. Pointer cancellation and release clear the timer, and a
+long press does not cause a second toggle on the synthesized click. The UI
+regression covers the touch interaction; keyboard Escape behavior remains
+covered by the existing test.
+
+### Full regression consolidation — 2026-10-30
+
+The complete current suites pass after the cross-cutting interaction and
+identifier-disclosure work: UI **39 files / 101 tests**, apps **41 files / 165
+tests**, and core **332 files / 2,065 tests** with 7 skipped files and 10
+skipped tests. Core lint, formatting, and `git diff --check` also pass.
+
+### Header network badge and Settings theme control — 2026-10-30
+
+The shared `PageHeader` now shows a compact, localized Mainnet/Chipnet badge
+to the right of the OPTN logo. Legacy full-width network banners are marked
+and hidden on pages that have the shared header, preventing duplicate network
+surfaces while retaining the component for routes without a header. Settings
+now places a smaller light/dark switch on the right side of the Quick access
+section header. Focused UI tests and the production build pass.
+
+### Source validation refresh — 2026-10-30
+
+After the pending-popup disclosure and Send recovery-fixture additions,
+`npm run test:core` passes **331 files / 2,064 tests** with 7 skipped files and
+10 skipped tests. The UI suite remains **39 files / 100 tests**; the app suite
+remains **38 files / 161 tests**. Typecheck, production build, core lint,
+dependency policy, security, add-on validation, Prettier, and
+`git diff --check` also pass. Headless Chrome rendered the `send-error`
+fixture route with its Chipnet banner and prefilled public recipient/amount;
+the connected browser and packaged/native evidence gaps remain open.
+
+### Android unit-test evidence — 2026-10-30
+
+The Android Gradle unit-test task passes with the installed Java 21 toolchain
+using `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 npm run android:test`.
+All configured app/plugin unit-test tasks completed successfully. No Android
+emulator or device is connected, so instrumented touch and packaged visual
+evidence remain open. The initial Java 25 attempt failed during Gradle task
+creation because this project targets Java 21; that was an environment
+mismatch, not a product test failure.
+
+### Repository gate refresh — 2026-10-30
+
+The redesign branch also passes the repository dependency-policy check,
+security suite (**2 files / 6 tests**), and built-in add-on manifest validation
+(**1 file / 1 test**). These checks do not replace packaged-device or live
+provider evidence, which remain separately tracked.
+
+### Android debug package evidence — 2026-10-30
+
+The existing Android packaging workflow succeeds with Java 21:
+`JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 npm run android:apk:dev`.
+It produced both F-Droid and Play debug APKs from the current web bundle:
+`android/app/build/outputs/apk/fdroid/debug/optn-wallet-1.7.4-fdroid-debug.apk`
+and `android/app/build/outputs/apk/play/debug/optn-wallet-1.7.4-play-debug.apk`.
+The artifacts are package/build evidence only; no device-rendered or
+instrumented interaction claim is made because `adb devices` reports no target.
+
+### Connected Android render evidence — 2026-10-31
+
+After USB debugging authorization, the rebuilt Play debug APK was installed on
+the connected Samsung SM-A205W. Real device renders confirmed Home and Settings
+show the compact localized Mainnet badge beside the OPTN logo, with no
+duplicate full-width network banner. Settings also places the smaller theme
+toggle on the right side of Quick access. `uiautomator` exposed the active
+network label and `Toggle theme` control. No live-chain transaction was
+performed.

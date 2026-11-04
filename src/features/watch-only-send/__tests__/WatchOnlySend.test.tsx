@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
@@ -10,6 +12,12 @@ import {
 } from '../sendEmptyState';
 import { store } from '../../../state/store';
 import { I18nProvider } from '../../../i18n/I18nProvider';
+
+const source = readFileSync(
+  join(process.cwd(), 'src/features/watch-only-send/WatchOnlySend.tsx'),
+  'utf8'
+);
+
 describe('WatchOnlySend workspace', () => {
   it('gives context-correct recovery guidance when no BCH coins are available', () => {
     expect(noSpendableBchCoinsHint(false)).toContain(
@@ -133,5 +141,12 @@ describe('WatchOnlySend workspace', () => {
     expect(html).not.toContain('Sighash type');
     expect(html).not.toContain('Increase QR density');
     expect(html).not.toContain('Decrease QR density');
+  });
+
+  it('keeps technical watch-only diagnostics behind friendly recovery copy', () => {
+    expect(source).toContain('friendlyWatchOnlyError(error, t)');
+    expect(source).toContain("t('send.technicalDetails')");
+    expect(source).toContain('whitespace-pre-wrap break-words');
+    expect(source).not.toContain('{error}</p>');
   });
 });

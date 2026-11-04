@@ -10,6 +10,7 @@ type SegmentedSubnavProps<T extends string> = {
   }>;
   className?: string;
   stretch?: boolean;
+  wrap?: boolean;
 };
 
 const SegmentedSubnav = <T extends string>({
@@ -18,13 +19,16 @@ const SegmentedSubnav = <T extends string>({
   options,
   className = '',
   stretch = false,
+  wrap = false,
 }: SegmentedSubnavProps<T>) => {
   return (
     <div
       className={`${
         stretch
           ? 'grid grid-cols-2 gap-2'
-          : 'flex gap-2 overflow-x-auto overscroll-contain pb-1'
+          : wrap
+            ? 'flex flex-wrap gap-2'
+            : 'flex gap-2 overflow-x-auto overscroll-contain pb-1'
       } ${className}`.trim()}
     >
       {options.map((option) => (

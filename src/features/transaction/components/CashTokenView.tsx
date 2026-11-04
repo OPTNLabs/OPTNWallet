@@ -7,6 +7,7 @@ import { resolveTokenPresentation } from '../../../utils/tokenPresentation';
 import type { TokenPresentationFallback } from '../../../utils/tokenPresentation';
 import TokenIdentityBadge from '../../../components/ui/TokenIdentityBadge';
 import { useI18n } from '../../../i18n/useI18n';
+import { maskSensitiveValue } from '../../../utils/maskSensitiveValue';
 
 interface CashTokenViewProps {
   recipientAddress: string;
@@ -115,7 +116,7 @@ const CashTokenView: React.FC<CashTokenViewProps> = ({
             .filter((utxo) => !utxo.token && utxo.tx_pos === 0)
             .map((utxo, index) => (
               <option key={utxo.tx_hash + index} value={utxo.tx_hash}>
-                {utxo.tx_hash}
+                {maskSensitiveValue(utxo.tx_hash)}
               </option>
             ))}
         </select>

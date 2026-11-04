@@ -1,10 +1,11 @@
 /** @vitest-environment jsdom */
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { translations } from '../../../../i18n/resources';
 import type { TranslationKey } from '../../../../i18n/resources';
+import { interpolateMessage } from '../../../../i18n/format';
 import { SessionList } from '../../../../components/walletconnect/SessionList';
 import WizardConnectPanel from '../../../../components/wizardconnect/WizardConnectPanel';
 import CashConnectPanel from '../../../../components/cashconnect/CashConnectPanel';
@@ -19,13 +20,21 @@ import {
 const mock = vi.hoisted(() => ({
   state: {} as unknown,
   loadWalletPublicAddresses: vi.fn(),
+  dispatch: vi.fn(),
+  fixture: false,
 }));
 vi.mock('react-redux', () => ({
-  useDispatch: () => vi.fn(),
+  useDispatch: () => mock.dispatch,
   useSelector: (selector: (state: unknown) => unknown) => selector(mock.state),
 }));
+vi.mock('../../../../ui-fixtures/fixtureData', () => ({
+  isUiFixtureEnabled: () => mock.fixture,
+}));
 vi.mock('../../../../i18n/useI18n', () => ({
-  useI18n: () => ({ t: (key: TranslationKey) => translations.en[key] }),
+  useI18n: () => ({
+    t: (key: TranslationKey, values?: Record<string, string | number>) =>
+      interpolateMessage(translations.en[key], values),
+  }),
 }));
 vi.mock('../../../../state/slices/wizardconnectSlice', () => ({
   default: (state: Record<string, unknown> = {}) => state,
@@ -54,7 +63,11 @@ vi.mock('../../../../services/connect/walletPublicAddresses', () => ({
   loadWalletPublicAddresses: mock.loadWalletPublicAddresses,
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mock.fixture = false;
+  mock.dispatch.mockReset();
+});
 
 describe('connection panels', () => {
   it('previews raw WizardConnect transactions on Chipnet and blocks invalid previews', async () => {
@@ -104,9 +117,16 @@ describe('connection panels', () => {
       },
     };
     const view = render(<WizardSignTransactionModal />);
-    expect(screen.getByText(/^bchtest:/)).toBeInTheDocument();
+    const addressTrigger = screen.getByRole('button', { name: 'Copy address' });
+    expect(addressTrigger).not.toHaveTextContent('bchtest:');
+    fireEvent.contextMenu(addressTrigger);
+    const dialogs = screen.getAllByRole('dialog');
+    expect(dialogs[dialogs.length - 1]).toHaveTextContent('bchtest:');
     expect(
       screen.getByText('Relay available — dApp connection not verified')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Explain connection status' })
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Sign', exact: true })
@@ -120,6 +140,10 @@ describe('connection panels', () => {
     expect(
       screen.getByText('Technical transaction details (1 inputs, 1 outputs)')
     ).toBeInTheDocument();
+    mock.fixture = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Sign', exact: true }));
+    expect(mock.dispatch).not.toHaveBeenCalled();
+    mock.fixture = false;
     request.transaction.sourceOutputs = [];
     view.rerender(<WizardSignTransactionModal />);
     expect(
@@ -162,6 +186,9 @@ describe('connection panels', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'Waiting for your approval'
     );
+    expect(
+      screen.getByRole('button', { name: 'Waiting for your approval' })
+    ).toBeInTheDocument();
     mock.state = {
       cashconnect: {
         sessions: {},
@@ -173,6 +200,11 @@ describe('connection panels', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Connection attempt failed'
     );
+    expect(
+      screen.getByRole('button', {
+        name: 'Connection attempt failed. Retry pairing to try again.',
+      })
+    ).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 

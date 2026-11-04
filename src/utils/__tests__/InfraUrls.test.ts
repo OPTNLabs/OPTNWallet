@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { getElectrumServers, getInfraUrlPools } from '../servers/InfraUrls';
+import {
+  getBcmrNativeTokenUrls,
+  getElectrumServers,
+  getInfraUrlPools,
+} from '../servers/InfraUrls';
 import { Network } from '../../state/slices/networkSlice';
 
 describe('InfraUrls', () => {
@@ -31,6 +35,15 @@ describe('InfraUrls', () => {
     expect(getInfraUrlPools(Network.CHIPNET).bcmrApiBaseUrls).toEqual([
       'https://bcmr.optnlabs.com/api',
       'https://bcmr-chipnet.paytaca.com/api',
+    ]);
+
+    expect(
+      getBcmrNativeTokenUrls(
+        Network.CHIPNET,
+        '4a3cac0663c121e976c7ad6783dfadab0d05c0700ef1d2cc75a0579a6ea431f4'
+      )
+    ).toEqual([
+      'https://tokenindex.optnlabs.com/v1/token/4a3cac0663c121e976c7ad6783dfadab0d05c0700ef1d2cc75a0579a6ea431f4',
     ]);
   });
 

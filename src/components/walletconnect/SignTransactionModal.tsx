@@ -16,15 +16,18 @@ import { transactionPreview } from '../../services/connect/transactionPreview';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import useOutboundTransactions from '../../hooks/useOutboundTransactions';
-import { shortenAddress } from '../../utils/shortenHash';
-import WalletTooltip from '../ui/WalletTooltip';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 import { toErrorMessage } from '../../utils/errorHandling';
 import { useI18n } from '../../i18n/useI18n';
 import ConnectorWalletEffectSummary from '../connect/ConnectorWalletEffectSummary';
 import ConnectorTransactionSummary from '../connect/ConnectorTransactionSummary';
+import MaskedConnectorDescription from '../connect/MaskedConnectorDescription';
 import { describeConnectorRequest } from '../../services/connect/requestDescription';
 import WalletPopupSheet from '../ui/WalletPopupSheet';
+import MaskedValue from '../ui/MaskedValue';
+import InfoButton from '../ui/InfoButton';
+import NetworkContextBanner from '../ui/NetworkContextBanner';
+import { isUiFixtureEnabled } from '../../ui-fixtures/fixtureData';
 
 function isStaleWalletConnectError(error: unknown): boolean {
   const message = toErrorMessage(error).toLowerCase();
@@ -106,13 +109,28 @@ export function SignTransactionModal() {
     }
   }
 
+  function describeLockingDestination(bytecode: Uint8Array) {
+    try {
+      const result = lockingBytecodeToCashAddress({
+        prefix: PREFIX[network],
+        bytecode,
+      });
+      return typeof result === 'string'
+        ? { label: t('wc.lockingScript'), value: `0x${binToHex(bytecode)}` }
+        : { label: t('wc.address'), value: result.address };
+    } catch {
+      return { label: t('wc.lockingScript'), value: `0x${binToHex(bytecode)}` };
+    }
+  }
+
   const broadcastLocked = shouldBroadcast && hasUnresolved;
   const dappUrl = dappMetadata?.url
     ? normalizeExternalUrl(dappMetadata.url)
     : null;
 
   const handleSign = async () => {
-    if (broadcastLocked || !preview || inFlight.current) return;
+    if (isUiFixtureEnabled() || broadcastLocked || !preview || inFlight.current)
+      return;
     inFlight.current = true;
     setBusy(true);
     try {
@@ -121,14 +139,16 @@ export function SignTransactionModal() {
       ).unwrap();
       const outcomeMessage =
         outcome.kind === 'broadcasted'
-          ? 'Signed and broadcast by this wallet.'
+          ? t('wc.signedAndBroadcast')
           : outcome.kind === 'submitted'
-            ? 'Signed and submitted. Watch transaction history before sending again.'
+            ? t('wc.signedAndSubmitted')
             : outcome.kind === 'failed'
-              ? `Signed transaction returned to the app, but wallet broadcast failed: ${outcome.message}. The app may still submit it.`
+              ? t('wc.broadcastFailedReturned', {
+                  message: outcome.message,
+                })
               : outcome.kind === 'not_attempted_hardware'
-                ? 'Signed on the hardware wallet and returned to the app. Wallet broadcast was not attempted; the app may submit it.'
-                : 'Signed transaction returned to the app. The app may submit it later.';
+                ? t('wc.signedOnHardwareReturned')
+                : t('wc.signedReturned');
       dispatch(
         enqueueNotification({
           id: `walletconnect:tx:signed:${topic}:${signTxRequest.id}`,
@@ -176,7 +196,7 @@ export function SignTransactionModal() {
   };
 
   const handleCancel = async () => {
-    if (inFlight.current) return;
+    if (isUiFixtureEnabled() || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     try {
@@ -302,17 +322,23 @@ export function SignTransactionModal() {
                   <span className="font-semibold">
                     {t('txReview.appDescription')}:
                   </span>{' '}
-                  {requestDescription.detail}
+                  <MaskedConnectorDescription value={requestDescription.detail} />
                 </div>
               )}
             </div>
           )}
+          <NetworkContextBanner network={network} className="mt-3" />
         </header>
 
         <div className="space-y-4 px-6 py-4">
           {broadcastLocked && (
-            <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 wallet-text-strong">
-              {t('wc.broadcastLocked')}
+            <div className="flex items-start gap-2 text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 wallet-text-strong">
+              <span className="min-w-0 flex-1">{t('wc.broadcastLocked')}</span>
+              <InfoButton
+                id="walletconnect-broadcast-lock-help"
+                ariaLabel={t('outbox.stateHelpLabel')}
+                content={t('wc.broadcastLocked')}
+              />
             </div>
           )}
 
@@ -335,7 +361,6 @@ export function SignTransactionModal() {
 
           {preview && (
             <ConnectorTransactionSummary
-              network={network}
               operation={
                 shouldBroadcast ? 'sign-and-broadcast' : 'sign-and-return'
               }
@@ -344,7 +369,7 @@ export function SignTransactionModal() {
           )}
 
           <details className="rounded-xl border border-[var(--wallet-border)] px-3 py-2">
-            <summary className="cursor-pointer font-semibold wallet-text-strong">
+            <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold wallet-text-strong">
               {t('txReview.technicalDetails')}{' '}
               <span className="font-normal wallet-muted">
                 ({inputs.length} inputs · {outputs.length} outputs)
@@ -362,6 +387,9 @@ export function SignTransactionModal() {
                   {inputs.map((source, i: number) => {
                     const txid = binToHex(source.outpointTransactionHash);
                     const value = source.valueSatoshis;
+                    const sourceDestination = describeLockingDestination(
+                      source.lockingBytecode
+                    );
                     return (
                       <div
                         key={i}
@@ -371,8 +399,28 @@ export function SignTransactionModal() {
                           {t('wc.inputNumber', { number: i + 1 })}
                         </div>
                         <div className="mt-1">
+                          {sourceDestination.label}:{' '}
+                          <MaskedValue
+                            value={sourceDestination.value}
+                            label={sourceDestination.label}
+                            ariaLabel={sourceDestination.label}
+                            prefixLength={5}
+                            suffixLength={5}
+                            preserveCashAddressPrefix
+                            maskLength={8}
+                            revealOnClick
+                            className="max-w-full break-all"
+                          />
+                        </div>
+                        <div className="mt-1">
                           {t('wc.previousTransaction')}:{' '}
-                          <span className="font-mono break-all">{txid}</span>
+                          <MaskedValue
+                            value={txid}
+                            label={t('history.transactionId')}
+                            ariaLabel={t('history.transactionId')}
+                            copySuccessMessageKey="history.transactionCopied"
+                            className="max-w-full break-all"
+                          />
                         </div>
                         <div>
                           {t('wc.outputIndex')}: {source.outpointIndex}
@@ -429,18 +477,17 @@ export function SignTransactionModal() {
                         </div>
                         <div>
                           {t('wc.address')}:{' '}
-                          <span
-                            className="font-mono wallet-link break-all cursor-pointer"
-                            data-tooltip-id={`address-tooltip-${i}`}
-                            data-tooltip-content={address}
-                          >
-                            {shortenAddress(address)}
-                          </span>
-                          <WalletTooltip
-                            id={`address-tooltip-${i}`}
-                            place="top"
-                            clickable={true}
-                            content={address}
+                          <MaskedValue
+                            value={address}
+                            label={t('wc.address')}
+                            ariaLabel={t('receive.copyAddress')}
+                            copySuccessMessageKey="receive.addressCopied"
+                            prefixLength={5}
+                            suffixLength={5}
+                            preserveCashAddressPrefix
+                            maskLength={8}
+                            revealOnClick
+                            className="max-w-full break-all"
                           />
                         </div>
                         <div>{Number(value) / SATSINBITCOIN} BCH</div>

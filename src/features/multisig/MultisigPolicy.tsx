@@ -7,6 +7,8 @@ import {
 import type { MultisigPolicy } from '../../services/psbt/multisigWallet';
 import MultisigPage from './MultisigPage';
 import { copyWithFeedback } from '../../utils/copyWithFeedback';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MultisigError from './MultisigError';
 
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
@@ -74,6 +76,7 @@ export default function MultisigPolicy() {
 
   return (
     <MultisigPage>
+      {policy?.network && <NetworkContextBanner network={policy.network} />}
       <section className="rounded-2xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
         <h2 className="text-xl font-bold wallet-text-strong">
           Multisig policy
@@ -189,11 +192,7 @@ export default function MultisigPolicy() {
         </section>
       )}
 
-      {error && (
-        <p role="alert" className="text-xs text-red-400">
-          {error}
-        </p>
-      )}
+      {error && <MultisigError message={error} />}
     </MultisigPage>
   );
 }

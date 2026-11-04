@@ -1,5 +1,6 @@
 import { useI18n } from '../../i18n/useI18n';
 import { formatNumber } from '../../i18n/format';
+import MaskedValue from '../ui/MaskedValue';
 
 export type TxSummaryToken = {
   category: string;
@@ -54,12 +55,6 @@ function toNum(v: unknown): number {
   } catch {
     return 0;
   }
-}
-
-function shortRef(txid: string, vout: number) {
-  const a = txid.slice(0, 8);
-  const b = txid.slice(-6);
-  return `${a}…${b}:${vout}`;
 }
 
 function tokenDetails(value: unknown): TxSummaryToken | undefined {
@@ -207,7 +202,14 @@ export default function TxSummary(props: Props) {
             >
               <div className="min-w-0">
                 <div className="font-mono text-sm sm:text-base truncate">
-                  {shortRef(i.txid, i.vout)}
+                  <MaskedValue
+                    value={i.txid}
+                    label={t('history.transactionId')}
+                    ariaLabel={t('history.transactionId')}
+                    copySuccessMessageKey="history.transactionCopied"
+                    className="max-w-full truncate align-middle"
+                  />
+                  :{i.vout}
                 </div>
                 <div className="text-sm wallet-muted">
                   {i.token
@@ -247,7 +249,17 @@ export default function TxSummary(props: Props) {
                     : t('txSummary.bch')}
                 </div>
                 <div className="font-mono text-sm sm:text-base break-all">
-                  {o.address}
+                  {o.address === 'OP_RETURN' ? (
+                    o.address
+                  ) : (
+                    <MaskedValue
+                      value={o.address}
+                      label={t('receive.copyAddress')}
+                      ariaLabel={t('receive.copyAddress')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      className="max-w-full break-all"
+                    />
+                  )}
                 </div>
                 {o.tokenDetails && <TokenDetails token={o.tokenDetails} />}
               </div>

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AppDispatch } from '../../state/store';
 import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
+import {
+  isUiFixtureEnabled,
+  uiFixtureScenario,
+} from '../../ui-fixtures/fixtureData';
 
 type UseTransactionHistoryFetchParams = {
   walletIdParam: string | undefined;
@@ -41,6 +45,12 @@ export function useTransactionHistoryFetch({
       setLoading(true);
       setError(false);
       setProgress(0);
+      if (isUiFixtureEnabled()) {
+        setProgress(100);
+        setError(uiFixtureScenario() === 'history-error');
+        setLoading(false);
+        return;
+      }
       try {
         const { scannedAddresses } = await refreshWalletTransactionHistory({
           walletId: walletIdNum,

@@ -110,6 +110,7 @@ describe('ImportWalletPage', () => {
   it('imports a valid mnemonic and navigates to the wallet', async () => {
     const user = userEvent.setup();
     render(<ImportWalletPage />);
+    expect(screen.getByRole('region')).toBeInTheDocument();
     enterPhrase(VALID_MNEMONIC);
 
     await user.click(screen.getByRole('button', { name: 'Import Wallet' }));

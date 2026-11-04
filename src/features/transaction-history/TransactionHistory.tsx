@@ -3,7 +3,6 @@ import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../state/store';
 import { useLocation, useParams } from 'react-router-dom';
 import { createSelector } from 'reselect';
-import { shortenTxHash } from '../../utils/shortenHash';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { useExplorerLink } from '../../utils/servers/useExplorerLink';
 import { useTransactionHistoryFetch } from './useTransactionHistoryFetch';
@@ -28,6 +27,15 @@ import { useI18n } from '../../i18n/useI18n';
 import { formatNumber } from '../../i18n/format';
 import ElectrumService from '../../services/ElectrumService';
 import { deriveWalletTransactionEffect } from './transactionEffect';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MaskedValue from '../../components/ui/MaskedValue';
+import InfoButton from '../../components/ui/InfoButton';
+import {
+  isUiFixtureEnabled,
+  UI_FIXTURE_CHANGE_ADDRESS,
+  UI_FIXTURE_PRIMARY_ADDRESS,
+  getUiFixtureWalletEffects,
+} from '../../ui-fixtures/fixtureData';
 
 const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
 const SATS_PER_BCH = 100_000_000;
@@ -130,6 +138,16 @@ const TransactionHistory: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
 
+    if (isUiFixtureEnabled()) {
+      setWalletAddresses(
+        new Set([UI_FIXTURE_PRIMARY_ADDRESS, UI_FIXTURE_CHANGE_ADDRESS])
+      );
+      setWalletEffects(getUiFixtureWalletEffects());
+      return () => {
+        cancelled = true;
+      };
+    }
+
     async function loadWalletAddresses() {
       if (!wallet_id) return;
       const dbService = DatabaseService();
@@ -174,6 +192,7 @@ const TransactionHistory: React.FC = () => {
   // visible page from verbose details so cards can show the wallet's actual
   // net BCH movement without blocking the initial history paint.
   useEffect(() => {
+    if (isUiFixtureEnabled()) return;
     if (walletAddresses.size === 0 || paginatedTransactions.length === 0) {
       return;
     }
@@ -215,6 +234,7 @@ const TransactionHistory: React.FC = () => {
           }
           compact
         />
+        <NetworkContextBanner network={currentNetwork} />
 
         <div className="wallet-card p-3 shrink-0">
           <div className="grid grid-cols-10 gap-2">
@@ -289,70 +309,83 @@ const TransactionHistory: React.FC = () => {
                   Number.isFinite(walletIdNum) &&
                   walletIdNum > 0 &&
                   isFusionTransaction(walletIdNum, tx.tx_hash);
+                const confirmed = isTxConfirmed(tx) || !isMempoolLike(tx);
+                const statusLabel = confirmed
+                  ? fused
+                    ? `Fused · ${t('history.confirmed')}`
+                    : t('history.confirmed')
+                  : fused
+                    ? `Fused · ${t('history.unconfirmed')}`
+                    : t('history.unconfirmed');
                 return (
                   <li key={id + tx.tx_hash}>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSelectedTx({ txid: tx.tx_hash, height: tx.height })
-                      }
-                      className="wallet-card p-4 block w-full text-left hover:brightness-[0.98] transition"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
+                    <div className="relative">
+                      <button
+                        type="button"
+                        aria-label={t('history.transactionHash')}
+                        onClick={() =>
+                          setSelectedTx({ txid: tx.tx_hash, height: tx.height })
+                        }
+                        className="wallet-card block w-full p-4 pr-16 text-left transition hover:brightness-[0.98]"
+                      >
+                        <div className="flex items-center gap-2 pr-8">
+                          <StatusChip tone={confirmed ? 'success' : 'warning'}>
+                            {statusLabel}
+                          </StatusChip>
+                        </div>
+                        <div className="mt-2">
                           <div className="text-xs wallet-muted mb-1">
-                            {t('history.transactionHash')}
+                            {t('history.transactionId')}
                           </div>
                           <div className="font-mono text-sm break-all wallet-text-strong">
-                            {shortenTxHash(tx.tx_hash)}
+                            <MaskedValue
+                              value={tx.tx_hash}
+                              label={t('history.transactionId')}
+                              ariaLabel={t('history.copyTransaction')}
+                              copySuccessMessageKey="history.transactionCopied"
+                              embedded
+                              className="break-all"
+                            />
                             {fused && <FusionBadge asTx className="ml-2" />}
                           </div>
                         </div>
-                        {isTxConfirmed(tx) || !isMempoolLike(tx) ? (
-                          <StatusChip tone="success">
-                            {fused
-                              ? `Fused · ${t('history.confirmed')}`
-                              : t('history.confirmed')}
-                          </StatusChip>
-                        ) : (
-                          <StatusChip tone="warning">
-                            {fused
-                              ? `Fused · ${t('history.unconfirmed')}`
-                              : t('history.unconfirmed')}
-                          </StatusChip>
-                        )}
-                      </div>
-                      <div className="mt-2 text-sm">
-                        {tx.height > 0 || tx.timestamp ? (
-                          <span className="wallet-text-strong">
-                            {t('history.block')}: {tx.height || '—'}
-                          </span>
-                        ) : isTxConfirmed(tx) ? (
-                          <span className="wallet-text-strong">
-                            {t('history.confirmed')}
-                          </span>
-                        ) : isMempoolLike(tx) ? (
-                          <span className="wallet-muted">
-                            {fused
-                              ? 'Broadcast — waiting for a block (height not yet in history)'
-                              : t('history.awaitingConfirmation')}
-                          </span>
-                        ) : (
-                          <span className="wallet-text-strong">
-                            {fused ? 'On chain' : t('history.confirmed')}
-                          </span>
-                        )}
-                      </div>
-                      {typeof walletEffects[tx.tx_hash] === 'number' ? (
-                        <div className="mt-2 font-semibold wallet-text-strong">
-                          {t('history.walletEffect')}:{' '}
-                          {formatWalletEffect(
-                            walletEffects[tx.tx_hash]!,
-                            locale
+                        <div className="mt-2 text-sm">
+                          {tx.height > 0 || tx.timestamp ? (
+                            <span className="wallet-text-strong">
+                              {t('history.block')}: {tx.height || '—'}
+                            </span>
+                          ) : isTxConfirmed(tx) ? (
+                            <span className="wallet-text-strong">
+                              {t('history.confirmed')}
+                            </span>
+                          ) : isMempoolLike(tx) ? (
+                            <span className="wallet-muted">
+                              {t('history.awaitingConfirmation')}
+                            </span>
+                          ) : (
+                            <span className="wallet-text-strong">
+                              {t('history.confirmed')}
+                            </span>
                           )}
                         </div>
-                      ) : null}
-                    </button>
+                        {typeof walletEffects[tx.tx_hash] === 'number' ? (
+                          <div className="mt-2 font-semibold wallet-text-strong">
+                            {t('history.walletEffect')}:{' '}
+                            {formatWalletEffect(
+                              walletEffects[tx.tx_hash]!,
+                              locale
+                            )}
+                          </div>
+                        ) : null}
+                      </button>
+                      <div className="absolute right-2 top-2">
+                        <InfoButton
+                          id={`history-status-${tx.tx_hash}`}
+                          ariaLabel={t('history.statusHelpLabel')}
+                          content={t('history.statusHelp')}
+                        />
+                      </div>
+                    </div>
                   </li>
                 );
               })}

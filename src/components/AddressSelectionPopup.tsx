@@ -1,13 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import KeyService from '../services/KeyService';
-import { shortenTxHash } from '../utils/shortenHash';
-import { PREFIX } from '../utils/constants';
 import { useSelector } from 'react-redux';
-import { RootState } from '../state/store';
-import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { selectWalletId } from '../state/slices/walletSlice';
 import Popup from './transaction/Popup';
 import { useI18n } from '../i18n/useI18n';
+import MaskedValue from './ui/MaskedValue';
 
 interface AddressSelectionPopupProps {
   onSelect: (address: string) => void;
@@ -28,9 +25,6 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
   const [loadFailed, setLoadFailed] = useState(false);
   const [reloadIndex, setReloadIndex] = useState(0);
   const { t } = useI18n();
-  const currentNetwork = useSelector((state: RootState) =>
-    selectCurrentNetwork(state)
-  );
   const walletId = useSelector(selectWalletId);
 
   useEffect(() => {
@@ -108,20 +102,25 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
         <div className="mb-4 max-h-64 overflow-y-auto overscroll-contain touch-pan-y pr-1">
           <ul>
             {addresses.map((addr) => {
-              const shortAddress = shortenTxHash(
-                addr.address,
-                PREFIX[currentNetwork].length
-              );
               return (
                 <li key={addr.id} className="mb-2">
-                  <button
-                    type="button"
-                    className="wallet-card flex min-h-[44px] w-full flex-col items-center break-words p-2 text-left hover:brightness-[0.98]"
-                    onClick={() => handleSelect(addr.address)}
-                    aria-label={`${t('contractPopup.selectAddress')}: ${shortAddress}`}
-                  >
-                    {shortAddress}
-                  </button>
+                  <div className="wallet-card flex min-h-[44px] items-center gap-2 p-2 hover:brightness-[0.98]">
+                    <MaskedValue
+                      value={addr.address}
+                      label={t('send.address')}
+                      ariaLabel={t('send.address')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      className="min-w-0 flex-1 text-xs"
+                    />
+                    <button
+                      type="button"
+                      className="wallet-btn-secondary min-h-[44px] shrink-0 px-3 py-2 text-xs"
+                      onClick={() => handleSelect(addr.address)}
+                      aria-label={`${t('contractPopup.selectAddress')}: ${t('send.address')}`}
+                    >
+                      {t('contractPopup.selectAddress')}
+                    </button>
+                  </div>
                 </li>
               );
             })}

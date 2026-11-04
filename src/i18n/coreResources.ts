@@ -445,7 +445,7 @@ export const coreTranslations = {
     'receive.close': 'Close',
     'receive.receiveQr': 'Receive QR',
     'receive.qrCopyDescription':
-      'Tap the QR to copy the current payload. Close to return.',
+      'Tap the QR to reveal or hide the full payload. Close to return.',
     'receive.copyQrPayload': 'Copy receive QR payload',
     'receive.bip21Title': 'BIP21 payment request',
     'receive.bip21Description':
@@ -459,6 +459,8 @@ export const coreTranslations = {
     'receive.optional': 'Optional',
     'receive.copyBip21': 'Copy BIP21 URI',
     'receive.copyAddress': 'Copy address',
+    'multisig.tokenAwareAddress': 'Token-aware address',
+    'multisig.bchAddress': 'BCH address',
     'receive.shareAddress': 'Share address',
     'receive.receiveGuidance':
       'Give this address to the person paying you. Nothing is sent from your wallet.',
@@ -486,6 +488,8 @@ export const coreTranslations = {
     'send.coins': 'coins',
     'send.spendableSummary':
       'Spendable {amount} BCH from {count} {coins} (same set as Home, minus token coins).',
+    'send.spendableUsdSummary':
+      'Spendable {amount} USD from {count} {coins} (same set as Home, minus token coins).',
     'send.send': 'Send',
     'send.guidedDescription':
       'Send BCH, fungible tokens, or NFTs with one guided flow.',
@@ -493,6 +497,7 @@ export const coreTranslations = {
     'send.selectedInputs': 'Selected inputs',
     'send.outpoint': 'Outpoint',
     'send.address': 'Address',
+    'send.stealthAddress': 'Stealth address',
     'send.sats': 'Sats',
     'send.height': 'Height',
     'send.tokenLabel': 'Token',
@@ -505,6 +510,9 @@ export const coreTranslations = {
     'send.rawTransaction': 'Raw transaction',
     'send.noTxBuilt': '(no tx built yet)',
     'send.advanced': 'Advanced',
+    'send.advancedHelpLabel': 'Explain advanced send options',
+    'send.advancedHelp':
+      'Advanced options control coin selection, the change address and the Max amount. Use them only when you need that control.',
     'send.advancedBuilder': 'Open Advanced Builder',
     'send.quantumrootShortcut': 'Quantumroot shortcut',
     'send.quantumrootApproval': 'approval key to Quantum Lock',
@@ -521,6 +529,9 @@ export const coreTranslations = {
     'send.airdrops': 'Airdrops',
     'send.openAirdrops': 'Open Airdrops',
     'send.recipient': 'Recipient',
+    'send.recipientHelpLabel': 'Explain the recipient field',
+    'send.recipientHelp':
+      'Enter the person or service receiving the payment. Verify the address and network before reviewing the send.',
     'send.scanQr': 'Scan QR',
     'send.copy': 'Copy',
     'send.recipientAmountLoaded': 'Recipient and amount loaded from QR.',
@@ -530,6 +541,7 @@ export const coreTranslations = {
     'send.verifyRecipient': 'QR scanned. Verify recipient before sending.',
     'send.amountBch': 'Amount (BCH)',
     'send.amountUsd': 'Amount (USD)',
+    'send.amountUnit': 'Amount unit',
     'send.max': 'Max',
     'send.fillMax': 'Fill the full spendable balance minus network fee',
     'send.switchToUsd': 'Switch amount input to USD',
@@ -557,6 +569,9 @@ export const coreTranslations = {
       'Leave blank to send the first available NFT in this category.',
     'send.submitted': 'Transaction submitted',
     'send.sent': 'Transaction sent',
+    'send.sentHelpLabel': 'Explain transaction status',
+    'send.sentHelp':
+      'Your wallet has completed the send flow. Keep the transaction ID for reference and wait for network confirmation when needed.',
     'send.keepTxid':
       'Keep this txid as your reference and avoid sending it again.',
     'send.waitPrevious':
@@ -568,6 +583,8 @@ export const coreTranslations = {
     'send.reset': 'Reset',
     'send.back': 'Back',
     'send.reviewTitle': 'Review Transaction',
+    'send.errorTitle': 'Payment needs attention',
+    'send.editPayment': 'Edit payment',
     'send.verifySlide':
       'Check who receives the payment, what leaves your wallet, and the network before signing.',
     'send.network': 'Network',
@@ -602,8 +619,10 @@ export const coreTranslations = {
     'send.invalidAddress':
       'Invalid address—double-check for typos or try scanning a QR code.',
     'send.insufficientFunds':
-      'Not enough funds. Check your balance or reduce the amount.',
+      'Not enough funds in your wallet. Check your balance or reduce the amount.',
     'send.networkError': 'Network error. Check your connection and try again.',
+    'send.genericError':
+      'We could not prepare that payment. Check the details and try again.',
     'send.changeAddress': 'Change address',
     'send.loading': 'Loading…',
 
@@ -761,6 +780,7 @@ export const coreTranslations = {
     'history.loadFailed':
       'Transaction history could not be loaded. Check your connection and try again.',
     'history.transactionHash': 'Transaction Hash',
+    'history.transactionId': 'Transaction ID',
     'history.confirmed': 'Confirmed',
     'history.pending': 'Pending',
     'history.block': 'Block',
@@ -771,6 +791,9 @@ export const coreTranslations = {
     'history.last': 'Last',
     'history.transaction': 'Transaction',
     'history.status': 'Status',
+    'history.statusHelpLabel': 'Explain transaction status',
+    'history.statusHelp':
+      'Confirmed means the transaction is in a block. Unconfirmed means the network has seen it, but it is still waiting for a block.',
     'history.walletEffect': 'Wallet effect',
     'history.fee': 'Fee',
     'history.timestamp': 'Timestamp',
@@ -804,6 +827,9 @@ export const coreTranslations = {
     'history.confirmations': '{count} confirmations',
     'outbox.title': 'Outbox',
     'outbox.pendingOutgoing': 'Pending outgoing transactions',
+    'outbox.pendingHelpLabel': 'What pending outgoing transactions mean',
+    'outbox.pendingHelp':
+      'These sends stay here until the wallet can confirm whether they reached the network. Clearing a lock does not reverse a payment that was already sent.',
     'outbox.description':
       'Offline-first protection keeps new sends paused until these transactions are seen or safely released.',
     'outbox.noPending': 'No pending outgoing transactions.',
@@ -813,7 +839,7 @@ export const coreTranslations = {
     'outbox.hoursAgo': '{count}h ago',
     'outbox.daysAgo': '{count}d ago',
     'outbox.updated': 'Updated {age}',
-    'outbox.txid': 'Txid',
+    'outbox.txid': 'Transaction ID',
     'outbox.destination': 'Destination',
     'outbox.amount': 'Amount',
     'outbox.requestedBy': 'Requested by',
@@ -824,7 +850,7 @@ export const coreTranslations = {
     'outbox.awaitingVerification': 'Awaiting verification',
     'outbox.verificationWaitDescription':
       'Wallet sync must confirm this Fusion transaction before its inputs can be reused.',
-    'outbox.copyTxid': 'Copy txid',
+    'outbox.copyTxid': 'Copy transaction ID',
     'outbox.clearPending': 'Clear pending lock',
     'outbox.releaseStale': 'Release if stale',
     'outbox.clearPendingTitle':
@@ -838,6 +864,20 @@ export const coreTranslations = {
     'outbox.dismissPending': 'Dismiss pending transactions popup',
     'outbox.dismiss': 'Dismiss',
     'outbox.releaseSendLock': 'Release send lock',
+    'outbox.stateBroadcasting': 'Sending',
+    'outbox.stateSubmitted': 'Submitted',
+    'outbox.stateBroadcasted': 'Sent to network',
+    'outbox.stateSeen': 'Seen by network',
+    'outbox.stateHelpLabel': 'Explain payment status',
+    'outbox.releaseHelpLabel': 'Explain release action',
+    'outbox.stateBroadcastingHelp':
+      'The wallet is preparing or submitting this payment. Keep the wallet open while it finishes.',
+    'outbox.stateSubmittedHelp':
+      'The wallet submitted this payment, but the network has not seen it yet.',
+    'outbox.stateBroadcastedHelp':
+      'The payment was sent to the network. Confirmation may still take time.',
+    'outbox.stateSeenHelp':
+      'The network has seen this payment. Confirmations are shown in History.',
 
     'settingsRows.language': 'Language',
     'settingsRows.languageDescription': 'Choose the wallet interface language',
@@ -945,6 +985,23 @@ export const coreTranslations = {
     'settingsNetwork.reloading': 'Reloading wallet…',
     'settingsNetwork.active': 'Active',
     'settingsNetwork.switching': 'Switching…',
+    'settingsNetwork.switchToMainnet': 'Switch to Mainnet',
+    'settingsNetwork.switchToChipnet': 'Switch to Chipnet',
+    'settingsNetwork.switchPrompt':
+      'You are about to change the active network to {network}.',
+    'settingsNetwork.mainnetWarning':
+      'Mainnet uses real BCH and real value. Confirm only if you intend to work with live funds.',
+    'settingsNetwork.chipnetWarning':
+      'Chipnet is for test funds only. Do not send real BCH here.',
+    'settingsNetwork.switchDetails':
+      'The wallet will clear the current network records and resynchronize addresses. Custom derivation paths are preserved.',
+    'settingsNetwork.errorTitle': 'Network update could not be completed',
+    'settingsNetwork.switchFailed':
+      'The network was not changed. Check your connection and try again.',
+    'settingsNetwork.reloadCompleted': 'Wallet reloaded successfully.',
+    'settingsNetwork.reloadFailed':
+      'The wallet could not be reloaded. Check your connection and try again.',
+    'settingsNetwork.retry': 'Try again',
     'settingsNetwork.comingSoon': 'Coming soon',
     'settingsNetwork.testnet3': 'Testnet3',
     'settingsNetwork.testnet4': 'Testnet4',
@@ -1434,7 +1491,7 @@ export const coreTranslations = {
     'receive.close': 'Cerrar',
     'receive.receiveQr': 'QR de recepción',
     'receive.qrCopyDescription':
-      'Toca el QR para copiar la carga actual. Cierra para volver.',
+      'Toca el QR para mostrar u ocultar la carga completa. Cierra para volver.',
     'receive.copyQrPayload': 'Copiar carga QR de recepción',
     'receive.bip21Title': 'Solicitud de pago BIP21',
     'receive.bip21Description':
@@ -1471,6 +1528,8 @@ export const coreTranslations = {
     'send.coins': 'monedas',
     'send.spendableSummary':
       'Disponible {amount} BCH de {count} {coins} (mismo conjunto que Inicio, sin monedas de tokens).',
+    'send.spendableUsdSummary':
+      'Disponible {amount} USD de {count} {coins} (mismo conjunto que Inicio, sin monedas de tokens).',
     'send.send': 'Enviar',
     'send.guidedDescription':
       'Envía BCH, tokens fungibles o NFT con un único flujo guiado.',
@@ -1490,6 +1549,9 @@ export const coreTranslations = {
     'send.rawTransaction': 'Transacción sin procesar',
     'send.noTxBuilt': '(aún no se ha construido ninguna transacción)',
     'send.advanced': 'Avanzado',
+    'send.advancedHelpLabel': 'Explicar las opciones avanzadas de envío',
+    'send.advancedHelp':
+      'Las opciones avanzadas controlan la selección de monedas, la dirección de cambio y el importe máximo. Úsalas solo cuando necesites ese control.',
     'send.advancedBuilder': 'Abrir constructor avanzado',
     'send.quantumrootShortcut': 'Acceso directo de Quantumroot',
     'send.quantumrootApproval': 'clave de aprobación al Bloqueo cuántico',
@@ -1506,6 +1568,9 @@ export const coreTranslations = {
     'send.airdrops': 'Airdrops',
     'send.openAirdrops': 'Abrir Airdrops',
     'send.recipient': 'Destinatario',
+    'send.recipientHelpLabel': 'Explicar el campo del destinatario',
+    'send.recipientHelp':
+      'Introduce la persona o el servicio que recibirá el pago. Verifica la dirección y la red antes de revisar el envío.',
     'send.scanQr': 'Escanear QR',
     'send.copy': 'Copiar',
     'send.recipientAmountLoaded':
@@ -1517,6 +1582,7 @@ export const coreTranslations = {
       'QR escaneado. Verifica el destinatario antes de enviar.',
     'send.amountBch': 'Importe (BCH)',
     'send.amountUsd': 'Importe (USD)',
+    'send.amountUnit': 'Unidad del importe',
     'send.max': 'Máximo',
     'send.fillMax':
       'Rellenar el saldo disponible completo menos la comisión de red',
@@ -1547,6 +1613,9 @@ export const coreTranslations = {
       'Déjalo vacío para enviar el primer NFT disponible de esta categoría.',
     'send.submitted': 'Transacción enviada',
     'send.sent': 'Transacción completada',
+    'send.sentHelpLabel': 'Explicar el estado de la transacción',
+    'send.sentHelp':
+      'Tu cartera ha completado el envío. Conserva el ID de transacción como referencia y espera la confirmación de la red cuando sea necesario.',
     'send.keepTxid':
       'Conserva este txid como referencia y evita enviarlo otra vez.',
     'send.waitPrevious':
@@ -1558,6 +1627,8 @@ export const coreTranslations = {
     'send.reset': 'Restablecer',
     'send.back': 'Atrás',
     'send.reviewTitle': 'Revisar transacción',
+    'send.errorTitle': 'El pago necesita atención',
+    'send.editPayment': 'Editar pago',
     'send.verifySlide': 'Verifica los detalles y desliza para enviar.',
     'send.summary': 'Resumen',
     'send.to': 'A',
@@ -1589,6 +1660,8 @@ export const coreTranslations = {
       'No hay fondos suficientes. Comprueba tu saldo o reduce el importe.',
     'send.networkError':
       'Error de red. Comprueba la conexión e inténtalo de nuevo.',
+    'send.genericError':
+      'No pudimos preparar ese pago. Comprueba los datos e inténtalo de nuevo.',
     'send.changeAddress': 'Dirección de cambio',
     'send.loading': 'Cargando…',
 
@@ -1753,6 +1826,7 @@ export const coreTranslations = {
     'history.loadFailed':
       'No se pudo cargar el historial de transacciones. Comprueba tu conexión e inténtalo de nuevo.',
     'history.transactionHash': 'Hash de transacción',
+    'history.transactionId': 'ID de transacción',
     'history.confirmed': 'Confirmada',
     'history.pending': 'Pendiente',
     'history.block': 'Bloque',
@@ -1761,6 +1835,9 @@ export const coreTranslations = {
     'history.last': 'Última',
     'history.transaction': 'Transacción',
     'history.status': 'Estado',
+    'history.statusHelpLabel': 'Explicar el estado de la transacción',
+    'history.statusHelp':
+      'Confirmada significa que la transacción está en un bloque. Sin confirmar significa que la red la ha visto, pero aún espera un bloque.',
     'history.fee': 'Comisión',
     'history.timestamp': 'Marca de tiempo',
     'history.openExplorer': 'Abrir en el explorador',
@@ -1789,6 +1866,9 @@ export const coreTranslations = {
     'history.confirmations': '{count} confirmaciones',
     'outbox.title': 'Bandeja de salida',
     'outbox.pendingOutgoing': 'Transacciones salientes pendientes',
+    'outbox.pendingHelpLabel': 'Qué significan las transacciones pendientes',
+    'outbox.pendingHelp':
+      'Estos envíos permanecen aquí hasta que la billetera confirme si llegaron a la red. Borrar un bloqueo no revierte un pago que ya se envió.',
     'outbox.description':
       'La protección offline mantiene en pausa los nuevos envíos hasta que estas transacciones se detecten o se liberen de forma segura.',
     'outbox.noPending': 'No hay transacciones salientes pendientes.',
@@ -1823,6 +1903,20 @@ export const coreTranslations = {
     'outbox.dismissPending': 'Descartar ventana de transacciones pendientes',
     'outbox.dismiss': 'Descartar',
     'outbox.releaseSendLock': 'Liberar bloqueo de envío',
+    'outbox.stateBroadcasting': 'Enviando',
+    'outbox.stateSubmitted': 'Enviada',
+    'outbox.stateBroadcasted': 'Enviada a la red',
+    'outbox.stateSeen': 'Vista por la red',
+    'outbox.stateHelpLabel': 'Explicar el estado del pago',
+    'outbox.releaseHelpLabel': 'Explicar la acción de liberación',
+    'outbox.stateBroadcastingHelp':
+      'La billetera está preparando o enviando este pago. Mantén la billetera abierta hasta que termine.',
+    'outbox.stateSubmittedHelp':
+      'La billetera envió este pago, pero la red aún no lo ha visto.',
+    'outbox.stateBroadcastedHelp':
+      'El pago se envió a la red. La confirmación puede tardar.',
+    'outbox.stateSeenHelp':
+      'La red ha visto este pago. Las confirmaciones aparecen en el historial.',
 
     'settingsRows.language': 'Idioma',
     'settingsRows.languageDescription': 'Elige el idioma de la interfaz',
@@ -1934,6 +2028,24 @@ export const coreTranslations = {
     'settingsNetwork.reloading': 'Recargando billetera…',
     'settingsNetwork.active': 'Activa',
     'settingsNetwork.switching': 'Cambiando…',
+    'settingsNetwork.switchToMainnet': 'Cambiar a Mainnet',
+    'settingsNetwork.switchToChipnet': 'Cambiar a Chipnet',
+    'settingsNetwork.switchPrompt':
+      'Estás a punto de cambiar la red activa a {network}.',
+    'settingsNetwork.mainnetWarning':
+      'Mainnet usa BCH y valor reales. Confirma solo si quieres trabajar con fondos reales.',
+    'settingsNetwork.chipnetWarning':
+      'Chipnet es solo para fondos de prueba. No envíes BCH real aquí.',
+    'settingsNetwork.switchDetails':
+      'La billetera borrará los registros de la red actual y resincronizará las direcciones. Las rutas personalizadas se conservan.',
+    'settingsNetwork.errorTitle':
+      'No se pudo completar la actualización de red',
+    'settingsNetwork.switchFailed':
+      'La red no cambió. Comprueba la conexión e inténtalo de nuevo.',
+    'settingsNetwork.reloadCompleted': 'La billetera se recargó correctamente.',
+    'settingsNetwork.reloadFailed':
+      'No se pudo recargar la billetera. Comprueba la conexión e inténtalo de nuevo.',
+    'settingsNetwork.retry': 'Intentar de nuevo',
     'settingsNetwork.comingSoon': 'Próximamente',
     'settingsNetwork.testnet3': 'Testnet3',
     'settingsNetwork.testnet4': 'Testnet4',
@@ -2369,7 +2481,7 @@ export const coreTranslations = {
     'receive.noVaultFunds': '尚未检测到 Quantumroot 保险库资金。',
     'receive.close': '关闭',
     'receive.receiveQr': '接收二维码',
-    'receive.qrCopyDescription': '点击二维码复制当前内容。关闭以返回。',
+    'receive.qrCopyDescription': '点击二维码显示或隐藏完整内容。关闭以返回。',
     'receive.copyQrPayload': '复制接收二维码内容',
     'receive.bip21Title': 'BIP21 支付请求',
     'receive.bip21Description': '将金额、标签和消息编码到二维码内容中。',
@@ -2401,6 +2513,8 @@ export const coreTranslations = {
     'send.coins': '枚硬币',
     'send.spendableSummary':
       '可用 {amount} BCH，来自 {count} 个{coins}（与首页相同，但不含代币币）。',
+    'send.spendableUsdSummary':
+      '可用 {amount} USD，来自 {count} 个{coins}（与首页相同，但不含代币币）。',
     'send.send': '发送',
     'send.guidedDescription': '通过一个引导流程发送 BCH、同质化代币或 NFT。',
     'send.debug': '调试',
@@ -2419,6 +2533,9 @@ export const coreTranslations = {
     'send.rawTransaction': '原始交易',
     'send.noTxBuilt': '（尚未构建交易）',
     'send.advanced': '高级',
+    'send.advancedHelpLabel': '解释高级发送选项',
+    'send.advancedHelp':
+      '高级选项用于控制币选择、找零地址和最大金额。只有需要这些控制时才使用。',
     'send.advancedBuilder': '打开高级构建器',
     'send.quantumrootShortcut': 'Quantumroot 快捷方式',
     'send.quantumrootApproval': '发送到量子锁的批准密钥',
@@ -2433,6 +2550,8 @@ export const coreTranslations = {
     'send.airdrops': '空投',
     'send.openAirdrops': '打开空投',
     'send.recipient': '收款人',
+    'send.recipientHelpLabel': '解释收款人字段',
+    'send.recipientHelp': '输入付款接收方。请在检查发送前确认地址和网络。',
     'send.scanQr': '扫描二维码',
     'send.copy': '复制',
     'send.recipientAmountLoaded': '已从二维码加载收款人和金额。',
@@ -2442,6 +2561,7 @@ export const coreTranslations = {
     'send.verifyRecipient': '已扫描二维码。发送前请确认收款人。',
     'send.amountBch': '金额（BCH）',
     'send.amountUsd': '金额（USD）',
+    'send.amountUnit': '金额单位',
     'send.max': '最大值',
     'send.fillMax': '填入扣除网络费用后的全部可用余额',
     'send.switchToUsd': '将金额输入切换为 USD',
@@ -2467,6 +2587,9 @@ export const coreTranslations = {
     'send.leaveBlankNft': '留空以发送此类别中第一个可用的 NFT。',
     'send.submitted': '交易已提交',
     'send.sent': '交易已发送',
+    'send.sentHelpLabel': '解释交易状态',
+    'send.sentHelp':
+      '钱包已完成发送流程。请保留交易 ID，并在需要时等待网络确认。',
     'send.keepTxid': '请保留此 txid 作为参考，避免重复发送。',
     'send.waitPrevious': '请等待上一笔转出交易完成同步',
     'send.fillRequired': '请填写必填字段',
@@ -2476,6 +2599,8 @@ export const coreTranslations = {
     'send.reset': '重置',
     'send.back': '返回',
     'send.reviewTitle': '检查交易',
+    'send.errorTitle': '付款需要处理',
+    'send.editPayment': '编辑付款',
     'send.verifySlide': '确认详情后滑动发送。',
     'send.summary': '摘要',
     'send.to': '收款人',
@@ -2504,6 +2629,7 @@ export const coreTranslations = {
     'send.invalidAddress': '地址无效，请检查拼写或尝试扫描二维码。',
     'send.insufficientFunds': '资金不足，请检查余额或减少金额。',
     'send.networkError': '网络错误，请检查连接后重试。',
+    'send.genericError': '无法准备该付款。请检查详细信息后重试。',
     'send.changeAddress': '找零地址',
     'send.loading': '加载中…',
 
@@ -2659,6 +2785,7 @@ export const coreTranslations = {
     'history.loading': '正在加载交易记录…',
     'history.loadFailed': '无法加载交易记录。请检查连接后重试。',
     'history.transactionHash': '交易哈希',
+    'history.transactionId': '交易 ID',
     'history.confirmed': '已确认',
     'history.pending': '待处理',
     'history.block': '区块',
@@ -2667,6 +2794,9 @@ export const coreTranslations = {
     'history.last': '最后一页',
     'history.transaction': '交易',
     'history.status': '状态',
+    'history.statusHelpLabel': '解释交易状态',
+    'history.statusHelp':
+      '已确认表示交易已进入区块。未确认表示网络已看到交易，但仍在等待区块。',
     'history.fee': '费用',
     'history.timestamp': '时间戳',
     'history.openExplorer': '在浏览器中打开',
@@ -2693,6 +2823,9 @@ export const coreTranslations = {
     'history.confirmations': '{count} 次确认',
     'outbox.title': '发件箱',
     'outbox.pendingOutgoing': '待处理转出交易',
+    'outbox.pendingHelpLabel': '了解待处理转出交易',
+    'outbox.pendingHelp':
+      '这些发送会保留在此处，直到钱包确认它们是否已到达网络。清除锁定不会撤销已经发送的付款。',
     'outbox.description':
       '离线优先保护会暂停新发送，直到这些交易被发现或安全释放。',
     'outbox.noPending': '没有待处理的转出交易。',
@@ -2724,6 +2857,17 @@ export const coreTranslations = {
     'outbox.dismissPending': '关闭待处理交易弹窗',
     'outbox.dismiss': '关闭',
     'outbox.releaseSendLock': '释放发送锁定',
+    'outbox.stateBroadcasting': '发送中',
+    'outbox.stateSubmitted': '已提交',
+    'outbox.stateBroadcasted': '已发送到网络',
+    'outbox.stateSeen': '网络已看到',
+    'outbox.stateHelpLabel': '解释付款状态',
+    'outbox.releaseHelpLabel': '解释释放操作',
+    'outbox.stateBroadcastingHelp':
+      '钱包正在准备或提交这笔付款。请保持钱包打开，直到操作完成。',
+    'outbox.stateSubmittedHelp': '钱包已提交这笔付款，但网络尚未看到它。',
+    'outbox.stateBroadcastedHelp': '付款已发送到网络。确认可能需要一些时间。',
+    'outbox.stateSeenHelp': '网络已看到这笔付款。确认数会显示在历史记录中。',
 
     'settingsRows.language': '语言',
     'settingsRows.languageDescription': '选择钱包界面语言',
@@ -2822,6 +2966,20 @@ export const coreTranslations = {
     'settingsNetwork.reloading': '正在重新加载钱包…',
     'settingsNetwork.active': '当前',
     'settingsNetwork.switching': '切换中…',
+    'settingsNetwork.switchToMainnet': '切换到主网',
+    'settingsNetwork.switchToChipnet': '切换到 Chipnet',
+    'settingsNetwork.switchPrompt': '即将把当前网络切换为 {network}。',
+    'settingsNetwork.mainnetWarning':
+      '主网使用真实 BCH 和真实价值。只有在你确定要使用真实资金时才确认。',
+    'settingsNetwork.chipnetWarning':
+      'Chipnet 仅用于测试资金。请勿在此发送真实 BCH。',
+    'settingsNetwork.switchDetails':
+      '钱包会清除当前网络记录并重新同步地址。自定义派生路径会保留。',
+    'settingsNetwork.errorTitle': '无法完成网络更新',
+    'settingsNetwork.switchFailed': '网络未更改。请检查连接后重试。',
+    'settingsNetwork.reloadCompleted': '钱包重新加载成功。',
+    'settingsNetwork.reloadFailed': '无法重新加载钱包。请检查连接后重试。',
+    'settingsNetwork.retry': '重试',
     'settingsNetwork.comingSoon': '即将推出',
     'settingsNetwork.testnet3': 'Testnet3',
     'settingsNetwork.testnet4': 'Testnet4',

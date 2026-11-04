@@ -15,9 +15,11 @@ import { isTxConfirmed } from '../../utils/txConfirmation';
 import { useI18n } from '../../i18n/useI18n';
 import { formatDate, formatNumber } from '../../i18n/format';
 import type { SupportedLocale } from '../../i18n/types';
-import { copyWithFeedback } from '../../utils/copyWithFeedback';
 import { handleExternalLinkClick } from '../../utils/openExternalLink';
 import { deriveWalletTransactionEffect } from './transactionEffect';
+import MaskedValue from '../../components/ui/MaskedValue';
+import InfoButton from '../../components/ui/InfoButton';
+import { logError } from '../../utils/errorHandling';
 
 type Props = {
   txid: string;
@@ -92,9 +94,12 @@ function Section({
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="font-mono text-xs break-all wallet-text-strong">
-                    {row.address}
-                  </div>
+                  <MaskedValue
+                    value={row.address}
+                    label={t('send.address')}
+                    copySuccessMessageKey="receive.addressCopied"
+                    className="block max-w-full break-all text-xs"
+                  />
                   {typeof row.outputIndex === 'number' ? (
                     <div className="text-xs wallet-muted mt-1">
                       {t('history.output')} #{row.outputIndex}
@@ -176,9 +181,8 @@ export default function TransactionDetailPopup({
         }
       } catch (err) {
         if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : t('history.loadDetailsFailed')
-          );
+          logError('TransactionDetailPopup.loadDetails', err, { txid });
+          setError(t('history.loadDetailsFailed'));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -208,25 +212,27 @@ export default function TransactionDetailPopup({
       <div className="space-y-4 p-1">
         <div>
           <div className="text-xs wallet-muted mb-1">
-            {t('history.transaction')}
+            {t('history.transactionId')}
           </div>
-          <button
-            type="button"
-            className="block w-full text-left font-mono text-sm break-all wallet-text-strong underline decoration-[var(--wallet-border)] underline-offset-4 hover:decoration-current"
-            aria-label={t('history.copyTransaction')}
-            onClick={() =>
-              void copyWithFeedback(txid, 'history.transactionCopied')
-            }
-          >
-            {txid}
-          </button>
+          <MaskedValue
+            value={txid}
+            label={t('history.transactionId')}
+            ariaLabel={t('history.copyTransaction')}
+            copySuccessMessageKey="history.transactionCopied"
+            className="block w-full text-sm"
+          />
         </div>
 
         <section className="wallet-card p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xs wallet-muted mb-1">
-                {t('history.status')}
+              <div className="flex items-center gap-1 text-xs wallet-muted mb-1">
+                <span>{t('history.status')}</span>
+                <InfoButton
+                  id="transaction-status-help"
+                  ariaLabel={t('history.statusHelpLabel')}
+                  content={t('history.statusHelp')}
+                />
               </div>
               <div className="text-sm wallet-text-strong">
                 {loading

@@ -1,4 +1,8 @@
 import KeyManager from '../../apis/WalletManager/KeyManager';
+import {
+  getUiFixtureAddressPairs,
+  isUiFixtureEnabled,
+} from '../../ui-fixtures/fixtureData';
 
 /**
  * Read the public address inventory used to identify wallet-owned transaction
@@ -9,6 +13,13 @@ export async function loadWalletPublicAddresses(
 ): Promise<string[]> {
   if (!Number.isSafeInteger(walletId) || walletId <= 0) {
     throw new Error('A valid wallet is required to load public addresses.');
+  }
+
+  if (isUiFixtureEnabled()) {
+    return getUiFixtureAddressPairs().flatMap(({ address, tokenAddress }) => [
+      address,
+      tokenAddress,
+    ]);
   }
 
   const keys = await KeyManager().retrieveKeys(walletId);

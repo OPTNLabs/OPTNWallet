@@ -2,6 +2,7 @@ import React from 'react';
 import { Network } from '../../../state/slices/networkSlice';
 import { getBchAccountPath } from '../../../services/HdWalletService';
 import Bip44AccountPathFields from '../../../components/Bip44AccountPathFields';
+import NetworkContextBanner from '../../../components/ui/NetworkContextBanner';
 import NetworkSelector from './NetworkSelector';
 import { useI18n } from '../../../i18n/useI18n';
 
@@ -38,6 +39,7 @@ export const DerivationPathField: React.FC<DerivationPathFieldProps> = ({
         <p className="text-xs wallet-muted mb-2">
           {t('derivation.walletNetworkDescription')}
         </p>
+        <NetworkContextBanner network={network} className="mb-3" />
         <NetworkSelector networkType={network} centered />
       </div>
       <details className="rounded-xl border border-[var(--wallet-border)]">

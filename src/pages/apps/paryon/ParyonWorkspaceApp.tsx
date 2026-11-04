@@ -37,8 +37,13 @@ import {
   paryonConfirmationLabel,
 } from './actionConfirmation';
 import { getReturnPath } from '../../../utils/navigation';
+import { useI18n } from '../../../i18n/useI18n';
 import WalletScreen from '../../../components/ui/WalletScreen';
 import SegmentedSubnav from '../../../components/ui/SegmentedSubnav';
+import MaskedValue from '../../../components/ui/MaskedValue';
+import InfoButton from '../../../components/ui/InfoButton';
+import PageHeader from '../../../components/ui/PageHeader';
+import RouteExitFooter from '../../../components/ui/RouteExitFooter';
 
 type Props = {
   sdk: AddonSDK;
@@ -94,6 +99,7 @@ function stateTone(
 
 export default function ParyonWorkspaceApp({ sdk, app }: Props) {
   const { t: addonT } = useAddonI18n();
+  const { t: walletT } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const network = sdk.wallet.getContext().network;
@@ -117,6 +123,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
   const [loadingNativeSnapshot, setLoadingNativeSnapshot] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [statusTxid, setStatusTxid] = useState<string | null>(null);
   const [borrowForm, setBorrowForm] = useState<BorrowForm>({
     borrowAmount: '100.00',
     collateralBch: '0.25',
@@ -385,6 +392,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       contractCount: snapshot.contractCount,
       loadError,
       statusMessage,
+      statusTxid,
       writeEnabled,
       writeWarning,
       oraclePriceCentsPerBch: market.oraclePriceCentsPerBch?.toString() ?? null,
@@ -451,6 +459,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     selectedPosition,
     snapshot,
     statusMessage,
+    statusTxid,
     view,
     writeEnabled,
     writeWarning,
@@ -549,6 +558,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     if (confirmState.action === 'borrow') {
       if (!nativeSnapshot) {
         setStatusMessage('Live wallet state is still loading.');
+        setStatusTxid(null);
         setConfirmError(
           'Live wallet state is still loading. Close this review and try again once it is ready.'
         );
@@ -556,16 +566,17 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       }
       try {
         setConfirmLoading(true);
+        setStatusTxid(null);
         setStatusMessage('Broadcasting the reviewed borrow transaction…');
         const result = await sdk.tx.broadcast(preparedTransaction!.hex);
         if (result.errorMessage) throw new Error(result.errorMessage);
-        setStatusMessage(
-          `Borrow transaction broadcast${result.txid ? `: ${result.txid}` : ''}.`
-        );
+        setStatusMessage('Borrow transaction broadcast.');
+        setStatusTxid(result.txid ?? null);
         closePreview();
         return;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        setStatusTxid(null);
         setStatusMessage(message);
         setConfirmError(message);
         return;
@@ -576,6 +587,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     if (confirmState.action === 'stake') {
       if (!nativeSnapshot) {
         setStatusMessage('Live wallet state is still loading.');
+        setStatusTxid(null);
         setConfirmError(
           'Live wallet state is still loading. Close this review and try again once it is ready.'
         );
@@ -583,16 +595,17 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       }
       try {
         setConfirmLoading(true);
+        setStatusTxid(null);
         setStatusMessage('Broadcasting the reviewed stake transaction…');
         const result = await sdk.tx.broadcast(preparedTransaction!.hex);
         if (result.errorMessage) throw new Error(result.errorMessage);
-        setStatusMessage(
-          `Stake transaction broadcast${result.txid ? `: ${result.txid}` : ''}.`
-        );
+        setStatusMessage('Stake transaction broadcast.');
+        setStatusTxid(result.txid ?? null);
         closePreview();
         return;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        setStatusTxid(null);
         setStatusMessage(message);
         setConfirmError(message);
         return;
@@ -603,6 +616,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     setStatusMessage(
       `${confirmState.preview.title} preview staged inside OPTN Wallet.`
     );
+    setStatusTxid(null);
     closePreview();
   };
 
@@ -675,7 +689,22 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       ) : null}
 
       {statusMessage ? (
-        <StatusBanner tone="positive">{statusMessage}</StatusBanner>
+        <StatusBanner tone="positive">
+          <div>{statusMessage}</div>
+          {statusTxid ? (
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-white/60">
+                {walletT('history.transactionId')}
+              </span>
+              <MaskedValue
+                value={statusTxid}
+                label={walletT('history.transactionId')}
+                copySuccessMessageKey="history.transactionCopied"
+                className="text-xs text-white"
+              />
+            </div>
+          ) : null}
+        </StatusBanner>
       ) : null}
 
       <StatusBanner
@@ -763,10 +792,39 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
                   >
                     {thread.freshness}
                   </Badge>
+                  <InfoButton
+                    id={`paryon-thread-freshness-${thread.name}`}
+                    ariaLabel={addonT(
+                      'module.threadFreshnessHelp',
+                      'Explain thread freshness'
+                    )}
+                    content={addonT(
+                      'module.threadFreshnessHelp',
+                      'Fresh means the latest verified contract state is available. Stale or degraded data keeps writes disabled until a fresh state is indexed.'
+                    )}
+                  />
                 </div>
                 {thread.preferredOutpoint ? (
-                  <div className="mt-2 break-all text-[0.72rem] leading-5 text-white/58">
-                    {thread.preferredOutpoint}
+                  <div className="mt-2 flex items-center gap-2 text-[0.72rem] leading-5 text-white/58">
+                    <span className="shrink-0">
+                      {addonT(
+                        'module.preferredOutpoint',
+                        'Preferred contract output'
+                      )}
+                      :
+                    </span>
+                    <MaskedValue
+                      value={thread.preferredOutpoint}
+                      label={addonT(
+                        'module.preferredOutpoint',
+                        'Preferred contract output'
+                      )}
+                      ariaLabel={addonT(
+                        'module.preferredOutpoint',
+                        'Preferred contract output'
+                      )}
+                      className="min-w-0 break-all text-[0.72rem] text-white/75"
+                    />
                   </div>
                 ) : null}
                 {thread.warnings.length > 0 ? (
@@ -1072,14 +1130,6 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
           </div>
         </div>
       </details>
-
-      <button
-        type="button"
-        className="wallet-btn-danger mt-2 w-full rounded-full px-4 py-3 text-sm font-semibold"
-        onClick={() => navigate(backTarget)}
-      >
-        Back
-      </button>
     </div>
   );
 
@@ -1394,8 +1444,10 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
   return (
     <WalletScreen maxWidthClassName="max-w-md" className="text-white">
       <div className="space-y-4">
+        <PageHeader title={app.name} compact />
         {renderNav()}
         {renderView()}
+        <RouteExitFooter label="Back" onBack={() => navigate(backTarget)} />
       </div>
 
       {confirmState.open ? (
@@ -1603,6 +1655,7 @@ function ActionScreen({
   form: React.ReactNode;
 }) {
   const { t: addonT } = useAddonI18n();
+  const { t: walletT } = useI18n();
   return (
     <ScreenShell title={title} subtitle={subtitle} onBack={onBack}>
       <div className="space-y-3">
@@ -1678,7 +1731,14 @@ function ActionScreen({
             {plan.target ? (
               <div className="mt-3 rounded-2xl border border-white/10 bg-black/12 px-3 py-3 text-sm leading-6 text-white/82">
                 Target: {plan.target.label} · {plan.target.state} ·{' '}
-                {plan.target.txHash.slice(0, 12)}…
+                <MaskedValue
+                  value={plan.target.txHash}
+                  label={walletT('history.transactionId')}
+                  ariaLabel={walletT('history.transactionId')}
+                  copySuccessMessageKey="history.transactionCopied"
+                  embedded
+                  className="align-middle text-white"
+                />
               </div>
             ) : null}
             <div className="mt-3 grid gap-2">

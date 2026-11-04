@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useParams } from 'react-router-dom';
 import { copyWithFeedback } from '../../utils/copyWithFeedback';
+import MaskedValue from '../../components/ui/MaskedValue';
+import { useI18n } from '../../i18n/useI18n';
 import MultisigPage from './MultisigPage';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MultisigError from './MultisigError';
 import {
   getMultisigPolicyStatus,
   reserveMultisigAddress,
@@ -11,9 +15,11 @@ import {
 
 /** Receive view for multisig wallets. Mounting this screen never reserves an index. */
 export default function MultisigReceive() {
+  const { t } = useI18n();
   const { wallet_id: routeWalletId } = useParams();
   const walletId = Number(routeWalletId);
   const [policyId, setPolicyId] = useState<string | null>(null);
+  const [network, setNetwork] = useState<string | null>(null);
   const [reservation, setReservation] =
     useState<MultisigAddressReservation | null>(null);
   const [error, setError] = useState('');
@@ -33,7 +39,10 @@ export default function MultisigReceive() {
   useEffect(() => {
     if (!walletId) return;
     void getMultisigPolicyStatus(walletId)
-      .then((status) => setPolicyId(status?.policyId ?? null))
+      .then((status) => {
+        setPolicyId(status?.policyId ?? null);
+        setNetwork(status?.network ?? null);
+      })
       .catch((cause) =>
         setError(
           cause instanceof Error
@@ -62,6 +71,7 @@ export default function MultisigReceive() {
 
   return (
     <MultisigPage>
+      {network && <NetworkContextBanner network={network} />}
       <section className="space-y-3 rounded-2xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--wallet-accent-strong)]">
           Shared receive
@@ -112,9 +122,15 @@ export default function MultisigReceive() {
                       {copiedAddress === 'token' ? 'Copied' : 'Copy'}
                     </button>
                   </div>
-                  <p className="mt-1 break-all rounded-lg border border-[var(--wallet-border)] p-2 font-mono text-[10px] wallet-text-strong">
-                    {reservation.tokenAddress}
-                  </p>
+                  <div className="mt-1 rounded-lg border border-[var(--wallet-border)] p-2">
+                    <MaskedValue
+                      value={reservation.tokenAddress}
+                      label={t('multisig.tokenAwareAddress')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      embedded
+                      className="w-full break-all text-[10px] wallet-text-strong"
+                    />
+                  </div>
                 </div>
                 <div>
                   <div className="flex items-center justify-between gap-2">
@@ -131,9 +147,15 @@ export default function MultisigReceive() {
                       {copiedAddress === 'bch' ? 'Copied' : 'Copy'}
                     </button>
                   </div>
-                  <p className="mt-1 break-all rounded-lg border border-[var(--wallet-border)] p-2 font-mono text-[10px] wallet-text-strong">
-                    {reservation.address}
-                  </p>
+                  <div className="mt-1 rounded-lg border border-[var(--wallet-border)] p-2">
+                    <MaskedValue
+                      value={reservation.address}
+                      label={t('multisig.bchAddress')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      embedded
+                      className="w-full break-all text-[10px] wallet-text-strong"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -152,11 +174,7 @@ export default function MultisigReceive() {
             {busy ? 'Reserving…' : 'Reserve next receive address'}
           </button>
         )}
-        {error && (
-          <p role="alert" className="text-sm text-red-400">
-            {error}
-          </p>
-        )}
+        {error && <MultisigError message={error} />}
       </section>
     </MultisigPage>
   );

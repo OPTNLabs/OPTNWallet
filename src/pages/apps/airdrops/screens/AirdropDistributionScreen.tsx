@@ -1270,7 +1270,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
               className="wallet-btn-secondary w-full"
               onClick={() => setStep('recipients')}
             >
-              Back
+              Previous step
             </button>
           </div>
         </SectionCard>
@@ -1314,7 +1314,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
               className="wallet-btn-secondary w-full mt-2"
               onClick={() => setStep('asset')}
             >
-              Back
+              Previous step
             </button>
           </div>
         </SectionCard>

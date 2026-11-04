@@ -35,19 +35,25 @@ import { isDesktopPlatform } from '../utils/platform';
 import { WalletType } from '../types/wallet';
 import { useI18n } from '../i18n/useI18n';
 import ReceiveAddressSetupAction from './ReceiveAddressSetupAction';
-import { copyWithFeedback, shareWithFeedback } from '../utils/copyWithFeedback';
+import { copyWithFeedback } from '../utils/copyWithFeedback';
 import { canSignLocally } from '../services/watchOnlyWallet';
+import RouteExitFooter from '../components/ui/RouteExitFooter';
+import MaskedValue from '../components/ui/MaskedValue';
 import {
   buildBchPaymentUri,
   isValidBchPaymentAmount,
   normalizeBchPaymentAmountInput,
 } from './receivePaymentUri';
+import {
+  getUiFixtureKeyPairs,
+  isUiFixtureEnabled,
+} from '../ui-fixtures/fixtureData';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
 const ALLOW_PRIVATE_KEY_VIEW = true;
 
-type WalletKeyPair = {
+export type WalletKeyPair = {
   address: string;
   tokenAddress: string;
   publicKey: Uint8Array;
@@ -112,7 +118,6 @@ const Receive: React.FC = () => {
   const navigate = useNavigate();
   const { t } = useI18n();
   const location = useLocation();
-  const backTarget = getReturnPath(location, '/apps');
   const [mainKeyPairs, setMainKeyPairs] = useState<WalletKeyPair[]>([]);
   const [changeKeyPairs, setChangeKeyPairs] = useState<WalletKeyPair[]>([]);
   const [addressSetupBusy, setAddressSetupBusy] = useState(false);
@@ -135,6 +140,7 @@ const Receive: React.FC = () => {
   const [showBip21Popup, setShowBip21Popup] = useState(false);
   const [showAddressListPopup, setShowAddressListPopup] = useState(false);
   const [showQrPopup, setShowQrPopup] = useState(false);
+  const [showQrAddress, setShowQrAddress] = useState(false);
   const [bip21Amount, setBip21Amount] = useState('');
   const [bip21AmountError, setBip21AmountError] = useState(false);
   const [bip21Label, setBip21Label] = useState('');
@@ -165,6 +171,10 @@ const Receive: React.FC = () => {
 
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
+  );
+  const backTarget = getReturnPath(
+    location,
+    currentWalletId ? `/home/${currentWalletId}` : '/actions'
   );
   const activeWalletIdRef = useRef(currentWalletId);
   activeWalletIdRef.current = currentWalletId;
@@ -230,9 +240,11 @@ const Receive: React.FC = () => {
       if (!currentWalletId) return;
 
       try {
-        let existingKeys = (await KeyService.retrieveKeys(
-          currentWalletId
-        )) as WalletKeyPair[];
+        let existingKeys = isUiFixtureEnabled()
+          ? (getUiFixtureKeyPairs() as WalletKeyPair[])
+          : ((await KeyService.retrieveKeys(
+              currentWalletId
+            )) as WalletKeyPair[]);
         if (cancelled) return;
 
         // A desktop wallet can reach this shared screen from a restored
@@ -299,6 +311,12 @@ const Receive: React.FC = () => {
 
   const handleInitializeReceiveAddresses = async () => {
     if (!currentWalletId || addressSetupInFlight.current) return;
+    if (isUiFixtureEnabled()) {
+      const fixtureKeys = getUiFixtureKeyPairs() as WalletKeyPair[];
+      setMainKeyPairs(fixtureKeys.filter((key) => key.changeIndex === 0));
+      setChangeKeyPairs(fixtureKeys.filter((key) => key.changeIndex === 1));
+      return;
+    }
     const walletId = currentWalletId;
     addressSetupInFlight.current = true;
     setAddressSetupBusy(true);
@@ -358,7 +376,9 @@ const Receive: React.FC = () => {
   };
 
   const handleAddressSelect = async (tokenAddress: string, address: string) => {
-    const keys = (await KeyService.retrieveKeys(wallet_id)) as WalletKeyPair[];
+    const keys = isUiFixtureEnabled()
+      ? (getUiFixtureKeyPairs() as WalletKeyPair[])
+      : ((await KeyService.retrieveKeys(wallet_id)) as WalletKeyPair[]);
     const selectedKey = keys.find((key) => key.address === address);
 
     if (!selectedKey) {
@@ -393,6 +413,10 @@ const Receive: React.FC = () => {
 
   useEffect(() => {
     if (!currentWalletId || !selectedWalletKey) return;
+    if (isUiFixtureEnabled()) {
+      setSelectedQuantumrootVault(null);
+      return;
+    }
 
     let cancelled = false;
     const loadQuantumrootVault = async () => {
@@ -422,6 +446,7 @@ const Receive: React.FC = () => {
 
   useEffect(() => {
     if (!currentWalletId || !selectedQuantumrootVault) return;
+    if (isUiFixtureEnabled()) return;
 
     let cancelled = false;
     const loadQuantumrootStatus = async () => {
@@ -578,18 +603,6 @@ const Receive: React.FC = () => {
           : 'receive.addressCopied'
     );
 
-  const handleShareAddress = () => {
-    if (!activeAddress) return;
-    return shareWithFeedback(
-      {
-        title: t('receive.title'),
-        text: activeAddress,
-      },
-      'receive.addressShared',
-      'receive.shareFailed'
-    );
-  };
-
   const toggleAddressType = () => {
     const sourcePair = selectedAddressPair ?? primaryKeyPair;
     if (!sourcePair) return;
@@ -621,6 +634,10 @@ const Receive: React.FC = () => {
   const activeAddress = selectedAddress ?? primaryKeyPair?.address ?? '';
   const addressPrefixLength =
     PREFIX[currentNetwork]?.length ?? PREFIX.mainnet.length;
+  // Preserve the BCH cashaddr prefix and five payload characters, matching the
+  // established pubkey/PKH disclosure density without exposing the full address.
+  const addressMaskPrefixLength = addressPrefixLength + 6;
+  const addressMaskSuffixLength = 5;
   const receiveAddressLabelMaskLength = 6;
   const bip21Uri = buildBchPaymentUri(activeAddress, {
     amount: bip21Amount,
@@ -849,7 +866,10 @@ const Receive: React.FC = () => {
           <button
             type="button"
             className="rounded-2xl border border-[rgba(0,0,0,0.08)] bg-white p-1 shadow-sm transition-transform duration-200 hover:scale-[1.01] focus:outline-none focus:ring-2 focus:ring-[var(--wallet-accent)] focus:ring-offset-2"
-            onClick={() => setShowQrPopup(true)}
+            onClick={() => {
+              setShowQrAddress(false);
+              setShowQrPopup(true);
+            }}
             aria-label={t('receive.openQrPreview')}
           >
             <QRCodeSVG
@@ -874,33 +894,49 @@ const Receive: React.FC = () => {
               </p>
             )}
             <div className="w-full flex items-center gap-1.5">
-              <button
-                type="button"
-                data-testid="receive-address"
-                aria-label={t('receive.copyAddress')}
-                className={`flex min-h-[44px] min-w-0 items-center gap-2 overflow-hidden wallet-surface-strong rounded-[12px] px-3 py-2 text-left hover:brightness-[0.97] ${
-                  visibleQrCodeType === 'address' ? 'flex-1' : 'w-full'
-                }`}
-                onClick={() => handleCopy(activeQrPayload)}
-              >
-                {visibleQrCodeType === 'address' ? (
-                  <span className="block min-w-0 flex-1 overflow-hidden whitespace-nowrap text-sm">
-                    {activeLabelDisplay}
-                  </span>
-                ) : (
+              {visibleQrCodeType === 'address' ? (
+                <div
+                  className="flex min-h-[44px] min-w-0 flex-1 items-center gap-2 overflow-hidden wallet-surface-strong rounded-[12px] px-3 py-2 text-left"
+                  data-testid="receive-address"
+                >
+                  <MaskedValue
+                    value={activeQrPayload}
+                    label={t('receive.copyAddress')}
+                    prefixLength={addressMaskPrefixLength}
+                    suffixLength={addressMaskSuffixLength}
+                    copySuccessMessageKey={
+                      showBip21Popup
+                        ? 'receive.paymentRequestCopied'
+                        : 'receive.addressCopied'
+                    }
+                    className="block min-w-0 flex-1 overflow-hidden whitespace-nowrap text-sm"
+                  />
+                  <MdContentCopy
+                    aria-hidden="true"
+                    className="shrink-0 text-base wallet-muted"
+                  />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  data-testid="receive-address"
+                  aria-label={t('receive.copyAddress')}
+                  className="flex min-h-[44px] min-w-0 w-full items-center gap-2 overflow-hidden wallet-surface-strong rounded-[12px] px-3 py-2 text-left hover:brightness-[0.97]"
+                  onClick={() => handleCopy(activeQrPayload)}
+                >
                   <span className="min-w-0 flex-1">
                     {renderMaskedLabel(activeLabelDisplay, 7, 7)}
                   </span>
-                )}
-                <MdContentCopy
-                  aria-hidden="true"
-                  className="shrink-0 text-base wallet-muted"
-                />
-              </button>
+                  <MdContentCopy
+                    aria-hidden="true"
+                    className="shrink-0 text-base wallet-muted"
+                  />
+                </button>
+              )}
               {visibleQrCodeType === 'address' && (
                 <button
                   type="button"
-                  className={`wallet-btn-secondary shrink-0 whitespace-nowrap rounded-[12px] px-2.5 py-1.5 text-[11px] ${
+                  className={`wallet-btn-secondary min-h-[44px] shrink-0 whitespace-nowrap rounded-[12px] px-2.5 py-1.5 text-[11px] ${
                     showBip21Popup ? 'wallet-segment-active' : ''
                   }`}
                   onClick={() => setShowBip21Popup(true)}
@@ -909,24 +945,6 @@ const Receive: React.FC = () => {
                 </button>
               )}
             </div>
-            {visibleQrCodeType === 'address' && (
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  className="wallet-btn-secondary min-h-[44px] px-3 py-2 text-sm font-semibold"
-                  onClick={() => void handleCopy(activeAddress)}
-                >
-                  {t('receive.copyAddress')}
-                </button>
-                <button
-                  type="button"
-                  className="wallet-btn-secondary min-h-[44px] px-3 py-2 text-sm font-semibold"
-                  onClick={() => void handleShareAddress()}
-                >
-                  {t('receive.shareAddress')}
-                </button>
-              </div>
-            )}
           </div>
         </div>
       </SectionCard>
@@ -951,7 +969,7 @@ const Receive: React.FC = () => {
             />
             <button
               type="button"
-              className="wallet-btn-secondary px-3 py-1.5 text-xs"
+              className="wallet-btn-secondary min-h-[44px] px-3 py-1.5 text-xs"
               onClick={() => setShowAddressListPopup(true)}
             >
               {t('receive.switch')}
@@ -965,55 +983,57 @@ const Receive: React.FC = () => {
       <SectionCard className="p-2.5">
         <div
           ref={modeTabsScrollRef}
-          className="flex gap-1.5 overflow-x-auto overscroll-x-contain pb-1"
+          className="min-w-0 max-w-full overflow-x-auto overscroll-x-contain pb-1"
         >
-          <button
-            type="button"
-            className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
-              visibleQrCodeType === 'address'
-                ? 'wallet-segment-active'
-                : 'wallet-segment-inactive'
-            }`}
-            onClick={() => setQrCodeType('address')}
-          >
-            Address
-          </button>
-          <button
-            type="button"
-            className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
-              visibleQrCodeType === 'pubKey'
-                ? 'wallet-segment-active'
-                : 'wallet-segment-inactive'
-            }`}
-            onClick={handlePubKeyTabClick}
-          >
-            PubKey
-          </button>
-          <button
-            type="button"
-            className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
-              visibleQrCodeType === 'pkh'
-                ? 'wallet-segment-active'
-                : 'wallet-segment-inactive'
-            }`}
-            onClick={() => setQrCodeType('pkh')}
-          >
-            PKH
-          </button>
-          {privateKeyRevealApproved && (
+          <div className="flex w-max min-w-full justify-center gap-1.5">
             <button
-              ref={privkeyTabRef}
               type="button"
               className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
-                visibleQrCodeType === 'privkey'
+                visibleQrCodeType === 'address'
                   ? 'wallet-segment-active'
                   : 'wallet-segment-inactive'
               }`}
-              onClick={handlePrivKeyTabClick}
+              onClick={() => setQrCodeType('address')}
             >
-              PrivKey
+              Address
             </button>
-          )}
+            <button
+              type="button"
+              className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
+                visibleQrCodeType === 'pubKey'
+                  ? 'wallet-segment-active'
+                  : 'wallet-segment-inactive'
+              }`}
+              onClick={handlePubKeyTabClick}
+            >
+              PubKey
+            </button>
+            <button
+              type="button"
+              className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
+                visibleQrCodeType === 'pkh'
+                  ? 'wallet-segment-active'
+                  : 'wallet-segment-inactive'
+              }`}
+              onClick={() => setQrCodeType('pkh')}
+            >
+              PKH
+            </button>
+            {privateKeyRevealApproved && (
+              <button
+                ref={privkeyTabRef}
+                type="button"
+                className={`min-h-[44px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
+                  visibleQrCodeType === 'privkey'
+                    ? 'wallet-segment-active'
+                    : 'wallet-segment-inactive'
+                }`}
+                onClick={handlePrivKeyTabClick}
+              >
+                PrivKey
+              </button>
+            )}
+          </div>
         </div>
       </SectionCard>
     );
@@ -1093,13 +1113,10 @@ const Receive: React.FC = () => {
           )}
           <div className="space-y-3">
             {modeButtons}
-            <button
-              type="button"
-              onClick={() => navigate(backTarget)}
-              className="wallet-btn-secondary w-full py-3 font-semibold shadow-xl"
-            >
-              {t('receive.back')}
-            </button>
+            <RouteExitFooter
+              label={t('receive.back')}
+              onBack={() => navigate(backTarget)}
+            />
           </div>
         </div>
       </div>
@@ -1180,19 +1197,41 @@ const Receive: React.FC = () => {
                   <div className="mb-1 text-[11px] font-semibold wallet-muted">
                     {t('receive.receiveAddress')}
                   </div>
-                  <div className="break-all font-mono text-xs">
-                    {selectedQuantumrootVault?.receive_address ??
-                      t('receive.unavailable')}
-                  </div>
+                  {selectedQuantumrootVault?.receive_address ? (
+                    <MaskedValue
+                      value={selectedQuantumrootVault.receive_address}
+                      label={t('receive.receiveAddress')}
+                      ariaLabel={t('receive.receiveAddress')}
+                      prefixLength={addressMaskPrefixLength}
+                      suffixLength={addressMaskSuffixLength}
+                      copySuccessMessageKey="receive.addressCopied"
+                      className="max-w-full break-all text-xs"
+                    />
+                  ) : (
+                    <div className="font-mono text-xs">
+                      {t('receive.unavailable')}
+                    </div>
+                  )}
                 </div>
                 <div className="wallet-surface-strong rounded-[14px] p-3">
                   <div className="mb-1 text-[11px] font-semibold wallet-muted">
                     {t('receive.quantumLockAddress')}
                   </div>
-                  <div className="break-all font-mono text-xs">
-                    {selectedQuantumrootVault?.quantum_lock_address ??
-                      t('receive.unavailable')}
-                  </div>
+                  {selectedQuantumrootVault?.quantum_lock_address ? (
+                    <MaskedValue
+                      value={selectedQuantumrootVault.quantum_lock_address}
+                      label={t('receive.quantumLockAddress')}
+                      ariaLabel={t('receive.quantumLockAddress')}
+                      prefixLength={addressMaskPrefixLength}
+                      suffixLength={addressMaskSuffixLength}
+                      copySuccessMessageKey="receive.addressCopied"
+                      className="max-w-full break-all text-xs"
+                    />
+                  ) : (
+                    <div className="font-mono text-xs">
+                      {t('receive.unavailable')}
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -1217,7 +1256,10 @@ const Receive: React.FC = () => {
 
       {showQrPopup && (
         <Popup
-          closePopups={() => setShowQrPopup(false)}
+          closePopups={() => {
+            setShowQrAddress(false);
+            setShowQrPopup(false);
+          }}
           closeButtonText={t('receive.close')}
         >
           <div className="space-y-4 p-1 sm:p-2">
@@ -1231,8 +1273,18 @@ const Receive: React.FC = () => {
               <button
                 type="button"
                 className="rounded-[24px] border border-[rgba(0,0,0,0.08)] bg-white p-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--wallet-accent)] focus:ring-offset-2"
-                onClick={() => handleCopy(activeQrPayload)}
-                aria-label={t('receive.copyQrPayload')}
+                onClick={() => {
+                  if (visibleQrCodeType === 'address') {
+                    setShowQrAddress((visible) => !visible);
+                  } else {
+                    void handleCopy(activeQrPayload);
+                  }
+                }}
+                aria-label={
+                  visibleQrCodeType === 'address'
+                    ? t('receive.qrCopyDescription')
+                    : t('receive.copyQrPayload')
+                }
               >
                 <QRCodeSVG
                   value={activeQrPayload}
@@ -1255,9 +1307,33 @@ const Receive: React.FC = () => {
             </div>
             <div className="rounded-[18px] bg-[var(--wallet-surface-strong)] px-4 py-3 text-center">
               {visibleQrCodeType === 'address' ? (
-                <span className="block min-w-0 overflow-hidden whitespace-nowrap text-sm">
-                  {activeLabelDisplay}
-                </span>
+                showQrAddress ? (
+                  <button
+                    type="button"
+                    className="w-full break-all text-left font-mono text-sm underline decoration-[var(--wallet-border)] underline-offset-4"
+                    onClick={() => void handleCopy(activeQrPayload)}
+                    aria-label={t('receive.copyAddress')}
+                  >
+                    {activeQrPayload}
+                  </button>
+                ) : (
+                  <MaskedValue
+                    value={activeQrPayload}
+                    label={
+                      showBip21Popup
+                        ? t('receive.bip21Title')
+                        : t('receive.copyAddress')
+                    }
+                    prefixLength={showBip21Popup ? 4 : addressMaskPrefixLength}
+                    suffixLength={showBip21Popup ? 4 : addressMaskSuffixLength}
+                    copySuccessMessageKey={
+                      showBip21Popup
+                        ? 'receive.paymentRequestCopied'
+                        : 'receive.addressCopied'
+                    }
+                    className="block w-full overflow-hidden whitespace-nowrap text-sm"
+                  />
+                )
               ) : (
                 renderMaskedLabel(activeLabelDisplay, 7, 7)
               )}
@@ -1453,13 +1529,15 @@ const Receive: React.FC = () => {
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-semibold wallet-text-strong">
-                            {shortenTxHash(
-                              displayAddress,
-                              addressPrefixLength,
-                              receiveAddressLabelMaskLength
-                            )}
-                          </div>
+                          <MaskedValue
+                            value={displayAddress}
+                            label={t('send.address')}
+                            prefixLength={addressMaskPrefixLength}
+                            suffixLength={addressMaskSuffixLength}
+                            copySuccessMessageKey="receive.addressCopied"
+                            className="text-sm font-semibold wallet-text-strong"
+                            embedded
+                          />
                           <div className="mt-1 break-all text-xs wallet-muted">
                             {path}
                           </div>

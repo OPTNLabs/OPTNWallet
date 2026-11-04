@@ -57,6 +57,12 @@ import {
 import { finalizeRpaPayment, makeRpaDummyAddress } from '../services/RpaSender';
 import KeyService from '../services/KeyService';
 import { secp256k1 } from '@bitauth/libauth';
+import {
+  getUiFixtureReview,
+  getUiFixtureUtxos,
+  isUiFixtureEnabled,
+  uiFixtureScenario,
+} from '../ui-fixtures/fixtureData';
 
 const DEFAULT_TOKEN_OUTPUT_BCH = (TOKEN_OUTPUT_SATS / SATSINBITCOIN).toFixed(8);
 
@@ -197,6 +203,14 @@ export default function useSimpleSend() {
     setWalletUtxosLoaded(false);
     (async () => {
       if (!walletId) return;
+      if (isUiFixtureEnabled()) {
+        if (!cancelled) {
+          setDbUtxos(homeBchUtxos);
+          setTokenUtxos([]);
+          setWalletUtxosLoaded(true);
+        }
+        return;
+      }
       // Paint the same coins Home already shows, then overlay SQL so Send
       // cannot briefly look like "only the receive UTXOs".
       if (!cancelled && homeBchUtxos.length > 0) {
@@ -228,6 +242,13 @@ export default function useSimpleSend() {
   // outbound tracker, so unconfirmed change remains spendable after a refresh.
   const refreshBchUtxos = useCallback(async (): Promise<UTXO[]> => {
     if (!walletId) return [];
+
+    if (isUiFixtureEnabled()) {
+      const fixtureUtxos = mergeSpendableBchUtxos(homeBchUtxos, []);
+      setDbUtxos(fixtureUtxos);
+      setWalletUtxosLoaded(true);
+      return fixtureUtxos;
+    }
 
     const walletAddresses = addresses
       .map(({ address }) => address)
@@ -350,6 +371,10 @@ export default function useSimpleSend() {
       try {
         if (!selectedChangeAddress || !walletId) {
           setTokenChangeAddress(selectedChangeAddress || '');
+          return;
+        }
+        if (isUiFixtureEnabled()) {
+          setTokenChangeAddress(selectedChangeAddress);
           return;
         }
         const mgr = AddressManager();
@@ -545,8 +570,41 @@ export default function useSimpleSend() {
       window.requestAnimationFrame(() => resolve());
     });
     try {
+      if (isUiFixtureEnabled() && uiFixtureScenario() === 'send-error') {
+        setError(
+          'Unable to build BCH send with one free candidate totaling 10,000 sats.'
+        );
+        setMode('error');
+        return;
+      }
+
+      if (isUiFixtureEnabled() && uiFixtureScenario() === 'send-review') {
+        const targetSats = parseAmountToSats(
+          amountBch || parsedRecipient.amountRaw || ''
+        );
+        if (targetSats <= 0) {
+          setError('Amount must be greater than 0.');
+          setMode('error');
+          return;
+        }
+        const fixtureInputs = Object.values(getUiFixtureUtxos())
+          .flat()
+          .filter((utxo) => !utxo.token);
+        setSelectedForTx(fixtureInputs.slice(0, 1));
+        setReview(
+          getUiFixtureReview(
+            normalizedRecipient,
+            amountBch || parsedRecipient.amountRaw || '',
+            selectedChangeAddress || undefined
+          )
+        );
+        setMode('review');
+        return;
+      }
+
       assertCoinHoldScope(holdScope);
       setReviewScope(holdScope);
+
       const rpaBlockReason = getRpaSendBlockReason(recipient, currentNetwork);
       if (rpaBlockReason) {
         setError(rpaBlockReason);
@@ -1013,6 +1071,11 @@ export default function useSimpleSend() {
 
   const doSend = useCallback(async () => {
     if (!review) return;
+    if (isUiFixtureEnabled()) {
+      setError('The UI fixture is display-only; no transaction was signed.');
+      setMode('error');
+      return;
+    }
     // Software path needs a signed rawTx from review. Hardware path signs on device now.
     if (!isHardwareWallet && !review.rawTx) return;
     try {

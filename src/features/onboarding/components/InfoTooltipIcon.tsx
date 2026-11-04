@@ -28,7 +28,14 @@ const InfoTooltipIcon = ({
         aria-label={ariaLabel}
         aria-expanded={open}
         aria-controls={contentId}
+        aria-describedby={open ? contentId : undefined}
         onClick={() => setOpen((isOpen) => !isOpen)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            setOpen(false);
+          }
+        }}
       >
         <MdInfoOutline aria-hidden="true" className={iconClassName} />
       </button>

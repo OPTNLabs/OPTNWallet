@@ -14,6 +14,7 @@ import {
   shortTokenCategory,
 } from '../../utils/tokenPresentation';
 import { getBcmrMetadataStatusLabel } from '../../types/bcmr';
+import InfoButton from '../ui/InfoButton';
 
 type Props = {
   preview: ConnectorTransactionPreview;
@@ -97,8 +98,16 @@ export default function ConnectorWalletEffectSummary({
 
   if (status === 'loading') {
     return (
-      <div role="status" className="wallet-card p-3 text-sm wallet-muted">
-        Verifying this wallet’s inputs and change…
+      <div
+        role="status"
+        className="wallet-card flex items-center gap-1 p-3 text-sm wallet-muted"
+      >
+        <span>{t('txReview.verifyingWalletEffect')}</span>
+        <InfoButton
+          id="connector-wallet-effect-loading-help"
+          ariaLabel={t('txReview.walletEffect')}
+          content={t('txReview.walletEffectHelp')}
+        />
       </div>
     );
   }
@@ -107,10 +116,14 @@ export default function ConnectorWalletEffectSummary({
     return (
       <div
         role="status"
-        className="wallet-warning-panel rounded-xl p-3 text-sm"
+        className="wallet-warning-panel flex items-start gap-1 rounded-xl p-3 text-sm"
       >
-        Wallet-owned inputs and change could not be verified from this request.
-        Review the whole transaction details carefully before signing.
+        <span>{t('txReview.walletEffectUnavailable')}</span>
+        <InfoButton
+          id="connector-wallet-effect-unavailable-help"
+          ariaLabel={t('txReview.walletEffect')}
+          content={t('txReview.walletEffectHelp')}
+        />
       </div>
     );
   }
@@ -197,8 +210,10 @@ export default function ConnectorWalletEffectSummary({
                 )}
                 <div className="mt-2 text-xs wallet-muted">
                   {metadata
-                    ? `BCMR: ${getBcmrMetadataStatusLabel(metadata)}`
-                    : 'BCMR: Identifying token…'}
+                    ? t('txReview.bcmrStatus', {
+                        status: getBcmrMetadataStatusLabel(metadata),
+                      })
+                    : t('txReview.bcmrIdentifying')}
                   {appLabelDiffers ? (
                     <span className="ml-2">
                       {t('txReview.appLabel')}: {tokenLabel}
@@ -225,15 +240,15 @@ export default function ConnectorWalletEffectSummary({
               key={`identity-${token.category}`}
               className="rounded-xl border border-[var(--wallet-border)] px-3 py-2"
             >
-              <summary className="cursor-pointer font-semibold wallet-text-strong">
+              <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold wallet-text-strong">
                 {t('txReview.tokenIdentity')} · {label}
               </summary>
               <div className="mt-2 space-y-1 text-xs wallet-muted">
                 <div>
-                  BCMR:{' '}
+                  {t('txReview.bcmr')}:{' '}
                   {metadata
                     ? getBcmrMetadataStatusLabel(metadata)
-                    : 'Identifying token…'}
+                    : t('txReview.identifyingToken')}
                 </div>
                 <div>
                   {t('wc.tokenCategory')}: {shortTokenCategory(token.category)}
@@ -246,10 +261,10 @@ export default function ConnectorWalletEffectSummary({
       )}
 
       <p className="text-xs wallet-muted">
-        Matched {effect.ownedInputCount} wallet input
-        {effect.ownedInputCount === 1 ? '' : 's'} and {effect.ownedOutputCount}{' '}
-        wallet output{effect.ownedOutputCount === 1 ? '' : 's'} by locking
-        bytecode. Whole-transaction fees can include other participants.
+        {t('txReview.matchedWalletEffect', {
+          inputs: effect.ownedInputCount,
+          outputs: effect.ownedOutputCount,
+        })}
       </p>
     </section>
   );

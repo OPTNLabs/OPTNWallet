@@ -149,7 +149,8 @@ describe('desktop watch-only preview', () => {
       </Provider>
     );
 
-    expect(html).toContain('Master fingerprint (optional)');
+    expect(html).toContain('Master fingerprint');
+    expect(html).toContain('(optional)');
     expect(html).toContain('8 hex characters');
   });
 

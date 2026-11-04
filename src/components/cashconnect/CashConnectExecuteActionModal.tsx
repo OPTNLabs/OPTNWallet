@@ -11,6 +11,8 @@ import { toErrorMessage } from '../../utils/errorHandling';
 import { showWalletNotification } from '../../utils/copyWithFeedback';
 import { useI18n } from '../../i18n/useI18n';
 import WalletPopupSheet from '../ui/WalletPopupSheet';
+import NetworkContextBanner from '../ui/NetworkContextBanner';
+import { isUiFixtureEnabled } from '../../ui-fixtures/fixtureData';
 
 function formatMeta(
   segments: Array<string | { type: string }> | undefined
@@ -50,7 +52,7 @@ export default function CashConnectExecuteActionModal() {
   const transactionCount = response.transactions.length;
 
   const handleApprove = async () => {
-    if (inFlight.current) return;
+    if (isUiFixtureEnabled() || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     try {
@@ -69,7 +71,7 @@ export default function CashConnectExecuteActionModal() {
   };
 
   const handleReject = async () => {
-    if (inFlight.current) return;
+    if (isUiFixtureEnabled() || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     try {
@@ -89,7 +91,7 @@ export default function CashConnectExecuteActionModal() {
 
   return (
     <WalletPopupSheet
-      dismissLabel="Reject"
+      dismissLabel={t('cashconnect.reject')}
       onDismiss={() => void handleReject()}
       footer={
         <div className="grid grid-cols-2 gap-3">
@@ -99,7 +101,7 @@ export default function CashConnectExecuteActionModal() {
             onClick={() => void handleApprove()}
             disabled={busy}
           >
-            {busy ? 'Working…' : 'Approve request'}
+            {busy ? t('cashconnect.working') : t('cashconnect.approveRequest')}
           </button>
           <button
             type="button"
@@ -107,7 +109,7 @@ export default function CashConnectExecuteActionModal() {
             onClick={() => void handleReject()}
             disabled={busy}
           >
-            Reject
+            {t('cashconnect.reject')}
           </button>
         </div>
       }
@@ -127,31 +129,31 @@ export default function CashConnectExecuteActionModal() {
       {description ? (
         <p className="mt-3 text-sm wallet-muted">{description}</p>
       ) : null}
+      <NetworkContextBanner network={session.chain} className="mt-4" />
       <div className="wallet-card mt-4 p-3 text-sm">
-        <p className="font-semibold">What this request does</p>
-        <p className="mt-1 break-all">Action: {request.action}</p>
+        <p className="font-semibold">{t('cashconnect.whatRequestDoes')}</p>
+        <p className="mt-1 break-all">
+          {t('cashconnect.action')}: {request.action}
+        </p>
         <p className="mt-1">
-          Approving returns {transactionCount} prepared transaction
-          {transactionCount === 1 ? '' : 's'} to {session.dapp.name}. The app
-          may submit them to the network.
+          {t('cashconnect.approvingReturns', {
+            count: transactionCount,
+            name: session.dapp.name,
+          })}
         </p>
         {transactionCount > 1 ? (
           <p className="mt-2 wallet-warning-panel rounded-lg p-2">
-            This action includes multiple transactions. Review the estimated
-            balance changes below.
+            {t('cashconnect.multipleTransactions')}
           </p>
         ) : null}
       </div>
       <div className="mt-4 text-sm space-y-1">
-        <p className="font-semibold">Balance change reported by this request</p>
+        <p className="font-semibold">{t('cashconnect.balanceChange')}</p>
         <p className="wallet-muted">
-          CashConnect did not provide the source outputs needed for this wallet
-          to verify ownership and change independently.
+          {t('cashconnect.sourceOutputsUnavailable')}
         </p>
         {balanceChanges.length === 0 ? (
-          <p className="wallet-muted">
-            No balance change was supplied for this request.
-          </p>
+          <p className="wallet-muted">{t('cashconnect.noBalanceChange')}</p>
         ) : null}
         {balanceChanges.map(([category, amount]) => (
           <p key={category}>{formatBalance(category, amount)}</p>

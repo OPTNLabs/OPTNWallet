@@ -54,6 +54,9 @@ it('names the review dialog, contains keyboard focus, cancels on Escape, and res
 
   const dialog = screen.getByRole('dialog', { name: 'send.reviewTitle' });
   const close = screen.getByRole('button', { name: 'receive.close' });
+  expect(
+    screen.getByRole('button', { name: /send\.technicalDetails/ })
+  ).toHaveClass('min-h-[44px]');
   const focusable = Array.from(
     dialog.querySelectorAll<HTMLElement>(
       'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -114,6 +117,11 @@ it('shows final NFT identity and authority before authorization', () => {
   );
 
   expect(screen.getByText(category)).toBeInTheDocument();
+  const addressValues = screen.getAllByRole('button', {
+    name: 'receive.copyAddress',
+  });
+  expect(addressValues[1]).toHaveTextContent('bcht**********ient');
+  fireEvent.contextMenu(addressValues[1]);
   expect(screen.getByText('bchtest:zrecipient')).toBeInTheDocument();
   expect(screen.getByText('cafe')).toBeInTheDocument();
   expect(screen.getByText('assets.mintingNfts')).toBeInTheDocument();

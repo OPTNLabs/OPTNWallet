@@ -11,6 +11,7 @@ const mock = vi.hoisted(() => ({
   approve: vi.fn(() => ({ type: 'cashconnect/approve' })),
   reject: vi.fn(() => ({ type: 'cashconnect/reject' })),
   notify: vi.fn(),
+  fixture: false,
 }));
 
 vi.mock('react-redux', () => ({
@@ -24,6 +25,9 @@ vi.mock('../../../../state/slices/cashconnectSlice', () => ({
 vi.mock('../../../../utils/copyWithFeedback', () => ({
   showWalletNotification: mock.notify,
 }));
+vi.mock('../../../../ui-fixtures/fixtureData', () => ({
+  isUiFixtureEnabled: () => mock.fixture,
+}));
 vi.mock('../../../../i18n/useI18n', () => ({
   useI18n: () => ({ t: (key: TranslationKey) => translations.en[key] }),
 }));
@@ -33,6 +37,7 @@ import CashConnectExecuteActionModal from '../../../../components/cashconnect/Ca
 afterEach(() => {
   document.body.replaceChildren();
   vi.clearAllMocks();
+  mock.fixture = false;
 });
 
 it('guards repeated approval and explains that the app receives prepared transactions', async () => {
@@ -69,4 +74,32 @@ it('guards repeated approval and explains that the app receives prepared transac
   expect(mock.notify).toHaveBeenCalledWith(
     translations.en['cashconnect.actionApproved']
   );
+});
+
+it('keeps fixture approval and rejection display-only', () => {
+  mock.fixture = true;
+  mock.state = {
+    cashconnect: {
+      pendingAction: {
+        session: {
+          dapp: { name: 'Example dApp', url: 'https://example.test' },
+          template: { name: 'Swap' },
+          chain: 'bchtest',
+        },
+        request: { action: 'swap' },
+        response: {
+          meta: { title: ['Swap'] },
+          balanceChanges: { sats: -1000n },
+          transactions: ['prepared'],
+        },
+      },
+    },
+  };
+
+  render(<CashConnectExecuteActionModal />);
+  fireEvent.click(screen.getByRole('button', { name: 'Approve request' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Reject' })[1]);
+
+  expect(mock.approve).not.toHaveBeenCalled();
+  expect(mock.reject).not.toHaveBeenCalled();
 });

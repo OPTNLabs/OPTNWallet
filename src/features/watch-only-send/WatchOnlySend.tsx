@@ -28,6 +28,10 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 
 import WalletScreen from '../../components/ui/WalletScreen';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MaskedValue from '../../components/ui/MaskedValue';
+import InfoButton from '../../components/ui/InfoButton';
+import FriendlyErrorPanel from '../../components/ui/FriendlyErrorPanel';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import {
   selectCustomFeeSatPerByte,
@@ -166,6 +170,33 @@ type SpendableInput = WatchOnlyInputSpec & {
 const FRAME_INTERVAL_MS = 800;
 const MAX_SIGNED_PSBT_FILE_BYTES = 5 * 1024 * 1024;
 
+function friendlyWatchOnlyError(
+  message: string,
+  t: ReturnType<typeof useI18n>['t']
+): string {
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes('insufficient funds') ||
+    normalized.includes('does not cover the') ||
+    normalized.includes('not enough funds')
+  ) {
+    return t('send.insufficientFunds');
+  }
+  if (
+    normalized.includes('network refresh') ||
+    normalized.includes('timeout') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('unreachable') ||
+    normalized.includes('offline')
+  ) {
+    return t('send.networkError');
+  }
+
+  const userGuidance =
+    /^(enter|select|build|review|open|the old|no change|signed psbt|not enough frames|this device|the available|release|the transaction was broadcast)/i;
+  return userGuidance.test(message) ? message : t('send.genericError');
+}
+
 const SIGHASH_OPTIONS = [
   { value: 0x41, label: 'All (Recommended)' },
   { value: 0x42, label: 'None' },
@@ -226,9 +257,6 @@ const satsToBch = (sats: bigint): string => {
   const bch = Number(sats) / 1e8;
   return bch.toLocaleString('en-US', { maximumFractionDigits: 8 });
 };
-
-const shortTxid = (txid: string): string =>
-  txid.length > 18 ? `${txid.slice(0, 8)}…${txid.slice(-8)}` : txid;
 
 function validateBroadcastRelayFee(
   rawTxHex: string,
@@ -1593,6 +1621,18 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
   };
 
   const handleBack = () => {
+    if (broadcastArmed) {
+      setBroadcastArmed(false);
+      return;
+    }
+    if (error) {
+      setError('');
+      return;
+    }
+    if (proposalState) {
+      handleEditProposal();
+      return;
+    }
     navigate(returnTo ?? getReturnPath(location, '/home'));
   };
 
@@ -1672,6 +1712,8 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
             {mobile ? 'Mobile multisig send' : 'Watch-only Send'}
           </h1>
         </div>
+
+        <NetworkContextBanner network={policyNetwork} />
 
         <StepBar current={step} />
 
@@ -1764,7 +1806,15 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                         Sending {amountText || '0'} BCH
                       </p>
                       <p className="break-all text-[11px] wallet-muted">
-                        to {recipient}
+                        to{' '}
+                        <MaskedValue
+                          value={recipient}
+                          label={t('send.recipient')}
+                          ariaLabel={t('send.recipient')}
+                          copySuccessMessageKey="receive.addressCopied"
+                          embedded
+                          className="max-w-full align-middle"
+                        />
                       </p>
                       <p className="text-[11px] wallet-muted">
                         {selectedInputs.length} coin
@@ -1835,7 +1885,15 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                           />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-mono wallet-text-strong">
-                              {shortTxid(input.txid)}:{input.vout}
+                              <MaskedValue
+                                value={input.txid}
+                                label={t('history.transactionId')}
+                                ariaLabel={t('history.transactionId')}
+                                copySuccessMessageKey="history.transactionCopied"
+                                embedded
+                                className="max-w-[13rem] truncate align-middle"
+                              />
+                              :{input.vout}
                             </span>
                             <span className="block wallet-muted">
                               {satsToBch(input.satoshis)} BCH ·{' '}
@@ -1892,9 +1950,19 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
               <section
                 className={`wallet-card space-y-3 p-4 ${step === 1 && spendFormEnabled ? '' : 'hidden'}`}
               >
-                <label className="block space-y-1 text-sm wallet-text-strong">
-                  Destination (cashaddr)
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1 text-sm wallet-text-strong">
+                    <label htmlFor="watch-only-recipient">
+                      Destination (cashaddr)
+                    </label>
+                    <InfoButton
+                      id="watch-only-recipient-help"
+                      ariaLabel={t('send.recipientHelpLabel')}
+                      content={t('send.recipientHelp')}
+                    />
+                  </div>
                   <input
+                    id="watch-only-recipient"
                     value={recipient}
                     onChange={(event) => setRecipient(event.target.value)}
                     placeholder="bitcoincash:q… or bchtest:q…"
@@ -1902,7 +1970,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                     spellCheck={false}
                     className="wallet-input w-full rounded-md px-3 py-2 font-mono text-xs"
                   />
-                </label>
+                </div>
                 <label className="block space-y-1 text-sm wallet-text-strong">
                   Amount (BCH)
                   <input
@@ -2049,7 +2117,19 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                 )}
                 <div className="flex items-center justify-between text-xs wallet-muted">
                   <span>
-                    Change → {changeAddress ? shortTxid(changeAddress) : '…'}
+                    Change →{' '}
+                    {changeAddress ? (
+                      <MaskedValue
+                        value={changeAddress}
+                        label={t('send.changeAddress')}
+                        ariaLabel={t('send.changeAddress')}
+                        copySuccessMessageKey="receive.addressCopied"
+                        embedded
+                        className="max-w-[10rem] truncate align-middle"
+                      />
+                    ) : (
+                      '…'
+                    )}
                   </span>
                   {proposalState && (
                     <span>
@@ -2390,6 +2470,11 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                     {verdict.state === 'complete'
                       ? 'Ready to broadcast'
                       : 'Signed transaction check'}
+                    <InfoButton
+                      id="watch-only-verdict-help"
+                      ariaLabel={t('send.sentHelpLabel')}
+                      content={t('send.sentHelp')}
+                    />
                   </p>
                   <p className="text-xs leading-relaxed wallet-muted">
                     {verdict.reason}
@@ -2468,31 +2553,56 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                   aria-live="polite"
                   className="mt-3 shrink-0 rounded-2xl border p-4 text-sm shadow-sm wallet-success-panel"
                 >
-                  <div className="mb-1 font-semibold wallet-text-strong">
-                    {broadcastState === 'submitted'
-                      ? t('send.submitted')
-                      : t('send.sent')}
+                  <div className="mb-1 flex items-center gap-1 font-semibold wallet-text-strong">
+                    <span>
+                      {broadcastState === 'submitted'
+                        ? t('send.submitted')
+                        : t('send.sent')}
+                    </span>
+                    <InfoButton
+                      id="watch-only-sent-help"
+                      ariaLabel={t('send.sentHelpLabel')}
+                      content={t('send.sentHelp')}
+                    />
                   </div>
                   {broadcastState === 'submitted' && (
                     <div className="mb-2 wallet-muted">
                       {t('send.keepTxid')}
                     </div>
                   )}
-                  <div className="break-all font-mono wallet-text-strong">
-                    {broadcastTxid}
-                  </div>
+                  <MaskedValue
+                    value={broadcastTxid}
+                    label={t('history.transactionId')}
+                    ariaLabel={t('history.transactionId')}
+                    copySuccessMessageKey="history.transactionCopied"
+                    className="wallet-text-strong"
+                  />
                 </section>
               )}
 
               {error && (
                 <>
-                  <p role="alert" className="text-xs text-red-400">
-                    {error}
-                  </p>
+                  <FriendlyErrorPanel
+                    title={t('send.errorTitle')}
+                    message={friendlyWatchOnlyError(error, t)}
+                  />
+                  <details className="mt-2">
+                    <summary className="flex min-h-[44px] cursor-pointer items-center text-xs font-semibold wallet-muted">
+                      {t('send.technicalDetails')}
+                    </summary>
+                    <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3 text-left text-[11px] wallet-muted">
+                      {error}
+                    </pre>
+                  </details>
                   {mobile && conflictingTxids.length > 0 && (
                     <section className="space-y-2 rounded-xl border border-amber-500/60 bg-amber-500/10 p-3">
-                      <p className="text-sm font-semibold text-amber-200">
-                        Previous multisig spend still reserved
+                      <p className="flex items-center gap-1 text-sm font-semibold text-amber-200">
+                        <span>Previous multisig spend still reserved</span>
+                        <InfoButton
+                          id="watch-only-conflicting-lock-help"
+                          ariaLabel={t('outbox.releaseHelpLabel')}
+                          content={t('outbox.pendingHelp')}
+                        />
                       </p>
                       <p className="text-xs leading-relaxed wallet-muted">
                         Release this local lock only after confirming that the
@@ -2502,7 +2612,13 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                       <div className="space-y-1 font-mono text-[10px] text-amber-100">
                         {conflictingTxids.map((txid) => (
                           <p key={txid} className="break-all">
-                            {txid}
+                            <MaskedValue
+                              value={txid}
+                              label={t('history.transactionId')}
+                              ariaLabel={t('history.transactionId')}
+                              copySuccessMessageKey="history.transactionCopied"
+                              className="text-amber-100"
+                            />
                           </p>
                         ))}
                       </div>

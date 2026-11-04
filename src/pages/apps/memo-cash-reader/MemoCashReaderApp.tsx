@@ -6,6 +6,7 @@ import {
   useState,
   type ChangeEvent,
 } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { DecodedMemoRow, MemoAction } from './services/memoDecoder';
 import {
@@ -14,6 +15,11 @@ import {
   type MemoPageCursor,
 } from './services/chaingraphMemoClient';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
+import { useI18n } from '../../../i18n/useI18n';
+import MaskedValue from '../../../components/ui/MaskedValue';
+import PageHeader from '../../../components/ui/PageHeader';
+import RouteExitFooter from '../../../components/ui/RouteExitFooter';
+import { getReturnPath } from '../../../utils/navigation';
 
 type Props = {
   sdk: AddonSDK;
@@ -156,7 +162,11 @@ function buildProfilesByAddress(
 }
 
 export default function MemoCashReaderApp({ sdk }: Props) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
   const { t: addonT } = useAddonI18n();
+  const { t: walletT } = useI18n();
   const [network, setNetwork] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
@@ -426,6 +436,7 @@ export default function MemoCashReaderApp({ sdk }: Props) {
 
   return (
     <div className="wallet-page p-4 max-w-3xl mx-auto h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] flex flex-col overflow-hidden">
+      <PageHeader title={addonT('module.title', 'Memo.cash Reader')} compact />
       <div className="wallet-card p-4 mb-4 shrink-0">
         <div className="text-xl font-semibold">
           {addonT('module.title', 'Memo.cash Reader')}
@@ -525,13 +536,31 @@ export default function MemoCashReaderApp({ sdk }: Props) {
             return (
               <article key={row.id} className="wallet-card p-4 rounded">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="font-medium">{display}</div>
+                  <div className="min-w-0 font-medium">
+                    {profile?.name ? (
+                      display
+                    ) : row.actorAddress ? (
+                      <MaskedValue
+                        value={row.actorAddress}
+                        label={walletT('send.address')}
+                        copySuccessMessageKey="receive.addressCopied"
+                        className="text-sm"
+                      />
+                    ) : (
+                      display
+                    )}
+                  </div>
                   <div className="wallet-muted text-xs">
                     {actionLabel(row.action, addonT)}
                   </div>
                 </div>
-                <div className="wallet-muted text-xs mt-1 break-all">
-                  {row.txid}
+                <div className="wallet-muted mt-1 text-xs">
+                  <MaskedValue
+                    value={row.txid}
+                    label={walletT('history.transactionId')}
+                    copySuccessMessageKey="history.transactionCopied"
+                    className="text-xs wallet-muted"
+                  />
                 </div>
                 <div className="mt-2 whitespace-pre-wrap break-words">
                   {excerpt(row.action) || (
@@ -641,6 +670,10 @@ export default function MemoCashReaderApp({ sdk }: Props) {
           {queryingLabel || addonT('common.querying', 'Querying Chaingraph…')}
         </div>
       )}
+      <RouteExitFooter
+        label={addonT('common.back', 'Back')}
+        onBack={() => navigate(backTarget)}
+      />
     </div>
   );
 }

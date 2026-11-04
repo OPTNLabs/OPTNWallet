@@ -11,6 +11,8 @@ import { StealthBadge } from '../../components/StealthBadge';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import type { RootState } from '../../state/store';
 import { useI18n } from '../../i18n/useI18n';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MaskedValue from '../../components/ui/MaskedValue';
 
 type ReviewCardProps = {
   open: boolean;
@@ -180,30 +182,13 @@ export function ReviewCard({
     };
   }, [open]);
 
-  const visibleRecipient = useMemo(() => {
-    if (!recipient) return '';
-    const colonIndex = recipient.indexOf(':');
-    const prefix = colonIndex >= 0 ? recipient.slice(0, colonIndex + 1) : '';
-    const body = colonIndex >= 0 ? recipient.slice(colonIndex + 1) : recipient;
-    if (body.length <= 10) return `${prefix}${body}`;
-    return `${prefix}${body.slice(0, 5)}…${body.slice(-5)}`;
-  }, [recipient]);
-
   const technicalInputs = useMemo(
     () =>
       selectedForTx.map((u) => {
         const key = outpointKey(u.tx_hash, u.tx_pos);
         return {
           key,
-          address: (() => {
-            const raw = u.address ?? '';
-            const withoutPrefix = raw.includes(':')
-              ? raw.slice(raw.indexOf(':') + 1)
-              : raw;
-            return withoutPrefix.length > 12
-              ? `${withoutPrefix.slice(0, 8)}…${withoutPrefix.slice(-6)}`
-              : withoutPrefix;
-          })(),
+          address: u.address ?? '',
           sats: Number(u.amount ?? u.value ?? 0),
           pending: typeof u.height === 'number' ? u.height <= 0 : false,
           depth: walletId > 0 ? coinDepth(walletId, key) : 0,
@@ -226,13 +211,6 @@ export function ReviewCard({
         }
 
         const rawAddress = out.recipientAddress || '';
-        const withoutPrefix = rawAddress.includes(':')
-          ? rawAddress.slice(rawAddress.indexOf(':') + 1)
-          : rawAddress;
-        const shortAddress =
-          withoutPrefix.length > 12
-            ? `${withoutPrefix.slice(0, 8)}…${withoutPrefix.slice(-6)}`
-            : withoutPrefix;
         const tokenLabel = out.token
           ? out.token.nft
             ? `${displayNameFor(out.token.category)} NFT`
@@ -241,7 +219,7 @@ export function ReviewCard({
 
         return {
           key: `${rawAddress}-${i}`,
-          label: shortAddress,
+          label: rawAddress,
           value: tokenLabel,
           sats: Number(out.amount || 0),
         };
@@ -418,6 +396,9 @@ export function ReviewCard({
               {reviewContext}
             </div>
           )}
+          {networkLabel ? (
+            <NetworkContextBanner network={networkLabel} className="mt-3" />
+          ) : null}
         </div>
 
         <div className="p-4 space-y-4 max-h-[56vh] overflow-y-auto">
@@ -442,22 +423,26 @@ export function ReviewCard({
               ) : null}
               <div className="wallet-stat-row">
                 <span className="font-medium">{t('send.to')}</span>
-                <span
-                  className="font-mono truncate max-w-[60%] wallet-text-strong"
-                  title={recipient}
-                >
-                  {visibleRecipient}
-                </span>
+                <MaskedValue
+                  value={recipient}
+                  label={t('send.to')}
+                  ariaLabel={t('receive.copyAddress')}
+                  copySuccessMessageKey="receive.addressCopied"
+                  className="max-w-[60%] truncate wallet-text-strong"
+                />
               </div>
               {review.rpaStealthAddress && (
                 <div className="wallet-stat-row">
-                  <span className="font-medium">Stealth address</span>
-                  <span
-                    className="font-mono break-all text-right max-w-[70%] wallet-text-strong"
-                    title={review.rpaStealthAddress}
-                  >
-                    {review.rpaStealthAddress}
+                  <span className="font-medium">
+                    {t('send.stealthAddress')}
                   </span>
+                  <MaskedValue
+                    value={review.rpaStealthAddress}
+                    label={t('send.stealthAddress')}
+                    ariaLabel={t('receive.copyAddress')}
+                    copySuccessMessageKey="receive.addressCopied"
+                    className="max-w-[70%] break-all text-right wallet-text-strong"
+                  />
                 </div>
               )}
 
@@ -503,8 +488,14 @@ export function ReviewCard({
                     <div className="text-xs font-medium wallet-muted">
                       {t('send.to')}
                     </div>
-                    <div className="mt-1 break-all font-mono text-xs wallet-text-strong">
-                      {reviewedTokenRecipient}
+                    <div className="mt-1 font-mono text-xs wallet-text-strong">
+                      <MaskedValue
+                        value={reviewedTokenRecipient}
+                        label={t('send.to')}
+                        ariaLabel={t('receive.copyAddress')}
+                        copySuccessMessageKey="receive.addressCopied"
+                        className="max-w-full break-all text-xs"
+                      />
                     </div>
                   </div>
                   {reviewedNft && (
@@ -602,7 +593,7 @@ export function ReviewCard({
           <div className="rounded-2xl border border-[var(--wallet-border)] wallet-surface-strong p-3 text-sm">
             <button
               type="button"
-              className="flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-3 py-2.5 text-left shadow-sm"
+              className="flex min-h-[44px] w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-3 py-2.5 text-left shadow-sm"
               onClick={() => setShowTechnicalDetails((prev) => !prev)}
             >
               <span className="font-semibold wallet-text-strong">
@@ -670,7 +661,17 @@ export function ReviewCard({
                       >
                         <div className="min-w-0">
                           <div className="font-mono wallet-text-strong truncate">
-                            {input.address}
+                            {input.address ? (
+                              <MaskedValue
+                                value={input.address}
+                                label={t('receive.copyAddress')}
+                                ariaLabel={t('receive.copyAddress')}
+                                copySuccessMessageKey="receive.addressCopied"
+                                className="max-w-[14rem] truncate align-middle"
+                              />
+                            ) : (
+                              '—'
+                            )}
                             {input.depth > 0 && (
                               <FusionBadge
                                 depth={input.depth}
@@ -707,7 +708,17 @@ export function ReviewCard({
                       >
                         <div className="min-w-0">
                           <div className="font-mono wallet-text-strong truncate">
-                            {output.label}
+                            {output.label === 'OP_RETURN' || !output.label ? (
+                              output.label || '—'
+                            ) : (
+                              <MaskedValue
+                                value={output.label}
+                                label={t('receive.copyAddress')}
+                                ariaLabel={t('receive.copyAddress')}
+                                copySuccessMessageKey="receive.addressCopied"
+                                className="max-w-[14rem] truncate align-middle"
+                              />
+                            )}
                           </div>
                           <div className="wallet-muted truncate">
                             {output.value}

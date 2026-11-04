@@ -12,7 +12,7 @@ import { installProductionConsoleGuards } from './utils/productionConsole';
 import { installBarcodeScannerUnhandledRejectionGuard } from './utils/barcodeScanner';
 import { HashRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
-import { store } from './state/store';
+import type { Store } from 'redux';
 import { ThemeProvider } from './app/theme/ThemeContext';
 import { WalletConfirmProvider } from './components/WalletConfirmDialog';
 import { I18nProvider } from './i18n/I18nProvider';
@@ -27,20 +27,22 @@ if (Capacitor.isNativePlatform()) {
   document.documentElement.classList.add('native-contained');
 }
 
-function renderApp(App: React.ComponentType) {
+function renderApp(App: React.ComponentType, appStore?: Store) {
+  const app = (
+    <I18nProvider>
+      <ThemeProvider>
+        <HashRouter>
+          <WalletConfirmProvider>
+            <App />
+          </WalletConfirmProvider>
+        </HashRouter>
+      </ThemeProvider>
+    </I18nProvider>
+  );
+
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <Provider store={store}>
-        <I18nProvider>
-          <ThemeProvider>
-            <HashRouter>
-              <WalletConfirmProvider>
-                <App />
-              </WalletConfirmProvider>
-            </HashRouter>
-          </ThemeProvider>
-        </I18nProvider>
-      </Provider>
+      {appStore ? <Provider store={appStore}>{app}</Provider> : app}
     </React.StrictMode>
   );
 
@@ -71,8 +73,33 @@ async function startApp() {
   // need the async WASM compile above to finish before this synchronous API is
   // evaluated.
   startupStatus.setMessage('Opening wallet…');
-  const { default: App } = await import('./app/AppShell');
-  renderApp(App);
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashQueryIndex = window.location.hash.indexOf('?');
+  if (hashQueryIndex >= 0) {
+    new URLSearchParams(window.location.hash.slice(hashQueryIndex + 1)).forEach(
+      (value, key) => {
+        if (!searchParams.has(key)) searchParams.set(key, value);
+      }
+    );
+  }
+  const useUiFixture =
+    import.meta.env.DEV &&
+    import.meta.env.VITE_UI_FIXTURE === '1' &&
+    searchParams.has('ui-fixture');
+  if (useUiFixture) {
+    const [{ default: App }, { store }] = await Promise.all([
+      import('./ui-fixtures/UiFixtureApp'),
+      import('./state/store'),
+    ]);
+    renderApp(App, store);
+    return;
+  }
+
+  const [{ default: App }, { store }] = await Promise.all([
+    import('./app/AppShell'),
+    import('./state/store'),
+  ]);
+  renderApp(App, store);
 }
 
 void startApp().catch((error: unknown) => {

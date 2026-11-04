@@ -14,10 +14,12 @@ import TokenAvatar from '../../components/ui/TokenAvatar';
 import WalletScreen from '../../components/ui/WalletScreen';
 import {
   type AppsViewCategory,
+  APP_BROWSE_CATEGORIES,
   compareAppsForBrowse,
   getAppCategory,
   getAppDescription,
   getAppIconFrame,
+  groupAppsByCategory,
   isComingSoonApp,
   shouldHideApp,
 } from './appsViewHelpers';
@@ -30,6 +32,7 @@ import {
   getLocalizedAddonAppDescription,
   getLocalizedAddonAppName,
 } from '../../services/addons/AddonLocale';
+import FriendlyErrorPanel from '../../components/ui/FriendlyErrorPanel';
 
 type AppCard = {
   id: string;
@@ -45,7 +48,7 @@ type Filter = 'All' | AppCard['category'];
 
 const DEFAULT_ICON = '/assets/images/OPTNWelcome1.png';
 
-const FILTERS: Filter[] = ['All', 'Wallet', 'Token', 'Utils', 'Advanced'];
+const FILTERS: Filter[] = ['All', ...APP_BROWSE_CATEGORIES];
 
 const AppsView = () => {
   const navigate = useNavigate();
@@ -157,6 +160,126 @@ const AppsView = () => {
         : cards.filter((card) => card.category === filter),
     [cards, filter]
   );
+  const groupedCards = useMemo(
+    () => groupAppsByCategory(filteredCards),
+    [filteredCards]
+  );
+  const categoryLabel = (category: AppsViewCategory): string =>
+    category === 'Wallet'
+      ? t('apps.wallet')
+      : category === 'Token'
+        ? t('apps.token')
+        : category === 'Advanced'
+          ? t('apps.advanced')
+          : t('apps.utils');
+  const categoryDescription = (category: AppsViewCategory): string =>
+    category === 'Wallet'
+      ? t('apps.walletBestFor')
+      : category === 'Token'
+        ? t('apps.tokenBestFor')
+        : category === 'Advanced'
+          ? t('apps.advancedBestFor')
+          : t('apps.utilsBestFor');
+
+  const renderAppCard = (app: AppCard) => (
+    <ActionTile
+      key={app.id}
+      compact
+      title={app.name}
+      description={getAppDescription(app)}
+      layout="horizontal"
+      descriptionLines={2}
+      className="overflow-hidden"
+      style={{ height: '112px' }}
+      disabled={app.disabled || (app.comingSoon && isNativeRuntime && !devMode)}
+      trailing={
+        isComingSoonApp(app.id, app.name) ? (
+          <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-200">
+            {t('apps.comingSoon')}
+          </span>
+        ) : null
+      }
+      onClick={
+        app.disabled
+          ? undefined
+          : () => {
+              if (app.id === 'optn.wallet.contracts') {
+                navigate('/contract', {
+                  state: { returnTo: '/apps' },
+                });
+                return;
+              }
+              if (app.id === 'optn.wallet.quantumroot') {
+                navigate('/quantumroot', {
+                  state: { returnTo: '/apps' },
+                });
+                return;
+              }
+              if (app.id === 'optn.wallet.cashfusion') {
+                // First-class app route — not Settings (that felt like a UI bug).
+                navigate('/cashfusion', {
+                  state: { returnTo: '/apps' },
+                });
+                return;
+              }
+              if (app.id === 'optn.wallet.nostr-chat') {
+                navigate('/chat', { state: { returnTo: '/apps' } });
+                return;
+              }
+              if (app.name.toLowerCase().includes('paryonusd')) {
+                navigate('/paryon', {
+                  state: { returnTo: '/apps' },
+                });
+                return;
+              }
+              if (
+                app.id === 'optn.builtin.paper-wallet-sweep:paperWalletSweepApp'
+              ) {
+                navigate('/paper-wallet-sweep', {
+                  state: { returnTo: '/apps' },
+                });
+                return;
+              }
+              navigate(`/apps/${app.id}`, {
+                state: { returnTo: '/apps' },
+              });
+            }
+      }
+      icon={
+        app.id === 'optn.builtin.cauldron:cauldronSwapApp' ||
+        app.id === 'optn.builtin.events:airdropsApp' ||
+        app.id === 'optn.wallet.contracts' ||
+        app.id === 'optn.wallet.quantumroot' ||
+        app.id === 'optn.wallet.cashfusion' ||
+        app.id === 'optn.wallet.nostr-chat' ||
+        app.id === 'optn.builtin.fundme:fundmeApp' ? (
+          <div
+            className={`flex h-8 w-8 items-center justify-center overflow-hidden rounded-2xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-surface-strong)_72%,transparent)] ${getAppIconFrame(app)}`}
+          >
+            {app.id === 'optn.wallet.nostr-chat' ? (
+              <MdChatBubbleOutline className="text-xl" aria-hidden="true" />
+            ) : (
+              <img
+                src={app.icon}
+                alt={app.name}
+                className="h-full w-full object-contain p-1"
+              />
+            )}
+          </div>
+        ) : (
+          <div
+            className={`flex h-8 w-8 items-center justify-center rounded-2xl ${getAppIconFrame(app)}`}
+          >
+            <TokenAvatar
+              iconUri={app.icon}
+              name={app.name}
+              sizeClassName="h-8 w-8"
+            />
+          </div>
+        )
+      }
+    />
+  );
   return (
     <WalletScreen maxWidthClassName="max-w-md">
       <div className="flex h-full min-h-0 flex-col gap-4">
@@ -208,8 +331,19 @@ const AppsView = () => {
         </SectionCard>
 
         {error && (
-          <div className="rounded border wallet-danger-panel p-3 text-sm">
-            {t('apps.loadFailed')}: {error}
+          <div className="space-y-1">
+            <FriendlyErrorPanel
+              title={t('apps.loadFailed')}
+              message={t('apps.loadFailed')}
+            />
+            <details>
+              <summary className="flex min-h-[44px] cursor-pointer items-center text-xs font-semibold wallet-muted">
+                {t('send.technicalDetails')}
+              </summary>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3 text-[11px] wallet-muted">
+                {error}
+              </pre>
+            </details>
           </div>
         )}
 
@@ -227,112 +361,18 @@ const AppsView = () => {
                   {t('apps.loadingApp')}
                 </p>
               </div>
-            ) : filteredCards.length > 0 ? (
-              filteredCards.map((app) => (
-                <ActionTile
-                  key={app.id}
-                  compact
-                  title={app.name}
-                  description={getAppDescription(app)}
-                  layout="horizontal"
-                  descriptionLines={2}
-                  className="overflow-hidden"
-                  style={{ height: '112px' }}
-                  disabled={
-                    app.disabled ||
-                    (app.comingSoon && isNativeRuntime && !devMode)
-                  }
-                  trailing={
-                    isComingSoonApp(app.id, app.name) ? (
-                      <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-200">
-                        {t('apps.comingSoon')}
-                      </span>
-                    ) : null
-                  }
-                  onClick={
-                    app.disabled
-                      ? undefined
-                      : () => {
-                          if (app.id === 'optn.wallet.contracts') {
-                            navigate('/contract', {
-                              state: { returnTo: '/apps' },
-                            });
-                            return;
-                          }
-                          if (app.id === 'optn.wallet.quantumroot') {
-                            navigate('/quantumroot', {
-                              state: { returnTo: '/apps' },
-                            });
-                            return;
-                          }
-                          if (app.id === 'optn.wallet.cashfusion') {
-                            // First-class app route — not Settings (that felt like a UI bug).
-                            navigate('/cashfusion', {
-                              state: { returnTo: '/apps' },
-                            });
-                            return;
-                          }
-                          if (app.id === 'optn.wallet.nostr-chat') {
-                            navigate('/chat', { state: { returnTo: '/apps' } });
-                            return;
-                          }
-                          if (app.name.toLowerCase().includes('paryonusd')) {
-                            navigate('/paryon', {
-                              state: { returnTo: '/apps' },
-                            });
-                            return;
-                          }
-                          if (
-                            app.id ===
-                            'optn.builtin.paper-wallet-sweep:paperWalletSweepApp'
-                          ) {
-                            navigate('/paper-wallet-sweep', {
-                              state: { returnTo: '/apps' },
-                            });
-                            return;
-                          }
-                          navigate(`/apps/${app.id}`, {
-                            state: { returnTo: '/apps' },
-                          });
-                        }
-                  }
-                  icon={
-                    app.id === 'optn.builtin.cauldron:cauldronSwapApp' ||
-                    app.id === 'optn.builtin.events:airdropsApp' ||
-                    app.id === 'optn.wallet.contracts' ||
-                    app.id === 'optn.wallet.quantumroot' ||
-                    app.id === 'optn.wallet.cashfusion' ||
-                    app.id === 'optn.wallet.nostr-chat' ||
-                    app.id === 'optn.builtin.fundme:fundmeApp' ? (
-                      <div
-                        className={`flex h-8 w-8 items-center justify-center overflow-hidden rounded-2xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-surface-strong)_72%,transparent)] ${getAppIconFrame(app)}`}
-                      >
-                        {app.id === 'optn.wallet.nostr-chat' ? (
-                          <MdChatBubbleOutline
-                            className="text-xl"
-                            aria-hidden="true"
-                          />
-                        ) : (
-                          <img
-                            src={app.icon}
-                            alt={app.name}
-                            className="h-full w-full object-contain p-1"
-                          />
-                        )}
-                      </div>
-                    ) : (
-                      <div
-                        className={`flex h-8 w-8 items-center justify-center rounded-2xl ${getAppIconFrame(app)}`}
-                      >
-                        <TokenAvatar
-                          iconUri={app.icon}
-                          name={app.name}
-                          sizeClassName="h-8 w-8"
-                        />
-                      </div>
-                    )
-                  }
-                />
+            ) : groupedCards.length > 0 ? (
+              groupedCards.map((group) => (
+                <SectionCard key={group.category} className="p-3">
+                  <SectionHeader
+                    title={categoryLabel(group.category)}
+                    subtitle={categoryDescription(group.category)}
+                    compact
+                  />
+                  <div className="space-y-2.5">
+                    {group.apps.map(renderAppCard)}
+                  </div>
+                </SectionCard>
               ))
             ) : (
               <div className="rounded-2xl border border-[var(--wallet-border)] p-4 text-sm wallet-muted">

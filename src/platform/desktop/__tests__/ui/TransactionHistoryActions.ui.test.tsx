@@ -156,6 +156,10 @@ it('opens the selected-network explorer from transaction details', () => {
   expect(
     screen.queryByRole('link', { name: 'history.openExplorer' })
   ).toBeNull();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'history.statusHelpLabel' })
+  );
+  expect(screen.getByRole('note')).toHaveTextContent('history.statusHelp');
   fireEvent.click(detailsAction);
   expect(mocks.explorer.tx).toHaveBeenCalledWith(
     'chipnet',
@@ -175,6 +179,17 @@ it('does not add a confusing server-settings detour when no URL is available', (
     screen.queryByRole('link', { name: 'history.openExplorer' })
   ).toBeNull();
   expect(screen.queryByRole('link', { name: 'nav.settings' })).toBeNull();
+});
+
+it('leads each history card with status before technical identifiers', () => {
+  renderHistory([transaction]);
+
+  const card = screen.getByRole('button', { name: /history\.transactionHash/ });
+  const cardText = card.textContent ?? '';
+  expect(cardText.indexOf('history.confirmed')).toBeGreaterThanOrEqual(0);
+  expect(cardText.indexOf('history.confirmed')).toBeLessThan(
+    cardText.indexOf('history.transactionId')
+  );
 });
 
 it('opens the transaction passed from Home activity', () => {

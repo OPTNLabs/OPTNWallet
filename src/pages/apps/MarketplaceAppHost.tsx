@@ -21,6 +21,8 @@ import { createAddonSDK, type AddonSDK } from '../../services/AddonsSDK';
 import { renderDeclarativeScreen } from './marketplaceScreenResolver';
 import AddonIframeHost from './AddonIframeHost';
 import { getReturnPath } from '../../utils/navigation';
+import PageHeader from '../../components/ui/PageHeader';
+import RouteExitFooter from '../../components/ui/RouteExitFooter';
 import {
   isComingSoonApp,
   shouldHideApp,
@@ -261,6 +263,13 @@ export default function MarketplaceAppHost() {
         : '',
     [locale, resolved]
   );
+  const hostOwnsRouteChrome = useMemo(() => {
+    if (!resolved) return false;
+    if (resolved.app.kind === 'iframe-bundle') return true;
+    if (resolved.app.kind !== 'declarative') return true;
+    const moduleId = getAddonModuleId(getDeclarativeScreenId(resolved.app));
+    return !moduleId || moduleId === 'authguard';
+  }, [resolved]);
   const paryonContractAddresses = useMemo(() => {
     if (!resolved) return new Set<string>();
     if (!resolved.app.id.toLowerCase().includes('paryonworkspaceapp')) {
@@ -753,8 +762,17 @@ export default function MarketplaceAppHost() {
     <>
       <div className="mx-auto flex h-full min-h-0 w-full max-w-md flex-col px-4">
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pr-1">
+          {hostOwnsRouteChrome ? (
+            <PageHeader title={localizedAppName || t('apps.title')} compact />
+          ) : null}
           {renderApp()}
         </div>
+        {hostOwnsRouteChrome ? (
+          <RouteExitFooter
+            label={t('apps.back')}
+            onBack={() => navigate(backTarget)}
+          />
+        ) : null}
       </div>
       {consentPrompt && (
         <div className="wallet-popup-backdrop">

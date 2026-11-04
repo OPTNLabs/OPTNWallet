@@ -13,6 +13,7 @@ import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { Network } from '../state/slices/networkSlice';
 import { getReturnPath } from '../utils/navigation';
 import { homeRoute } from '../navigation/routes';
+import RouteExitFooter from '../components/ui/RouteExitFooter';
 
 const CashFusionApp: React.FC = () => {
   const navigate = useNavigate();
@@ -32,15 +33,7 @@ const CashFusionApp: React.FC = () => {
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
           <CashFusionSettings />
         </div>
-        <div className="mt-auto shrink-0 pb-2 pt-2">
-          <button
-            type="button"
-            className="wallet-btn-danger w-full py-3 text-base font-semibold shadow-xl"
-            onClick={() => navigate(returnTarget)}
-          >
-            Back
-          </button>
-        </div>
+        <RouteExitFooter label="Back" onBack={() => navigate(returnTarget)} />
       </div>
     </WalletScreen>
   );

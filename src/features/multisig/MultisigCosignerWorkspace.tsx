@@ -29,6 +29,10 @@ import {
 import { loadMultisigPolicy } from '../../services/multisig/MultisigStorageService';
 import { signMultisigPsbtLocally } from '../../services/multisig/MultisigSignerService';
 import { copyWithFeedback } from '../../utils/copyWithFeedback';
+import MaskedValue from '../../components/ui/MaskedValue';
+import { useI18n } from '../../i18n/useI18n';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MultisigError from './MultisigError';
 
 type SignStage = 'receive' | 'review' | 'export';
 
@@ -109,6 +113,7 @@ function validateIncomingPsbt(
 }
 
 export default function MultisigCosignerWorkspace() {
+  const { t } = useI18n();
   const { wallet_id: routeWalletId } = useParams();
   const policyWalletId = Number(routeWalletId);
   const signerWalletId = useSelector(selectWalletId);
@@ -364,6 +369,7 @@ export default function MultisigCosignerWorkspace() {
 
   return (
     <MultisigPage>
+      {policy?.network && <NetworkContextBanner network={policy.network} />}
       <section className="wallet-card space-y-3 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--wallet-accent-strong)]">
           Cosigner signing
@@ -460,7 +466,15 @@ export default function MultisigCosignerWorkspace() {
                 Fee:{' '}
                 {feeSatoshis === null ? 'invalid' : `${toBch(feeSatoshis)} BCH`}
               </p>
-              <p className="break-all font-mono">TX: {unsignedTxHash}</p>
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="shrink-0">{t('history.transactionId')}:</span>
+                <MaskedValue
+                  value={unsignedTxHash}
+                  label={t('history.transactionId')}
+                  copySuccessMessageKey="receive.copied"
+                  className="min-w-0 break-all text-xs"
+                />
+              </div>
             </div>
             <div className="space-y-1 rounded-xl border border-[var(--wallet-border)] p-3">
               <p className="text-xs font-semibold wallet-text-strong">
@@ -550,11 +564,7 @@ export default function MultisigCosignerWorkspace() {
         </>
       )}
 
-      {error && (
-        <p role="alert" className="text-xs text-red-400">
-          {error}
-        </p>
-      )}
+      {error && <MultisigError message={error} />}
       {(stage === 'review' || stage === 'export') && (
         <button
           type="button"

@@ -19,6 +19,11 @@ import { transactionPreview } from '../../services/connect/transactionPreview';
 import { describeConnectorRequest } from '../../services/connect/requestDescription';
 import ConnectorWalletEffectSummary from '../connect/ConnectorWalletEffectSummary';
 import ConnectorTransactionSummary from '../connect/ConnectorTransactionSummary';
+import MaskedConnectorDescription from '../connect/MaskedConnectorDescription';
+import MaskedValue from '../ui/MaskedValue';
+import NetworkContextBanner from '../ui/NetworkContextBanner';
+import InfoButton from '../ui/InfoButton';
+import { isUiFixtureEnabled } from '../../ui-fixtures/fixtureData';
 
 type TxAmountCarrier = { valueSatoshis: unknown };
 type TxToken = {
@@ -30,7 +35,7 @@ type TxOutput = TxAmountCarrier & {
   lockingBytecode: unknown;
   token?: TxToken;
 };
-type TxInputSource = TxAmountCarrier;
+type TxInputSource = TxAmountCarrier & { lockingBytecode: unknown };
 
 function parsePushData(bytecode: Uint8Array): string[] {
   const result: string[] = [];
@@ -102,8 +107,22 @@ export default function WizardSignTransactionModal() {
     sourceOutputs.length === tx.inputs.length &&
     totalInput >= totalOutput;
 
+  function describeLockingDestination(bytecode: Uint8Array) {
+    try {
+      const result = lockingBytecodeToCashAddress({
+        prefix: PREFIX[network],
+        bytecode,
+      });
+      return typeof result === 'string'
+        ? { label: t('wc.lockingScript'), value: `0x${binToHex(bytecode)}` }
+        : { label: t('wizard.address'), value: result.address };
+    } catch {
+      return { label: t('wc.lockingScript'), value: `0x${binToHex(bytecode)}` };
+    }
+  }
+
   const handleApprove = async () => {
-    if (!canApprove || inFlight.current) return;
+    if (isUiFixtureEnabled() || !canApprove || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     try {
@@ -124,7 +143,7 @@ export default function WizardSignTransactionModal() {
   };
 
   const handleReject = async () => {
-    if (inFlight.current) return;
+    if (isUiFixtureEnabled() || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     try {
@@ -163,13 +182,21 @@ export default function WizardSignTransactionModal() {
               <strong>{t('wizard.status')}:</strong>{' '}
               {t(
                 wizardConnectionStatus(connection?.status.status ?? 'pending')
-              )}
+              )}{' '}
+              <InfoButton
+                id="wizard-sign-status-help"
+                ariaLabel={t('wizard.statusHelpLabel')}
+                content={t('wizard.statusHelp')}
+              />
             </div>
           </div>
 
+          <NetworkContextBanner network={network} />
+
           {payload.userPrompt && (
             <p className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 wallet-text-strong">
-              <strong>{t('wizard.prompt')}:</strong> {payload.userPrompt}
+              <strong>{t('wizard.prompt')}:</strong>{' '}
+              <MaskedConnectorDescription value={payload.userPrompt} />
             </p>
           )}
 
@@ -181,7 +208,6 @@ export default function WizardSignTransactionModal() {
 
           {canApprove && connectorPreview && (
             <ConnectorTransactionSummary
-              network={network}
               operation="sign-and-return"
               preview={connectorPreview}
             />
@@ -198,9 +224,11 @@ export default function WizardSignTransactionModal() {
           {tx && canApprove && (
             <>
               <details className="rounded-xl border border-[var(--wallet-border)] px-3 py-2">
-                <summary className="cursor-pointer font-semibold">
-                  Technical transaction details ({sourceOutputs.length} inputs,{' '}
-                  {outputs.length} outputs)
+                <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold">
+                  {t('wizard.technicalDetails', {
+                    inputs: sourceOutputs.length,
+                    outputs: outputs.length,
+                  })}
                 </summary>
                 <div className="mt-3 space-y-3">
                   {(sourceOutputs as TxInputSource[]).map((source, index) => (
@@ -208,15 +236,40 @@ export default function WizardSignTransactionModal() {
                       key={`${pending.request.sequence}-${index}`}
                       className="ml-2"
                     >
+                      {(() => {
+                        const sourceDestination = describeLockingDestination(
+                          ensureUint8Array(source.lockingBytecode)
+                        );
+                        return (
+                          <div>
+                            {sourceDestination.label}:{' '}
+                            <MaskedValue
+                              value={sourceDestination.value}
+                              label={sourceDestination.label}
+                              ariaLabel={sourceDestination.label}
+                              prefixLength={5}
+                              suffixLength={5}
+                              preserveCashAddressPrefix
+                              maskLength={8}
+                              revealOnClick
+                              className="max-w-full break-all"
+                            />
+                          </div>
+                        );
+                      })()}
                       <div>
                         {t('wizard.txid')}:{' '}
-                        <span className="font-mono break-all">
-                          {binToHex(
+                        <MaskedValue
+                          value={binToHex(
                             ensureUint8Array(
                               tx.inputs[index].outpointTransactionHash
                             )
                           )}
-                        </span>
+                          label={t('history.transactionId')}
+                          ariaLabel={t('history.transactionId')}
+                          copySuccessMessageKey="history.transactionCopied"
+                          className="max-w-full break-all"
+                        />
                       </div>
                       <div>
                         {t('wizard.index')}: {tx.inputs[index].outpointIndex}
@@ -272,9 +325,18 @@ export default function WizardSignTransactionModal() {
                       >
                         <div>
                           {t('wizard.address')}:{' '}
-                          <span className="font-mono wallet-link break-all">
-                            {address}
-                          </span>
+                          <MaskedValue
+                            value={address}
+                            label={t('wizard.address')}
+                            ariaLabel={t('receive.copyAddress')}
+                            copySuccessMessageKey="receive.addressCopied"
+                            prefixLength={5}
+                            suffixLength={5}
+                            preserveCashAddressPrefix
+                            maskLength={8}
+                            revealOnClick
+                            className="max-w-full break-all"
+                          />
                         </div>
                         <div>{Number(value) / SATSINBITCOIN} BCH</div>
                         {output.token && (
@@ -297,11 +359,11 @@ export default function WizardSignTransactionModal() {
                             {output.token.nft && (
                               <>
                                 <div>
-                                  <strong>NFT capability:</strong>{' '}
+                                  <strong>{t('wizard.nftCapability')}:</strong>{' '}
                                   {output.token.nft.capability}
                                 </div>
                                 <div>
-                                  <strong>NFT commitment:</strong>{' '}
+                                  <strong>{t('wizard.nftCommitment')}:</strong>{' '}
                                   <span className="font-mono break-all">
                                     {binToHex(
                                       ensureUint8Array(
@@ -329,7 +391,7 @@ export default function WizardSignTransactionModal() {
             onClick={() => void handleApprove()}
             className="wallet-btn-primary"
           >
-            {busy ? 'Working…' : t('wizard.sign')}
+            {busy ? t('wizard.working') : t('wizard.sign')}
           </button>
           <button
             onClick={() => void handleReject()}

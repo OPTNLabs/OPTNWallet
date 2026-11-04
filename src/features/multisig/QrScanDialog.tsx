@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { createQrTransport } from './QrTransport';
 import Popup from '../transaction/components/Popup';
+import MultisigError from './MultisigError';
 
 export function QrScanDialog(props: {
   onFrame: (frame: string) => void;
@@ -37,11 +38,7 @@ export function QrScanDialog(props: {
           Use the camera on mobile or the desktop image/file fallback. Scan each
           UR frame; duplicates are safe.
         </p>
-        {error && (
-          <p role="alert" className="text-xs text-red-400">
-            {error}
-          </p>
-        )}
+        {error && <MultisigError message={error} />}
         <button
           type="button"
           className="wallet-btn-primary min-h-[44px] w-full"

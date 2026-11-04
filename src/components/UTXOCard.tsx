@@ -1,7 +1,6 @@
 // src/components/UTXOCard.tsx
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
 import { SATSINBITCOIN } from '../utils/constants';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
@@ -29,6 +28,7 @@ import {
 } from '../platform/desktop/coinHoldsBridge';
 import { isDesktopPlatform } from '../utils/platform';
 import { useI18n } from '../i18n/useI18n';
+import MaskedValue from './ui/MaskedValue';
 
 interface UTXOCardProps {
   utxos: UTXO[];
@@ -247,7 +247,13 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                   </p>
                   <p>
                     <strong>{t('utxo.txHash')}:</strong>{' '}
-                    {shortenTxHash(utxo.tx_hash)}
+                    <MaskedValue
+                      value={utxo.tx_hash}
+                      label={t('history.transactionId')}
+                      ariaLabel={t('utxo.txHash')}
+                      copySuccessMessageKey="history.transactionCopied"
+                      className="text-xs"
+                    />
                   </p>
                   <p>
                     <strong>{t('utxo.pos')}:</strong> {utxo.tx_pos}

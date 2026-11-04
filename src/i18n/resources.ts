@@ -34,12 +34,19 @@ const baseTranslations = {
       'Session authorized — dApp availability unknown',
     'connection.awaitingAcknowledgement': 'Waiting for session acknowledgement',
     'connection.awaitingApproval': 'Waiting for your approval',
+    'connection.awaitingApprovalHelp':
+      'A dApp request is waiting for you. Review it in the wallet before approving or rejecting it.',
+    'connection.statusHelpLabel': 'Explain connection status',
+    'connection.statusHelp':
+      'This status describes the wallet connection lifecycle. A relay or session can be available without confirming that the dApp is ready for requests.',
     'connection.savedSessions': 'Saved sessions',
     'connection.noSavedSessions': 'No saved sessions',
     'connection.attempts': 'Connection attempts',
     'connection.attemptStarted': 'Attempt started',
     'connection.failed':
       'Connection attempt failed. Retry pairing to try again.',
+    'connection.failedHelp':
+      'The connection did not complete. Check the pairing URI and your network, then try again.',
     'app.language': 'Language',
     'app.languageDescription': 'Choose the wallet interface language',
     'app.back': 'Back',
@@ -64,6 +71,9 @@ const baseTranslations = {
       'This balance has not been checked with the network yet. Sync before relying on it.',
     'home.balanceMayBeOutdated':
       'Could not confirm the current balance. It may be out of date. Try Sync or check your server settings.',
+    'home.syncStatusHelpLabel': 'Explain balance freshness',
+    'home.syncStatusHelp':
+      'This balance may be cached or not yet verified by the active network. Refresh before relying on it or sending funds.',
     'home.serverSettings': 'Server settings',
     'home.syncing': 'Syncing…',
     'home.sync': 'Sync',
@@ -72,6 +82,10 @@ const baseTranslations = {
     'home.usdUnavailable': 'USD unavailable',
     'home.usdPriceUnavailable': 'USD price unavailable',
     'home.toggleBalance': 'Toggle BCH and USD balance',
+    'home.spendableBch': 'Spendable {amount} BCH',
+    'home.spendableUsd': 'Spendable {amount} USD',
+    'home.stealthBch': 'Stealth {amount} BCH',
+    'home.stealthUsd': 'Stealth {amount} USD',
     'home.quickActions': 'Quick Actions',
     'home.scanQr': 'Scan QR',
     'home.noQrCode': 'No QR code detected. Try again.',
@@ -238,6 +252,9 @@ const baseTranslations = {
       'Este saldo aún no se ha comprobado en la red. Sincroniza antes de confiar en él.',
     'home.balanceMayBeOutdated':
       'No se pudo confirmar el saldo actual. Puede estar desactualizado. Intenta sincronizar o revisa los servidores.',
+    'home.syncStatusHelpLabel': 'Explicar la actualización del saldo',
+    'home.syncStatusHelp':
+      'Este saldo puede estar en caché o aún no haber sido verificado por la red activa. Sincroniza antes de confiar en él o enviar fondos.',
     'home.serverSettings': 'Servidores',
     'home.syncing': 'Sincronizando…',
     'home.sync': 'Sincronizar',
@@ -415,6 +432,9 @@ const baseTranslations = {
     'home.balanceNotVerified': '此余额尚未通过网络核实。请先同步再依赖此余额。',
     'home.balanceMayBeOutdated':
       '无法确认当前余额，余额可能已过期。请尝试同步或检查服务器设置。',
+    'home.syncStatusHelpLabel': '解释余额新鲜度',
+    'home.syncStatusHelp':
+      '此余额可能来自缓存，或尚未由当前网络验证。请在依赖余额或发送资金前刷新。',
     'home.serverSettings': '服务器设置',
     'home.syncing': '同步中…',
     'home.sync': '同步',

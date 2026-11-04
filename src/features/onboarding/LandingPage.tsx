@@ -147,6 +147,7 @@ const LandingPage = ({ surface }: LandingPageProps) => {
             ]}
             numbered={false}
             className="max-w-none"
+            onFinish={() => setShowHelp(false)}
           />
         </Popup>
       )}

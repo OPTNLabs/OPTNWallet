@@ -91,7 +91,7 @@ describe('BcmrService', () => {
     service.fetchTokenIndexNativeRegistry = vi
       .fn()
       .mockResolvedValue({
-        registryUri: `https://tokenindex.optnlabs.com/v1/token/${authbase}/bcmr`,
+        registryUri: `https://tokenindex.optnlabs.com/v1/token/${authbase}`,
         registry: {},
       });
     service.fetchAndCommitRegistry = vi.fn();
@@ -100,13 +100,43 @@ describe('BcmrService', () => {
     const result = await service.resolveIdentityRegistryUncached(authbase);
 
     expect(service.fetchTokenIndexNativeRegistry).toHaveBeenCalledWith(authbase, [
-      `https://tokenindex.optnlabs.com/v1/token/${authbase}/bcmr`,
+      `https://tokenindex.optnlabs.com/v1/token/${authbase}`,
     ]);
     expect(service.fetchAndCommitRegistry).not.toHaveBeenCalled();
     expect(service.resolveAuthChainRegistry).not.toHaveBeenCalled();
     expect(result).toMatchObject({
-      registryUri: `https://tokenindex.optnlabs.com/v1/token/${authbase}/bcmr`,
+      registryUri: `https://tokenindex.optnlabs.com/v1/token/${authbase}`,
     });
+  });
+
+  it('treats a 200 token summary without BCMR as a typed metadata miss', async () => {
+    const category =
+      '1111111111111111111111111111111111111111111111111111111111111111';
+    const service = new BcmrService() as unknown as {
+      fetchTokenIndexNativeRegistry: (
+        authbase: string,
+        uri: string
+      ) => Promise<unknown>;
+    };
+
+    vi.mocked(ipfsFetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          category,
+          bcmr: {
+            identity_snapshot: null,
+          },
+        }),
+        { status: 200 }
+      )
+    );
+
+    await expect(
+      service.fetchTokenIndexNativeRegistry(
+        category,
+        `https://tokenindex.optnlabs.com/v1/token/${category}`
+      )
+    ).rejects.toMatchObject({ name: 'BcmrRegistryNotFoundError' });
   });
 
   it('falls back to legacy registry URLs when tokenindexer v1 is unavailable', async () => {

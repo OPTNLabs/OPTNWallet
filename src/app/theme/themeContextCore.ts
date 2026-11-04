@@ -25,17 +25,14 @@ export interface ThemeContextValue {
   skin: UiSkin;
   setMode: (mode: ThemeMode) => void;
   setSkin: (skin: UiSkin) => void;
-  /** The existing two-state control: green surfaces, or true black. */
+  /** The quick two-state control: neutral Light or green Dark surfaces. */
   toggleMode: () => void;
 }
 
 /**
- * Two keys, because the old one is ambiguous. It stored `'light' | 'dark'`
- * where "dark" meant this wallet's green surfaces; the mode set now also has a
- * real `dark` (OLED black) whose stored value would be the same string. Read
- * under one key and choosing Dark could never survive a restart — it would come
- * back as green every launch. The versioned key holds the four-mode value; the
- * legacy key is read only when it is absent.
+ * The versioned key holds the four-mode value. The legacy key is read only when
+ * it is absent and maps its old two-state dark choice to the new green Dark
+ * palette.
  */
 const THEME_STORAGE_KEY = 'wallet_theme_mode_v2';
 const LEGACY_THEME_STORAGE_KEY = 'wallet_theme_mode';
@@ -54,12 +51,11 @@ export function isUiSkin(value: unknown): value is UiSkin {
 }
 
 /**
- * Translate a value written by the two-mode build. "dark" there was green, so
- * anyone who chose it gets the same colours back rather than OLED black for a
- * choice they never made.
+ * Translate a value written by the two-mode build. Its dark choice now maps to
+ * the green Dark palette so existing users keep the same visual treatment.
  */
 export function normalizeLegacyMode(saved: string | null): ThemeMode | null {
-  if (saved === 'dark') return 'green';
+  if (saved === 'dark') return 'dark';
   if (saved === 'light') return 'light';
   return null;
 }
@@ -79,7 +75,7 @@ export const getInitialTheme = (): ThemeMode => {
     typeof window.matchMedia === 'function' &&
     window.matchMedia('(prefers-color-scheme: dark)').matches
   ) {
-    return 'green';
+    return 'dark';
   }
 
   return 'light';
@@ -128,7 +124,7 @@ export const THEME_MODE_DESCRIPTIONS: Record<ThemeMode, string> = {
   light: 'Light surfaces, dark text',
   gray: 'Charcoal everyday dark',
   green: 'OPTN wallet green',
-  dark: 'True black, for OLED screens',
+  dark: 'Green dark surfaces',
 };
 
 export const UI_SKIN_LABELS: Record<UiSkin, string> = {

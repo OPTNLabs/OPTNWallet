@@ -17,7 +17,7 @@ export function SendHeader({ showDebug, setShowDebug }: SendHeaderProps) {
           OPTN Wallet
         </div>
         <h1 className="text-2xl font-extrabold wallet-text-strong leading-tight">
-          {t('send.title')}
+          {t('send.send')}
         </h1>
         <p className="text-sm wallet-muted">{t('send.guidedDescription')}</p>
       </div>

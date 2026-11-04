@@ -8,6 +8,8 @@ import type { MultisigPolicy } from '../../services/psbt/multisigWallet';
 import { createMultisigDescriptorSet } from '../../services/psbt/multisigWallet';
 import { refreshMultisigWalletUtxos } from '../../services/WalletUtxoRefreshService';
 import MultisigPage from './MultisigPage';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MultisigError from './MultisigError';
 
 export default function MultisigHome() {
   const navigate = useNavigate();
@@ -117,6 +119,7 @@ export default function MultisigHome() {
 
   return (
     <MultisigPage>
+      {policy?.network && <NetworkContextBanner network={policy.network} />}
       <section className="rounded-2xl border border-[var(--wallet-accent)] bg-[var(--wallet-surface)] p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--wallet-accent-strong)]">
           Multisig overview
@@ -187,11 +190,7 @@ export default function MultisigHome() {
             ))}
           </div>
         )}
-        {error && (
-          <p role="alert" className="mt-3 text-xs text-red-400">
-            {error}
-          </p>
-        )}
+        {error && <MultisigError message={error} className="mt-3" />}
       </section>
 
       <section className="grid gap-3 sm:grid-cols-2">

@@ -69,7 +69,9 @@ it('announces detail lookup failures and retries the same transaction', async ()
   );
 
   await waitFor(() => expect(mocks.fetchDetails).toHaveBeenCalledOnce());
-  expect(await screen.findByRole('alert')).toHaveTextContent('offline');
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'history.loadDetailsFailed'
+  );
   const retry = screen.getByRole('button', { name: 'builder.tryAgain' });
   expect(retry).toHaveClass('min-h-[44px]');
   fireEvent.click(retry);

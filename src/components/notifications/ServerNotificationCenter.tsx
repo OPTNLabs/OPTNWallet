@@ -3,11 +3,12 @@ import { useDispatch, useSelector } from 'react-redux';
 import type { RootState } from '../../state/store';
 import { dequeueServerNotification } from '../../state/slices/serverNotificationsSlice';
 import { useI18n } from '../../i18n/useI18n';
+import MaskedValue from '../ui/MaskedValue';
 
 const ToastItem: React.FC<{
   id: string;
   title: string;
-  body: string;
+  body: React.ReactNode;
   onClose: (id: string) => void;
   duration?: number;
 }> = ({ id, title, body, onClose, duration = 8000 }) => {
@@ -33,7 +34,7 @@ const ToastItem: React.FC<{
         </div>
         <button
           onClick={() => onClose(id)}
-          className="ml-2 rounded-full p-1 wallet-muted hover:brightness-95"
+          className="ml-2 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full p-1 wallet-muted hover:brightness-95"
           aria-label={t('notifications.dismiss')}
           title={t('notifications.dismiss')}
         >
@@ -55,17 +56,38 @@ const ServerNotificationCenter: React.FC = () => {
     <div className="pointer-events-none fixed inset-x-0 top-3 z-[9998] flex justify-center sm:justify-start sm:pl-4">
       <div className="pointer-events-none flex max-h-[80vh] flex-col-reverse overflow-y-auto sm:items-start">
         {queue.map((n) => {
-          const shortTx = `${n.txid.slice(0, 6)}…${n.txid.slice(-6)}`;
-          const shortAddr = n.address
-            ? `${n.address.slice(0, 8)}…${n.address.slice(-6)}`
-            : t('notifications.unknownAddress');
           const title =
             n.kind === 'transaction_confirmed'
               ? t('notifications.transactionConfirmed')
               : n.kind === 'incoming_token'
                 ? t('notifications.incomingToken')
                 : t('notifications.incomingBch');
-          const body = `${shortTx} • ${shortAddr}`;
+          const body = (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+              <span>{t('history.transactionId')}:</span>
+              <MaskedValue
+                value={n.txid}
+                label={t('history.transactionId')}
+                ariaLabel={t('history.transactionId')}
+                copySuccessMessageKey="history.transactionCopied"
+                embedded
+                className="text-xs"
+              />
+              <span aria-hidden="true">•</span>
+              {n.address ? (
+                <MaskedValue
+                  value={n.address}
+                  label={t('receive.receiveAddress')}
+                  ariaLabel={t('receive.receiveAddress')}
+                  copySuccessMessageKey="receive.addressCopied"
+                  embedded
+                  className="text-xs"
+                />
+              ) : (
+                <span>{t('notifications.unknownAddress')}</span>
+              )}
+            </div>
+          );
           return (
             <ToastItem
               key={n.id}

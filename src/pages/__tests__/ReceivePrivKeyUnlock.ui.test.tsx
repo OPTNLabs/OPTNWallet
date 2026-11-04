@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   waitFor,
 } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
@@ -130,4 +131,48 @@ it('keeps PrivKey absent until ten PubKey taps and resets after leaving Receive'
   fireEvent.click(screen.getByRole('button', { name: 'PubKey' }));
   expect(screen.queryByRole('button', { name: 'PrivKey' })).toBeNull();
   expect(mocks.fetchAddressPrivateKey).toHaveBeenCalledTimes(1);
+});
+
+it('toggles the QR address between masked and full payloads', async () => {
+  const address = `bchtest:q${'a'.repeat(40)}zxy12`;
+  mocks.retrieveKeys.mockResolvedValue([
+    {
+      address,
+      tokenAddress: `bchtest:z${'b'.repeat(40)}uvw34`,
+      publicKey: new Uint8Array([2, 3]),
+      pubkeyHash: new Uint8Array([4, 5]),
+      changeIndex: 0,
+      addressIndex: 0,
+    },
+  ]);
+
+  render(
+    <MemoryRouter initialEntries={['/receive']}>
+      <Routes>
+        <Route path="/receive" element={<Receive />} />
+      </Routes>
+    </MemoryRouter>
+  );
+
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'receive.openQrPreview' })
+  );
+
+  const dialog = screen.getByRole('dialog');
+  const qrToggle = within(dialog).getByRole('button', {
+    name: 'receive.qrCopyDescription',
+  });
+  const addressValue = () =>
+    within(dialog).getByRole('button', { name: 'receive.copyAddress' });
+
+  expect(addressValue()).toHaveTextContent(address.slice(0, 8));
+  expect(addressValue()).toHaveTextContent(address.slice(-5));
+  expect(addressValue()).toHaveTextContent('*');
+
+  fireEvent.click(qrToggle);
+  expect(addressValue()).toHaveTextContent(address);
+
+  fireEvent.click(qrToggle);
+  expect(addressValue()).not.toHaveTextContent(address);
+  expect(addressValue()).toHaveTextContent(address.slice(-5));
 });

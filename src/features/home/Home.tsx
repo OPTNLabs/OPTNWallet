@@ -1,7 +1,7 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { FaArrowDown, FaArrowUp, FaBitcoin, FaQrcode } from 'react-icons/fa';
+import { FaArrowDown, FaArrowUp, FaQrcode } from 'react-icons/fa';
 import { AppDispatch, RootState } from '../../state/store';
 import {
   setFetchingUTXOs,
@@ -30,22 +30,31 @@ import { SATSINBITCOIN } from '../../utils/constants';
 import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
-import { shortenTxHash } from '../../utils/shortenHash';
-import { takeRecentTransactions } from '../../utils/transactionHistoryOrder';
+import {
+  isMempoolLike,
+  takeRecentTransactions,
+} from '../../utils/transactionHistoryOrder';
+import { isTxConfirmed } from '../../utils/txConfirmation';
 import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
 import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
-import { FusionBadge } from '../../components/FusionBadge';
 import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from './useHomeConnect';
 import { useI18n } from '../../i18n/useI18n';
 import { unitFor } from '../../utils/unitLabel';
+import BchUsdControl from '../../components/ui/BchUsdControl';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MaskedValue from '../../components/ui/MaskedValue';
+import { formatNumber } from '../../i18n/format';
+import InfoButton from '../../components/ui/InfoButton';
+import StatusChip from '../../components/ui/StatusChip';
 
 type QuickActionButtonProps = {
   title: string;
   icon: React.ReactNode;
   onClick: () => void;
   testId?: string;
+  attention?: boolean;
 };
 
 function getQuickActionTextClass(title: string) {
@@ -59,18 +68,29 @@ function QuickActionButton({
   icon,
   onClick,
   testId,
+  attention = false,
 }: QuickActionButtonProps) {
   return (
     <button
       type="button"
       data-testid={testId}
       onClick={onClick}
-      className="wallet-card flex min-h-[4.9rem] min-w-0 flex-[1_1_0%] items-center gap-2 rounded-2xl px-3 py-2.5 text-left transition hover:brightness-[0.98]"
+      className={`wallet-card flex min-h-[4.9rem] min-w-0 flex-[1_1_0%] items-center gap-2 rounded-2xl px-3 py-2.5 text-left transition hover:brightness-[0.98] ${
+        attention
+          ? 'ring-2 ring-[var(--wallet-accent)] ring-offset-2 ring-offset-[var(--wallet-bg)]'
+          : ''
+      }`}
     >
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_70%,transparent)] text-[var(--wallet-accent-strong)]">
         {icon}
       </div>
       <span className={getQuickActionTextClass(title)}>{title}</span>
+      {attention ? (
+        <span
+          className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--wallet-accent-strong)]"
+          aria-label={title}
+        />
+      ) : null}
     </button>
   );
 }
@@ -82,7 +102,7 @@ type HomeProps = {
 const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const navigate = useNavigate();
   const dispatch = useDispatch<AppDispatch>();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const dbService = useMemo(() => DatabaseService(), []);
 
   const currentWalletId = useSelector(
@@ -117,6 +137,13 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const unit = unitFor(currentNetwork);
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const [refreshFailed, setRefreshFailed] = useState(false);
+  const [incomingFlag, setIncomingFlag] = useState<{
+    key: string;
+    title: string;
+    amountSats?: number;
+    address: string | null;
+    txid: string;
+  } | null>(null);
   const homeConnect = useHomeConnect();
   const totalBch = (totalBalance + stealthSats) / SATSINBITCOIN;
   const totalUsd =
@@ -133,6 +160,49 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
     () => takeRecentTransactions(transactions, 3),
     [transactions]
   );
+  const incomingUtxo = useSelector((state: RootState) =>
+    state.notifications.queue.find((item) => item.kind === 'utxo')
+  );
+  const incomingServer = useSelector((state: RootState) =>
+    state.serverNotifications.queue.find(
+      (item) => item.kind === 'incoming_bch' || item.kind === 'incoming_token'
+    )
+  );
+  const incomingSourceKey = incomingUtxo
+    ? `utxo:${incomingUtxo.id}`
+    : incomingServer
+      ? `server:${incomingServer.id}`
+      : '';
+
+  useEffect(() => {
+    if (!incomingSourceKey) return;
+
+    const source = incomingUtxo;
+    const server = incomingServer;
+    if (source) {
+      setIncomingFlag({
+        key: incomingSourceKey,
+        title: t('notifications.fundsReceived'),
+        amountSats: source.value ?? 0,
+        address: source.address,
+        txid: source.txid,
+      });
+    } else if (server) {
+      const title =
+        server.kind === 'incoming_token'
+          ? t('notifications.incomingToken')
+          : t('notifications.incomingBch');
+      setIncomingFlag({
+        key: incomingSourceKey,
+        title,
+        address: server.address,
+        txid: server.txid,
+      });
+    }
+
+    const timer = window.setTimeout(() => setIncomingFlag(null), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [incomingServer, incomingSourceKey, incomingUtxo, locale, t]);
   // Sync is explicit here. Background wallet synchronization is owned by the
   // shared worker lifecycle so returning to Home does not start another full
   // network, UTXO, and history pass.
@@ -254,13 +324,16 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
           }
           compact
         />
+        <NetworkContextBanner network={currentNetwork} />
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-4">
-          <SectionCard className="shrink-0 p-2.5">
-            <PriceFeed compact />
-          </SectionCard>
-
-          <SectionCard className="shrink-0 p-3">
+          <SectionCard
+            className={`shrink-0 border-2 p-3 ${
+              currentNetwork === Network.CHIPNET
+                ? 'border-indigo-400/70 bg-indigo-500/5'
+                : 'border-emerald-500/70 bg-emerald-500/5'
+            }`}
+          >
             <SectionHeader
               title={t('home.portfolio')}
               subtitle={t('home.walletOverview')}
@@ -289,15 +362,64 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                 </div>
               }
             />
-            <div className="flex items-center justify-between gap-3">
-              <div>
+            {incomingFlag ? (
+              <div
+                className="mt-3 flex items-start gap-3 rounded-2xl border border-[var(--wallet-accent)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_54%,transparent)] p-3"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--wallet-accent-strong)]" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold wallet-text-strong">
+                    {incomingFlag.title}
+                  </div>
+                  <div className="mt-1 grid min-w-0 gap-1 text-xs wallet-muted">
+                    {incomingFlag.amountSats !== undefined ? (
+                      <span className="wallet-text-strong">
+                        {t('send.amount')}:{' '}
+                        {formatNumber(incomingFlag.amountSats, locale)} sats
+                      </span>
+                    ) : null}
+                    {incomingFlag.address ? (
+                      <span className="grid min-w-0 grid-cols-[auto,minmax(0,1fr)] items-center gap-x-2">
+                        <span>{t('receive.receiveAddress')}:</span>
+                        <MaskedValue
+                          value={incomingFlag.address}
+                          label={t('receive.receiveAddress')}
+                          copySuccessMessageKey="receive.addressCopied"
+                          embedded
+                          className="block max-w-full truncate text-xs"
+                        />
+                      </span>
+                    ) : (
+                      <span>{t('notifications.unknownAddress')}</span>
+                    )}
+                    <span className="grid min-w-0 grid-cols-[auto,minmax(0,1fr)] items-center gap-x-2">
+                      <span>{t('history.transactionId')}:</span>
+                      <MaskedValue
+                        value={incomingFlag.txid}
+                        label={t('history.transactionId')}
+                        copySuccessMessageKey="history.transactionCopied"
+                        embedded
+                        className="block max-w-full truncate text-xs"
+                      />
+                    </span>
+                  </div>
+                </div>
                 <button
                   type="button"
-                  onClick={() =>
-                    setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
-                  }
-                  className="text-left"
+                  className="min-h-[44px] shrink-0 rounded-xl px-2 text-xs wallet-muted hover:brightness-95"
+                  onClick={() => setIncomingFlag(null)}
+                  aria-label={t('notifications.dismiss')}
+                  title={t('notifications.dismiss')}
                 >
+                  ✕
+                </button>
+              </div>
+            ) : null}
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-left">
                   <div className="text-2xl font-bold wallet-text-strong">
                     {displayMode === 'BCH'
                       ? `${totalBch.toFixed(8)} ${unit}`
@@ -313,34 +435,49 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                       : `${totalBch.toFixed(8)} ${unit}`}
                   </div>
                   {stealthSats > 0 && (
-                    <div className="text-[10px] wallet-muted mt-0.5">
-                      {(totalBalance / SATSINBITCOIN).toFixed(8)} spendable
-                      {' + '}
-                      {(stealthSats / SATSINBITCOIN).toFixed(8)} stealth
+                    <div className="mt-0.5 text-[10px] wallet-muted">
+                      {displayMode === 'USD'
+                        ? totalUsd !== null
+                          ? `${t('home.spendableUsd', {
+                              amount: `$${((totalBalance / SATSINBITCOIN) * bchUsdQuote!).toFixed(2)}`,
+                            })} + ${t('home.stealthUsd', {
+                              amount: `$${((stealthSats / SATSINBITCOIN) * bchUsdQuote!).toFixed(2)}`,
+                            })}`
+                          : t('home.usdUnavailable')
+                        : `${t('home.spendableBch', {
+                            amount: (totalBalance / SATSINBITCOIN).toFixed(8),
+                          })} + ${t('home.stealthBch', {
+                            amount: (stealthSats / SATSINBITCOIN).toFixed(8),
+                          })}`}
                     </div>
                   )}
-                </button>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
+              <BchUsdControl
+                value={displayMode.toLowerCase() as 'bch' | 'usd'}
+                onChange={(next) =>
+                  setDisplayMode(next === 'bch' ? 'BCH' : 'USD')
                 }
-                className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
-                aria-label={t('home.toggleBalance')}
-              >
-                <FaBitcoin className="text-2xl" />
-              </button>
+                className="w-[112px] shrink-0"
+              />
             </div>
             {syncNotice && (
               <div
-                className="mt-2 text-xs wallet-muted"
+                className="mt-2 flex items-center gap-1 text-xs wallet-muted"
                 role="status"
                 aria-live="polite"
               >
                 <span>{syncNotice}</span>
+                <InfoButton
+                  id="home-sync-status-help"
+                  ariaLabel={t('home.syncStatusHelpLabel')}
+                  content={t('home.syncStatusHelp')}
+                />
                 {walletSyncStatus !== 'unverified' && (
-                  <a className="ml-1 underline" href="#/settings?panel=server">
+                  <a
+                    className="ml-1 inline-flex min-h-[44px] items-center underline"
+                    href="#/settings?panel=server"
+                  >
                     {t('home.serverSettings')}
                   </a>
                 )}
@@ -367,7 +504,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                     type="button"
                     onClick={homeConnect.openPopup}
                     disabled={homeConnect.scanning || homeConnect.submitting}
-                    className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
+                    className="wallet-card inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
                     aria-label={t('home.scanQr')}
                     title={t('home.scanQr')}
                   >
@@ -386,6 +523,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                 title={t('home.receive')}
                 testId="home-receive-action"
                 icon={<FaArrowDown />}
+                attention={Boolean(incomingFlag)}
                 onClick={() =>
                   navigate('/receive', {
                     state: { returnTo: `/home/${currentWalletId ?? ''}` },
@@ -409,12 +547,42 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
+              title={t('actions.advancedActions')}
+              subtitle={t('actions.deeperTools')}
+              compact
+            />
+            <div className="space-y-2.5">
+              <SettingsRow
+                title={t('assets.title')}
+                description={t('assets.quickInventory')}
+                compact
+                onClick={() =>
+                  navigate('/assets', {
+                    state: { returnTo: `/home/${currentWalletId ?? ''}` },
+                  })
+                }
+              />
+              <SettingsRow
+                title={t('apps.title')}
+                description={t('apps.subtitle')}
+                compact
+                onClick={() =>
+                  navigate('/apps', {
+                    state: { returnTo: `/home/${currentWalletId ?? ''}` },
+                  })
+                }
+              />
+            </div>
+          </SectionCard>
+
+          <SectionCard className="shrink-0 p-3">
+            <SectionHeader
               title={t('home.recentActivity')}
               subtitle={t('home.latestActivity')}
               compact
               action={
                 <button
-                  className="wallet-link text-sm"
+                  className="wallet-link inline-flex min-h-[44px] items-center px-2 text-sm"
                   onClick={() => navigate(`/transactions/${currentWalletId}`)}
                 >
                   {t('home.viewAll')}
@@ -430,57 +598,73 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
                     Number.isFinite(walletIdNum) &&
                     walletIdNum > 0 &&
                     isFusionTransaction(walletIdNum, tx.tx_hash);
+                  const confirmed = isTxConfirmed(tx) || !isMempoolLike(tx);
                   return (
-                    <SettingsRow
-                      key={tx.tx_hash}
-                      title={
-                        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-                          <span className="font-mono truncate">
-                            {shortenTxHash(tx.tx_hash)}
+                    <div key={tx.tx_hash} className="relative">
+                      <SettingsRow
+                        title={
+                          <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                            <StatusChip
+                              tone={confirmed ? 'success' : 'warning'}
+                            >
+                              {fused
+                                ? `Fused · ${confirmed ? t('home.confirmed') : t('home.pending')}`
+                                : confirmed
+                                  ? t('home.confirmed')
+                                  : t('home.pending')}
+                            </StatusChip>
                           </span>
-                          {fused ? <FusionBadge asTx /> : null}
-                        </span>
-                      }
-                      description={
-                        tx.height > 0
-                          ? `${t('home.block')} ${tx.height}`
-                          : t('home.pendingConfirmation')
-                      }
-                      right={
-                        <span
-                          className={
-                            fused
-                              ? 'text-xs font-semibold text-emerald-400 whitespace-nowrap'
-                              : 'wallet-muted text-xs whitespace-nowrap'
-                          }
-                        >
-                          {fused
-                            ? tx.height > 0
-                              ? `Fused · ${t('home.confirmed')}`
-                              : `Fused · ${t('home.pending')}`
-                            : tx.height > 0
-                              ? t('home.confirmed')
-                              : t('home.pending')}
-                        </span>
-                      }
-                      compact
-                      onClick={() =>
-                        navigate(`/transactions/${currentWalletId}`, {
-                          state: {
-                            openTransaction: {
-                              txid: tx.tx_hash,
-                              height: tx.height,
+                        }
+                        description={
+                          <span className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5">
+                            <span>
+                              {tx.height > 0
+                                ? `${t('home.block')} ${tx.height}`
+                                : t('home.pendingConfirmation')}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>{t('history.transactionId')}:</span>
+                            <MaskedValue
+                              value={tx.tx_hash}
+                              label={t('history.transactionId')}
+                              ariaLabel={t('history.copyTransaction')}
+                              copySuccessMessageKey="history.transactionCopied"
+                              embedded
+                              className="max-w-[180px] truncate font-mono"
+                            />
+                          </span>
+                        }
+                        right={<span className="pr-10">›</span>}
+                        compact
+                        onClick={() =>
+                          navigate(`/transactions/${currentWalletId}`, {
+                            state: {
+                              openTransaction: {
+                                txid: tx.tx_hash,
+                                height: tx.height,
+                              },
                             },
-                          },
-                        })
-                      }
-                    />
+                          })
+                        }
+                      />
+                      <div className="absolute right-1 top-1/2 z-10 -translate-y-1/2">
+                        <InfoButton
+                          id={`home-history-status-${tx.tx_hash}`}
+                          ariaLabel={t('history.statusHelpLabel')}
+                          content={t('history.statusHelp')}
+                        />
+                      </div>
+                    </div>
                   );
                 })
               ) : (
                 <EmptyState message={t('home.noRecentActivity')} />
               )}
             </div>
+          </SectionCard>
+
+          <SectionCard className="shrink-0 p-2.5">
+            <PriceFeed compact />
           </SectionCard>
         </div>
       </div>

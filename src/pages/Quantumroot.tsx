@@ -10,7 +10,6 @@ import Popup from '../components/transaction/Popup';
 import { RootState } from '../state/store';
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../utils/constants';
-import { shortenTxHash } from '../utils/shortenHash';
 import { getReturnPath } from '../utils/navigation';
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
 import QuantumrootVaultPopup from './quantumroot/QuantumrootVaultPopup';
@@ -20,6 +19,8 @@ import { useI18n } from '../i18n/useI18n';
 import { formatDate } from '../i18n/format';
 import type { SupportedLocale } from '../i18n/types';
 import { copyWithFeedback } from '../utils/copyWithFeedback';
+import MaskedValue from '../components/ui/MaskedValue';
+import RouteExitFooter from '../components/ui/RouteExitFooter';
 
 function formatBch(sats: number) {
   return `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
@@ -88,6 +89,7 @@ const Quantumroot: React.FC = () => {
     handleSweepAllReceiveUtxos,
     handleRecoverQuantumLockUtxo,
     pendingRecoveryReview,
+    recoveryBroadcastNotice,
     recoveryReviewLoading,
     recoveryReviewError,
     handleCancelRecoveryReview,
@@ -186,14 +188,10 @@ const Quantumroot: React.FC = () => {
           </SectionCard>
         </div>
 
-        <div className="mt-auto pb-2 pt-3">
-          <button
-            className="wallet-btn-danger w-full"
-            onClick={() => navigate(returnTarget)}
-          >
-            {t('quantumroot.back')}
-          </button>
-        </div>
+        <RouteExitFooter
+          label={t('quantumroot.back')}
+          onBack={() => navigate(returnTarget)}
+        />
       </div>
 
       {showVaultsPopup && (
@@ -249,7 +247,13 @@ const Quantumroot: React.FC = () => {
                               })}
                             </div>
                             <div className="text-[11px] wallet-muted mt-1">
-                              {shortenTxHash(vault.receive_address)}
+                              <MaskedValue
+                                value={vault.receive_address}
+                                label={t('send.address')}
+                                copySuccessMessageKey="receive.addressCopied"
+                                className="text-[11px] wallet-muted"
+                                embedded
+                              />
                             </div>
                           </div>
                           <div className="text-right">
@@ -326,6 +330,7 @@ const Quantumroot: React.FC = () => {
           void handleRecoverQuantumLockUtxo(utxo, destinationAddress)
         }
         pendingRecoveryReview={pendingRecoveryReview}
+        recoveryBroadcastNotice={recoveryBroadcastNotice}
         recoveryReviewLoading={recoveryReviewLoading}
         recoveryReviewError={recoveryReviewError}
         onCancelRecoveryReview={handleCancelRecoveryReview}

@@ -454,33 +454,7 @@ const Settings: React.FC = () => {
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
-        <PageHeader
-          title={t('app.settings')}
-          compact
-          titleAction={
-            <button
-              onClick={toggleMode}
-              className="flex shrink-0 items-center gap-1 rounded-full wallet-surface-strong border border-[var(--wallet-border)] px-1.5 py-1 text-sm font-semibold wallet-text-strong whitespace-nowrap"
-              aria-label={t('app.toggleTheme')}
-            >
-              <MdSunny className="text-[12px] wallet-muted" />
-              <span
-                className={`relative inline-flex h-5 w-9 items-center rounded-full border transition-colors ${
-                  mode === 'dark'
-                    ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
-                    : 'wallet-surface border-[var(--wallet-border)]'
-                }`}
-              >
-                <span
-                  className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                    mode === 'dark' ? 'translate-x-4' : 'translate-x-0'
-                  }`}
-                />
-              </span>
-              <MdModeNight className="text-[12px] wallet-muted" />
-            </button>
-          }
-        />
+        <PageHeader title={t('app.settings')} compact />
 
         <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-hidden">
           {!selectedOption ? (
@@ -488,7 +462,35 @@ const Settings: React.FC = () => {
               <div className="flex h-full min-h-0 flex-col gap-4">
                 <div className="grid min-h-0 flex-1 grid-cols-1 gap-2.5 overflow-y-auto overscroll-contain pr-1">
                   <SectionCard className="p-0">
-                    <SectionHeader title={t('app.quickAccess')} compact />
+                    <SectionHeader
+                      title={t('app.quickAccess')}
+                      compact
+                      action={
+                        <button
+                          onClick={toggleMode}
+                          className="flex h-8 shrink-0 items-center gap-1 rounded-full wallet-surface-strong border border-[var(--wallet-border)] px-1.5 text-xs font-semibold wallet-text-strong whitespace-nowrap"
+                          aria-label={t('app.toggleTheme')}
+                        >
+                          <MdSunny className="text-[11px] wallet-muted" />
+                          <span
+                            className={`relative inline-flex h-4 w-8 items-center rounded-full border transition-colors ${
+                              mode === 'dark'
+                                ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
+                                : 'wallet-surface border-[var(--wallet-border)]'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                                mode === 'dark'
+                                  ? 'translate-x-4'
+                                  : 'translate-x-0'
+                              }`}
+                            />
+                          </span>
+                          <MdModeNight className="text-[11px] wallet-muted" />
+                        </button>
+                      }
+                    />
                     {renderRows(visibleWalletRows)}
                   </SectionCard>
 

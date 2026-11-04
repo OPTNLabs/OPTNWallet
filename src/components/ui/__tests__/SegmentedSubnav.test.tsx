@@ -19,4 +19,18 @@ describe('SegmentedSubnav', () => {
     expect(html).toContain('Advanced');
     expect(html).toContain('wallet-segment-active');
   });
+
+  it('can wrap a dense filter row without forcing horizontal scrolling', () => {
+    const html = renderToStaticMarkup(
+      <SegmentedSubnav
+        value="all"
+        onChange={vi.fn()}
+        wrap
+        options={[{ value: 'all', label: 'All' }]}
+      />
+    );
+
+    expect(html).toContain('flex flex-wrap gap-2');
+    expect(html).not.toContain('overflow-x-auto');
+  });
 });

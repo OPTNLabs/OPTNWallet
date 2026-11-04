@@ -2,20 +2,19 @@ import { useDispatch } from 'react-redux';
 import { Network, setNetwork } from '../../../state/slices/networkSlice';
 import NetworkSwitch from '../../../components/modules/NetworkSwitch';
 import InfoTooltipIcon from './InfoTooltipIcon';
+import { useI18n } from '../../../i18n/useI18n';
 
 type NetworkSelectorProps = {
   networkType: Network;
   centered?: boolean;
 };
 
-const NETWORK_TOOLTIP_TEXT =
-  'Select the blockchain network your wallet will connect to (e.g., Mainnet or Chipnet).';
-
 const NetworkSelector = ({
   networkType,
   centered = false,
 }: NetworkSelectorProps) => {
   const dispatch = useDispatch();
+  const { t } = useI18n();
 
   return (
     <div
@@ -25,14 +24,16 @@ const NetworkSelector = ({
     >
       <NetworkSwitch
         networkType={networkType}
-        setNetworkType={(nextNetwork: Network) => dispatch(setNetwork(nextNetwork))}
+        setNetworkType={(nextNetwork: Network) =>
+          dispatch(setNetwork(nextNetwork))
+        }
       />
       <InfoTooltipIcon
         id="network-tooltip"
-        content={NETWORK_TOOLTIP_TEXT}
+        content={t('derivation.walletNetworkDescription')}
         className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
         iconClassName="cursor-pointer wallet-link text-lg font-bold select-none"
-        ariaLabel="Network information"
+        ariaLabel={t('derivation.walletNetwork')}
       />
     </div>
   );

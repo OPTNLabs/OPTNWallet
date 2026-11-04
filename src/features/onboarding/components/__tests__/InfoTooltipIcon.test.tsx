@@ -23,8 +23,11 @@ describe('InfoTooltipIcon', () => {
       'Keep your recovery phrase offline.'
     );
     expect(button).toHaveAttribute('aria-expanded', 'true');
+    expect(button).toHaveAttribute('aria-describedby');
 
-    fireEvent.click(button);
+    fireEvent.keyDown(button, { key: 'Escape' });
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(button).not.toHaveAttribute('aria-describedby');
   });
 });

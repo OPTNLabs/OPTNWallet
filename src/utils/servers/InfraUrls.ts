@@ -297,7 +297,10 @@ export function getBcmrNativeTokenUrls(
   category: string
 ): string[] {
   const { bcmrNativeBaseUrls } = getInfraUrlPools(network);
-  return bcmrNativeBaseUrls.map((base) => `${base}/token/${category}/bcmr`);
+  // The summary endpoint is 200 for indexed tokens even when BCMR is absent;
+  // its nullable `bcmr` field lets clients distinguish missing metadata from
+  // an infrastructure failure without generating expected 404s.
+  return bcmrNativeBaseUrls.map((base) => `${base}/token/${category}`);
 }
 
 // Servers that only expose the raw Electrum TCP-SSL port (50002) and have NO

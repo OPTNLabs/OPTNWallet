@@ -9,10 +9,15 @@ import type { TranslationKey } from '../../../../i18n/resources';
 const mock = vi.hoisted(() => ({
   state: {} as unknown,
   loadWalletPublicAddresses: vi.fn(),
+  dispatch: vi.fn(),
+  fixture: false,
 }));
 vi.mock('react-redux', () => ({
-  useDispatch: () => vi.fn(),
+  useDispatch: () => mock.dispatch,
   useSelector: (selector: (state: unknown) => unknown) => selector(mock.state),
+}));
+vi.mock('../../../../ui-fixtures/fixtureData', () => ({
+  isUiFixtureEnabled: () => mock.fixture,
 }));
 vi.mock('../../../../hooks/useOutboundTransactions', () => ({
   default: () => ({ hasUnresolved: false }),
@@ -51,7 +56,11 @@ vi.mock('../../../../i18n/useI18n', () => ({
 
 import { SignTransactionModal } from '../../../../components/walletconnect/SignTransactionModal';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mock.fixture = false;
+  mock.dispatch.mockReset();
+});
 
 beforeEach(() => {
   const address = lockingBytecodeToCashAddress({
@@ -117,10 +126,20 @@ it('shows Chipnet destinations and a verified wallet effect', async () => {
   ).toBeGreaterThanOrEqual(2);
   fireEvent.click(screen.getByText(/Technical transaction details/));
   expect(screen.getByText('Output index: 3')).toBeInTheDocument();
-  expect(screen.getByText(/bchtest:/)).toBeInTheDocument();
+  const addressTrigger = screen.getByRole('button', { name: 'Copy address' });
+  expect(addressTrigger).not.toHaveTextContent('bchtest:');
+  fireEvent.contextMenu(addressTrigger);
+  const dialogs = screen.getAllByRole('dialog');
+  expect(dialogs[dialogs.length - 1]).toHaveTextContent('bchtest:');
   expect(
     screen.getByRole('button', { name: 'Sign and return to the app' })
   ).toBeEnabled();
+  mock.fixture = true;
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Sign and return to the app' })
+  );
+  expect(mock.dispatch).not.toHaveBeenCalled();
+  mock.fixture = false;
 });
 
 it('blocks an incomplete request without displaying a negative fee', () => {
@@ -168,4 +187,5 @@ it('surfaces a Cauldron swap prompt and token label before technical details', a
   );
   const technicalDetails = screen.getByText(/Technical transaction details/);
   expect(technicalDetails.closest('details')).not.toHaveAttribute('open');
+  expect(technicalDetails.closest('summary')).toHaveClass('min-h-[44px]');
 });

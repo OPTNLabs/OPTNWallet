@@ -822,6 +822,9 @@ export const localeOverrides = {
       'لم يتم التحقق من هذا الرصيد عبر الشبكة بعد. قم بالمزامنة قبل الاعتماد عليه.',
     'home.balanceMayBeOutdated':
       'تعذر التحقق من الرصيد الحالي. قد يكون قديماً. حاول المزامنة أو تحقق من إعدادات الخادم.',
+    'home.syncStatusHelpLabel': 'شرح حداثة الرصيد',
+    'home.syncStatusHelp':
+      'قد يكون هذا الرصيد مخزنًا مؤقتًا أو لم يتم التحقق منه عبر الشبكة النشطة بعد. قم بالمزامنة قبل الاعتماد عليه أو إرسال الأموال.',
     'home.serverSettings': 'إعدادات الخادم',
     'home.syncing': 'جارٍ المزامنة…',
     'home.sync': 'مزامنة',
@@ -830,6 +833,17 @@ export const localeOverrides = {
     'home.usdUnavailable': 'USD غير متاح',
     'home.usdPriceUnavailable': 'سعر USD غير متاح',
     'home.toggleBalance': 'تبديل رصيد BCH وUSD',
+    'connection.awaitingApprovalHelp':
+      'يوجد طلب من تطبيق لامركزي بانتظارك. راجعه داخل المحفظة قبل الموافقة أو الرفض.',
+    'connection.statusHelpLabel': 'شرح حالة الاتصال',
+    'connection.statusHelp':
+      'تصف هذه الحالة دورة حياة اتصال المحفظة. قد يكون المرحّل أو الجلسة متاحًا دون تأكيد أن التطبيق اللامركزي جاهز للطلبات.',
+    'connection.failedHelp':
+      'لم يكتمل الاتصال. تحقق من URI الاقتران والشبكة ثم حاول مرة أخرى.',
+    'home.spendableBch': 'المتاح للإنفاق {amount} BCH',
+    'home.spendableUsd': 'المتاح للإنفاق {amount} USD',
+    'home.stealthBch': 'الخفي {amount} BCH',
+    'home.stealthUsd': 'الخفي {amount} USD',
     'home.quickActions': 'إجراءات سريعة',
     'home.scanQr': 'مسح QR',
     'home.noQrCode': 'لم يتم العثور على رمز QR. حاول مرة أخرى.',
@@ -944,6 +958,8 @@ export const localeOverrides = {
     'receive.optional': 'اختياري',
     'receive.copyBip21': 'نسخ URI لـ BIP21',
     'receive.copyAddress': 'نسخ العنوان',
+    'multisig.tokenAwareAddress': 'العنوان المتوافق مع الرموز',
+    'multisig.bchAddress': 'عنوان BCH',
     'receive.shareAddress': 'مشاركة العنوان',
     'receive.receiveGuidance':
       'أعطِ هذا العنوان إلى الشخص الذي سيدفع لك. لن يتم إرسال أي شيء من محفظتك.',
@@ -966,16 +982,20 @@ export const localeOverrides = {
     'send.address': 'العنوان',
     'send.sats': 'ساتوشي',
     'send.recipient': 'المستلم',
+    'send.stealthAddress': 'العنوان الخفي',
     'send.scanQr': 'مسح QR',
     'send.copy': 'نسخ',
     'send.amountBch': 'المبلغ (BCH)',
     'send.amountUsd': 'المبلغ (USD)',
+    'send.amountUnit': 'وحدة المبلغ',
     'send.max': 'الحد الأقصى',
     'send.review': 'مراجعة',
     'send.clearForm': 'مسح النموذج',
     'send.reset': 'إعادة ضبط',
     'send.back': 'رجوع',
     'send.reviewTitle': 'مراجعة المعاملة',
+    'send.errorTitle': 'تحتاج عملية الدفع إلى الانتباه',
+    'send.editPayment': 'تعديل الدفع',
     'send.summary': 'الملخص',
     'send.to': 'إلى',
     'send.amount': 'المبلغ',
@@ -986,6 +1006,8 @@ export const localeOverrides = {
     'send.coins': 'عملات',
     'send.spendableSummary':
       '{amount} BCH قابل للإنفاق من {count} {coins} (مثل الصفحة الرئيسية، باستثناء عملات الرموز).',
+    'send.spendableUsdSummary':
+      '{amount} USD قابل للإنفاق من {count} {coins} (مثل الصفحة الرئيسية، باستثناء عملات الرموز).',
     'send.pending': 'معلّق',
     'send.sending': 'جارٍ الإرسال…',
     'send.preparingReview': 'جارٍ إعداد المراجعة…',
@@ -1006,6 +1028,7 @@ export const localeOverrides = {
     'history.loadFailed':
       'تعذر تحميل سجل المعاملات. تحقق من الاتصال وحاول مرة أخرى.',
     'history.transactionHash': 'تجزئة المعاملة',
+    'history.transactionId': 'معرّف المعاملة',
     'history.confirmed': 'مؤكدة',
     'history.pending': 'معلّقة',
     'history.block': 'كتلة',
@@ -1014,6 +1037,9 @@ export const localeOverrides = {
     'history.nextPage': 'الصفحة التالية',
     'history.transaction': 'معاملة',
     'history.status': 'الحالة',
+    'history.statusHelpLabel': 'شرح حالة المعاملة',
+    'history.statusHelp':
+      'تعني الحالة المؤكدة أن المعاملة موجودة في كتلة. وتعني غير المؤكدة أن الشبكة رأت المعاملة لكنها تنتظر كتلة.',
     'history.fee': 'الرسوم',
     'history.timestamp': 'الطابع الزمني',
     'history.openExplorer': 'فتح في المستكشف',
@@ -1093,7 +1119,7 @@ export const localeOverrides = {
     'receive.quantumLockAddress': 'عنوان Quantum Lock',
     'receive.noVaultFunds': 'لم يتم العثور على أموال في خزائن Quantumroot بعد.',
     'receive.qrCopyDescription':
-      'اضغط على رمز QR لنسخ الحمولة الحالية. أغلق للعودة.',
+      'اضغط على رمز QR لإظهار الحمولة الكاملة أو إخفائها. أغلق للعودة.',
     'receive.copyQrPayload': 'نسخ حمولة QR للاستلام',
     'receive.bip21Title': 'طلب دفع BIP21',
     'receive.bip21Description': 'ترميز المبلغ والتسمية والرسالة داخل حمولة QR.',
@@ -1118,6 +1144,9 @@ export const localeOverrides = {
     'send.rawTransaction': 'المعاملة الخام',
     'send.noTxBuilt': '(لم تُبنَ معاملة بعد)',
     'send.advanced': 'متقدم',
+    'send.advancedHelpLabel': 'شرح خيارات الإرسال المتقدمة',
+    'send.advancedHelp':
+      'تتحكم الخيارات المتقدمة في اختيار العملات وعنوان الباقي والمبلغ الأقصى. استخدمها فقط عند الحاجة.',
     'send.advancedBuilder': 'فتح منشئ المعاملات المتقدم',
     'send.quantumrootShortcut': 'اختصار Quantumroot',
     'send.quantumrootApproval': 'مفتاح الموافقة إلى Quantum Lock',
@@ -1133,6 +1162,9 @@ export const localeOverrides = {
     'send.nft': 'NFT',
     'send.airdrops': 'توزيعات جوائز',
     'send.openAirdrops': 'فتح توزيعات الجوائز',
+    'send.recipientHelpLabel': 'شرح حقل المستلم',
+    'send.recipientHelp':
+      'أدخل الشخص أو الخدمة التي ستستلم الدفعة. تحقق من العنوان والشبكة قبل مراجعة الإرسال.',
     'send.recipientAmountLoaded': 'تم تحميل المستلم والمبلغ من QR.',
     'send.invalidBip21Amount':
       'يحتوي طلب الدفع على مبلغ BCH غير صالح. امسح طلبًا صالحًا أو أدخل المبلغ يدويًا.',
@@ -1164,6 +1196,9 @@ export const localeOverrides = {
     'send.leaveBlankNft': 'اتركه فارغًا لإرسال أول NFT متاح في هذه الفئة.',
     'send.submitted': 'تم إرسال المعاملة',
     'send.sent': 'تم إرسال المعاملة',
+    'send.sentHelpLabel': 'شرح حالة المعاملة',
+    'send.sentHelp':
+      'أكملت محفظتك عملية الإرسال. احتفظ بمعرّف المعاملة للرجوع إليه وانتظر تأكيد الشبكة عند الحاجة.',
     'send.keepTxid':
       'احتفظ بمعرّف المعاملة للرجوع إليه وتجنب إرسالها مرة أخرى.',
     'send.waitPrevious': 'انتظر مزامنة معاملتك الصادرة السابقة أولًا',
@@ -1190,8 +1225,10 @@ export const localeOverrides = {
     'send.slideToConfirm': 'اسحب للتأكيد',
     'send.invalidAddress': 'العنوان غير صالح — تحقق من الأخطاء أو امسح رمز QR.',
     'send.insufficientFunds':
-      'الأموال غير كافية. تحقق من رصيدك أو خفّض المبلغ.',
+      'لا توجد أموال كافية في محفظتك. تحقق من رصيدك أو خفّض المبلغ.',
     'send.networkError': 'خطأ في الشبكة. تحقق من الاتصال وحاول مرة أخرى.',
+    'send.genericError':
+      'تعذر إعداد عملية الدفع. تحقق من التفاصيل وحاول مرة أخرى.',
     'settingsRows.language': 'اللغة',
     'settingsRows.languageDescription': 'اختر لغة واجهة المحفظة',
     'settingsRows.network': 'الشبكة',
@@ -1265,6 +1302,23 @@ export const localeOverrides = {
     'settingsNetwork.reloading': 'جارٍ إعادة تحميل المحفظة…',
     'settingsNetwork.active': 'نشطة',
     'settingsNetwork.switching': 'جارٍ التبديل…',
+    'settingsNetwork.switchToMainnet': 'التبديل إلى Mainnet',
+    'settingsNetwork.switchToChipnet': 'التبديل إلى Chipnet',
+    'settingsNetwork.switchPrompt':
+      'أنت على وشك تغيير الشبكة النشطة إلى {network}.',
+    'settingsNetwork.mainnetWarning':
+      'تستخدم Mainnet عملات BCH وقيمة حقيقية. أكّد فقط إذا كنت تريد العمل بأموال حقيقية.',
+    'settingsNetwork.chipnetWarning':
+      'Chipnet مخصصة لأموال الاختبار فقط. لا ترسل BCH حقيقية هنا.',
+    'settingsNetwork.switchDetails':
+      'ستمسح المحفظة سجلات الشبكة الحالية وتعيد مزامنة العناوين. تبقى مسارات الاشتقاق المخصصة محفوظة.',
+    'settingsNetwork.errorTitle': 'تعذر إكمال تحديث الشبكة',
+    'settingsNetwork.switchFailed':
+      'لم تتغير الشبكة. تحقق من الاتصال وحاول مرة أخرى.',
+    'settingsNetwork.reloadCompleted': 'تمت إعادة تحميل المحفظة بنجاح.',
+    'settingsNetwork.reloadFailed':
+      'تعذرت إعادة تحميل المحفظة. تحقق من الاتصال وحاول مرة أخرى.',
+    'settingsNetwork.retry': 'حاول مرة أخرى',
     'settingsNetwork.comingSoon': 'قريبًا',
     'settingsNetwork.testnet3': 'Testnet3',
     'settingsNetwork.testnet4': 'Testnet4',
@@ -1330,6 +1384,16 @@ export const localeOverrides = {
     'txReview.walletEffect': 'ما الذي سيتغير في هذه المحفظة',
     'txReview.walletEffectHelp':
       'تطابق هذه المبالغ مدخلات هذه المحفظة والباقي الخاص بها.',
+    'txReview.verifyingWalletEffect':
+      'جارٍ التحقق من مدخلات هذه المحفظة والباقي الخاص بها…',
+    'txReview.walletEffectUnavailable':
+      'تعذر التحقق من المدخلات والباقي المملوكين لهذه المحفظة من هذا الطلب. راجع المعاملة كاملة بعناية قبل التوقيع.',
+    'txReview.bcmr': 'بيانات BCMR',
+    'txReview.bcmrStatus': 'حالة BCMR: {status}',
+    'txReview.bcmrIdentifying': 'BCMR: جارٍ تحديد الرمز…',
+    'txReview.identifyingToken': 'جارٍ تحديد الرمز…',
+    'txReview.matchedWalletEffect':
+      'تمت مطابقة {inputs} من مدخلات هذه المحفظة و{outputs} من مخرجاتها باستخدام رمز القفل. قد تشمل رسوم المعاملة كاملة مشاركين آخرين.',
     'txReview.spend': 'ستدفع',
     'txReview.receive': 'ستستلم',
     'txReview.token': 'رمز',
@@ -1348,6 +1412,7 @@ export const localeOverrides = {
     'wc.outputs': 'المخرجات ({count})',
     'wc.opReturnOutput': 'مخرج OP_RETURN',
     'wc.address': 'العنوان',
+    'wc.lockingScript': 'نص القفل',
     'wc.tokenCategory': 'فئة الرمز',
     'wc.fungibleAmount': 'كمية الرمز القابل للاستبدال',
     'wc.nftCapability': 'قدرة NFT',
@@ -1405,6 +1470,15 @@ export const localeOverrides = {
     'wc.messageRejectedBody': 'تم رفض طلب رسالة WalletConnect.',
     'wc.messageRejectFailedBody': 'تعذر رفض طلب رسالة WalletConnect.',
     'wc.transactionApprovedTitle': 'تمت الموافقة على معاملة WalletConnect',
+    'wc.signedAndBroadcast': 'تم توقيع المعاملة وبثها بواسطة هذه المحفظة.',
+    'wc.signedAndSubmitted':
+      'تم توقيع المعاملة وإرسالها. راقب سجل المعاملات قبل الإرسال مرة أخرى.',
+    'wc.broadcastFailedReturned':
+      'أُعيدت المعاملة الموقعة إلى التطبيق، لكن فشل بث المحفظة: {message}. قد يرسلها التطبيق رغم ذلك.',
+    'wc.signedOnHardwareReturned':
+      'تم التوقيع على محفظة الأجهزة وإعادة المعاملة إلى التطبيق. لم تحاول المحفظة بثها؛ قد يرسلها التطبيق.',
+    'wc.signedReturned':
+      'تم توقيع المعاملة وإعادتها إلى التطبيق. قد يرسلها التطبيق لاحقًا.',
     'wc.transactionSentBody': 'تم إرسال استجابة المعاملة إلى {name}.',
     'wc.transactionResponseSentBody': 'تم إرسال استجابة معاملة WalletConnect.',
     'wc.sessionDisconnectedTitle': 'انقطع اتصال جلسة WalletConnect',
@@ -1449,9 +1523,17 @@ export const localeOverrides = {
     'wizard.connectedOn': 'تم الاتصال في',
     'wizard.close': 'إغلاق',
     'wizard.signRequest': 'طلب توقيع WizardConnect',
+    'wizard.working': 'جارٍ التنفيذ…',
+    'wizard.technicalDetails':
+      'تفاصيل المعاملة التقنية ({inputs} مدخلات، {outputs} مخرجات)',
+    'wizard.nftCapability': 'قدرة NFT',
+    'wizard.nftCommitment': 'التزام NFT',
     'wizard.unknownDapp': 'dApp غير معروف',
     'wizard.dapp': 'dApp',
     'wizard.status': 'الحالة',
+    'wizard.statusHelpLabel': 'شرح حالة الاتصال',
+    'wizard.statusHelp':
+      'هذه هي حالة الاتصال التي يعلنها المرحّل. قد يكون المرحّل متاحًا قبل تأكيد جلسة التطبيق اللامركزي بالكامل.',
     'wizard.prompt': 'المطالبة',
     'wizard.unsupportedTransaction':
       'يستخدم هذا الطلب تمثيلًا غير مدعوم للمعاملة في تكامل OPTN Wallet الحالي.',
@@ -1480,6 +1562,26 @@ export const localeOverrides = {
       'فشلت الموافقة على CashConnect: {message}',
     'cashconnect.actionRejected': 'تم رفض طلب CashConnect.',
     'cashconnect.actionRejectionFailed': 'فشل رفض CashConnect: {message}',
+    'cashconnect.reject': 'رفض',
+    'cashconnect.approve': 'موافقة',
+    'cashconnect.approveRequest': 'الموافقة على الطلب',
+    'cashconnect.working': 'جارٍ التنفيذ…',
+    'cashconnect.whatRequestDoes': 'ما الذي يفعله هذا الطلب',
+    'cashconnect.action': 'الإجراء',
+    'cashconnect.approvingReturns':
+      'تُعيد الموافقة {count} من المعاملات المُعدّة إلى {name}. قد يرسلها التطبيق إلى الشبكة.',
+    'cashconnect.multipleTransactions':
+      'يتضمن هذا الإجراء معاملات متعددة. راجع تغييرات الرصيد المقدرة أدناه.',
+    'cashconnect.balanceChange': 'تغيير الرصيد الذي أبلغ عنه هذا الطلب',
+    'cashconnect.sourceOutputsUnavailable':
+      'لم يوفر CashConnect المخرجات المصدر اللازمة لهذه المحفظة للتحقق من الملكية والباقي بشكل مستقل.',
+    'cashconnect.noBalanceChange': 'لم يُقدّم أي تغيير في الرصيد لهذا الطلب.',
+    'cashconnect.connectingDoesNotSend':
+      'الاتصال لا يرسل العملات. سيطلب كل إنفاق موافقتك مرة أخرى.',
+    'cashconnect.what': 'ما هو',
+    'cashconnect.actions': 'الإجراءات',
+    'cashconnect.tokens': 'الرموز',
+    'cashconnect.none': 'لا شيء',
     'wizard.sessionDisconnectedOrExpired':
       'انقطعت جلسة WizardConnect أو انتهت صلاحيتها من جهة dApp.',
     'server.invalidHost': 'أدخل مضيفًا صالحًا:منفذ (مثل 192.168.0.129:50002).',
@@ -1537,6 +1639,9 @@ export const localeOverrides = {
     'notifications.fundsReceivedBody': '{amount} ساتوشي إلى {address} • {txid}',
     'network.chipnet': 'Chipnet',
     'network.mainnet': 'Mainnet',
+    'network.activeLabel': 'الشبكة النشطة: {network}',
+    'network.liveMarker': 'مباشر',
+    'network.testMarker': 'اختبار',
     'network.switch': 'تبديل الشبكة. الحالية: {network}',
     'camera.scan': 'مسح QR بالكاميرا',
     'camera.unavailable':
@@ -1570,9 +1675,13 @@ export const localeOverrides = {
       'المحفظة أولًا، ثم الرموز والأدوات والمنصات المتقدمة',
     'apps.all': 'الكل',
     'apps.wallet': 'المحفظة',
+    'apps.walletBestFor': 'أدوات المحفظة اليومية وإعداد المدفوعات',
     'apps.token': 'رمز',
+    'apps.tokenBestFor': 'إدارة الرموز وسكّها وتطبيقات العملات المستقرة',
     'apps.utils': 'أدوات',
+    'apps.utilsBestFor': 'أدوات مفيدة للمراسلة والتوزيع والمشاركة',
     'apps.advanced': 'متقدم',
+    'apps.advancedBestFor': 'تدفقات متعددة الخطوات ومنصات تجريبية',
     'apps.contractsDescription': 'تصفح المصنوعات وأدر مثيلات العقود المنشورة',
     'apps.quantumrootDescription': 'أدوات الاستلام والاسترداد للخزائن المتقدمة',
     'apps.cashFusionDescription': 'CoinJoin خاص — خادم أو P2P عبر Nostr وTor',
@@ -1754,6 +1863,9 @@ export const localeOverrides = {
     'hardware.onekeyStep4': 'اسمح بالاتصال عند الطلب',
     'outbox.title': 'صندوق الصادر',
     'outbox.pendingOutgoing': 'المعاملات الصادرة المعلقة',
+    'outbox.pendingHelpLabel': 'معنى المعاملات الصادرة المعلقة',
+    'outbox.pendingHelp':
+      'تبقى عمليات الإرسال هنا حتى تتمكن المحفظة من تأكيد وصولها إلى الشبكة. لا يؤدي مسح القفل إلى عكس دفعة أُرسلت بالفعل.',
     'outbox.description':
       'تحافظ الحماية التي تعمل دون اتصال على إيقاف الإرسالات الجديدة حتى تُرى هذه المعاملات أو تُحرر بأمان.',
     'outbox.noPending': 'لا توجد معاملات صادرة معلقة.',
@@ -1787,6 +1899,19 @@ export const localeOverrides = {
     'outbox.dismissPending': 'إغلاق نافذة المعاملات المعلقة',
     'outbox.dismiss': 'إغلاق',
     'outbox.releaseSendLock': 'تحرير قفل الإرسال',
+    'outbox.stateBroadcasting': 'جارٍ الإرسال',
+    'outbox.stateSubmitted': 'تم الإرسال',
+    'outbox.stateBroadcasted': 'أُرسلت إلى الشبكة',
+    'outbox.stateSeen': 'رأتها الشبكة',
+    'outbox.stateHelpLabel': 'شرح حالة الدفع',
+    'outbox.releaseHelpLabel': 'شرح إجراء التحرير',
+    'outbox.stateBroadcastingHelp':
+      'تعمل المحفظة على إعداد هذه الدفعة أو إرسالها. أبقِ المحفظة مفتوحة حتى تكتمل.',
+    'outbox.stateSubmittedHelp':
+      'أرسلت المحفظة هذه الدفعة، لكن الشبكة لم ترها بعد.',
+    'outbox.stateBroadcastedHelp':
+      'أُرسلت الدفعة إلى الشبكة. قد يستغرق التأكيد بعض الوقت.',
+    'outbox.stateSeenHelp': 'رأت الشبكة هذه الدفعة. تظهر التأكيدات في السجل.',
     'desktopSecurity.loading': 'جارٍ تحميل المحفظة…',
     'desktopSecurity.secureWallet': 'تأمين محفظتك',
     'desktopSecurity.setupDescription':
@@ -2232,6 +2357,8 @@ export const localeOverrides = {
     'contractView.loadContractsFailed': 'فشل تحميل العقود المتاحة.',
     'contractView.loadInstancesFailed': 'فشل تحميل مثيلات العقود.',
     'contractView.loadDetailsFailed': 'فشل تحميل تفاصيل العقد.',
+    'contractView.loadFailedFriendly':
+      'تعذر تحميل بيانات العقود. حاول مرة أخرى أو تحقق من اتصال الشبكة.',
     'contractView.createFailed': 'فشل إنشاء العقد: {message}',
     'contractView.deleteFailedFallback': 'فشل حذف العقد.',
     'contractView.updateFailedFallback': 'فشل تحديث العقد.',
@@ -2332,6 +2459,12 @@ export const localeOverrides = {
     'watchOnly.type': 'نوع محفظة المشاهدة فقط',
     'watchOnly.standard': 'قياسي',
     'watchOnly.accountXpub': 'xPub الحساب',
+    'watchOnly.accountXpubHelp':
+      'إن xPub الحساب معلومة عامة تُستخدم لاشتقاق عناوين الاستلام والباقي. لا يمكنها إنفاق الأموال بمفردها.',
+    'watchOnly.masterFingerprint': 'بصمة المفتاح الرئيسية',
+    'watchOnly.optional': 'اختياري',
+    'watchOnly.masterFingerprintHelp':
+      'بيانات عامة اختيارية تساعد على مطابقة هذا الحساب مع جهاز التوقيع الذي صدّره. ليست مفتاحًا خاصًا.',
     'watchOnly.comingNext': 'التالي',
     'watchOnly.multisign': 'توقيع متعدد',
     'watchOnly.multipleCosigners': 'عدة موقّعين مشاركين',
@@ -2896,6 +3029,10 @@ export const localeOverrides = {
     'fusion.noEligibleCoins': 'لا توجد عملات مؤهلة للدمج الآن.',
     'fusion.cooldown': 'بانتظار انتهاء مهلة الدمج التلقائي.',
     'walkthrough.label': 'جولة إرشادية',
+    'walkthrough.progress': 'الخطوة {current} من {total}',
+    'walkthrough.previous': 'رجوع',
+    'walkthrough.next': 'التالي',
+    'walkthrough.finish': 'تم',
     'error.somethingWrong': 'حدث خطأ ما.',
     'watchOnly.pathNote':
       "تأكد من أن SeedCash صدّر هذا الحساب بالمسار m/44'/145'/account'. لا يستطيع xPub مستقل بنظام BIP32 إثبات غرض الأصل أو مسار العملة.",

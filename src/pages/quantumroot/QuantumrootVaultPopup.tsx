@@ -17,11 +17,8 @@ import ActionTile from '../../components/ui/ActionTile';
 import Popup from '../../components/transaction/Popup';
 import StatusChip from '../../components/ui/StatusChip';
 import TokenIdentityBadge from '../../components/ui/TokenIdentityBadge';
-import {
-  shortenAddress,
-  shortenHash,
-  shortenTxHash,
-} from '../../utils/shortenHash';
+import { shortenHash } from '../../utils/shortenHash';
+import MaskedValue from '../../components/ui/MaskedValue';
 import { SATSINBITCOIN } from '../../utils/constants';
 import {
   resolveTokenPresentation,
@@ -42,6 +39,7 @@ import { isConfiguredQuantumrootTokenCategory } from '../../services/Quantumroot
 import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
 import { ContainedSwipeConfirmModal } from '../apps/mint-cashtokens-poc/components/uiPrimitives';
 import type { QuantumrootRecoveryReview } from './recoveryReview';
+import type { QuantumrootBroadcastNotice } from './useQuantumrootWorkspace';
 
 type QuantumrootVaultPopupProps = {
   selectedVault: QuantumrootVaultRecord | null;
@@ -71,6 +69,7 @@ type QuantumrootVaultPopupProps = {
   onAuthorizedSpendUtxo: (utxo: UTXO, destinationAddress: string) => void;
   onRecoverQuantumLockUtxo: (utxo: UTXO, destinationAddress: string) => void;
   pendingRecoveryReview: QuantumrootRecoveryReview | null;
+  recoveryBroadcastNotice: QuantumrootBroadcastNotice | null;
   recoveryReviewLoading: boolean;
   recoveryReviewError: string | null;
   onCancelRecoveryReview: () => void;
@@ -232,6 +231,7 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
   onAuthorizedSpendUtxo,
   onRecoverQuantumLockUtxo,
   pendingRecoveryReview,
+  recoveryBroadcastNotice,
   recoveryReviewLoading,
   recoveryReviewError,
   onCancelRecoveryReview,
@@ -520,6 +520,28 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
           {t('quantumroot.betaProduction')}
         </StatusChip>
       </h3>
+      {recoveryBroadcastNotice ? (
+        <div
+          className="mb-3 rounded-2xl border border-emerald-400/30 bg-emerald-400/10 p-3"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="text-sm font-semibold text-emerald-100">
+            {t(recoveryBroadcastNotice.messageKey, {
+              txid: t('history.transactionId'),
+            })}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-emerald-100/80">
+            <span>{t('history.transactionId')}:</span>
+            <MaskedValue
+              value={recoveryBroadcastNotice.txid}
+              label={t('history.transactionId')}
+              copySuccessMessageKey="history.transactionCopied"
+              className="text-xs text-emerald-50"
+            />
+          </div>
+        </div>
+      ) : null}
       <div className="space-y-3">
         <div className="wallet-surface-strong rounded-[18px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_28%,var(--wallet-surface-strong))] p-4">
           <div className="flex items-start gap-3">
@@ -615,11 +637,19 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                   <div className="text-[11px] uppercase tracking-[0.16em] wallet-muted">
                     {t('quantumroot.popup.destination')}
                   </div>
-                  <div className="mt-1 font-semibold wallet-text-strong break-all">
-                    {pendingSpendAddress.trim()
-                      ? shortenAddress(pendingSpendAddress)
-                      : t('quantumroot.popup.noDestination')}
-                  </div>
+                  {pendingSpendAddress.trim() ? (
+                    <MaskedValue
+                      value={pendingSpendAddress}
+                      label={t('quantumroot.popup.destination')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      embedded
+                      className="mt-1 font-semibold wallet-text-strong"
+                    />
+                  ) : (
+                    <div className="mt-1 font-semibold wallet-text-strong">
+                      {t('quantumroot.popup.noDestination')}
+                    </div>
+                  )}
                 </div>
                 <StatusChip
                   tone={pendingSpendAddress.trim() ? 'success' : 'warning'}
@@ -1192,11 +1222,19 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                   <div className="text-[11px] uppercase tracking-[0.16em] wallet-muted">
                     {t('quantumroot.popup.spendDestination')}
                   </div>
-                  <div className="mt-1 font-semibold wallet-text-strong break-all">
-                    {pendingSpendAddress.trim()
-                      ? shortenAddress(pendingSpendAddress)
-                      : t('quantumroot.popup.noDestination')}
-                  </div>
+                  {pendingSpendAddress.trim() ? (
+                    <MaskedValue
+                      value={pendingSpendAddress}
+                      label={t('quantumroot.popup.spendDestination')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      embedded
+                      className="mt-1 font-semibold wallet-text-strong"
+                    />
+                  ) : (
+                    <div className="mt-1 font-semibold wallet-text-strong">
+                      {t('quantumroot.popup.noDestination')}
+                    </div>
+                  )}
                   <div className="mt-1 text-[11px] wallet-muted">
                     {t('quantumroot.popup.reviewDestination')}
                   </div>
@@ -1327,7 +1365,14 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                             </div>
                             <div className="text-[11px] wallet-muted mt-1">
                               {t('quantumroot.popup.outpoint')}{' '}
-                              {shortenHash(utxo.tx_hash, 8, 6)}:{utxo.tx_pos}
+                              <MaskedValue
+                                value={utxo.tx_hash}
+                                label={t('history.transactionId')}
+                                copySuccessMessageKey="history.transactionCopied"
+                                embedded
+                                className="text-[11px]"
+                              />
+                              :{utxo.tx_pos}
                             </div>
                             <div className="mt-2">
                               <StatusChip
@@ -1387,11 +1432,19 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
               <div className="text-[11px] font-semibold wallet-muted mb-1">
                 {t('quantumroot.popup.walletRecoveryAddress')}
               </div>
-              <div className="text-sm break-all">
-                {recoveryDestinationAddress
-                  ? shortenAddress(recoveryDestinationAddress)
-                  : t('quantumroot.popup.noStandardAddress')}
-              </div>
+              {recoveryDestinationAddress ? (
+                <MaskedValue
+                  value={recoveryDestinationAddress}
+                  label={t('quantumroot.popup.walletRecoveryAddress')}
+                  copySuccessMessageKey="receive.addressCopied"
+                  embedded
+                  className="text-sm"
+                />
+              ) : (
+                <div className="text-sm">
+                  {t('quantumroot.popup.noStandardAddress')}
+                </div>
+              )}
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
                   className="wallet-btn-secondary px-3 py-2 text-xs"
@@ -1486,7 +1539,14 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                                 {formatBch(utxo.value ?? utxo.amount ?? 0)}
                               </div>
                               <div className="text-[11px] wallet-muted mt-1">
-                                {shortenTxHash(utxo.tx_hash)}:{utxo.tx_pos}
+                                <MaskedValue
+                                  value={utxo.tx_hash}
+                                  label={t('history.transactionId')}
+                                  copySuccessMessageKey="history.transactionCopied"
+                                  embedded
+                                  className="text-[11px]"
+                                />
+                                :{utxo.tx_pos}
                               </div>
                               <div className="mt-2">
                                 <StatusChip
@@ -1544,7 +1604,14 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                               {formatBch(utxo.value ?? utxo.amount ?? 0)}
                             </div>
                             <div className="text-[11px] wallet-muted mt-1">
-                              {shortenTxHash(utxo.tx_hash)}:{utxo.tx_pos}
+                              <MaskedValue
+                                value={utxo.tx_hash}
+                                label={t('history.transactionId')}
+                                copySuccessMessageKey="history.transactionCopied"
+                                embedded
+                                className="text-[11px]"
+                              />
+                              :{utxo.tx_pos}
                             </div>
                             <div className="mt-2">
                               <StatusChip
@@ -1732,7 +1799,14 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                 <div className="mt-2 max-h-[20vh] space-y-1 overflow-y-auto font-mono text-xs wallet-muted">
                   {pendingRecoveryReview.sweptUtxos.map((utxo) => (
                     <div key={`${utxo.tx_hash}:${utxo.tx_pos}`}>
-                      {shortenTxHash(utxo.tx_hash)}:{utxo.tx_pos} ·{' '}
+                      <MaskedValue
+                        value={utxo.tx_hash}
+                        label={t('history.transactionId')}
+                        copySuccessMessageKey="history.transactionCopied"
+                        embedded
+                        className="text-xs"
+                      />
+                      :{utxo.tx_pos} ·{' '}
                       {formatBch(Number(utxo.value ?? utxo.amount ?? 0))}
                     </div>
                   ))}

@@ -5,11 +5,12 @@ import type { RootState } from '../../state/store';
 import { dequeueNotification } from '../../state/slices/notificationsSlice';
 import { useI18n } from '../../i18n/useI18n';
 import { formatNumber } from '../../i18n/format';
+import MaskedValue from '../ui/MaskedValue';
 
 const ToastItem: React.FC<{
   id: string;
   title: string;
-  body: string;
+  body: React.ReactNode;
   onClose: (id: string) => void;
   duration?: number;
 }> = ({ id, title, body, onClose, duration = 6000 }) => {
@@ -35,7 +36,7 @@ const ToastItem: React.FC<{
         </div>
         <button
           onClick={() => onClose(id)}
-          className="ml-2 rounded-full p-1 wallet-muted hover:brightness-95"
+          className="ml-2 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full p-1 wallet-muted hover:brightness-95"
           aria-label={t('notifications.dismiss')}
           title={t('notifications.dismiss')}
         >
@@ -73,19 +74,36 @@ const UtxoNotificationCenter: React.FC = () => {
           }
 
           const sats = n.value ?? 0;
-          const shortAddr = `${n.address.slice(0, 8)}…${n.address.slice(-6)}`;
-          const shortTx = `${n.txid.slice(0, 6)}…${n.txid.slice(-6)}`;
-
           return (
             <ToastItem
               key={n.id}
               id={n.id}
               title={t('notifications.fundsReceived')}
-              body={t('notifications.fundsReceivedBody', {
-                amount: formatNumber(sats, locale),
-                address: shortAddr,
-                txid: shortTx,
-              })}
+              body={
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                  <span className="wallet-text-strong">
+                    {formatNumber(sats, locale)} sats
+                  </span>
+                  <span aria-hidden="true">•</span>
+                  <MaskedValue
+                    value={n.address}
+                    label={t('receive.receiveAddress')}
+                    ariaLabel={t('receive.receiveAddress')}
+                    copySuccessMessageKey="receive.addressCopied"
+                    embedded
+                    className="text-xs"
+                  />
+                  <span aria-hidden="true">•</span>
+                  <MaskedValue
+                    value={n.txid}
+                    label={t('history.transactionId')}
+                    ariaLabel={t('history.transactionId')}
+                    copySuccessMessageKey="history.transactionCopied"
+                    embedded
+                    className="text-xs"
+                  />
+                </div>
+              }
               onClose={onClose}
             />
           );

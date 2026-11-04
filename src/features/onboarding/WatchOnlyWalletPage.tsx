@@ -9,10 +9,7 @@ import OnboardingScreen from './components/OnboardingScreen';
 import { useI18n } from '../../i18n/useI18n';
 import { homeRoute } from '../../navigation/routes';
 import { scanBarcodeSafely } from '../../utils/barcodeScanner';
-import {
-  Network,
-  setNetwork,
-} from '../../state/slices/networkSlice';
+import { Network, setNetwork } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import {
   setWalletDerivationPath,
@@ -25,6 +22,8 @@ import {
   WATCH_ONLY_WALLET_TYPE,
 } from '../../services/watchOnlyWallet';
 import { deriveWatchOnlyAccountPreview } from '../../services/watchOnlyAccountPreview';
+import MaskedValue from '../../components/ui/MaskedValue';
+import InfoTooltipIcon from './components/InfoTooltipIcon';
 
 const WatchOnlyWalletPage = () => {
   const currentNetwork = useSelector(selectCurrentNetwork);
@@ -148,9 +147,19 @@ const WatchOnlyWalletPage = () => {
             />
           </label>
 
-          <label className="block space-y-1 text-sm wallet-text-strong">
-            {t('watchOnly.network')}
+          <div className="space-y-1 text-sm wallet-text-strong">
+            <span className="flex items-center justify-between gap-2">
+              <label htmlFor="watch-only-network">
+                {t('watchOnly.network')}
+              </label>
+              <InfoTooltipIcon
+                id="watch-only-network-help"
+                content={t('onboarding.helpNetworkDescription')}
+                ariaLabel={t('watchOnly.network')}
+              />
+            </span>
             <select
+              id="watch-only-network"
               value={network}
               onChange={(event) => {
                 setSelectedNetwork(event.target.value as Network);
@@ -162,11 +171,21 @@ const WatchOnlyWalletPage = () => {
               <option value={Network.MAINNET}>{t('watchOnly.mainnet')}</option>
               <option value={Network.CHIPNET}>{t('watchOnly.chipnet')}</option>
             </select>
-          </label>
+          </div>
 
-          <label className="block space-y-1 text-sm wallet-text-strong">
-            {t('watchOnly.accountXpub')}
+          <div className="space-y-1 text-sm wallet-text-strong">
+            <span className="flex items-center justify-between gap-2">
+              <label htmlFor="watch-only-account-xpub">
+                {t('watchOnly.accountXpub')}
+              </label>
+              <InfoTooltipIcon
+                id="watch-only-xpub-help"
+                content={t('watchOnly.accountXpubHelp')}
+                ariaLabel={t('watchOnly.accountXpub')}
+              />
+            </span>
             <textarea
+              id="watch-only-account-xpub"
               value={accountXpub}
               onChange={(event) => {
                 setAccountXpub(event.target.value);
@@ -179,7 +198,7 @@ const WatchOnlyWalletPage = () => {
               className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-xs"
               placeholder={t('watchOnly.xpubPlaceholder')}
             />
-          </label>
+          </div>
 
           <button
             type="button"
@@ -190,9 +209,22 @@ const WatchOnlyWalletPage = () => {
             {scanBusy ? 'Scanning…' : t('watchOnly.scanCamera')}
           </button>
 
-          <label className="block space-y-1 text-sm wallet-text-strong">
-            Master fingerprint <span className="wallet-muted">(optional)</span>
+          <div className="space-y-1 text-sm wallet-text-strong">
+            <span className="flex items-center justify-between gap-2">
+              <label htmlFor="watch-only-fingerprint">
+                {t('watchOnly.masterFingerprint')}{' '}
+                <span className="wallet-muted">
+                  ({t('watchOnly.optional')})
+                </span>
+              </label>
+              <InfoTooltipIcon
+                id="watch-only-fingerprint-help"
+                content={t('watchOnly.masterFingerprintHelp')}
+                ariaLabel={t('watchOnly.masterFingerprint')}
+              />
+            </span>
             <input
+              id="watch-only-fingerprint"
               value={masterFingerprint}
               onChange={(event) => {
                 setMasterFingerprint(event.target.value);
@@ -207,18 +239,30 @@ const WatchOnlyWalletPage = () => {
               className="wallet-input w-full rounded-md px-3 py-2 font-mono uppercase"
               placeholder="8 hex characters"
             />
-          </label>
+          </div>
 
           {preview && (
             <div className="wallet-card space-y-2 p-3 text-xs">
               <p className="font-semibold wallet-text-strong">
                 {t('watchOnly.previewTitle')}
               </p>
-              <p className="break-all wallet-muted">
-                {preview.receive.path}: {preview.receive.address}
+              <p className="flex flex-wrap items-center gap-1 wallet-muted">
+                <span>{preview.receive.path}:</span>
+                <MaskedValue
+                  value={preview.receive.address}
+                  label={t('send.address')}
+                  copySuccessMessageKey="receive.addressCopied"
+                  className="text-xs wallet-muted"
+                />
               </p>
-              <p className="break-all wallet-muted">
-                {preview.change.path}: {preview.change.address}
+              <p className="flex flex-wrap items-center gap-1 wallet-muted">
+                <span>{preview.change.path}:</span>
+                <MaskedValue
+                  value={preview.change.address}
+                  label={t('send.address')}
+                  copySuccessMessageKey="receive.addressCopied"
+                  className="text-xs wallet-muted"
+                />
               </p>
             </div>
           )}

@@ -28,6 +28,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': 'Selected position',
     'module.walletHistory': 'Wallet history',
     'module.nativeForm': 'Native form',
+    'module.threadFreshnessHelp':
+      'Fresh means the latest verified contract state is available. Stale or degraded data keeps writes disabled until a fresh state is indexed.',
+    'module.preferredOutpoint': 'Preferred contract output',
   },
   es: {
     'module.protocolSnapshot': 'Resumen del protocolo',
@@ -49,6 +52,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': 'Posición seleccionada',
     'module.walletHistory': 'Historial de la cartera',
     'module.nativeForm': 'Formulario nativo',
+    'module.threadFreshnessHelp':
+      'Fresco significa que está disponible el último estado verificado del contrato. Los datos obsoletos o degradados mantienen las escrituras desactivadas hasta indexar un estado nuevo.',
+    'module.preferredOutpoint': 'Salida de contrato preferida',
   },
   'pt-BR': {
     'module.protocolSnapshot': 'Visão do protocolo',
@@ -70,6 +76,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': 'Posição selecionada',
     'module.walletHistory': 'Histórico da carteira',
     'module.nativeForm': 'Formulário nativo',
+    'module.threadFreshnessHelp':
+      'Fresco significa que o estado verificado mais recente do contrato está disponível. Dados antigos ou degradados mantêm as gravações desativadas até que um estado novo seja indexado.',
+    'module.preferredOutpoint': 'Saída de contrato preferida',
   },
   'zh-CN': {
     'module.protocolSnapshot': '协议快照',
@@ -91,6 +100,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': '已选仓位',
     'module.walletHistory': '钱包历史',
     'module.nativeForm': '原生表单',
+    'module.threadFreshnessHelp':
+      '“最新”表示最新的已验证合约状态可用。数据过期或降级时会保持写入禁用，直到索引到最新状态。',
+    'module.preferredOutpoint': '首选合约输出',
   },
   'zh-TW': {
     'module.protocolSnapshot': '協定快照',
@@ -112,6 +124,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': '已選部位',
     'module.walletHistory': '錢包歷史',
     'module.nativeForm': '原生表單',
+    'module.threadFreshnessHelp':
+      '「最新」表示最新的已驗證合約狀態可用。資料過期或降級時會保持寫入停用，直到索引到最新狀態。',
+    'module.preferredOutpoint': '偏好的合約輸出',
   },
   vi: {
     'module.protocolSnapshot': 'Tổng quan giao thức',
@@ -133,6 +148,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': 'Vị thế đã chọn',
     'module.walletHistory': 'Lịch sử ví',
     'module.nativeForm': 'Biểu mẫu gốc',
+    'module.threadFreshnessHelp':
+      'Trạng thái mới nghĩa là trạng thái hợp đồng đã xác minh mới nhất đang khả dụng. Dữ liệu cũ hoặc suy giảm sẽ giữ chức năng ghi ở chế độ tắt cho đến khi có trạng thái mới được lập chỉ mục.',
+    'module.preferredOutpoint': 'Đầu ra hợp đồng ưu tiên',
   },
   ar: {
     'module.protocolSnapshot': 'ملخص البروتوكول',
@@ -154,6 +172,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': 'المركز المحدد',
     'module.walletHistory': 'سجل المحفظة',
     'module.nativeForm': 'النموذج الأصلي',
+    'module.threadFreshnessHelp':
+      'تعني الحالة الحديثة أن أحدث حالة موثقة للعقد متاحة. تبقى البيانات القديمة أو المتدهورة للقراءة فقط حتى تتم فهرسة حالة حديثة.',
+    'module.preferredOutpoint': 'مخرج العقد المفضل',
   },
   fr: {
     'module.protocolSnapshot': 'Aperçu du protocole',
@@ -175,6 +196,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': 'Position sélectionnée',
     'module.walletHistory': 'Historique du portefeuille',
     'module.nativeForm': 'Formulaire natif',
+    'module.threadFreshnessHelp':
+      'Frais signifie que le dernier état vérifié du contrat est disponible. Les données obsolètes ou dégradées désactivent les écritures jusqu’à l’indexation d’un état frais.',
+    'module.preferredOutpoint': 'Sortie de contrat préférée',
   },
   ko: {
     'module.protocolSnapshot': '프로토콜 요약',
@@ -196,6 +220,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': '선택한 포지션',
     'module.walletHistory': '지갑 기록',
     'module.nativeForm': '네이티브 양식',
+    'module.threadFreshnessHelp':
+      '최신 상태는 확인된 최신 계약 상태를 사용할 수 있음을 뜻합니다. 오래되었거나 저하된 데이터가 있으면 최신 상태가 색인될 때까지 쓰기가 비활성화됩니다.',
+    'module.preferredOutpoint': '선호 계약 출력',
   },
   ja: {
     'module.protocolSnapshot': 'プロトコル概要',
@@ -217,6 +244,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': '選択したポジション',
     'module.walletHistory': 'ウォレット履歴',
     'module.nativeForm': 'ネイティブフォーム',
+    'module.threadFreshnessHelp':
+      '最新とは、確認済みの最新のコントラクト状態が利用できることを示します。古い状態または劣化したデータでは、新しい状態がインデックスされるまで書き込みが無効になります。',
+    'module.preferredOutpoint': '優先コントラクト出力',
   },
   ru: {
     'module.protocolSnapshot': 'Сводка протокола',
@@ -238,6 +268,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': 'Выбранная позиция',
     'module.walletHistory': 'История кошелька',
     'module.nativeForm': 'Нативная форма',
+    'module.threadFreshnessHelp':
+      'Состояние «свежее» означает, что доступно последнее проверенное состояние контракта. Устаревшие или неполные данные отключают запись, пока не будет проиндексировано свежее состояние.',
+    'module.preferredOutpoint': 'Предпочтительный выход контракта',
   },
   'ha-NG': {
     'module.protocolSnapshot': 'Takaitaccen yarjejeniya',
@@ -259,6 +292,9 @@ const messages: AddonModuleLocaleMessages = {
     'module.selectedPosition': 'Matsayin da aka zaɓa',
     'module.walletHistory': 'Tarihin walat',
     'module.nativeForm': 'Tsarin asali',
+    'module.threadFreshnessHelp':
+      'Sabo yana nufin sabon halin kwangilar da aka tabbatar yana nan. Bayanai tsofaffi ko marasa cikawa suna kashe rubutu har sai an yi wa sabon hali fihirisa.',
+    'module.preferredOutpoint': 'Fitowar kwangilar da aka fi so',
   },
 };
 

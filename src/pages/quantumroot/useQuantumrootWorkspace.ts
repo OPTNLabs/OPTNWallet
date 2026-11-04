@@ -16,7 +16,6 @@ import {
   type QuantumrootTokenAwareness,
 } from '../../services/QuantumrootTokenAwarenessService';
 import { validateQuantumrootAuthorizedSpendAgainstFulcrum } from '../../services/QuantumrootFulcrumValidationService';
-import { shortenTxHash } from '../../utils/shortenHash';
 import { TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import TransactionService from '../../services/TransactionService';
 import {
@@ -39,6 +38,11 @@ import {
 } from './recoveryReview';
 import { useI18n } from '../../i18n/useI18n';
 import type { TranslationKey } from '../../i18n/resources';
+
+export type QuantumrootBroadcastNotice = {
+  txid: string;
+  messageKey: TranslationKey;
+};
 
 type QuantumrootTranslator = (
   key: TranslationKey,
@@ -118,6 +122,7 @@ type UseQuantumrootWorkspaceResult = QuantumrootWorkspaceState & {
     destinationAddress: string
   ) => Promise<void>;
   pendingRecoveryReview: QuantumrootRecoveryReview | null;
+  recoveryBroadcastNotice: QuantumrootBroadcastNotice | null;
   recoveryReviewLoading: boolean;
   recoveryReviewError: string | null;
   handleCancelRecoveryReview: () => void;
@@ -159,6 +164,8 @@ export function useQuantumrootWorkspace({
   const [savingConfiguration, setSavingConfiguration] = useState(false);
   const [pendingRecoveryReview, setPendingRecoveryReview] =
     useState<QuantumrootRecoveryReview | null>(null);
+  const [recoveryBroadcastNotice, setRecoveryBroadcastNotice] =
+    useState<QuantumrootBroadcastNotice | null>(null);
   const [recoveryReviewLoading, setRecoveryReviewLoading] = useState(false);
   const [recoveryReviewError, setRecoveryReviewError] = useState<string | null>(
     null
@@ -167,6 +174,7 @@ export function useQuantumrootWorkspace({
   useEffect(() => {
     if (!selectedVault) {
       setPendingRecoveryReview(null);
+      setRecoveryBroadcastNotice(null);
       setRecoveryReviewError(null);
     }
   }, [selectedVault]);
@@ -756,6 +764,7 @@ export function useQuantumrootWorkspace({
 
     setRecoveryReviewLoading(true);
     setRecoveryReviewError(null);
+    setRecoveryBroadcastNotice(null);
     try {
       const source =
         pendingRecoveryReview.kind === 'sweep'
@@ -816,8 +825,12 @@ export function useQuantumrootWorkspace({
       }
 
       setPendingRecoveryReview(null);
+      setRecoveryBroadcastNotice({
+        txid: sent.txid,
+        messageKey: source.successKey,
+      });
       await Toast.show({
-        text: t(source.successKey, { txid: shortenTxHash(sent.txid) }),
+        text: t('history.awaitingConfirmation'),
       });
       await loadQuantumrootWorkspace();
     } catch (error) {
@@ -867,6 +880,7 @@ export function useQuantumrootWorkspace({
     handleSweepAllReceiveUtxos,
     handleRecoverQuantumLockUtxo,
     pendingRecoveryReview,
+    recoveryBroadcastNotice,
     recoveryReviewLoading,
     recoveryReviewError,
     handleCancelRecoveryReview,

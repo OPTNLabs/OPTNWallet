@@ -22,8 +22,11 @@ import {
 } from '../../../apis/ChaingraphManager/ChaingraphManager';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
+import { useI18n } from '../../../i18n/useI18n';
 import { ContainedSwipeConfirmModal } from '../mint-cashtokens-poc/components/uiPrimitives';
 import TxSummary from '../../../components/confirm/TxSummary';
+import MaskedValue from '../../../components/ui/MaskedValue';
+import { maskSensitiveValue } from '../../../utils/maskSensitiveValue';
 import {
   authorizeAuthGuardBroadcast,
   assertAuthGuardReviewContext,
@@ -79,6 +82,31 @@ type Props = {
    */
   loadWalletAddresses: () => Promise<Set<string>>;
 };
+
+function TransactionAwareStatus({
+  message,
+  label,
+}: {
+  message: string;
+  label: string;
+}) {
+  const match = message.match(/\b[0-9a-f]{64}\b/i);
+  if (!match) return <>{message}</>;
+  const [before, after] = message.split(match[0]);
+  return (
+    <>
+      {before}
+      <MaskedValue
+        value={match[0]}
+        label={label}
+        copySuccessMessageKey="history.transactionCopied"
+        className="text-xs"
+        embedded
+      />
+      {after}
+    </>
+  );
+}
 
 function toBigIntSafe(v: unknown): bigint {
   if (typeof v === 'bigint') return v;
@@ -237,6 +265,7 @@ export default function AuthGuardApp({
   loadWalletAddresses,
 }: Props) {
   const { t: addonT } = useAddonI18n();
+  const { t: walletT } = useI18n();
   const { contentClassName, runSmoothReset } = useSmoothResetTransition();
   const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
   const [selected, setSelected] = useState<UTXO | null>(null);
@@ -749,7 +778,9 @@ export default function AuthGuardApp({
           const tx1ResultLabel =
             sent1.broadcastState === 'submitted' ? 'submitted' : 'broadcasted';
 
-          setStep0AStatus(`tx1 ${tx1ResultLabel}: ${txid1}. Refreshing UTXOs…`);
+          setStep0AStatus(
+            `tx1 ${tx1ResultLabel}: ${maskSensitiveValue(txid1)}. Refreshing UTXOs…`
+          );
 
           await refreshWalletUtxos(true);
           const res1 = await sdk.utxos.listForWallet();
@@ -851,8 +882,8 @@ export default function AuthGuardApp({
 
       setStep0AStatus(
         sent.broadcastState === 'submitted'
-          ? `AuthKey transaction submitted: ${txid}. Refreshing UTXOs…`
-          : `AuthKey tx broadcasted: ${txid}. Refreshing UTXOs…`
+          ? `AuthKey transaction submitted: ${maskSensitiveValue(txid)}. Refreshing UTXOs…`
+          : `AuthKey tx broadcasted: ${maskSensitiveValue(txid)}. Refreshing UTXOs…`
       );
 
       await runSmoothReset(async () => {
@@ -861,14 +892,14 @@ export default function AuthGuardApp({
       });
       setStep0AStatus(
         sent.broadcastState === 'submitted'
-          ? `AuthKey submitted: ${txid}. Returned to the start screen.`
-          : `AuthKey minted: ${txid}. Returned to the start screen.`
+          ? `AuthKey submitted: ${maskSensitiveValue(txid)}. Returned to the start screen.`
+          : `AuthKey minted: ${maskSensitiveValue(txid)}. Returned to the start screen.`
       );
     } catch (e: unknown) {
       const reason = e instanceof Error ? e.message : String(e);
       setBuildErr(
         createdGenesisTxid
-          ? `${reason} Genesis candidate ${createdGenesisTxid} was already broadcast; check transaction history before retrying.`
+          ? `${reason} Genesis candidate ${maskSensitiveValue(createdGenesisTxid)} was already broadcast; check transaction history before retrying.`
           : reason
       );
       setStep0AStatus('');
@@ -1070,8 +1101,8 @@ export default function AuthGuardApp({
 
       setStep0BStatus(
         sent.broadcastState === 'submitted'
-          ? `Mint transaction submitted: ${txid}. Refreshing UTXOs…`
-          : `Mint tx broadcasted: ${txid}. Refreshing UTXOs…`
+          ? `Mint transaction submitted: ${maskSensitiveValue(txid)}. Refreshing UTXOs…`
+          : `Mint tx broadcasted: ${maskSensitiveValue(txid)}. Refreshing UTXOs…`
       );
 
       await runSmoothReset(async () => {
@@ -1080,8 +1111,8 @@ export default function AuthGuardApp({
       });
       setStep0BStatus(
         sent.broadcastState === 'submitted'
-          ? `Mint submitted: ${txid}. Returned to the start screen.`
-          : `Mint complete: ${txid}. Returned to the start screen.`
+          ? `Mint submitted: ${maskSensitiveValue(txid)}. Returned to the start screen.`
+          : `Mint complete: ${maskSensitiveValue(txid)}. Returned to the start screen.`
       );
     } catch (e: unknown) {
       setBuildErr(e instanceof Error ? e.message : String(e));
@@ -1476,7 +1507,15 @@ export default function AuthGuardApp({
       >
         <div className="flex justify-between">
           <div className="font-mono">
-            {u.tx_hash.slice(0, 10)}…:{u.tx_pos}
+            <MaskedValue
+              value={u.tx_hash}
+              label={walletT('history.transactionId')}
+              ariaLabel={walletT('history.transactionId')}
+              copySuccessMessageKey="history.transactionCopied"
+              embedded
+              className="max-w-[13rem] align-middle"
+            />
+            :{u.tx_pos}
           </div>
           <div className="font-semibold">{u.value} sats</div>
         </div>
@@ -1620,7 +1659,10 @@ export default function AuthGuardApp({
                 <span className="font-semibold">
                   {addonT('module.status', 'Status')}:
                 </span>{' '}
-                {step0AStatus}
+                <TransactionAwareStatus
+                  message={step0AStatus}
+                  label={walletT('history.transactionId')}
+                />
               </div>
             )}
           </div>
@@ -1776,7 +1818,10 @@ export default function AuthGuardApp({
                 <span className="font-semibold">
                   {addonT('module.status', 'Status')}:
                 </span>{' '}
-                {step0BStatus}
+                <TransactionAwareStatus
+                  message={step0BStatus}
+                  label={walletT('history.transactionId')}
+                />
               </div>
             )}
 
@@ -2059,7 +2104,12 @@ export default function AuthGuardApp({
       {buildErr && (
         <div className="text-red-600 text-sm mb-3">
           <div className="font-semibold">{addonT('common.error', 'Error')}</div>
-          <div>{buildErr}</div>
+          <div>
+            <TransactionAwareStatus
+              message={buildErr}
+              label={walletT('history.transactionId')}
+            />
+          </div>
         </div>
       )}
 

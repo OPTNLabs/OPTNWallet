@@ -14,12 +14,12 @@ import {
   TransactionCommon,
   // type TransactionCommon,
 } from '@bitauth/libauth';
-import { PREFIX, SATSINBITCOIN } from '../../../utils/constants';
-import { shortenTxHash } from '../../../utils/shortenHash';
+import { SATSINBITCOIN } from '../../../utils/constants';
 import { ensureUint8Array } from '../../../utils/binary';
 import { type BroadcastState } from '../../../services/TransactionService';
 import { useI18n } from '../../../i18n/useI18n';
-import { copyWithFeedback } from '../../../utils/copyWithFeedback';
+import MaskedValue from '../../../components/ui/MaskedValue';
+import FriendlyErrorPanel from '../../../components/ui/FriendlyErrorPanel';
 
 interface ErrorAndStatusPopupsProps {
   showRawTxPopup: boolean;
@@ -30,6 +30,28 @@ interface ErrorAndStatusPopupsProps {
   currentNetwork: string;
   broadcastState?: BroadcastState;
   closePopups: () => void;
+}
+
+function friendlyBuilderError(
+  message: string,
+  t: ReturnType<typeof useI18n>['t']
+): string {
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes('insufficient funds') ||
+    normalized.includes('output amount exceeds inputs')
+  ) {
+    return t('send.insufficientFunds');
+  }
+  if (
+    /\b(connection|timeout|econnrefused|offline|unreachable)\b/i.test(
+      message
+    ) ||
+    /^network error\b/i.test(message)
+  ) {
+    return t('send.networkError');
+  }
+  return t('send.genericError');
 }
 
 const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
@@ -43,10 +65,6 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
   closePopups,
 }) => {
   const { t } = useI18n();
-  const prefixLength =
-    currentNetwork === Network.MAINNET
-      ? PREFIX.mainnet.length
-      : PREFIX.chipnet.length;
   const toCashAddress = (
     bytecode: Uint8Array,
     prefix: 'bitcoincash' | 'bchtest' | 'bchreg'
@@ -55,7 +73,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
       const result = lockingBytecodeToCashAddress({ bytecode, prefix });
       return typeof result === 'string' ? `⚠️ ${result}` : result.address;
     } catch {
-      return '⚠️ Invalid locking bytecode';
+      return `⚠️ ${t('wc.invalidLockingBytecode')}`;
     }
   };
 
@@ -116,12 +134,15 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                   <div key={idx} className="ml-4 mt-1">
                     <p>
                       • {t('txDetails.txid')}:{' '}
-                      {shortenTxHash(
-                        Buffer.from(input.outpointTransactionHash)
+                      <MaskedValue
+                        value={Buffer.from(input.outpointTransactionHash)
                           .reverse()
-                          .toString('hex')
-                        // PREFIX[currentNetwork].length
-                      )}
+                          .toString('hex')}
+                        label={t('history.transactionId')}
+                        ariaLabel={t('history.transactionId')}
+                        copySuccessMessageKey="history.transactionCopied"
+                        className="max-w-full align-middle"
+                      />
                     </p>
                     <p>
                       • {t('txDetails.index')}: {input.outpointIndex}
@@ -170,17 +191,18 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                         <>
                           <p>
                             • {t('builder.address')}:{' '}
-                            <span className="font-mono wallet-link break-all">
-                              {shortenTxHash(
-                                toCashAddress(
-                                  lockingBytecode,
-                                  currentNetwork === Network.MAINNET
-                                    ? 'bitcoincash'
-                                    : 'bchtest'
-                                ),
-                                prefixLength
+                            <MaskedValue
+                              value={toCashAddress(
+                                lockingBytecode,
+                                currentNetwork === Network.MAINNET
+                                  ? 'bitcoincash'
+                                  : 'bchtest'
                               )}
-                            </span>
+                              label={t('receive.copyAddress')}
+                              ariaLabel={t('receive.copyAddress')}
+                              copySuccessMessageKey="receive.addressCopied"
+                              className="max-w-full break-all"
+                            />
                           </p>
                         </>
                       )}
@@ -257,14 +279,13 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
             </p>
             <div className="flex items-center mb-4">
               <strong className="mr-2">{t('builder.txId')}:</strong>
-              <span className="font-mono">{shortenTxHash(transactionId)}</span>
-              <button
-                onClick={() => void copyWithFeedback(transactionId)}
-                className="wallet-btn-secondary ml-2 px-2 py-1"
-                title={t('builder.copyToClipboard')}
-              >
-                📋
-              </button>
+              <MaskedValue
+                value={transactionId}
+                label={t('history.transactionId')}
+                ariaLabel={t('history.transactionId')}
+                copySuccessMessageKey="history.transactionCopied"
+                className="max-w-full"
+              />
             </div>
             <ExplorerLink
               network={
@@ -284,15 +305,22 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
         <Popup closePopups={closePopups} closeButtonText={t('builder.close')}>
           <div className="flex flex-col items-center p-6">
             <div className="wallet-danger-text text-4xl mb-4">⚠️</div>
-            <h3 className="text-2xl font-bold wallet-text-strong mb-3">
-              {t('builder.transactionError')}
-            </h3>
-            <p className="wallet-muted text-center text-sm mb-6">
-              {errorMessage}
-            </p>
+            <FriendlyErrorPanel
+              title={t('builder.transactionError')}
+              message={friendlyBuilderError(errorMessage, t)}
+              className="w-full text-left"
+            />
+            <details className="mt-4 w-full">
+              <summary className="flex min-h-[44px] cursor-pointer items-center text-sm font-semibold wallet-muted">
+                {t('send.technicalDetails')}
+              </summary>
+              <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3 text-left text-xs wallet-muted">
+                {errorMessage}
+              </pre>
+            </details>
             <button
               onClick={closePopups}
-              className="wallet-btn-danger py-2 px-6"
+              className="wallet-btn-danger mt-4 min-h-[44px] px-6"
             >
               {t('builder.tryAgain')}
             </button>

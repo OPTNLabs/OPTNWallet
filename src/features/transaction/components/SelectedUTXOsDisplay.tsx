@@ -1,11 +1,8 @@
 // src/components/transaction/SelectedUTXOsDisplay.tsx
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { FaBitcoin } from 'react-icons/fa';
 import { UTXO } from '../../../types/types';
 import Popup from './Popup';
-import { shortenTxHash } from '../../../utils/shortenHash';
-import { PREFIX } from '../../../utils/constants';
-import { Network } from '../../../state/slices/networkSlice';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../../state/store';
 import useSharedTokenMetadata from '../../../hooks/useSharedTokenMetadata';
@@ -19,6 +16,7 @@ import { outpointKey } from '../../../platform/desktop/CoinLabelService';
 import { FusionBadge } from '../../../components/FusionBadge';
 import { selectWalletId } from '../../../state/slices/walletSlice';
 import { useI18n } from '../../../i18n/useI18n';
+import MaskedValue from '../../../components/ui/MaskedValue';
 
 interface SelectedUTXOsDisplayProps {
   selectedUtxos: UTXO[];
@@ -26,7 +24,6 @@ interface SelectedUTXOsDisplayProps {
   selectedContractAddresses: string[];
   totalSelectedUtxoAmount: bigint;
   handleUtxoClick: (utxo: UTXO) => void;
-  currentNetwork: Network;
 }
 
 // ---- BigInt-safe formatting helpers ----
@@ -65,7 +62,6 @@ export default function SelectedUTXOsDisplay({
   selectedContractAddresses,
   totalSelectedUtxoAmount,
   handleUtxoClick,
-  currentNetwork,
 }: SelectedUTXOsDisplayProps) {
   const { t } = useI18n();
   const [showPopup, setShowPopup] = useState(false);
@@ -143,17 +139,38 @@ export default function SelectedUTXOsDisplay({
                 const sats = toBigIntSats(utxo.amount ?? utxo.value);
 
                 return (
-                  <button
+                  <div
                     key={key}
                     onClick={() => handleUtxoClick(utxo)}
+                    onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      handleUtxoClick(utxo);
+                    }}
+                    role="button"
+                    tabIndex={0}
                     className="flex flex-col items-start mb-2 w-full break-words whitespace-normal border border-[var(--wallet-border)] p-2 rounded wallet-surface-strong"
                   >
                     {/* Address */}
                     <span className="w-full">
-                      {shortenTxHash(
-                        meta ? utxo.tokenAddress ?? utxo.address : utxo.address,
-                        PREFIX[currentNetwork].length
-                      )}
+                      <MaskedValue
+                        value={
+                          meta
+                            ? utxo.tokenAddress ?? utxo.address
+                            : utxo.address
+                        }
+                        label={
+                          meta
+                            ? t('builder.tokenAddress')
+                            : t('builder.bchAddress')
+                        }
+                        ariaLabel={
+                          meta
+                            ? t('builder.tokenAddress')
+                            : t('builder.bchAddress')
+                        }
+                        embedded
+                      />
                     </span>
 
                     {/* Conditional rendering based on whether it's a token */}
@@ -181,7 +198,15 @@ export default function SelectedUTXOsDisplay({
                           )}
                         </span>
                         <span className="w-full">
-                          {t('builder.txHash')}: {shortenTxHash(utxo.tx_hash)}
+                          {t('builder.txHash')}:{' '}
+                          <MaskedValue
+                            value={utxo.tx_hash}
+                            label={t('history.transactionId')}
+                            ariaLabel={t('history.transactionId')}
+                            copySuccessMessageKey="history.transactionCopied"
+                            className="text-xs"
+                            embedded
+                          />
                         </span>
                       </>
                     )}
@@ -225,7 +250,7 @@ export default function SelectedUTXOsDisplay({
                         </>
                       )}
                     </div>
-                  </button>
+                  </div>
                 );
               })
             )}

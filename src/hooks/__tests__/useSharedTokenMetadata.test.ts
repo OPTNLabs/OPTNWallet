@@ -30,6 +30,8 @@ vi.mock('../../services/BcmrService', () => ({
   default: vi.fn().mockImplementation(function () {
     return bcmrInstance;
   }),
+  isBcmrRegistryNotFoundError: (error: unknown) =>
+    error instanceof Error && error.name === 'BcmrRegistryNotFoundError',
 }));
 
 import {
@@ -192,6 +194,30 @@ describe('useSharedTokenMetadata web preload', () => {
       name: category,
     });
     expect(second).toEqual(first);
+    expect(bcmrInstance.resolveIdentityRegistry).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a typed missing BCMR response as unresolved without retrying rapidly', async () => {
+    const category =
+      'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    bcmrInstance.getSnapshot.mockResolvedValue(null);
+    bcmrInstance.getCategoryAuthbase.mockResolvedValue(category);
+    const missing = new Error('No BCMR registry found for category');
+    missing.name = 'BcmrRegistryNotFoundError';
+    bcmrInstance.resolveIdentityRegistry.mockRejectedValue(missing);
+
+    const first = await resolveTokenMetadata(category);
+    const second = await resolveTokenMetadata(category);
+
+    expect(first).toMatchObject({
+      status: 'ready',
+      freshness: 'unavailable',
+      identityStatus: 'unresolved',
+      name: category,
+    });
+    expect(first?.error).toBeUndefined();
+    expect(second).toEqual(first);
+    expect(isTokenMetadataRefreshDue(first ?? undefined)).toBe(false);
     expect(bcmrInstance.resolveIdentityRegistry).toHaveBeenCalledTimes(1);
   });
 

@@ -478,6 +478,7 @@ export default class BcmrService {
   ): Promise<IdentityRegistry | null> {
     const uris = Array.isArray(uriOrUris) ? uriOrUris : [uriOrUris];
     const net: Network = store.getState().network.currentNetwork;
+    let nativeMetadataMissing = false;
 
     try {
       return await runWithFailover(
@@ -498,6 +499,10 @@ export default class BcmrService {
 
           const imported = normalizeTokenIndexSnapshot(authbase, data);
           if (!imported) {
+            nativeMetadataMissing =
+              Boolean(data.category) &&
+              !data.identity_snapshot &&
+              !data.bcmr?.identity_snapshot;
             throw new Error(`Invalid tokenindex BCMR response from ${uri}`);
           }
 
@@ -512,6 +517,9 @@ export default class BcmrService {
         }
       );
     } catch {
+      if (nativeMetadataMissing) {
+        throw new BcmrRegistryNotFoundError(authbase);
+      }
       return null;
     }
   }
