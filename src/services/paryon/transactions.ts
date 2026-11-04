@@ -1,5 +1,10 @@
 import { lockingBytecodeToCashAddress } from '@bitauth/libauth';
-import { Contract, ElectrumNetworkProvider, Network } from 'cashscript';
+import {
+  Contract,
+  ElectrumNetworkProvider,
+  Network,
+  type SignatureTemplate,
+} from 'cashscript';
 
 import type { AddonSDK } from '../AddonsSDK';
 import { getParyonArtifact } from './ParyonService';
@@ -193,8 +198,11 @@ export async function prepareBorrowLoan(args: {
     throw new Error('No primary wallet address available.');
   }
   const tokenAddress = await sdk.wallet.toTokenAddress(primaryAddress);
-  const signatureTemplate =
-    await sdk.signing.signatureTemplateForAddress(primaryAddress);
+  const signatureTemplate = await (
+    sdk.signing as unknown as {
+      signatureTemplateForAddress(address: string): Promise<SignatureTemplate>;
+    }
+  ).signatureTemplateForAddress(primaryAddress);
   const walletUtxos = await sdk.utxos.listForWallet();
   const feeUtxo = walletUtxos.allUtxos.find(
     (utxo) =>
@@ -417,8 +425,11 @@ export async function prepareStakeLiquidity(args: {
     throw new Error('No primary wallet address available.');
   }
   const tokenAddress = await sdk.wallet.toTokenAddress(primaryAddress);
-  const signatureTemplate =
-    await sdk.signing.signatureTemplateForAddress(primaryAddress);
+  const signatureTemplate = await (
+    sdk.signing as unknown as {
+      signatureTemplateForAddress(address: string): Promise<SignatureTemplate>;
+    }
+  ).signatureTemplateForAddress(primaryAddress);
   const walletUtxos = await sdk.utxos.listForWallet();
   const tokenInput = walletUtxos.tokenUtxos.find(
     (utxo) =>

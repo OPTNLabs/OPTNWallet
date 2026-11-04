@@ -62,10 +62,17 @@ Technical documentation for contributors and third-party integrators.
 
 ## Addon-Specific Docs
 
+- [SDK Technical Specification and Readiness Roadmap](./addon-sdk-technical-spec.md)
+  - Proposed public API, wallet authority/signing boundaries, implementation
+    phases, reference sources, and third-party readiness gates. The public
+    facade is implemented on the SDK hardening branch; publication remains
+    gated by the documented readiness evidence.
 - [Addon Development Guide](./addon-development-guide.md)
   - End-to-end process for adding or extending in-wallet addon apps.
 - [Addon SDK Reference](./addons-sdk.md)
   - Capabilities, modules, and policy/security behavior.
+- [Addon SDK Release Checklist](./addon-sdk-release-checklist.md)
+  - Evidence gates and remaining publication work.
 
 ## Suggested Reading Paths
 

@@ -195,7 +195,9 @@ export async function createWatchOnlyWallet(
     insertAddr.free();
   }
 
-  await dbService.saveDatabaseToFile(walletId);
+  // Creation must be durable before the caller can navigate or the native
+  // process can be force-stopped. The debounced save is insufficient here.
+  await dbService.flushDatabaseToFile(walletId);
   return walletId;
 }
 

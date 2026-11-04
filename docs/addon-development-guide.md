@@ -2,9 +2,17 @@
 
 This guide is for developers integrating addons with the OPTN Wallet SDK.
 
+The steps below cover the current WIP integration model. Use the
+[SDK technical specification](./addon-sdk-technical-spec.md) for the public
+third-party API, wallet-owned signing, migration plan, and release criteria.
+Use the secret-free mock host while developing an integration; production
+execution remains limited to explicitly verified host adapters.
+
 See also:
 
 - `README.md` for the developer docs index.
+- `../packages/addon-sdk/examples/README.md` for complete read-only, payment, CashToken, and
+  wallet-owned signing examples.
 - `integration-guide.md` for path selection (WalletConnect vs Addon SDK).
 - `addons-sdk.md` for SDK capability/module reference.
 
@@ -23,7 +31,7 @@ See also:
 - Built-in addon registry source: `src/addons/builtin/index.ts`
 - Registry validation: `src/services/AddonsRegistry.ts`
 - Permission validation: `src/services/AddonsAllowlist.ts`
-- SDK runtime: `src/services/AddonsSDK.ts`
+- Public SDK entrypoint: `src/services/addons/PublicSDK.ts`
 - SDK contract metadata: `src/services/addons/SDKContract.ts`
 - Localization contract: `docs/addon-localization.md`
 - Policy engine (auth/rate-limit/timeout/audit): `src/services/addons/AddonPolicyEngine.ts`
@@ -54,8 +62,8 @@ Add a manifest entry to `src/addons/builtin/index.ts`.
         'wallet:context:read',
         'wallet:addresses:read',
         'utxo:wallet:read',
-        'tx:build',
-        'tx:broadcast'
+        'tx:propose',
+        'tx:execute'
       ]
     }
   ],
@@ -68,8 +76,8 @@ Add a manifest entry to `src/addons/builtin/index.ts`.
         'wallet:context:read',
         'wallet:addresses:read',
         'utxo:wallet:read',
-        'tx:build',
-        'tx:broadcast'
+        'tx:propose',
+        'tx:execute'
       ],
       config: { screen: 'ExampleApp' }
     }
@@ -94,31 +102,57 @@ Rules:
   - capability `http:fetch_json`
 - Add localized metadata and screen messages in `localeBundles`; keep these
   messages out of the core wallet catalog.
+- Third-party code must use the public SDK factory. Manifests marked
+  `internal` are rejected by that factory and are reserved for built-in wallet
+  integrations using the host-private constructor.
 
 ## Step 2: Implement App Screen
 
-Create a screen component in `src/pages/apps/...` and accept `sdk: AddonSDK` from host.
+Create a screen component in `src/pages/apps/...` and accept the public
+`AddonWalletClient` from the host.
 
 ```tsx
-import type { AddonSDK } from '../../../services/AddonsSDK';
+import type { AddonWalletClient } from '@optnlabs/optn-wallet-addon-sdk';
 
-type Props = { sdk: AddonSDK };
+type Props = { sdk: AddonWalletClient };
 
 export default function ExampleApp({ sdk }: Props) {
-  // Read wallet context
-  const { walletId, network } = sdk.wallet.getContext();
+  // Read wallet context from an async effect or event handler.
+  const loadContext = async () => sdk.wallet.getContext();
 
   // Fetch addresses/utxos with capability + policy enforcement
   // await sdk.wallet.listAddresses()
   // await sdk.utxos.listForWallet()
 
-  return (
-    <div>
-      Wallet {walletId} on {String(network)}
-    </div>
-  );
+  return <div>Wallet context is loaded through `loadContext()`.</div>;
 }
 ```
+
+For an external browser add-on, establish the host session before mounting:
+
+```ts
+const connection = await connectAddonPostMessage({
+  target: walletWindow,
+  targetOrigin: 'https://wallet.example',
+  addonId: manifest.id,
+  requestedCapabilities: ['wallet:context:read', 'tx:propose', 'tx:execute'],
+});
+const sdk = createAddonWalletClient(connection.transport);
+
+if (connection.hasCapability('tx:propose')) {
+  const proposal = await sdk.tx.propose({ inputs, outputs });
+  const operation = await sdk.tx.requestExecution({
+    proposalId: proposal.proposalId,
+    mode: 'wallet-submit',
+    idempotencyKey: `checkout:${checkoutId}`,
+  });
+  // Poll sdk.tx.getOperation(operation.operationId) until terminal.
+}
+```
+
+The wallet owns approval, signing, construction, broadcast, and recovery. The
+add-on receives only sanitized data and the resulting signature or operation
+status.
 
 ## Step 3: Register Declarative Screen Mapping
 
@@ -138,15 +172,32 @@ Map `config.screen` in `src/pages/apps/MarketplaceAppHost.tsx`:
 - `sdk.chain`
   - `getLatestBlock()`, `queryUnspentByLockingBytecode()`
 - `sdk.tx`
-  - `addOutput()`, `build()`, `broadcast()`
-- `sdk.contracts`
-  - `deriveAddress()`, `deriveLockingBytecodeHex()`
+  - `propose({ inputs, outputs, expiresInMs })` (unsigned proposal preview)
+  - `getProposal()`
+  - `requestExecution({ proposalId, mode, idempotencyKey })` (wallet-owned execution)
+  - `getOperation()` (poll wallet-owned submission status)
+
+The legacy `build()` and `broadcast()` methods are host-private compatibility
+paths for built-in prototypes and are unavailable to third-party SDK contexts.
+
+`tx.propose` accepts an optional explicit CashToken intent. The current intent
+names are `transfer`, `mint-fungible`, `mint-nft`, `mutate-nft`, and `burn`.
+Use `transfer` for exact token/NFT conservation. Use the other kinds only when
+the proposal intentionally mints, mutates authority/commitment, or burns
+assets; the wallet validates the declared transition and still keeps token
+signing and broadcast behind the host authority gate.
+
 - `sdk.signing`
-  - `signatureTemplateForAddress()`
+  - `signMessage({ address, message })` (the wallet performs signing; private keys and templates remain outside the add-on)
 - `sdk.http`
   - `fetchJson()`
 - `sdk.ui`
   - `confirmSensitiveAction()`
+
+`sdk.contracts`, signature templates, raw transaction builders, signed
+transaction export, and direct broadcast are host-private and are not part of
+the third-party package. CashScript registry and contract execution remain
+disabled until a separately reviewed registry and provenance contract exists.
 
 ## Security Expectations
 

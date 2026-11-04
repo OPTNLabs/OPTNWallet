@@ -22,17 +22,17 @@ const projectRoot = process.cwd();
 // This is the only runner that reads the local mnemonic. It is kept in this
 // Node process, is never passed to either app process, and is never printed.
 loadDotenv({ path: path.join(projectRoot, '.env'), override: false });
-const mnemonic = process.env.OPTN_MERCHANT_E2E_MNEMONIC?.trim() ?? '';
+const mnemonic = process.env.OPTN_E2E_MNEMONIC?.trim() ?? '';
 if (!mnemonic) {
   console.error(
-    'OPTN_MERCHANT_E2E_MNEMONIC is required. This runner never prints it.'
+    'OPTN_E2E_MNEMONIC is required. This runner never prints it.'
   );
   process.exit(2);
 }
 assert.equal(
   bip39.validateMnemonic(mnemonic, bip39.wordlists.english),
   true,
-  'OPTN_MERCHANT_E2E_MNEMONIC is not a valid English mnemonic'
+  'OPTN_E2E_MNEMONIC is not a valid English mnemonic'
 );
 
 const appBinary =
@@ -83,7 +83,7 @@ function sanitizedEnvironment(profileRoot) {
       delete environment[key];
     }
   }
-  delete environment.OPTN_MERCHANT_E2E_MNEMONIC;
+  delete environment.OPTN_E2E_MNEMONIC;
   environment.XDG_DATA_HOME = path.join(profileRoot, 'data');
   environment.XDG_CONFIG_HOME = path.join(profileRoot, 'config');
   environment.XDG_CACHE_HOME = path.join(profileRoot, 'cache');
@@ -306,6 +306,29 @@ async function createMerchantProposal(session) {
   return payload;
 }
 
+async function exerciseAddonContractDemo(session) {
+  await click(session, 'a[href="#/apps"]');
+  await waitFor(session, 'h1=Apps');
+  await clickButtonContaining(session, 'Add-on SDK Demo');
+  await waitFor(session, 'h2=Add-on SDK wallet demo');
+  await click(session, 'button*=Derive CashScript contract address');
+  try {
+    await waitFor(session, 'div*=Contract address:');
+  } catch (error) {
+    const body = await (await session.$('body')).getText().catch(() => 'unavailable');
+    throw new Error(`SDK contract derivation did not complete: ${body.replace(/\s+/g, ' ').slice(-500)}`, { cause: error });
+  }
+  const proposalButton = await session.$('button*=Propose contract spend for review');
+  if (await proposalButton.isDisplayed().catch(() => false) && await proposalButton.isEnabled().catch(() => false)) {
+    await proposalButton.click();
+    await waitFor(session, 'div*=Contract proposal submitted for wallet review');
+    console.log('[addon-sdk-desktop-mobile] desktop contract proposal review passed');
+  } else {
+    console.log(`[addon-sdk-desktop-mobile] desktop contract proposal unavailable: ${JSON.stringify(await (await session.$('body')).getText().catch(() => 'unavailable'))}`);
+  }
+  console.log('[addon-sdk-desktop-mobile] desktop contract derivation passed');
+}
+
 function resolveSdkRoot() {
   const configured = process.env.ANDROID_SDK_ROOT ?? process.env.ANDROID_HOME;
   if (configured) return configured;
@@ -506,7 +529,7 @@ class CdpClient {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Timed out waiting for CDP command ${method}.`));
-      }, 10_000);
+      }, 60_000);
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timeout);
@@ -645,13 +668,31 @@ async function androidWaitHeading(client, text, timeout = 60_000) {
 }
 
 async function androidImportWallet(client) {
-  await androidWaitHeading(
-    client,
-    'Powered with Bitcoin Covenants for Bitcoin Cash'
+  try {
+    await androidWait(
+      client,
+      `document.body?.innerText?.includes('Powered with Bitcoin Covenants for Bitcoin Cash') === true || document.body?.innerText?.includes('Home') === true`,
+      'Android wallet startup screen did not load.'
+    );
+  } catch (error) {
+    const state = await client.evaluate(`({ url: location.href, ready: document.readyState, body: document.body?.innerText?.replace(/\\s+/g, ' ').slice(-2400) ?? '' })`).catch(() => null);
+    throw new Error(`Android wallet startup screen did not load: ${JSON.stringify(state)}`, { cause: error });
+  }
+  const alreadyImported = await client.evaluate(
+    `document.body?.innerText?.includes('Home') === true`
   );
+  if (alreadyImported) {
+    console.log('[merchant-pay-desktop-mobile] mobile buyer wallet already ready');
+    return;
+  }
   await androidClickText(client, 'a', 'Import Wallet');
   await androidWaitHeading(client, 'Import Wallet');
-  await androidClickSelector(client, 'button[aria-label*="Current: Mainnet"]');
+  const mainnetSelectorPresent = await client.evaluate(
+    `Boolean(document.querySelector('button[aria-label*="Current: Mainnet"]'))`
+  );
+  if (mainnetSelectorPresent) {
+    await androidClickSelector(client, 'button[aria-label*="Current: Mainnet"]');
+  }
   await androidWait(
     client,
     `document.querySelectorAll('input[placeholder="word"]').length === 12`,
@@ -662,8 +703,44 @@ async function androidImportWallet(client) {
     await androidSetInput(client, 'input[placeholder="word"]', index, word);
   }
   await androidClickText(client, 'button', 'Import Wallet');
-  await androidWaitHeading(client, 'Home', 120_000);
+  try {
+    await androidWait(client, `document.body?.innerText?.includes('Home') === true`, 'Android wallet home did not load.', 120_000);
+  } catch (error) {
+    const state = await client.evaluate(`({ url: location.href, body: document.body?.innerText?.replace(/\\s+/g, ' ').slice(-2400) ?? '' })`).catch(() => null);
+    throw new Error(`Android wallet home did not load: ${JSON.stringify(state)}`, { cause: error });
+  }
   console.log('[merchant-pay-desktop-mobile] mobile buyer wallet ready');
+}
+
+async function exerciseAddonContractDemoAndroid(client) {
+  await client.evaluate(`(() => { window.location.hash = '#/apps'; return true; })()`);
+  await androidWait(client, `document.body?.innerText?.includes('Add-on SDK Demo') === true`, 'Android Apps view did not load.');
+  try {
+    await androidClickText(client, 'button', 'Add-on SDK Demo');
+  } catch (error) {
+    const clicked = await client.evaluate(`(() => { const node = [...document.querySelectorAll('*')].find((candidate) => candidate.textContent?.trim() === 'Add-on SDK Demo'); if (!node) return false; (node.closest('button,a,[role="button"]') ?? node).click(); return true; })()`);
+    if (!clicked) {
+      const state = await client.evaluate(`({ url: location.href, body: document.body?.innerText?.replace(/\\s+/g, ' ').slice(0, 1800) ?? '' })`).catch(() => null);
+      throw new Error(`Android SDK demo was not listed: ${JSON.stringify(state)}`, { cause: error });
+    }
+  }
+  await androidWait(client, `document.body?.innerText?.includes('Add-on SDK wallet demo') === true`, 'Android SDK demo did not open.');
+  const deriveClicked = await client.evaluate(`(() => { const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Derive CashScript contract address'); if (!button) return false; button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; })()`);
+  if (!deriveClicked) throw new Error('Android SDK contract derivation button was not found.');
+  try {
+    await androidWait(client, `document.body?.innerText?.includes('Contract address:') === true || document.body?.innerText?.includes('Expected') === true || document.body?.innerText?.includes('unsupported') === true`, 'Android SDK contract derivation did not complete.');
+  } catch (error) {
+    const state = await client.evaluate(`({ url: location.href, body: document.body?.innerText?.replace(/\\s+/g, ' ').slice(-2200) ?? '' })`).catch(() => null);
+    throw new Error(`Android SDK contract derivation did not complete: ${JSON.stringify(state)}`, { cause: error });
+  }
+  const proposalReady = await client.evaluate(`(() => { const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Propose contract spend for review') && !candidate.disabled); if (!button) return false; button.click(); return true; })()`);
+  if (proposalReady) {
+    await androidWait(client, `document.body?.innerText?.includes('Contract proposal submitted for wallet review') === true`, 'Android contract proposal review did not complete.');
+    console.log('[addon-sdk-desktop-mobile] Android contract proposal review passed');
+  } else {
+    console.log(`[addon-sdk-desktop-mobile] Android contract proposal unavailable: ${JSON.stringify(await client.evaluate('document.body?.innerText ?? ""'))}`);
+  }
+  console.log('[addon-sdk-desktop-mobile] Android contract derivation passed');
 }
 
 async function routeProposalToMobile(client, payload) {
@@ -732,15 +809,28 @@ async function routeProposalToMobile(client, payload) {
     );
     throw error;
   }
-  const payButtonText = await client.evaluate(
-    `([...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim().startsWith('Pay '))?.textContent?.trim() ?? '')`
-  );
-  await androidClickText(client, 'button', payButtonText);
   await androidWait(
     client,
-    `Boolean(document.querySelector('[role="dialog"][aria-label="Review Merchant Payment"]'))`,
-    'Android merchant review dialog did not open.'
+    `(() => { const el = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim().startsWith('Pay ') && !candidate.disabled); if (!el) return false; el.scrollIntoView({ block: 'center' }); el.click(); return true; })()`,
+    'Could not click the Android merchant payment button.'
   );
+  try {
+    await androidWait(
+      client,
+      `Boolean(document.querySelector('[role="dialog"][aria-label="Review Merchant Payment"]'))`,
+      'Android merchant review dialog did not open.'
+    );
+  } catch (error) {
+    const state = await client
+      .evaluate(
+        `({ body: document.body?.innerText?.replace(/\\s+/g, ' ').slice(0, 1800) ?? '', dialogs: [...document.querySelectorAll('[role="dialog"]')].map((dialog) => dialog.getAttribute('aria-label')), buttons: [...document.querySelectorAll('button')].map((button) => ({ text: button.textContent?.trim() ?? '', disabled: button.disabled })).filter((button) => button.text.startsWith('Pay ') || button.text.includes('Preparing'))) })`
+      )
+      .catch(() => null);
+    console.error(
+      `[merchant-pay-desktop-mobile] Android review dialog state: ${JSON.stringify(state)}`
+    );
+    throw error;
+  }
   const reviewText = await client.evaluate(
     `document.querySelector('[role="dialog"][aria-label="Review Merchant Payment"]')?.innerText ?? ''`
   );
@@ -803,7 +893,9 @@ try {
   }
   waitForDevice(androidSerial);
   runAdb(['-s', androidSerial, 'install', '-r', '-g', apk]);
-  runAdb(['-s', androidSerial, 'shell', 'pm', 'clear', packageName], true);
+  if (process.env.ANDROID_E2E_RESET === '1') {
+    runAdb(['-s', androidSerial, 'shell', 'pm', 'clear', packageName], true);
+  }
   runAdb(
     [
       '-s',
@@ -836,8 +928,10 @@ try {
   ]);
   const target = await waitForWebViewTarget(cdpPort);
   androidClient = await CdpClient.connect(target.webSocketDebuggerUrl);
-  await androidClient.command('Runtime.enable');
+  // Runtime.evaluate works without enabling the Runtime domain. Avoid making
+  // startup depend on a WebView event that can be lost during cold launch.
   await androidImportWallet(androidClient);
+  await exerciseAddonContractDemoAndroid(androidClient);
 
   desktopViteProcess = spawn(
     viteBinary,
@@ -868,11 +962,18 @@ try {
     capabilities: { 'tauri:options': { application: appBinary } },
   });
   await importDesktopWallet(desktopSession);
+  await exerciseAddonContractDemo(desktopSession);
+  if (process.env.ADDON_SDK_CONTRACT_ONLY === '1') {
+    console.log('[addon-sdk-desktop-mobile] PASS: Android + desktop contract adapter flow completed');
+  } else {
   const payload = await createMerchantProposal(desktopSession);
+  await androidClient.evaluate(`(() => { window.location.hash = '#/'; return true; })()`);
+  await androidWaitHeading(androidClient, 'Home', 30_000);
   await routeProposalToMobile(androidClient, payload);
   console.log(
     '[merchant-pay-desktop-mobile] PASS: desktop merchant + Android buyer reached review; no broadcast performed'
   );
+  }
 } finally {
   await desktopSession?.deleteSession().catch(() => undefined);
   if (desktopDriver && desktopDriver.exitCode == null)

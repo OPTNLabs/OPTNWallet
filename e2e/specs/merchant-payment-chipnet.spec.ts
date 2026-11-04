@@ -1,11 +1,11 @@
 import * as bip39 from 'bip39';
 
-const merchantMnemonic = process.env.OPTN_MERCHANT_E2E_MNEMONIC?.trim() ?? '';
+const e2eMnemonic = process.env.OPTN_E2E_MNEMONIC?.trim() ?? '';
 const allowBroadcast = process.env.OPTN_MERCHANT_E2E_ALLOW_BROADCAST === '1';
 
 // The normal desktop suite must remain deterministic and non-mutating. The
 // dedicated runner supplies the mnemonic and an isolated profile explicitly.
-const runMerchantPaymentTest = merchantMnemonic ? it : it.skip;
+const runMerchantPaymentTest = e2eMnemonic ? it : it.skip;
 
 async function clickButtonContaining(text: string): Promise<void> {
   const button = $(`button*=${text}`);
@@ -15,9 +15,9 @@ async function clickButtonContaining(text: string): Promise<void> {
 }
 
 async function importChipnetTestWallet(): Promise<void> {
-  const words = merchantMnemonic.split(/\s+/).filter(Boolean);
+  const words = e2eMnemonic.split(/\s+/).filter(Boolean);
   expect(
-    bip39.validateMnemonic(merchantMnemonic, bip39.wordlists.english)
+    bip39.validateMnemonic(e2eMnemonic, bip39.wordlists.english)
   ).toBe(true);
 
   await $('a=Import Wallet').click();

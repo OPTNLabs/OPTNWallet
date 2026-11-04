@@ -16,12 +16,23 @@ type AddonIframeHostProps = {
   manifest: AddonManifest;
   app: AddonAppDefinition;
   sdk: AddonSDK;
+  sessionId: string;
+  onConnectRequest?: (request: {
+    addonId: string;
+    requestedCapabilities: string[];
+  }) => Promise<{
+    sessionId: string;
+    expiresAt: string;
+    capabilities: string[];
+  } | null>;
 };
 
 export default function AddonIframeHost({
   manifest,
   app,
   sdk,
+  sessionId,
+  onConnectRequest,
 }: AddonIframeHostProps) {
   const { t, locale } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -36,14 +47,10 @@ export default function AddonIframeHost({
   };
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     let handle: MountedAddonIframe | null = null;
-    let initError: string | null = null;
-    setError(null);
-    setLoading(true);
 
     (async () => {
       try {
@@ -62,25 +69,14 @@ export default function AddonIframeHost({
           container: containerRef.current,
           bundleSource,
           sdk,
+          sessionId,
+          onConnectRequest,
           locale: localeRef.current.locale,
           localeMessages: localeRef.current.messages,
           onInitError: (message) => {
-            if (!cancelled) {
-              initError = message;
-              setError(message);
-              handle?.destroy();
-              handle = null;
-              handleRef.current = null;
-              setLoading(false);
-            }
+            if (!cancelled) setError(message);
           },
         });
-        if (initError) {
-          handle.destroy();
-          handle = null;
-          setLoading(false);
-          return;
-        }
         handleRef.current = handle;
         setLoading(false);
       } catch (err) {
@@ -96,7 +92,7 @@ export default function AddonIframeHost({
       handleRef.current = null;
       handle?.destroy();
     };
-  }, [manifest.id, app.id, app.entryFile, sdk, retryKey]);
+  }, [manifest.id, app.id, app.entryFile, sdk, sessionId, onConnectRequest]);
 
   useEffect(() => {
     handleRef.current?.setLocale(locale, localeRef.current.messages);
@@ -104,24 +100,11 @@ export default function AddonIframeHost({
 
   if (error) {
     return (
-      <div className="space-y-3 p-4">
+      <div className="p-4">
         <div className="font-bold text-red-600">
           {t('apps.addonLoadFailed')}
         </div>
-        <div className="text-sm" role="alert">
-          {error}
-        </div>
-        <button
-          type="button"
-          className="wallet-btn-secondary min-h-[44px] px-4"
-          onClick={() => {
-            setError(null);
-            setLoading(true);
-            setRetryKey((current) => current + 1);
-          }}
-        >
-          {t('apps.retryAddon')}
-        </button>
+        <div className="text-sm mt-1">{error}</div>
       </div>
     );
   }
