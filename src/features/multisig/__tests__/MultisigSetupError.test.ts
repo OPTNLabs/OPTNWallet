@@ -11,9 +11,7 @@ describe('multisig setup disclosure', () => {
     const qr = readSource('QrScanDialog.tsx');
 
     expect(setup).toContain('MultisigError');
-    expect(setup).toContain(
-      "network={screen === 'create' ? setupNetwork : activeNetwork}"
-    );
+    expect(setup).toContain('network: setupNetwork');
     expect(qr).toContain('MultisigError');
     expect(qr).not.toContain('<p role="alert"');
   });

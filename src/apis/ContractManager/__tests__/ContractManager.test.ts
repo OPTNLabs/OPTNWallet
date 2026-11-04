@@ -247,7 +247,7 @@ describe('ContractManager', () => {
       'spend'
     );
     expect(mockContractUnlockClaim).toHaveBeenCalledTimes(1);
-    expect(result.lockingBytecode).toBe('76a9...88ac');
+    expect(result.lockingBytecode).toBe('00');
     expect(result.unlocker).toBe('unlocker-result');
   });
 

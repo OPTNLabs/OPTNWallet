@@ -20,9 +20,8 @@ describe('Receive identifier disclosure', () => {
       "currentWalletId ? `/home/${currentWalletId}` : '/actions'"
     );
     expect(source).toContain('getReturnPath(');
-    expect(source).toContain(
-      'wallet-btn-secondary min-h-[44px] w-full py-3 font-semibold shadow-xl'
-    );
+    expect(source).toContain('<RouteExitFooter');
+    expect(source).toContain('onBack={() => navigate(backTarget)}');
   });
 
   it('keeps inline copy affordances on the selected receive address', () => {
