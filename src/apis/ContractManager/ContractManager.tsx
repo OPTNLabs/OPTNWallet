@@ -4,7 +4,7 @@ import {
   Contract,
   ElectrumNetworkProvider,
   SignatureTemplate,
-  SighashType,
+  HashType,
 } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import parseInputValue from '../../utils/parseInputValue';
@@ -741,14 +741,14 @@ export default function ContractManager(): ContractManagerApi {
               throw new Error(`Private key not found for sigaddr '${addr}'.`);
             }
 
-            return new SignatureTemplate(pk, SighashType.SIGHASH_ALL);
+            return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
           }
 
           if (v.startsWith('sigkey:')) {
             const keyMaterial = v.slice('sigkey:'.length).trim();
             if (!keyMaterial)
               throw new Error(`Invalid sigkey for '${input.name}'.`);
-            return new SignatureTemplate(keyMaterial, SighashType.SIGHASH_ALL);
+            return new SignatureTemplate(keyMaterial, HashType.SIGHASH_ALL);
           }
 
           throw new Error(

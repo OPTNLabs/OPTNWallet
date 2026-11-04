@@ -38,7 +38,7 @@ import KeyService from './KeyService';
 import BcmrService from './BcmrService';
 import {
   SignatureTemplate,
-  SighashType,
+  HashType,
   ElectrumNetworkProvider,
 } from 'cashscript';
 import { sha256, encodeString } from '@cashscript/utils';
@@ -2082,7 +2082,7 @@ export function createAddonSDK(
           async () => await KeyService.fetchAddressPrivateKey(address, 'spend')
         );
         if (!pk) throw new Error(`Missing private key for address: ${address}`);
-        return new SignatureTemplate(pk, SighashType.SIGHASH_ALL);
+        return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
       },
     },
 

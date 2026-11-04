@@ -24,6 +24,7 @@ const props = {
   manifest: { id: 'fixture.addon' },
   app: { id: 'fixture.app', entryFile: 'index.js' },
   sdk: {},
+  sessionId: 'fixture-session',
 } as React.ComponentProps<typeof AddonIframeHost>;
 
 afterEach(() => {

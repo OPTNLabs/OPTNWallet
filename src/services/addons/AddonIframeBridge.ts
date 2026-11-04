@@ -103,7 +103,7 @@ export async function dispatchAddonSdkCall(
   await ensureOptnCoreAsync();
   if (!addonLegacyGuestCallAllowed(moduleName, methodName)) {
     throw new Error(
-      'unknown SDK module/method or capability unavailable to an untrusted addon guest'
+      'unknown SDK module/method or unavailable SDK method/capability to an untrusted addon guest'
     );
   }
   const sdkRecord = sdk as unknown as Record<

@@ -47,10 +47,14 @@ export default function AddonIframeHost({
   };
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     let handle: MountedAddonIframe | null = null;
+    let initError: string | null = null;
+    setError(null);
+    setLoading(true);
 
     (async () => {
       try {
@@ -74,9 +78,22 @@ export default function AddonIframeHost({
           locale: localeRef.current.locale,
           localeMessages: localeRef.current.messages,
           onInitError: (message) => {
-            if (!cancelled) setError(message);
+            if (!cancelled) {
+              initError = message;
+              setError(message);
+              handle?.destroy();
+              handle = null;
+              handleRef.current = null;
+              setLoading(false);
+            }
           },
         });
+        if (initError) {
+          handle.destroy();
+          handle = null;
+          setLoading(false);
+          return;
+        }
         handleRef.current = handle;
         setLoading(false);
       } catch (err) {
@@ -92,7 +109,15 @@ export default function AddonIframeHost({
       handleRef.current = null;
       handle?.destroy();
     };
-  }, [manifest.id, app.id, app.entryFile, sdk, sessionId, onConnectRequest]);
+  }, [
+    manifest.id,
+    app.id,
+    app.entryFile,
+    sdk,
+    sessionId,
+    onConnectRequest,
+    retryKey,
+  ]);
 
   useEffect(() => {
     handleRef.current?.setLocale(locale, localeRef.current.messages);
@@ -100,11 +125,24 @@ export default function AddonIframeHost({
 
   if (error) {
     return (
-      <div className="p-4">
+      <div className="space-y-3 p-4">
         <div className="font-bold text-red-600">
           {t('apps.addonLoadFailed')}
         </div>
-        <div className="text-sm mt-1">{error}</div>
+        <div className="text-sm" role="alert">
+          {error}
+        </div>
+        <button
+          type="button"
+          className="wallet-btn-secondary min-h-[44px] px-4"
+          onClick={() => {
+            setError(null);
+            setLoading(true);
+            setRetryKey((current) => current + 1);
+          }}
+        >
+          {t('apps.retryAddon')}
+        </button>
       </div>
     );
   }
