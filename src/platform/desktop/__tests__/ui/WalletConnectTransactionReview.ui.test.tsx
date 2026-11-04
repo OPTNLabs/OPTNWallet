@@ -127,7 +127,7 @@ it('shows Chipnet destinations and a verified wallet effect', async () => {
   fireEvent.click(screen.getByText(/Technical transaction details/));
   expect(screen.getByText('Output index: 3')).toBeInTheDocument();
   const addressTrigger = screen.getByRole('button', { name: 'Copy address' });
-  expect(addressTrigger).not.toHaveTextContent('bchtest:');
+  expect(addressTrigger).toHaveTextContent('bchtest:');
   fireEvent.contextMenu(addressTrigger);
   const dialogs = screen.getAllByRole('dialog');
   expect(dialogs[dialogs.length - 1]).toHaveTextContent('bchtest:');

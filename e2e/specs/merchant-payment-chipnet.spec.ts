@@ -16,9 +16,9 @@ async function clickButtonContaining(text: string): Promise<void> {
 
 async function importChipnetTestWallet(): Promise<void> {
   const words = e2eMnemonic.split(/\s+/).filter(Boolean);
-  expect(
-    bip39.validateMnemonic(e2eMnemonic, bip39.wordlists.english)
-  ).toBe(true);
+  expect(bip39.validateMnemonic(e2eMnemonic, bip39.wordlists.english)).toBe(
+    true
+  );
 
   await $('a=Import Wallet').click();
   await $('h1=Import Wallet').waitForDisplayed({ timeout: 15000 });

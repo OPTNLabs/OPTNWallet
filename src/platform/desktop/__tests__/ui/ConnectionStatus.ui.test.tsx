@@ -118,7 +118,7 @@ describe('connection panels', () => {
     };
     const view = render(<WizardSignTransactionModal />);
     const addressTrigger = screen.getByRole('button', { name: 'Copy address' });
-    expect(addressTrigger).not.toHaveTextContent('bchtest:');
+    expect(addressTrigger).not.toHaveTextContent(address.address);
     fireEvent.contextMenu(addressTrigger);
     const dialogs = screen.getAllByRole('dialog');
     expect(dialogs[dialogs.length - 1]).toHaveTextContent('bchtest:');

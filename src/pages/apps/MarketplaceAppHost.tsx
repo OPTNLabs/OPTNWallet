@@ -16,7 +16,7 @@ import UTXOService from '../../services/UTXOService';
 import ElectrumService from '../../services/ElectrumService';
 import {
   ElectrumNetworkProvider,
-  SighashType,
+  HashType,
   SignatureTemplate,
   TransactionBuilder,
 } from 'cashscript';
@@ -776,7 +776,7 @@ export default function MarketplaceAppHost() {
           if (!key) throw new Error(`Wallet signing key unavailable for ${binding.address}`);
           signerTemplates.set(
             `${binding.purpose}:${binding.address}`,
-            new SignatureTemplate(key, SighashType.SIGHASH_ALL)
+            new SignatureTemplate(key, HashType.SIGHASH_ALL)
           );
         }
         const functionArgs = (metadata.functionArgs ?? []).map((arg: any) => {
@@ -810,7 +810,7 @@ export default function MarketplaceAppHost() {
           if (unlocker instanceof Promise) {
             const key = await unlocker;
             if (!key) throw new Error(`Wallet signing key unavailable for ${input.address}`);
-            builder.addInput(utxo, new SignatureTemplate(key, SighashType.SIGHASH_ALL).unlockP2PKH());
+            builder.addInput(utxo, new SignatureTemplate(key, HashType.SIGHASH_ALL).unlockP2PKH());
             continue;
           }
           builder.addInput(utxo, unlocker);
