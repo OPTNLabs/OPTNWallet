@@ -30,9 +30,9 @@
 // platform layers keep their own thin constructors over the OS CSPRNG.
 use hmac::{Hmac, Mac};
 use k256::elliptic_curve::ops::Reduce;
-use k256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
+use k256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
 use k256::elliptic_curve::{Group, PrimeField};
-use k256::{AffinePoint, EncodedPoint, ProjectivePoint, Scalar, U256};
+use k256::{AffinePoint, FieldBytes, ProjectivePoint, Scalar, Sec1Point};
 use num_bigint::BigUint;
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
@@ -57,21 +57,20 @@ fn y_is_quadratic_residue(y_be: &[u8]) -> bool {
 
 /// Parse a serialized secp256k1 point (33-byte compressed or 65-byte uncompressed).
 pub fn parse_point(bytes: &[u8]) -> Result<ProjectivePoint, String> {
-    let ep =
-        EncodedPoint::from_bytes(bytes).map_err(|_| "point could not be parsed".to_string())?;
-    Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))
+    let ep = Sec1Point::from_bytes(bytes).map_err(|_| "point could not be parsed".to_string())?;
+    Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&ep))
         .map(ProjectivePoint::from)
         .ok_or_else(|| "point not on curve".to_string())
 }
 
 /// Reduce 32 big-endian bytes into a scalar mod the group order n.
 pub fn scalar_reduce(bytes: [u8; 32]) -> Scalar {
-    <Scalar as Reduce<U256>>::reduce_bytes(&bytes.into())
+    <Scalar as Reduce<FieldBytes>>::reduce(&bytes.into())
 }
 
 /// (x, y) affine coordinates of a point as 32-byte big-endian arrays.
 fn affine_xy(point: &ProjectivePoint) -> ([u8; 32], [u8; 32]) {
-    let ep = point.to_affine().to_encoded_point(false);
+    let ep = point.to_affine().to_sec1_point(false);
     let mut x = [0u8; 32];
     let mut y = [0u8; 32];
     x.copy_from_slice(ep.x().expect("affine has x"));
@@ -81,7 +80,7 @@ fn affine_xy(point: &ProjectivePoint) -> ([u8; 32], [u8; 32]) {
 
 /// Compressed 33-byte encoding of a point.
 pub fn compressed(point: &ProjectivePoint) -> [u8; 33] {
-    let ep = point.to_affine().to_encoded_point(true);
+    let ep = point.to_affine().to_sec1_point(true);
     let mut out = [0u8; 33];
     out.copy_from_slice(ep.as_bytes());
     out

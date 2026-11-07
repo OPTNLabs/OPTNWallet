@@ -75,19 +75,22 @@ For desktop resolution verification without fetching or changing its lock:
 cargo metadata --offline --locked --manifest-path src-tauri/Cargo.toml --format-version 1
 ```
 
-## Advisory review remains open
+## Advisory coverage
 
 [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html) still
-lists 0.18.5 as affected. Its existing `deny.toml` exception is intentionally
-unchanged pending parent review of source evidence and advisory visibility.
-Cargo scanners can skip path dependencies; a disappearing warning is not
-proof that this backport works or that future glib advisories remain covered.
-Do not relabel the package or remove the exception solely because a scan passes.
+lists 0.18.5 as affected. Cargo scanners can skip path dependencies, so a
+disappearing warning is not proof that this backport works or that future glib
+advisories remain covered. Both stay checked without an ignore in `deny.toml`:
 
-The existing Rust nextest CI job runs the optimized regression on Linux. The
-Rust dependency policy job also audits a temporary registry dependency pinned
-to `glib = "=0.18.5"` with the repository's existing `deny.toml`. This preserves
-registry advisory matching despite the desktop path patch; it adds no ignore.
+- The Rust nextest CI job runs the optimized regression for the repair on Linux.
+- The Rust dependency policy job audits a temporary registry dependency pinned
+  to `glib = "=0.18.5"` with the repository's `deny.toml`, which ignores
+  nothing. `scripts/check-vendored-advisories.py` passes it only if every
+  advisory found is in the step's `REPAIRED_IN_VENDOR` list
+  (RUSTSEC-2024-0429, repaired here). A new glib advisory fails the job, as
+  does a scan that fails without naming one.
+
+Add an ID to `REPAIRED_IN_VENDOR` only together with its repair and test here.
 Local source, lock resolution, YAML, and shell syntax checks pass. The optimized
 Linux regression and registry advisory audit both passed in
 [run 34212834376](https://github.com/OPTNLabs/OPTNWallet/actions/runs/34212834376)

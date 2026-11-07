@@ -44,10 +44,10 @@ ripemd = "0.1"
 # to riscv64 and armv7 like the rest of the tree.
 hmac = "0.12"
 # Same version src-tauri pins. ECDSA over secp256k1 in pure Rust, so it crosses.
-k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+k256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 # BIP32 with the pure-Rust k256 backend — the same curve crate src-tauri
 # already uses. A C-backed secp256k1 would not cross-compile to riscv64.
-bip32 = { version = "0.5", default-features = false, features = ["alloc", "secp256k1", "std"] }
+bip32 = { version = "0.6", default-features = false, features = ["alloc", "secp256k1"] }
 # Mnemonics come from rust-bitcoin's bip39, not bip32's built-in one. bip32
 # checks `entropy.len() != KEY_SIZE + 1`, which accepts 24-word phrases and
 # rejects everything shorter — but this wallet imports 12-, 15-, 18-, 21- and

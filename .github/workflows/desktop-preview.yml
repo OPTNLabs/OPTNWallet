@@ -135,6 +135,9 @@ jobs:
         # first so a transient CDN disconnect does not waste the full build.
         # Asset URLs are checked against fixed digests; a changed upstream
         # asset fails closed instead of executing an unreviewed replacement.
+        # The AppImage plugin comes from its tagged release 1-alpha-20250213-1,
+        # not `continuous`: upstream rebuilds `continuous` in place, which
+        # deletes the pinned asset ids and turned every Linux preview red.
         if: startsWith(matrix.platform, 'ubuntu')
         shell: bash
         env:
@@ -155,8 +158,6 @@ jobs:
               apprun_sha='072f17c0895a85c490282fe5395c5007e5fc75da727e553b3b8fb680feb11578'
               linuxdeploy_sha='b12b5cc57bd0921e1f98d73f58aa364503bc1a27f54b7a69fd2870bce7fa2f55'
               appimage_plugin_sha='83c292149274965a865dcd44c135cfca8ba28c6b7de3eb628d4b8b5f248af17c'
-              # Release 1-alpha-20250213-1. Continuous rebuilds delete the
-              # previous asset ids, so a pin against continuous 404s.
               appimage_plugin_asset_id='228937549'
               apprun_asset='AppRun-aarch64'
               linuxdeploy_asset='linuxdeploy-aarch64.AppImage'
