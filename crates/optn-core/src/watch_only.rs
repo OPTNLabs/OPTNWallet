@@ -440,7 +440,7 @@ mod tests {
         let seed = mnemonic.to_seed_normalized("");
         let coin = network.default_coin_type();
         let path = format!("m/44'/{coin}'/{account}'").parse().unwrap();
-        XPrv::derive_from_path(seed, &path)
+        XPrv::derive_from_path(&seed, &path)
             .unwrap()
             .public_key()
             .to_string(Prefix::XPUB)
@@ -527,7 +527,7 @@ mod tests {
         let mnemonic = Mnemonic::parse_in_normalized(Language::English, TEST_MNEMONIC).unwrap();
         let seed = mnemonic.to_seed_normalized("");
         let path = "m/44'/145'/0'/0".parse().unwrap();
-        let branch = XPrv::derive_from_path(seed, &path)
+        let branch = XPrv::derive_from_path(&seed, &path)
             .unwrap()
             .public_key()
             .to_string(Prefix::XPUB);

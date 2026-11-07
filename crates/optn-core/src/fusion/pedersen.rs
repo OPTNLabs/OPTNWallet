@@ -23,8 +23,8 @@
 // while this crate also compiles to wasm32, where pulling in an RNG would mean
 // a getrandom JS shim for code that does not need one. Callers pass nonces in,
 // which also makes every value below reproducible from a test vector.
-use k256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-use k256::{AffinePoint, EncodedPoint, ProjectivePoint, Scalar};
+use k256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
+use k256::{AffinePoint, ProjectivePoint, Scalar, Sec1Point};
 use once_cell::sync::Lazy;
 
 /// The nothing-up-my-sleeve generator H, exactly as Electron Cash derives it:
@@ -34,8 +34,8 @@ static H: Lazy<ProjectivePoint> = Lazy::new(|| {
     let mut compressed = [0u8; 33];
     compressed[0] = 0x02; // even-y prefix
     compressed[1..].copy_from_slice(SEED);
-    let ep = EncodedPoint::from_bytes(compressed).expect("H compressed encoding is well-formed");
-    let ap = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))
+    let ep = Sec1Point::from_bytes(compressed).expect("H compressed encoding is well-formed");
+    let ap = Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&ep))
         .expect("H lies on secp256k1");
     ProjectivePoint::from(ap)
 });
@@ -66,7 +66,7 @@ pub fn commit_point_signed(amount: i64, nonce: &Scalar) -> ProjectivePoint {
 /// Serialize a commitment point as the 65-byte uncompressed encoding (0x04
 /// prefix) the protocol's `amount_commitment` field expects.
 pub fn encode_uncompressed(point: &ProjectivePoint) -> [u8; 65] {
-    let ep = point.to_affine().to_encoded_point(false);
+    let ep = point.to_affine().to_sec1_point(false);
     let mut out = [0u8; 65];
     out.copy_from_slice(ep.as_bytes());
     out
