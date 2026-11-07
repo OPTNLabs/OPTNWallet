@@ -208,3 +208,36 @@ it('escapes every script-closing tag in serialized function bodies', () => {
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
 });
+
+it('installs no elliptic: crypto-browserify is the throwing stand-in', () => {
+  // GHSA-848j-6mx2-7j84 has no fixed elliptic release. It reached the tree
+  // only through node-stdlib-browser's crypto-browserify, a polyfill the
+  // wallet excludes; vendor/no-crypto-browserify takes its place.
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--eval',
+      String.raw`
+        const assert = require('node:assert/strict');
+        const { readFileSync } = require('node:fs');
+        const { createRequire } = require('node:module');
+        const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+        const removed = /(?:^|\/)node_modules\/(?:elliptic|create-ecdh|browserify-sign)$/;
+        assert.deepEqual(Object.keys(lock.packages).filter((path) => removed.test(path)), []);
+        for (const name of ['elliptic', 'create-ecdh', 'browserify-sign']) {
+          assert.throws(() => require.resolve(name), { code: 'MODULE_NOT_FOUND' });
+        }
+        const stdlib = createRequire(require.resolve('node-stdlib-browser'));
+        const stub = stdlib
+          .resolve('crypto-browserify')
+          .split(require('node:path').sep)
+          .join('/');
+        assert.match(stub, /vendor\/no-crypto-browserify\/index\.js$/);
+        assert.throws(() => stdlib('crypto-browserify'), /GHSA-848j-6mx2-7j84/);
+      `,
+    ],
+    { cwd: repoRoot, encoding: 'utf8', timeout: 10_000 }
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+});

@@ -256,9 +256,9 @@ fn encode_component_placeholder(comp: pb::Component) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k256::elliptic_curve::sec1::FromEncodedPoint;
+    use k256::elliptic_curve::sec1::FromSec1Point;
     use k256::elliptic_curve::PrimeField;
-    use k256::{AffinePoint, EncodedPoint, ProjectivePoint, Scalar};
+    use k256::{AffinePoint, ProjectivePoint, Scalar, Sec1Point};
 
     #[test]
     fn component_hex_rejects_malformed_input() {
@@ -269,9 +269,9 @@ mod tests {
     }
 
     fn parse_uncompressed(b: &[u8]) -> ProjectivePoint {
-        let ep = EncodedPoint::from_bytes(b).unwrap();
+        let ep = Sec1Point::from_bytes(b).unwrap();
         ProjectivePoint::from(
-            Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep)).unwrap(),
+            Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&ep)).unwrap(),
         )
     }
 

@@ -13,8 +13,8 @@
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
-use k256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-use k256::{AffinePoint, EncodedPoint, ProjectivePoint, Scalar};
+use k256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
+use k256::{AffinePoint, ProjectivePoint, Scalar, Sec1Point};
 use sha2::{Digest, Sha256};
 
 use super::wire::{AuthorizedOutput, MIN_OUTPUT_VALUE};
@@ -99,8 +99,8 @@ fn peeler_point(pubkey_hex: &str) -> Result<ProjectivePoint, String> {
 }
 
 fn parse_point(bytes: &[u8]) -> Result<ProjectivePoint, String> {
-    let encoded = EncodedPoint::from_bytes(bytes).map_err(|_| "onion: not a curve point")?;
-    Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&encoded))
+    let encoded = Sec1Point::from_bytes(bytes).map_err(|_| "onion: not a curve point")?;
+    Option::<AffinePoint>::from(AffinePoint::from_sec1_point(&encoded))
         .map(ProjectivePoint::from)
         .ok_or_else(|| "onion: not a curve point".into())
 }
@@ -114,7 +114,7 @@ fn scalar(bytes: &[u8; 32]) -> Result<Scalar, String> {
 
 /// `sha256(x(secret · point))`.
 fn shared_key(secret: &Scalar, point: &ProjectivePoint) -> [u8; 32] {
-    let shared = (*point * secret).to_affine().to_encoded_point(true);
+    let shared = (*point * secret).to_affine().to_sec1_point(true);
     Sha256::digest(&shared.as_bytes()[1..33]).into()
 }
 
@@ -128,7 +128,7 @@ pub fn layer(data: &[u8], peeler_hex: &str) -> Result<Vec<u8>, String> {
     };
     let ephemeral_pub = (ProjectivePoint::GENERATOR * ephemeral)
         .to_affine()
-        .to_encoded_point(true);
+        .to_sec1_point(true);
     let key = shared_key(&ephemeral, &peeler);
     let iv = random_bytes::<IV_LEN>();
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| "onion: bad key length")?;
@@ -211,7 +211,7 @@ mod tests {
         let secret = [byte; 32];
         let point = (ProjectivePoint::GENERATOR * scalar(&secret).unwrap())
             .to_affine()
-            .to_encoded_point(true);
+            .to_sec1_point(true);
         // The x-only Nostr form.
         (secret, super::super::hex(&point.as_bytes()[1..33]))
     }

@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use k256::elliptic_curve::sec1::ToEncodedPoint;
+use k256::elliptic_curve::sec1::ToSec1Point;
 use k256::ProjectivePoint;
 
 use super::allocation::{plan_output_values, DEFAULT_MIN_OUTPUT};
@@ -25,7 +25,7 @@ const TIER: u64 = 100_000;
 fn x_only(secret: &[u8; 32]) -> String {
     let point = (ProjectivePoint::GENERATOR * canonical_scalar(secret).expect("valid key"))
         .to_affine()
-        .to_encoded_point(true);
+        .to_sec1_point(true);
     hex(&point.as_bytes()[1..33])
 }
 

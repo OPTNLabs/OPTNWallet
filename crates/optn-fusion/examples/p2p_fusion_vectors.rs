@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use k256::elliptic_curve::sec1::ToEncodedPoint;
+use k256::elliptic_curve::sec1::ToSec1Point;
 use k256::elliptic_curve::PrimeField;
 use optn_fusion::p2p::assemble::{assemble, finalize, sign_own_inputs, Contribution};
 use optn_fusion::p2p::credentials::{plan_credentials, total_slots, Issuer};
@@ -37,7 +37,7 @@ fn scalar(seed: u8) -> k256::Scalar {
 fn x_only(seed: u8) -> String {
     let point = (k256::ProjectivePoint::GENERATOR * scalar(seed))
         .to_affine()
-        .to_encoded_point(true);
+        .to_sec1_point(true);
     hex(&point.as_bytes()[1..33])
 }
 

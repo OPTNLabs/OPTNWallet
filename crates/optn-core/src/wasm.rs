@@ -856,19 +856,17 @@ pub fn explorer_custom_url(
 /// request in, a JSON selection out, coins named by outpoint.
 ///
 /// The selection's random draws come from the host's `crypto.getRandomValues`
-/// through getrandom's `js` backend, so no caller supplies them. A host
+/// through getrandom's `wasm_js` backend, so no caller supplies them. A host
 /// without secure randomness gets an error, never a selection.
 #[wasm_bindgen(js_name = fusionSelectCoins)]
 pub fn fusion_select_coins(request_json: &str) -> Result<String, JsValue> {
-    use k256::elliptic_curve::rand_core::{OsRng, RngCore};
     let mut unavailable = false;
-    let mut sample = || {
-        let mut bytes = [0u8; 8];
-        if OsRng.try_fill_bytes(&mut bytes).is_err() {
+    let mut sample = || match getrandom_04::u64() {
+        Ok(value) => (value >> 11) as f64 / (1u64 << 53) as f64,
+        Err(_) => {
             unavailable = true;
-            return 0.0;
+            0.0
         }
-        (u64::from_le_bytes(bytes) >> 11) as f64 / (1u64 << 53) as f64
     };
     let selection =
         crate::fusion::coin_selection::select_fusion_coins_json(request_json, &mut sample);

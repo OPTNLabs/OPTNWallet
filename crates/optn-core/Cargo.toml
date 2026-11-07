@@ -19,8 +19,8 @@ hmac = "0.12"
 # Already resolved by k256; use its RFC 5869 implementation for restart keys.
 hkdf = "0.12"
 # `ecdh` is for NIP-44's shared secret; the rest was already here.
-k256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "std"] }
-bip32 = { version = "0.5", default-features = false, features = ["alloc", "secp256k1", "std"] }
+k256 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh", "std"] }
+bip32 = { version = "0.6", default-features = false, features = ["alloc", "secp256k1"] }
 # No "rand": this crate only parses mnemonics, it never generates them.
 # The rand feature pulls getrandom, which refuses to build for
 # wasm32-unknown-unknown without a JS shim -- and generating a seed phrase
@@ -63,6 +63,10 @@ serde_json = { version = "1", default-features = false, features = ["std"] }
 # keep resolving getrandom the way they always did.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+# k256 0.14's crypto-bigint 0.7 resolves getrandom 0.4 as well, which needs its
+# own switch to the same crypto.getRandomValues. This crate already depends on
+# wasm-bindgen and js-sys here, the case getrandom's README allows it for.
+getrandom-04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 # The binding surface the wallet calls. wasm32 only: no native, riscv64 or
 # armv7 build links wasm-bindgen.
 # Pinned exactly, and it has to be: wasm-bindgen generates bindings that
@@ -70,6 +74,12 @@ getrandom = { version = "0.2", features = ["js"] }
 # the wallet at runtime rather than at build time.
 wasm-bindgen = "=0.2.127"
 js-sys = "0.3"
+
+[dev-dependencies]
+# The wallet-pack tests draw real random salts and nonces. rand_core 0.10 (via
+# k256 0.14) dropped OsRng; this is the getrandom that k256's crypto-bigint
+# already resolves, named apart from the wasm build's getrandom 0.2.
+getrandom-04 = { package = "getrandom", version = "0.4" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

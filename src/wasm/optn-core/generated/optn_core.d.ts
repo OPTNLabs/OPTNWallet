@@ -200,7 +200,7 @@ export function fusionScalarSum(packed: Uint8Array): Uint8Array;
  * request in, a JSON selection out, coins named by outpoint.
  *
  * The selection's random draws come from the host's `crypto.getRandomValues`
- * through getrandom's `js` backend, so no caller supplies them. A host
+ * through getrandom's `wasm_js` backend, so no caller supplies them. A host
  * without secure randomness gets an error, never a selection.
  */
 export function fusionSelectCoins(request_json: string): string;
