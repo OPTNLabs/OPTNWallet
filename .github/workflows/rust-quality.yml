@@ -129,21 +129,41 @@ jobs:
           cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" --format json check advisories 2> "$audit_dir/report.jsonl" || status=$?
           python3 scripts/check-vendored-advisories.py "$audit_dir/report.jsonl" "$status" $REPAIRED_IN_VENDOR
 
-      # vendor/hpke-rs-0.6.1 (MDK 0.8's HPKE) raises libcrux-sha3 to 0.0.11; see its OPTN.md.
-      - name: Preserve vendored hpke-rs advisory coverage
+      # vendor/openmls_rust_crypto-0.5.1 (MDK 0.8's OpenMLS crypto) takes p256 0.14 and hpke-rs 0.8; see its OPTN.md.
+      - name: Preserve vendored openmls_rust_crypto advisory coverage
         env:
-          REPAIRED_IN_VENDOR: RUSTSEC-2026-0207 RUSTSEC-2026-0208 RUSTSEC-2026-0212
+          REPAIRED_IN_VENDOR: RUSTSEC-2026-0207 RUSTSEC-2026-0208 RUSTSEC-2026-0212 RUSTSEC-2026-0387
         run: |
-          audit_dir="$RUNNER_TEMP/optn-hpke-rs-advisory"
+          audit_dir="$RUNNER_TEMP/optn-openmls-rust-crypto-advisory"
           mkdir -p "$audit_dir/src"
           touch "$audit_dir/src/lib.rs"
           cat > "$audit_dir/Cargo.toml" <<'EOF'
           [package]
-          name = "optn-hpke-rs-advisory"
+          name = "optn-openmls-rust-crypto-advisory"
           version = "0.0.0"
           edition = "2021"
           [dependencies]
-          hpke-rs = "=0.6.1"
+          openmls_rust_crypto = "=0.5.1"
+          EOF
+          status=0
+          cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" --format json check advisories 2> "$audit_dir/report.jsonl" || status=$?
+          python3 scripts/check-vendored-advisories.py "$audit_dir/report.jsonl" "$status" $REPAIRED_IN_VENDOR
+
+      # vendor/openmls_basic_credential-0.5.0 (MDK 0.8's MLS credentials) takes p256 0.14; see its OPTN.md.
+      - name: Preserve vendored openmls_basic_credential advisory coverage
+        env:
+          REPAIRED_IN_VENDOR: RUSTSEC-2026-0387
+        run: |
+          audit_dir="$RUNNER_TEMP/optn-openmls-basic-credential-advisory"
+          mkdir -p "$audit_dir/src"
+          touch "$audit_dir/src/lib.rs"
+          cat > "$audit_dir/Cargo.toml" <<'EOF'
+          [package]
+          name = "optn-openmls-basic-credential-advisory"
+          version = "0.0.0"
+          edition = "2021"
+          [dependencies]
+          openmls_basic_credential = "=0.5.0"
           EOF
           status=0
           cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" --format json check advisories 2> "$audit_dir/report.jsonl" || status=$?

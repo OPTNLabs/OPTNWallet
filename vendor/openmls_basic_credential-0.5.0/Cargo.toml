@@ -35,17 +35,21 @@ name = "openmls_basic_credential"
 path = "src/lib.rs"
 
 [dependencies.ed25519-dalek]
-version = "2.0"
+version = "3.0"
 features = ["rand_core"]
 
 [dependencies.openmls_traits]
 version = "0.5.0"
 
-[dependencies.p256]
-version = "0.13"
+[dependencies.getrandom]
+version = "0.4"
+features = ["sys_rng"]
 
-[dependencies.rand]
-version = "0.8"
+[dependencies.p256]
+version = "0.14"
+
+[dependencies.rand_core]
+version = "0.10"
 
 [dependencies.serde]
 version = "1.0"
@@ -57,3 +61,7 @@ features = [
     "serde",
     "mls",
 ]
+
+# OPTN: a standalone workspace, so this vendored crate is not a member of
+# OPTN's root workspace (see OPTN.md).
+[workspace]

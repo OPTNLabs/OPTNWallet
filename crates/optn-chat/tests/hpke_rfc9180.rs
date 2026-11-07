@@ -1,14 +1,12 @@
-//! The HPKE under optn-chat's MLS (vendor/hpke-rs-0.6.1, through MDK 0.8 and
-//! openmls_rust_crypto) reproduces RFC 9180's published test vectors for
-//! DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-128-GCM: Appendix A.1.1 (base
-//! mode) and A.1.2 (PSK mode).
+//! The HPKE under optn-chat's MLS (hpke-rs 0.8, through MDK 0.8 and
+//! vendor/openmls_rust_crypto-0.5.1) reproduces RFC 9180's published test
+//! vectors for DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-128-GCM: Appendix
+//! A.1.1 (base mode) and A.1.2 (PSK mode).
 //!
 //! The key schedule context RFC 9180 lists for each, `mode || psk_id_hash ||
-//! info_hash`, comes from the two LabeledExtract calls whose salt OPTN's copy
-//! writes differently from upstream (see vendor/hpke-rs-0.6.1/OPTN.md), and
-//! every exported value below depends on it. A change to that salt that moved
-//! a single byte would fail here, as would any other drift in the patched
-//! crate, and every peer would then derive different MLS keys.
+//! info_hash`, feeds every exported value below. The vendored provider moved
+//! from hpke-rs 0.6 to 0.8 (see its OPTN.md); any drift in that key schedule
+//! would fail here, and every peer would then derive different MLS keys.
 
 use hpke_rs::hpke_types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm};
 use hpke_rs::rustcrypto::HpkeRustCrypto;

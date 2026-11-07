@@ -39,8 +39,12 @@ libsqlite3-sys = { version = "0.35", optional = true, features = ["bundled-sqlci
 
 [dev-dependencies]
 # RFC 9180 known answers for the HPKE under MDK (tests/hpke_rfc9180.rs): the
-# same hpke-rs 0.6.1 openmls_rust_crypto resolves, with its RustCrypto provider.
-hpke-rs = { version = "0.6.1", features = ["rustcrypto"] }
+# same hpke-rs 0.8 openmls_rust_crypto resolves, with its RustCrypto provider.
+hpke-rs = { version = "0.8", features = ["rustcrypto"] }
+# Known answers for the OpenMLS crypto under MDK (tests/openmls_crypto_provider.rs):
+# the vendored copies [patch.crates-io] resolves, the ones MDK 0.8 uses.
+openmls_basic_credential = "0.5.0"
+openmls_rust_crypto = "0.5.1"
 mdk-memory-storage = "0.8.0"
 nostr-sdk = { version = "0.45.4", default-features = false, features = ["ring", "rustls-tls-webpki-roots", "local-relay"] }
 tempfile = "3"
