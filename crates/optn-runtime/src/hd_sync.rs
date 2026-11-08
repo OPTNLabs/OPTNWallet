@@ -1831,6 +1831,7 @@ mod tests {
         let runtime = private_runtime(storage.clone(), checkpoints.clone());
         let opened = runtime
             .wallet_security(Request::ImportWatchOnly {
+                legacy_source_id: None,
                 name: "Managed public account".into(),
                 account_xpub: SecretText::new(xpub.clone()),
                 master_fingerprint: "73c5da0a".into(),

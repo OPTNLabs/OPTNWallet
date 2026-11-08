@@ -45,8 +45,16 @@ enum StoredWalletFile {
 
 impl StoredWalletFile {
     fn legacy_source_id(&self) -> Result<Option<u32>, TransportError> {
-        let Self::Seed(file) = self else {
-            return Ok(None);
+        let file = match self {
+            Self::Seed(file) => file,
+            Self::WatchOnly(file) => {
+                return (file.source_id > 0)
+                    .then(|| {
+                        u32::try_from(file.source_id)
+                            .map_err(|_| failure("Invalid legacy wallet ownership."))
+                    })
+                    .transpose();
+            }
         };
         let migrated = file
             .extra
@@ -354,6 +362,8 @@ impl WalletSecurity {
                     wallets.push(StoredWallet {
                         handle,
                         name: file.name().to_owned(),
+                        // Ambiguous ownership lists as none; open refuses it.
+                        legacy_source_id: file.legacy_source_id().ok().flatten(),
                     });
                 }
             }
@@ -784,12 +794,34 @@ impl WalletSecurity {
                 confirmation,
                 network,
                 account_path,
+                legacy_source_id,
             } => {
                 if !state
                     .features
                     .enabled(state.surface, optn_app::FeatureFlag::WatchOnly)
                 {
                     return Err(failure("Watch-only is turned off."));
+                }
+                if let Some(owner) = legacy_source_id {
+                    if owner == 0 {
+                        return Err(failure("Invalid legacy wallet ownership."));
+                    }
+                    // Two files claiming one wallet would make its session ambiguous.
+                    let mut claimed = false;
+                    for handle in self.storage.list().map_err(platform)? {
+                        let Ok(bytes) = self.storage.read(&handle) else {
+                            continue;
+                        };
+                        claimed |= StoredWalletFile::parse(&bytes)
+                            .ok()
+                            .and_then(|file| file.legacy_source_id().ok().flatten())
+                            == Some(owner);
+                    }
+                    if claimed {
+                        return Err(failure(
+                            "This wallet already has an engine file. Open it instead.",
+                        ));
+                    }
                 }
                 let network: Network = network.parse().map_err(failure)?;
                 let account = hd::parse_account_path(&account_path).map_err(crypto)?;
@@ -802,7 +834,7 @@ impl WalletSecurity {
                         .try_into()
                         .map_err(|_| failure("Invalid wallet entropy."))?,
                 );
-                let file = WatchOnlyFile::create(
+                let mut file = WatchOnlyFile::create(
                     &name,
                     account_xpub.expose(),
                     &master_fingerprint,
@@ -814,6 +846,7 @@ impl WalletSecurity {
                     &checkpoint_entropy,
                 )
                 .map_err(crypto)?;
+                file.source_id = legacy_source_id.map_or(0, u64::from);
                 let suffix = entropy[..8]
                     .iter()
                     .map(|byte| format!("{byte:02x}"))
@@ -1370,6 +1403,67 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn watch_only_import_binds_one_file_to_its_desktop_wallet() {
+        let storage = Storage::default();
+        let xpub = hd::Wallet::from_mnemonic(hd::BIP39_TEST_VECTOR_MNEMONIC, "")
+            .unwrap()
+            .account_xpub_at(hd::AccountPath::default_for(Network::Chipnet))
+            .unwrap();
+        let mut security = WalletSecurity::new(Box::new(storage.clone()), None);
+        let mut state = AppState::default();
+        let history = WalletReconciliation::default();
+        let import = |legacy_source_id| Request::ImportWatchOnly {
+            legacy_source_id,
+            name: "Desktop watch-only owner fixture".into(),
+            account_xpub: secret(&xpub),
+            master_fingerprint: String::new(),
+            password: secret("test-password"),
+            confirmation: secret("test-password"),
+            network: "chipnet".into(),
+            account_path: "m/44'/1'/0'".into(),
+        };
+        let run = |security: &mut WalletSecurity, state: &mut AppState, request, now| {
+            security.handle(state, request, now, &history, None, &Default::default())
+        };
+
+        assert!(run(&mut security, &mut state, import(Some(0)), 1).is_err());
+        assert!(storage.list().unwrap().is_empty());
+
+        // The broadcast guard compares this to the desktop's wallet id.
+        let opened = run(&mut security, &mut state, import(Some(42)), 2).unwrap();
+        assert_eq!(opened.legacy_source_id, Some(42));
+        let handle = opened.active.clone().unwrap();
+        assert_eq!(
+            opened.wallets,
+            vec![StoredWallet {
+                handle: handle.clone(),
+                name: "Desktop watch-only owner fixture".into(),
+                legacy_source_id: Some(42),
+            }]
+        );
+
+        assert!(run(&mut security, &mut state, import(Some(42)), 3).is_err());
+        assert_eq!(storage.list().unwrap(), vec![handle.clone()]);
+
+        let reopened = run(
+            &mut security,
+            &mut state,
+            Request::Open {
+                handle: handle.clone(),
+                password: secret("test-password"),
+            },
+            4,
+        )
+        .unwrap();
+        assert_eq!(reopened.active.as_deref(), Some(handle.as_str()));
+        assert_eq!(reopened.legacy_source_id, Some(42));
+
+        let ownerless = run(&mut security, &mut state, import(None), 5).unwrap();
+        assert_eq!(ownerless.legacy_source_id, None);
+        assert_eq!(storage.list().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
     async fn watch_only_password_and_biometrics_never_grant_signing_authority() {
         use optn_app::AuthScope;
         let storage = Storage::default();
@@ -1383,6 +1477,7 @@ pub(crate) mod tests {
         let mut state = AppState::default();
         let history = WalletReconciliation::default();
         let request = || Request::ImportWatchOnly {
+            legacy_source_id: None,
             name: "Public watch-only authentication fixture".into(),
             account_xpub: secret(&xpub),
             master_fingerprint: "A1B2C3D4".into(),

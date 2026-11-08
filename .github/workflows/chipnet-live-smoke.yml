@@ -28,7 +28,9 @@ concurrency:
 
 env:
   SEEDCASH_REPOSITORY: SeedCashOrg/seedcash
-  SEEDCASH_REVISION: 4e1016637edf12bc478fc01bff354a5e384563ca
+  # 30c5ba6 decodes crypto-psbt only as a CBOR byte string and requires the
+  # 4-byte PSBT version; the wallet sends both, so an older pin cannot read it.
+  SEEDCASH_REVISION: 30c5ba609e97649f50603cfc447644b99c461047
 
 jobs:
   seedcash-chipnet:
