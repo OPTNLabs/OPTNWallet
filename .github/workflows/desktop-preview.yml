@@ -153,6 +153,9 @@ jobs:
           cache="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
           mkdir -p "$cache"
 
+          # Plugin assets: linuxdeploy/linuxdeploy-plugin-appimage release
+          # 1-alpha-20250213-1, commit a96502d15ce19ec1df3d46e6cbe87ddf38589a71.
+          # Use versioned assets: continuous builds replace/delete their assets.
           case "$tools_arch" in
             aarch64)
               apprun_sha='072f17c0895a85c490282fe5395c5007e5fc75da727e553b3b8fb680feb11578'

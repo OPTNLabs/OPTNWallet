@@ -12,10 +12,10 @@
 //! quietly broadcast would be the worst possible surprise in a wallet.
 
 use crate::chain_runtime::NativeChainRuntime;
-use optn_core::{cashaddr::Address, coins::Outpoint, network::Network, tx};
+use optn_core::{cashaddr::Address, coins::Outpoint};
 use optn_runtime::{
     tx_broadcast::{BroadcastCoordinator, BroadcastState},
-    wallet_spend::{prepare_spend, SpendRequest, SpendableCoin},
+    wallet_spend::{prepare_spend, SpendRequest},
     WalletOperationGuard,
 };
 use optn_transport::security::{
@@ -40,62 +40,6 @@ pub struct PreparedSpendView {
 
 /// Collect this account's spendable outputs with the path that signs each.
 ///
-/// Built from the runtime's own synchronized transactions and its own derived
-/// address book — never from a list a provider supplied, which is what makes it
-/// safe to sign against.
-fn spendable_coins(
-    snapshot: &optn_runtime::sync_worker::WalletNetworkSnapshot,
-    network: Network,
-) -> Result<Vec<SpendableCoin>, String> {
-    let book = snapshot
-        .hd
-        .as_ref()
-        .ok_or("this wallet has no synchronized HD account yet")?;
-    let mut by_script: Vec<(Vec<u8>, String)> = Vec::new();
-    for (address, path) in optn_runtime::wallet_spend::spendable_paths(book) {
-        let parsed = Address::decode(&address).map_err(|error| error.to_string())?;
-        if parsed.prefix != network.prefix() {
-            return Err("the synchronized account is on another network".into());
-        }
-        by_script.push((parsed.script_pubkey(), path));
-    }
-
-    let scripts: Vec<Vec<u8>> = by_script.iter().map(|(script, _)| script.clone()).collect();
-    let unspent = tx::unspent_outputs(
-        snapshot
-            .transactions
-            .iter()
-            .map(|transaction| transaction.raw.as_slice()),
-        &scripts,
-    )
-    .map_err(|error| error.to_string())?;
-
-    let mut coins = Vec::new();
-    for output in unspent {
-        // A token-carrying output is not ordinary BCH: spending one here would
-        // destroy the tokens it holds.
-        if output.output.token.is_some() {
-            continue;
-        }
-        let Some((_, path)) = by_script
-            .iter()
-            .find(|(script, _)| script == &output.output.script_pubkey)
-        else {
-            continue;
-        };
-        coins.push(SpendableCoin {
-            utxo: tx::Utxo {
-                txid: output.txid,
-                vout: output.vout,
-                value: output.output.value,
-                script_pubkey: output.output.script_pubkey.clone(),
-            },
-            path: path.clone(),
-        });
-    }
-    Ok(coins)
-}
-
 /// Outpoints this wallet may not spend, read from the durable hold record.
 fn held_outpoints(
     wallet_id: Option<u32>,
@@ -177,7 +121,7 @@ async fn build(
         .authoritative
         .ok_or("synchronize this wallet before sending")?
         .value;
-    let coins = spendable_coins(&snapshot, network)?;
+    let coins = optn_runtime::wallet_spend::snapshot_spendable_coins(&snapshot, network)?;
     if snapshot.hd.as_ref().map(|book| &book.account_xpub)
         != state
             .wallet

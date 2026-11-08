@@ -653,7 +653,11 @@ fn CoinRow(
     let outpoint = coin.outpoint();
     let frozen = coin.is_reserved();
     let token_protected = coin.token().is_some();
-    let output_protected = token_protected || coin.value_sats() == 0;
+    let output_protected = token_protected
+        || coin.value_sats() == 0
+        || coin
+            .freeze()
+            .is_some_and(|reason| !reason.is_user_reversible());
     let status = match coin.freeze() {
         None if token_protected => "CashTokens (protected)".to_string(),
         None if coin.value_sats() == 0 => "Zero-value output".to_string(),
@@ -662,6 +666,7 @@ fn CoinRow(
         Some(FreezeReason::FlipstarterPledge) => "Flipstarter pledge".into(),
         Some(FreezeReason::Authhead) => "Authhead".into(),
         Some(FreezeReason::FusionInFlight) => "Fusing".into(),
+        Some(FreezeReason::ExternalPayment) => "Reserved for payment".into(),
     };
     let label = coin.label().unwrap_or("").to_owned();
     let has_label = !label.is_empty();

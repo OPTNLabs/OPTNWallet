@@ -119,9 +119,11 @@ impl BootstrapCatalog {
 /// wallet that refuses to guess, and an unreasonable one to ship to someone who
 /// just wants to receive a payment.
 ///
-/// Pinned Electron Cash snapshots supply network-specific TLS endpoints. A shipped
-/// record grants no capability or health evidence; selection and transport policy
-/// still decide which candidates may be contacted. Regtest has no public hints.
+/// Pinned Electron Cash and General Protocols (`electrum-cash/servers`) snapshots
+/// supply network-specific TLS endpoints; a host both ship is one candidate
+/// credited to both. A shipped record grants no capability or health evidence;
+/// selection and transport policy still decide which candidates may be contacted.
+/// Regtest has no public hints.
 pub fn shipped_bootstrap_catalog(network: optn_core::network::Network) -> BootstrapCatalog {
     use optn_core::network::Network;
 
@@ -141,26 +143,33 @@ pub fn shipped_bootstrap_catalog(network: optn_core::network::Network) -> Bootst
         ),
         Network::Regtest => return BootstrapCatalog::default(),
     };
-    #[derive(serde::Deserialize)]
-    struct Server {
-        s: Option<String>,
-    }
-    let servers: BTreeMap<String, Server> = serde_json::from_str(snapshot)
+    let servers: BTreeMap<String, SnapshotServer> = serde_json::from_str(snapshot)
         .expect("reviewed embedded Electron Cash catalog must be valid JSON");
     let provenance = format!("https://github.com/Electron-Cash/Electron-Cash/blob/bb67161b162c1eea2ed2128dc224f7c55532cb8f/electroncash/{filename}");
     let mut catalog = BootstrapCatalog::default();
-    for (host, server) in servers {
-        let Some(port) = server.s else { continue };
-        let port: u16 = port.parse().expect("reviewed TLS port must fit u16");
-        assert_ne!(port, 0, "reviewed TLS port must be nonzero");
-        catalog.ingest(
-            Endpoint {
-                kind: EndpointKind::ElectrumTls,
-                host,
-                port: Some(port),
-            },
-            BootstrapProject::ElectronCash,
-            provenance.clone(),
+    ingest_tls_snapshot(
+        &mut catalog,
+        servers,
+        BootstrapProject::ElectronCash,
+        &provenance,
+    );
+    // General Protocols publishes no testnet3 list; its "testnet" is testnet4.
+    let electrum_cash = match network {
+        Network::Mainnet => Some(("mainnet", "mainnet.ts")),
+        Network::Chipnet => Some(("chipnet", "chipnet.ts")),
+        Network::Testnet4 => Some(("testnet4", "testnet.ts")),
+        Network::Testnet3 | Network::Regtest => None,
+    };
+    if let Some((key, file)) = electrum_cash {
+        let mut networks: BTreeMap<String, BTreeMap<String, SnapshotServer>> =
+            serde_json::from_str(include_str!("bootstrap/servers_electrum_cash.json"))
+                .expect("reviewed embedded electrum-cash catalog must be valid JSON");
+        let servers = networks.remove(key).unwrap_or_default();
+        ingest_tls_snapshot(
+            &mut catalog,
+            servers,
+            BootstrapProject::ElectrumCash,
+            &format!("https://gitlab.com/electrum-cash/servers/-/blob/36ffc06fa6ccbf98d171bf56a32e93ba3145b132/source/{file}"),
         );
     }
     // Reviewed upstream deployment examples identify separate chains. These are
@@ -190,6 +199,35 @@ pub fn shipped_bootstrap_catalog(network: optn_core::network::Network) -> Bootst
         );
     }
     catalog
+}
+
+/// One host entry in a pinned Electrum server snapshot. Only the TLS port is
+/// read; plain-TCP (`t`) entries are not enabled by this loader.
+#[derive(serde::Deserialize)]
+struct SnapshotServer {
+    s: Option<String>,
+}
+
+fn ingest_tls_snapshot(
+    catalog: &mut BootstrapCatalog,
+    servers: BTreeMap<String, SnapshotServer>,
+    project: BootstrapProject,
+    provenance: &str,
+) {
+    for (host, server) in servers {
+        let Some(port) = server.s else { continue };
+        let port: u16 = port.parse().expect("reviewed TLS port must fit u16");
+        assert_ne!(port, 0, "reviewed TLS port must be nonzero");
+        catalog.ingest(
+            Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host,
+                port: Some(port),
+            },
+            project,
+            provenance,
+        );
+    }
 }
 
 /// The same unverified discovery candidates for every native interface.
@@ -324,7 +362,12 @@ mod shipped {
     /// server before the wallet will do anything.
     #[test]
     fn the_production_networks_ship_a_starting_point() {
-        for network in [Network::Mainnet, Network::Chipnet] {
+        for network in [
+            Network::Mainnet,
+            Network::Chipnet,
+            Network::Testnet3,
+            Network::Testnet4,
+        ] {
             let catalog = shipped_bootstrap_catalog(network);
             assert!(
                 !catalog.is_empty(),
@@ -369,6 +412,62 @@ mod shipped {
                 matches!(&source.origin, SourceOrigin::Bootstrap { provenance, .. } if provenance.contains("bb67161b"))
             );
         }
+    }
+
+    /// General Protocols' list adds the hosts Electron Cash lacks and is credited
+    /// on the ones both ship, without displacing Electron Cash as their origin.
+    #[test]
+    fn electrum_cash_list_adds_missing_hosts_and_shares_the_rest() {
+        let projects = |network, host: &str| -> BTreeSet<BootstrapProject> {
+            let endpoint = Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host: host.into(),
+                port: Some(50002),
+            };
+            shipped_bootstrap_catalog(network)
+                .provenance_for(&endpoint)
+                .unwrap_or_else(|| panic!("{host} is not shipped for {network}"))
+                .iter()
+                .map(|provenance| provenance.project)
+                .collect()
+        };
+        let only_electrum_cash = BTreeSet::from([BootstrapProject::ElectrumCash]);
+        let both = BTreeSet::from([
+            BootstrapProject::ElectronCash,
+            BootstrapProject::ElectrumCash,
+        ]);
+
+        assert_eq!(
+            projects(Network::Testnet4, "testnet4.imaginary.cash"),
+            only_electrum_cash
+        );
+        assert_eq!(
+            projects(Network::Mainnet, "fulcrum.greyh.at"),
+            only_electrum_cash
+        );
+        assert_eq!(projects(Network::Chipnet, "chipnet.imaginary.cash"), both);
+        assert_eq!(projects(Network::Mainnet, "bch.imaginary.cash"), both);
+
+        let shared = shipped_source_catalog(Network::Chipnet);
+        let source = shared
+            .get(&SourceId::new(
+                "bootstrap:electrum-tls:chipnet.bch.ninja:50002",
+            ))
+            .expect("stable bootstrap ID");
+        assert!(matches!(
+            &source.origin,
+            SourceOrigin::Bootstrap {
+                project: BootstrapProject::ElectronCash,
+                ..
+            }
+        ));
+
+        assert!(shipped_bootstrap_catalog(Network::Testnet3)
+            .candidates()
+            .all(|candidate| candidate
+                .provenance
+                .iter()
+                .all(|provenance| provenance.project != BootstrapProject::ElectrumCash)));
     }
 
     /// Mainnet and chipnet do not share a starting point.

@@ -13,6 +13,7 @@ import { Network } from '../../state/slices/networkSlice';
 import { isDesktopPlatform } from '../../utils/platform';
 import LedgerTransportNative from './LedgerTransportNative';
 import TransportWebHID from '@ledgerhq/hw-transport-webhid';
+import { networkProfile } from '../../utils/networkProfile';
 
 /** BIP32 mainnet public version (same bytes BCH uses for xpub). */
 const XPUB_VERSION_MAINNET = 0x0488b21e;
@@ -20,11 +21,7 @@ const XPUB_VERSION_MAINNET = 0x0488b21e;
 const XPUB_VERSION_TESTNET = 0x043587cf;
 
 /** Names Ledger reports when the Bitcoin Cash app is open (case-insensitive). */
-const BCH_APP_NAMES = new Set([
-  'bitcoin cash',
-  'bch',
-  'bitcoin-cash',
-]);
+const BCH_APP_NAMES = new Set(['bitcoin cash', 'bch', 'bitcoin-cash']);
 
 export type LedgerAppInfo = {
   name: string;
@@ -32,7 +29,9 @@ export type LedgerAppInfo = {
 };
 
 function xpubVersionForNetwork(network: Network): number {
-  return network === Network.CHIPNET ? XPUB_VERSION_TESTNET : XPUB_VERSION_MAINNET;
+  return networkProfile(network).hdNetwork === 'testnet'
+    ? XPUB_VERSION_TESTNET
+    : XPUB_VERSION_MAINNET;
 }
 
 async function openLedgerTransport(): Promise<Transport> {

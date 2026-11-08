@@ -14,10 +14,10 @@ import type {
   QuantumrootVaultRecord,
   SignedMessageResponseI,
 } from '../types/types';
-import { Network } from '../state/slices/networkSlice';
 import type { deriveQuantumrootVault } from './QuantumrootService';
 import type { Bip39Language } from './Bip39Service';
 
+import { parseNetwork } from '../utils/networkProfile';
 /**
  * Why a caller wants a private key. Platform integrity services decide what
  * each one costs the user:
@@ -85,11 +85,7 @@ const KeyService = {
     // different device-scoped key.
     const walletInfo = await walletManager.getWalletMetadata(walletId);
     const resolvedNetwork =
-      walletInfo?.networkType === Network.MAINNET
-        ? Network.MAINNET
-        : walletInfo?.networkType === Network.CHIPNET
-          ? Network.CHIPNET
-          : currentNetwork;
+      parseNetwork(walletInfo?.networkType) ?? currentNetwork;
     const keyManager = KeyManager();
 
     await keyManager.createKeys(

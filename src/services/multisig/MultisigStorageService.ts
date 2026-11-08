@@ -21,6 +21,7 @@ import {
 } from '../psbt/multisigWallet';
 import { getBchAccountPath, normalizeBchAccountPath } from '../HdWalletService';
 
+import { cashAddressPrefix, parseNetwork } from '../../utils/networkProfile';
 export const MULTISIG_GAP_LIMIT = 20;
 const MAX_GAP_LIMIT = 100;
 
@@ -109,8 +110,8 @@ function asNumber(value: unknown, fallback = 0): number {
 }
 
 function networkFromStored(value: unknown): Network {
-  if (value === Network.MAINNET) return Network.MAINNET;
-  if (value === Network.CHIPNET) return Network.CHIPNET;
+  const network = parseNetwork(value);
+  if (network) return network;
   throw new Error(`Unsupported multisig network: ${String(value)}`);
 }
 
@@ -121,7 +122,7 @@ function addressPair(
   address: string;
   tokenAddress: string;
 } {
-  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const prefix = cashAddressPrefix(network);
   const ordinary = lockingBytecodeToCashAddress({
     bytecode: lockingBytecode,
     prefix,
@@ -244,7 +245,7 @@ function insertCompatibilityRows(
     key.free();
   }
 
-  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const prefix = cashAddressPrefix(network);
   const row = db.prepare(
     `INSERT OR IGNORE INTO addresses
        (wallet_id, address, balance, hd_index, change_index, prefix, token_address)
@@ -1068,8 +1069,7 @@ export async function migrateLegacyMultisigWallet(
     ) {
       return { walletId, status: 'skipped' };
     }
-    const network =
-      row.networkType === Network.CHIPNET ? Network.CHIPNET : Network.MAINNET;
+    const network = parseNetwork(row.networkType) ?? Network.MAINNET;
     const result = migrateLegacyWallet(
       db,
       walletId,
