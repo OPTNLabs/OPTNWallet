@@ -20,7 +20,8 @@ services:
     volumes:
       - ../..:/optn
     ports:
-      - "${OPTN_VITE_PORT:-5173}:5173"
+      # Loopback by default; see docker-compose.yml. OPTN_VITE_BIND=0.0.0.0 exposes it.
+      - "${OPTN_VITE_BIND:-127.0.0.1}:${OPTN_VITE_PORT:-5173}:5173"
     environment:
       CI: "true"
       OPTN_DOCKER_DEV: "1"

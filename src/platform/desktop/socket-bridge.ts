@@ -27,12 +27,16 @@ function webviewSocketAllowed(url: string): boolean {
   }
 }
 
+/**
+ * A fresh name for one socket's Tauri events: 16 bytes from Web Crypto as hex,
+ * within the 8-64 `[A-Za-z0-9-]` that `event_key` in nostr_tor.rs accepts.
+ * Every webview this runs in has getRandomValues, so there is no Math.random
+ * fallback (entropySources.test.ts keeps one from coming back).
+ */
 function eventKey(): string {
-  const random =
-    typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID().replace(/-/g, '')
-      : Math.random().toString(16).slice(2) + Date.now().toString(16);
-  return `ws-${random}`.slice(0, 64);
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0'));
+  return `ws-${hex.join('')}`;
 }
 
 type Listener = ((event: Event) => void) | null;

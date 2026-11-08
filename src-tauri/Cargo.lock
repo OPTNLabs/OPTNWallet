@@ -463,6 +463,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
 dependencies = [
  "bitcoin_hashes 0.14.101",
+ "rand_core 0.6.4",
  "serde",
  "unicode-normalization",
  "zeroize",
@@ -4688,6 +4689,7 @@ dependencies = [
  "num-bigint",
  "once_cell",
  "pbkdf2",
+ "rand_core 0.6.4",
  "ripemd 0.1.3",
  "serde",
  "serde_json",
