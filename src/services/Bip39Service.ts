@@ -1,5 +1,14 @@
-import * as bip39 from 'bip39';
 import type { SupportedLocale } from '../i18n/types';
+// Mnemonics are made, checked and hashed by crates/optn-core (src/hd.rs), the
+// same code the CLI and the desktop runtime use. Only Unicode normalization
+// stays here, because JS has it built in. The core draws a new phrase's
+// randomness itself, so JS never supplies or holds the entropy.
+import {
+  bip39GenerateMnemonic,
+  bip39IsCanonicalMnemonic,
+  bip39Seed,
+  ensureOptnCore,
+} from '../wasm/optn-core';
 
 export type Bip39Language = 'english';
 
@@ -16,10 +25,6 @@ export function getBip39LanguageForLocale(
   return 'english';
 }
 
-const WORDLISTS: Record<Bip39Language, typeof bip39.wordlists.english> = {
-  english: bip39.wordlists.english,
-};
-
 export const BIP39_IMPORT_ERROR =
   'Enter a valid English BIP39 recovery phrase with 12, 15, 18, 21, or 24 words.';
 
@@ -27,31 +32,59 @@ export function normalizeBip39Mnemonic(mnemonic: string): string {
   return mnemonic.normalize('NFKD').trim().toLowerCase().split(/\s+/).join(' ');
 }
 
+/**
+ * A new 12-word phrase from the core's generator (hd::generate_mnemonic): the
+ * bip39 crate's own generator fed by rand_core's OsRng, which in a browser
+ * reads crypto.getRandomValues directly, with no fallback.
+ */
 export function generateBip39Mnemonic(
   language: Bip39Language = 'english'
 ): string {
-  return bip39.generateMnemonic(128, undefined, WORDLISTS[language]);
+  void language; // English is the only list; see getBip39LanguageForLocale.
+  ensureOptnCore();
+  try {
+    return bip39GenerateMnemonic(DEFAULT_BIP39_WORD_COUNT);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
+  }
+}
+
+/**
+ * Whether the text is a valid English BIP39 phrase written exactly as BIP39
+ * writes one, after NFKD (what bip39.js's validateMnemonic accepted). The
+ * seed is hashed from the text as given, so a phrase that passes here is the
+ * one its seed comes from; callers that accept looser input normalize first.
+ */
+export function isCanonicalBip39Mnemonic(mnemonic: string): boolean {
+  ensureOptnCore();
+  return bip39IsCanonicalMnemonic(mnemonic.normalize('NFKD'));
+}
+
+/**
+ * The 64-byte BIP39 seed of a phrase and passphrase, both taken as given
+ * (after NFKD), as bip39.js's mnemonicToSeed computed it. For keys that are
+ * not BIP32, such as MLS's HPKE inputs. The caller wipes the result.
+ */
+export function bip39SeedFromMnemonic(
+  mnemonic: string,
+  passphrase = ''
+): Uint8Array {
+  ensureOptnCore();
+  return bip39Seed(mnemonic.normalize('NFKD'), passphrase.normalize('NFKD'));
 }
 
 export function detectBip39Language(mnemonic: string): Bip39Language | null {
   const normalized = normalizeBip39Mnemonic(mnemonic);
   if (!isSupportedWordCount(normalized.split(' ').length)) return null;
-
-  for (const language of Object.keys(WORDLISTS) as Bip39Language[]) {
-    if (bip39.validateMnemonic(normalized, WORDLISTS[language]))
-      return language;
-  }
-  return null;
+  return isCanonicalBip39Mnemonic(normalized) ? 'english' : null;
 }
 
 export function isValidBip39Mnemonic(
   mnemonic: string,
   language?: Bip39Language
 ): boolean {
-  const normalized = normalizeBip39Mnemonic(mnemonic);
-  if (!isSupportedWordCount(normalized.split(' ').length)) return false;
-  if (language) return bip39.validateMnemonic(normalized, WORDLISTS[language]);
-  return detectBip39Language(normalized) !== null;
+  void language; // Every supported language is English.
+  return detectBip39Language(mnemonic) !== null;
 }
 
 function isSupportedWordCount(value: number): value is Bip39WordCount {

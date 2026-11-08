@@ -1,11 +1,11 @@
 {
-  "sourceSha256": "08a102c1d062e9ae10fe2ee50de7f2705f2e1bf812008cc3d70684b8d67b65c7",
+  "sourceSha256": "bcf779da6e7f1a1bc8fed963f5153ad934fefb45d23715381c20850ef42fc35f",
   "bindgenVersion": "0.2.127",
   "files": {
-    "optn_core.js": "30f7b2ffb3e7ce29144a6bffd6eb92ec7ab33330c4edc9cde3f57e0fb93ee6a3",
-    "optn_core.d.ts": "256fda117441f4ce0a4c6a764e8843a312daaaab4857ae90b0cf7ec47aa6b68d",
-    "optn_core_bg.wasm": "8eb889cd15d2c90665c310cf317564a1da64ab0ceacf58d85d9f6b8b5436d9c7",
-    "optn_core_bg.wasm.d.ts": "7c453e1e9687bfb0dd898d56b1b85b85fed9cb0e34286116ef2ac13db444e24e",
-    "optnCoreWasmBase64.generated.ts": "6611fa638fea27141c5e04781394a0c296556c2631123fe1bf6c86de729ae606"
+    "optn_core.js": "25a610ac224c615fb80167498da148dc22a2f7559356e8da93fb7688efa980f4",
+    "optn_core.d.ts": "ef85bda66bd865ee8d4c24a8d06dfbd56dba1df2e71c9e33d6e860c2ac0526f6",
+    "optn_core_bg.wasm": "4613651286939e9193fc718479da54f10ea3901ae5324760dc3be3cb7a45780f",
+    "optn_core_bg.wasm.d.ts": "5fe7a420e26e825b89cde38d9bee6e7ea12cb75e72b788506b62a0ae9d3d14af",
+    "optnCoreWasmBase64.generated.ts": "e156ddb481b7759b5fda15e8ce8bfe5eb4cf460c0ad7e84bb5db3fcbfe03b6db"
   }
 }

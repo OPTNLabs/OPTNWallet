@@ -6,11 +6,11 @@
 // HPKE IKMs are HKDF from the BIP39 seed with Paytaca's info strings so a
 // restored wallet publishes the same KeyPackage.
 
-import { mnemonicToSeed } from 'bip39';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex } from '@noble/hashes/utils';
+import { bip39SeedFromMnemonic } from '../../../services/Bip39Service';
 import {
   nip06AccountSeed,
   nip06DerivationPath,
@@ -60,7 +60,7 @@ export async function deriveMlsKeys(
 }
 
 export async function deriveMlsHpkeIkms(mnemonic: string, passphrase = '') {
-  const seed = new Uint8Array(await mnemonicToSeed(mnemonic, passphrase));
+  const seed = bip39SeedFromMnemonic(mnemonic, passphrase);
   try {
     const initIkm = hkdf(
       sha256,
