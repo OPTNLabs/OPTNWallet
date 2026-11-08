@@ -730,7 +730,18 @@ impl ChainService {
                 })
             }
             Err(error) => {
-                self.set_route_health(route, health_for_error(&error));
+                // SHV advertisement is not proof of service (bit 9 has also
+                // been used by non-SHV nodes). An optional proof timeout or
+                // refusal must not disable the same peer's ordinary header
+                // path. Invalid replies still quarantine the route.
+                if !matches!(request, ChainRequest::HistoricalHeaderProof { .. })
+                    || !matches!(
+                        error,
+                        ChainBackendError::Unsupported | ChainBackendError::Timeout
+                    )
+                {
+                    self.set_route_health(route, health_for_error(&error));
+                }
                 Err(ChainServiceError::Exhausted {
                     attempts: vec![AttemptFailure {
                         source: route.source.clone(),

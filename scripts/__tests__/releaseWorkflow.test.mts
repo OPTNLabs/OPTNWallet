@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   mkdtempSync,
@@ -297,6 +298,111 @@ describe('release workflow', () => {
     expect(desktopPreviewWorkflow).toContain(
       "--header 'Accept: application/octet-stream'"
     );
+  });
+
+  it.each([
+    [
+      'aarch64',
+      '228937549',
+      '83c292149274965a865dcd44c135cfca8ba28c6b7de3eb628d4b8b5f248af17c',
+    ],
+    [
+      'x86_64',
+      '228937581',
+      '992d502a248e14ab185448ddf6f6e7d25558cb84d4623c354c3af350c25fccb3',
+    ],
+  ])(
+    'selects the versioned AppImage plugin and digest for %s',
+    (arch, id, sha) => {
+      const pins = desktopPreviewWorkflow
+        .replace(/\r\n/g, '\n')
+        .match(/^ {10}case "\$tools_arch" in[\s\S]*?^ {10}esac/m)?.[0];
+      expect(pins).toBeTruthy();
+      const result = spawnSync(bash, ['-e', '-u', '-o', 'pipefail'], {
+        input: `${pins}\nprintf '%s %s' "$appimage_plugin_asset_id" "$appimage_plugin_sha"\n`,
+        encoding: 'utf8',
+        timeout: 5_000,
+        env: { ...process.env, tools_arch: arch },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(`${id} ${sha}`);
+    }
+  );
+
+  it.each([
+    { name: 'verified download', cached: false, corrupt: false, exit: 0 },
+    { name: 'corrupt download', cached: false, corrupt: true, exit: 0 },
+    { name: 'failed download', cached: false, corrupt: false, exit: 22 },
+    { name: 'verified cache', cached: true, corrupt: false, exit: 0 },
+    { name: 'corrupt cache', cached: true, corrupt: true, exit: 0 },
+  ])('checks AppImage integrity before cache publication: $name', (fixture) => {
+    const download = desktopPreviewWorkflow
+      .replace(/\r\n/g, '\n')
+      .match(/^ {10}download_and_verify\(\) \{[\s\S]*?^ {10}\}/m)?.[0];
+    expect(download).toBeTruthy();
+    const directory = mkdtempSync(
+      resolve(tmpdir(), 'optn-appimage-integrity-')
+    );
+    const verified = 'verified AppImage fixture\n';
+    const corrupt = 'corrupt AppImage fixture\n';
+    const expected = createHash('sha256').update(verified).digest('hex');
+    try {
+      // A corrupt cache must be replaced by a verified download; a valid cache
+      // must avoid the network even when the remote content would be corrupt.
+      writeFileSync(
+        resolve(directory, 'download'),
+        fixture.cached || fixture.corrupt ? corrupt : verified
+      );
+      if (fixture.cached) {
+        writeFileSync(
+          resolve(directory, 'plugin'),
+          fixture.corrupt ? corrupt : verified
+        );
+        if (fixture.corrupt)
+          writeFileSync(resolve(directory, 'download'), verified);
+      }
+      const result = spawnSync(bash, ['-e', '-u', '-o', 'pipefail'], {
+        cwd: directory,
+        input: `curl() {
+  printf '%s\\n' "$@" > curl-args
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = '--output' ]; then
+      cp download "$2"
+      return "$MOCK_CURL_EXIT"
+    fi
+    shift
+  done
+  return 99
+}
+${download}
+download_and_verify https://example.invalid/plugin plugin "$EXPECTED_SHA"
+`,
+        encoding: 'utf8',
+        timeout: 5_000,
+        env: {
+          ...process.env,
+          EXPECTED_SHA: expected,
+          MOCK_CURL_EXIT: String(fixture.exit),
+        },
+      });
+      const accepted =
+        fixture.exit === 0 && (fixture.cached || !fixture.corrupt);
+      expect(result.error).toBeUndefined();
+      expect(result.status === 0, result.stdout + result.stderr).toBe(accepted);
+      expect(readdirSync(directory).includes('plugin')).toBe(accepted);
+      expect(readdirSync(directory).includes('curl-args')).toBe(
+        !fixture.cached || fixture.corrupt
+      );
+      if (accepted) {
+        expect(readFileSync(resolve(directory, 'plugin'), 'utf8')).toBe(
+          verified
+        );
+        expect(readdirSync(directory)).not.toContain('plugin.tmp');
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('builds and publishes both browser-extension archives', () => {

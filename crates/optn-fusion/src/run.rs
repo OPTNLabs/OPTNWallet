@@ -1503,8 +1503,11 @@ mod tests {
         // Electron Cash sends 20 bytes (fusion.py:334); the field allows up to
         // 20 and a longer value would be rejected outright.
         assert_eq!(self_fusion_tag(b"7").len(), 20);
-        // The wallet id must not be recoverable from what the server sees.
-        assert!(!self_fusion_tag(b"7").starts_with(b"7"));
+        // The wallet id must not be recoverable from what the server sees. The
+        // salt is random per process, so a one-byte id would show through by
+        // chance once in 256 runs; eight bytes make that 2^-64.
+        let id = b"wallet-7";
+        assert!(!self_fusion_tag(id).starts_with(id));
     }
 
     #[test]

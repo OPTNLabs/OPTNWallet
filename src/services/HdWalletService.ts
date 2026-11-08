@@ -1,6 +1,5 @@
 import { hexToBin } from '@bitauth/libauth';
 import { Network } from '../state/slices/networkSlice';
-import { COIN_TYPE } from '../utils/constants';
 import { zeroize } from '../utils/secureMemory';
 // Seeds, BIP32 and addresses are derived by crates/optn-core (src/hd.rs), the
 // same code the CLI and the desktop runtime use. This file keeps the wallet's
@@ -40,6 +39,7 @@ function callCore<T>(call: () => T): T {
   }
 }
 
+import { networkProfile } from '../utils/networkProfile';
 export type DerivedBchKeyMaterial = {
   publicKey: Uint8Array;
   privateKey: Uint8Array;
@@ -112,9 +112,7 @@ export const BCH_WALLET_SCAN_BRANCH_NAMES: readonly BchStandardBranchName[] = [
  * later cannot inherit 145 here while being probed as a test net there.
  */
 export function getBchCoinType(network: Network = Network.MAINNET): number {
-  return network === Network.MAINNET
-    ? COIN_TYPE.bitcoincash
-    : COIN_TYPE.testnet;
+  return networkProfile(network).coinType;
 }
 
 export const MAX_BIP44_INDEX = 0x7fffffff;
@@ -177,7 +175,7 @@ export function buildBchAccountPath(parts: BchAccountPathParts): string {
 }
 
 export function getHdKeyNetwork(network: Network): 'mainnet' | 'testnet' {
-  return network === Network.MAINNET ? 'mainnet' : 'testnet';
+  return networkProfile(network).hdNetwork;
 }
 
 /**

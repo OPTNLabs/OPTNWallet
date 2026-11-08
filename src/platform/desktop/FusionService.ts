@@ -9,6 +9,7 @@ import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
 import { binToHex } from '../../utils/hex';
 
+import { cashAddressPrefix } from '../../utils/networkProfile';
 interface FusionRunInput {
   prev_txid: string;
   prev_index: number;
@@ -91,8 +92,7 @@ export async function createFreshFusionOutputScripts(
     throw new Error('invalid Fusion output count');
   }
 
-  const expectedPrefix =
-    network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
+  const expectedPrefix = `${cashAddressPrefix(network)}:`;
   const occupiedIndexes = () =>
     KeyService.retrieveKeys(walletId).then(
       (keys) =>

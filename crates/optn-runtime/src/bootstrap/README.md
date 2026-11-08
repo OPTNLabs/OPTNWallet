@@ -9,6 +9,20 @@ Use each network's TLS port exactly as supplied. TCP-only entries are not enable
 by this TLS bootstrap loader. Reading the catalog performs no network requests.
 Updates must preserve endpoint-derived source IDs and apply the durable user overlay.
 
+## General Protocols server list (2026-10-08)
+
+`servers_electrum_cash.json` pins General Protocols' `electrum-cash/servers` commit
+`36ffc06fa6ccbf98d171bf56a32e93ba3145b132` (2026-10-02), `source/{mainnet,chipnet,testnet}.ts`.
+Source: https://gitlab.com/electrum-cash/servers/-/tree/36ffc06fa6ccbf98d171bf56a32e93ba3145b132/source
+Upstream license: MIT, https://gitlab.com/electrum-cash/servers/-/blob/36ffc06fa6ccbf98d171bf56a32e93ba3145b132/LICENSE.
+
+Its `testnet` list is testnet4; it publishes no testnet3 list. Hosts Electron Cash
+already ships stay one candidate credited to both projects. The list adds
+`testnet4.imaginary.cash` (testnet4) and `fulcrum.greyh.at` (mainnet). On 2026-10-08
+all seven listed TLS endpoints answered as Fulcrum and returned the expected block
+hash at the network's `electrum-cash/checkpoint` height; that is review evidence
+only, and these remain unverified discovery hints at runtime.
+
 ## Metadata services (2026-09-26)
 
 The Rust catalog also supplies optional BCMR candidate-byte retrieval:

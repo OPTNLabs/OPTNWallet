@@ -38,6 +38,7 @@ import {
   resetWatchOnlyWalletColumnsCache,
 } from './watchOnlySchema';
 
+import { cashAddressPrefix, parseNetwork } from '../utils/networkProfile';
 /**
  * Wallet type string for a watch-only wallet.
  *
@@ -142,7 +143,7 @@ export async function createWatchOnlyWallet(
   if (!walletId) throw new Error('Could not create the watch-only wallet.');
 
   // Dual-write keys + addresses (history scans `addresses`; UTXO uses `keys`).
-  const prefix = args.network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const prefix = cashAddressPrefix(args.network);
   const insertKey = db.prepare(
     `INSERT INTO keys
        (wallet_id, public_key, private_key, address, token_address, pubkey_hash,
@@ -219,7 +220,7 @@ export async function createWatchOnlyMultisigWallet(args: {
   validateMultisigPolicy(args.policy);
 
   const gapLimit = args.gapLimit ?? WATCH_ONLY_GAP_LIMIT;
-  const prefix = args.network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const prefix = cashAddressPrefix(args.network);
 
   await ensureWatchOnlyWalletColumns();
   const dbService = DatabaseService();
@@ -493,7 +494,7 @@ export async function ensureWatchOnlyWalletKeys(walletId: number): Promise<{
       return { keyCount: 0, rebuilt: false, firstReceive: null };
     }
     const row = metaQ.getAsObject() as Record<string, unknown>;
-    if (row.networkType === Network.CHIPNET) network = Network.CHIPNET;
+    network = parseNetwork(row.networkType) ?? Network.MAINNET;
     accountXpub =
       typeof row.account_xpub === 'string' ? row.account_xpub.trim() : '';
   } finally {
@@ -513,8 +514,7 @@ export async function ensureWatchOnlyWalletKeys(walletId: number): Promise<{
     countQ.free();
   }
 
-  const expectedPrefix =
-    network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
+  const expectedPrefix = `${cashAddressPrefix(network)}:`;
   const prefixQ = db.prepare(
     `SELECT COUNT(*) AS c FROM keys
      WHERE wallet_id = ? AND address LIKE ?`
@@ -597,7 +597,7 @@ export async function ensureWatchOnlyWalletKeys(walletId: number): Promise<{
     return { keyCount: 0, rebuilt: false, firstReceive: null };
   }
 
-  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const prefix = cashAddressPrefix(network);
   const insertKey = db.prepare(
     `INSERT OR IGNORE INTO keys
        (wallet_id, public_key, private_key, address, token_address, pubkey_hash,
@@ -676,12 +676,12 @@ export async function ensureWatchOnlyWalletAddresses(
     meta.bind([walletId, WATCH_ONLY_WALLET_TYPE]);
     if (!meta.step()) return 0;
     const row = meta.getAsObject() as Record<string, unknown>;
-    if (row.networkType === Network.CHIPNET) network = Network.CHIPNET;
+    network = parseNetwork(row.networkType) ?? Network.MAINNET;
   } finally {
     meta.free();
   }
 
-  const prefix = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  const prefix = cashAddressPrefix(network);
   const missing = db.prepare(`
     SELECT k.address, k.token_address, k.address_index, k.change_index
     FROM keys k

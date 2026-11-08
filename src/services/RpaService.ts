@@ -56,7 +56,7 @@ import {
 
 /** The core takes the network as a string; this is the only mapping needed. */
 function coreNetwork(network: Network): string {
-  return network === Network.MAINNET ? 'mainnet' : 'chipnet';
+  return network;
 }
 import {
   deriveHdPublicKeyAtPath,
@@ -65,6 +65,7 @@ import {
   BCH_STANDARD_BRANCH_INDEX,
 } from './HdWalletService';
 
+import { isTestNetwork } from '../utils/networkProfile';
 // ─── Key derivation paths ─────────────────────────────────────────────────────
 
 function scanKeyPath(network: Network, accountPath?: string): string {
@@ -271,12 +272,11 @@ export function getRpaSendBlockReason(
     return 'This reusable payment address (RPA) is invalid. No transaction was created.';
   }
 
-  const paycodeNetwork =
-    decoded.version === 0x01 || decoded.version === 0x02
-      ? Network.MAINNET
-      : Network.CHIPNET;
-  if (paycodeNetwork !== network) {
-    const label = paycodeNetwork === Network.MAINNET ? 'Mainnet' : 'Chipnet';
+  // A cashcode only says mainnet (cashcode:) or test network (cashcodetest:);
+  // every test chain shares the testnet payload version.
+  const paycodeIsMainnet = decoded.version === 0x01 || decoded.version === 0x02;
+  if (paycodeIsMainnet === isTestNetwork(network)) {
+    const label = paycodeIsMainnet ? 'Mainnet' : 'a test network';
     return `This RPA paycode is for ${label}, not the wallet's active network. No transaction was created.`;
   }
 

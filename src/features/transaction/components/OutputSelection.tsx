@@ -86,10 +86,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   const prices = useSelector((s: RootState) => s.priceFeed);
   const bchUsd = prices['BCH-USD']?.price ?? 0;
-  const prefixLength =
-    currentNetwork === Network.MAINNET
-      ? PREFIX.mainnet.length
-      : PREFIX.chipnet.length;
+  const prefixLength = PREFIX[currentNetwork].length;
 
   const hasGenesisUtxoSelected = selectedUtxos.some(
     (utxo) => !utxo.token && utxo.tx_pos === 0

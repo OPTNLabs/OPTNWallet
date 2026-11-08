@@ -29,6 +29,7 @@ import {
   deriveSpendingKey,
 } from './RpaService';
 
+import { parseNetwork } from '../utils/networkProfile';
 /**
  * The unlocked wallet's seed material and account path.
  *
@@ -49,8 +50,7 @@ async function rpaWalletContext(walletId: number): Promise<{
   if (!info?.mnemonic) {
     throw new Error('Wallet is not unlocked, so this coin cannot be signed.');
   }
-  const network =
-    info.networkType === Network.CHIPNET ? Network.CHIPNET : Network.MAINNET;
+  const network = parseNetwork(info.networkType) ?? Network.MAINNET;
   return {
     mnemonic: info.mnemonic,
     passphrase: info.passphrase ?? '',

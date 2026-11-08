@@ -14,6 +14,7 @@
 // changes nothing until a caller decides to adopt the result.
 
 import { Network } from '../state/slices/networkSlice';
+import { networkProfile } from '../utils/networkProfile';
 
 /**
  * Candidate account paths, most likely first.
@@ -24,7 +25,7 @@ import { Network } from '../state/slices/networkSlice';
  */
 export function candidateAccountPaths(network: Network): string[] {
   const accounts = [0, 1];
-  const coinTypes = network === Network.MAINNET ? [145, 0] : [1, 145, 0];
+  const coinTypes = networkProfile(network).discoveryCoinTypes;
   const paths: string[] = [];
   for (const coinType of coinTypes) {
     for (const account of accounts) {

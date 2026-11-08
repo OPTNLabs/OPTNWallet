@@ -341,6 +341,9 @@ pub enum BootstrapProject {
     FulcrumPeerNetwork,
     Paytaca,
     Ipfs,
+    /// General Protocols' `electrum-cash/servers` list. Declared last so a host
+    /// Electron Cash already ships keeps Electron Cash as its representative origin.
+    ElectrumCash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -535,6 +538,11 @@ pub const DEFAULT_BOOTSTRAP_FEEDS: &[BootstrapFeed] = &[
         project: BootstrapProject::ElectronCash,
         kind: BootstrapFeedKind::ElectrumServerCatalog,
         reference: "Electron-Cash/Electron-Cash: electroncash/servers.json",
+    },
+    BootstrapFeed {
+        project: BootstrapProject::ElectrumCash,
+        kind: BootstrapFeedKind::ElectrumServerCatalog,
+        reference: "electrum-cash/servers: source/{mainnet,chipnet,testnet}.ts",
     },
     BootstrapFeed {
         project: BootstrapProject::FulcrumPeerNetwork,

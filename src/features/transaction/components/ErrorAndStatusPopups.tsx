@@ -21,6 +21,7 @@ import { type BroadcastState } from '../../../services/TransactionService';
 import { useI18n } from '../../../i18n/useI18n';
 import { copyToClipboard } from '../../../utils/clipboard';
 
+import { cashAddressPrefix, parseNetwork } from '../../../utils/networkProfile';
 interface ErrorAndStatusPopupsProps {
   showRawTxPopup: boolean;
   showTxIdPopup: boolean;
@@ -43,10 +44,8 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
   closePopups,
 }) => {
   const { t } = useI18n();
-  const prefixLength =
-    currentNetwork === Network.MAINNET
-      ? PREFIX.mainnet.length
-      : PREFIX.chipnet.length;
+  const network = parseNetwork(currentNetwork) ?? Network.MAINNET;
+  const prefixLength = PREFIX[network].length;
   const toCashAddress = (
     bytecode: Uint8Array,
     prefix: 'bitcoincash' | 'bchtest' | 'bchreg'
@@ -174,9 +173,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                               {shortenTxHash(
                                 toCashAddress(
                                   lockingBytecode,
-                                  currentNetwork === Network.MAINNET
-                                    ? 'bitcoincash'
-                                    : 'bchtest'
+                                  cashAddressPrefix(network)
                                 ),
                                 prefixLength
                               )}
@@ -267,11 +264,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               </button>
             </div>
             <ExplorerLink
-              network={
-                currentNetwork === Network.CHIPNET
-                  ? Network.CHIPNET
-                  : Network.MAINNET
-              }
+              network={network}
               txid={transactionId}
               className="wallet-btn-primary py-2 px-4"
               label={t('builder.viewExplorer')}

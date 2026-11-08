@@ -19,6 +19,7 @@ import {
 import { deleteWalletScope } from '../DatabaseManager/DatabaseMerge';
 import { clearCachedWalletUtxoSnapshot } from '../../services/WalletUtxoSnapshotCache';
 
+import { parseNetwork } from '../../utils/networkProfile';
 // Helper function to safely cast SQL values to number
 function toNumber(value: unknown): number {
   return typeof value === 'number' ? value : parseInt(String(value), 10);
@@ -113,12 +114,7 @@ export default function WalletManager() {
       > = [];
       while (query.step()) {
         const row = query.getAsObject() as Record<string, unknown>;
-        const networkType =
-          row.networkType === Network.MAINNET
-            ? Network.MAINNET
-            : row.networkType === Network.CHIPNET
-              ? Network.CHIPNET
-              : Network.MAINNET;
+        const networkType = parseNetwork(row.networkType) ?? Network.MAINNET;
         const walletType =
           row.walletType === WalletType.QUANTUMROOT
             ? WalletType.QUANTUMROOT
@@ -168,12 +164,7 @@ export default function WalletManager() {
       const row = query.getAsObject() as Record<string, unknown>;
       query.free();
 
-      const networkType =
-        row.networkType === Network.MAINNET
-          ? Network.MAINNET
-          : row.networkType === Network.CHIPNET
-            ? Network.CHIPNET
-            : null;
+      const networkType = parseNetwork(row.networkType) ?? null;
       const walletType =
         row.walletType === WalletType.QUANTUMROOT
           ? WalletType.QUANTUMROOT
@@ -308,12 +299,7 @@ export default function WalletManager() {
           });
           continue;
         }
-        const rowNetwork =
-          row.networkType === Network.MAINNET
-            ? Network.MAINNET
-            : row.networkType === Network.CHIPNET
-              ? Network.CHIPNET
-              : null;
+        const rowNetwork = parseNetwork(row.networkType) ?? null;
         const rowWalletType = normalizeWalletType(row.walletType);
         const networkMatches =
           lookup?.networkType === undefined ||
@@ -388,12 +374,7 @@ export default function WalletManager() {
           );
           continue;
         }
-        const rowNetwork =
-          row.networkType === Network.MAINNET
-            ? Network.MAINNET
-            : row.networkType === Network.CHIPNET
-              ? Network.CHIPNET
-              : null;
+        const rowNetwork = parseNetwork(row.networkType) ?? null;
         const rowWalletType = normalizeWalletType(row.walletType);
         const networkMatches =
           lookup?.networkType === undefined ||
@@ -524,12 +505,7 @@ export default function WalletManager() {
 
       if (query.step()) {
         const rawWalletInfo = query.getAsObject() as Record<string, unknown>;
-        const networkType =
-          rawWalletInfo.networkType === Network.MAINNET
-            ? Network.MAINNET
-            : rawWalletInfo.networkType === Network.CHIPNET
-              ? Network.CHIPNET
-              : null;
+        const networkType = parseNetwork(rawWalletInfo.networkType) ?? null;
         const walletType =
           rawWalletInfo.walletType === WalletType.QUANTUMROOT
             ? WalletType.QUANTUMROOT

@@ -4,7 +4,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
-import { Network, setNetwork } from '../../state/slices/networkSlice';
+import { setNetwork } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import {
   setWalletId,
@@ -27,6 +27,7 @@ import {
 import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
 import { useI18n } from '../../i18n/useI18n';
 
+import { parseNetwork } from '../../utils/networkProfile';
 const TOTAL_WORDS = 12;
 const normalizeRecoveryWord = (word: string) =>
   word.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -239,11 +240,7 @@ const ImportWalletPage = () => {
       // recovery material a second time just to read network/path settings.
       const walletInfo = await walletManager.getWalletMetadata(walletID);
       const resolvedNetwork =
-        walletInfo?.networkType === Network.MAINNET
-          ? Network.MAINNET
-          : walletInfo?.networkType === Network.CHIPNET
-            ? Network.CHIPNET
-            : currentNetwork;
+        parseNetwork(walletInfo?.networkType) ?? currentNetwork;
 
       // Make the first receive/change pair available before activating the
       // wallet. The mobile worker starts syncing as soon as the wallet ID is
