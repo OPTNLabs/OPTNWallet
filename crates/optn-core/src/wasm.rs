@@ -53,6 +53,152 @@ fn err(e: crate::error::CliError) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
+// ─── Seeds and BIP32 ─────────────────────────────────────────────────────────
+//
+// The surface of src/services/HdWalletService.ts and Bip39Service.ts, which
+// used to do this with libauth and bip39.js. The seed is computed from the
+// phrase and passphrase on every call and dropped with the call, as before;
+// only what the caller asked for leaves. Both strings arrive NFKD-normalized:
+// JS has String.normalize, and this crate builds without Unicode tables.
+
+fn hd_wallet(mnemonic: &str, passphrase: &str) -> crate::hd::Wallet {
+    crate::hd::Wallet::from_seed(&crate::hd::bip39_seed(mnemonic, passphrase))
+}
+
+/// Copy secret bytes into caller-owned JS memory, then wipe the Rust copy.
+/// The caller wipes the array it gets once it has used it.
+fn hand_over(secret: &mut [u8]) -> js_sys::Uint8Array {
+    let output = js_sys::Uint8Array::new_with_length(secret.len() as u32);
+    output.copy_from(secret);
+    secret.zeroize();
+    output
+}
+
+/// A new recovery phrase, drawn by the core from the browser's own
+/// `crypto.getRandomValues` (see `hd::generate_mnemonic`). JavaScript never
+/// supplies or sees the entropy, only the finished phrase.
+#[wasm_bindgen(js_name = bip39GenerateMnemonic)]
+pub fn bip39_generate_mnemonic(word_count: usize) -> Result<String, JsValue> {
+    let phrase = crate::hd::generate_mnemonic(word_count).map_err(err)?;
+    Ok(phrase.as_str().to_owned())
+}
+
+/// Whether a phrase is valid English BIP39, written exactly as BIP39 writes it.
+#[wasm_bindgen(js_name = bip39IsCanonicalMnemonic)]
+pub fn bip39_is_canonical_mnemonic(phrase: &str) -> bool {
+    crate::hd::is_canonical_mnemonic(phrase)
+}
+
+/// The 64-byte BIP39 seed, for keys that are not BIP32 (MLS's HPKE inputs).
+#[wasm_bindgen(js_name = bip39Seed)]
+pub fn bip39_seed(mnemonic: &str, passphrase: &str) -> js_sys::Uint8Array {
+    let mut seed = crate::hd::bip39_seed(mnemonic, passphrase);
+    hand_over(seed.as_mut())
+}
+
+/// The 32-byte private key at a path.
+#[wasm_bindgen(js_name = hdPrivateKeyAtPath)]
+pub fn hd_private_key_at_path(
+    mnemonic: &str,
+    passphrase: &str,
+    path: &str,
+) -> Result<js_sys::Uint8Array, JsValue> {
+    let mut key = hd_wallet(mnemonic, passphrase)
+        .private_key(path)
+        .map_err(err)?;
+    Ok(hand_over(key.as_mut()))
+}
+
+/// `private(32) || compressed public(33)` at a path, from one derivation.
+#[wasm_bindgen(js_name = hdKeyPairAtPath)]
+pub fn hd_key_pair_at_path(
+    mnemonic: &str,
+    passphrase: &str,
+    path: &str,
+) -> Result<js_sys::Uint8Array, JsValue> {
+    let (private_key, public_key) = hd_wallet(mnemonic, passphrase)
+        .key_pair(path)
+        .map_err(err)?;
+    let mut packed = Zeroizing::new([0u8; 65]);
+    packed[..32].copy_from_slice(private_key.as_ref());
+    packed[32..].copy_from_slice(&public_key);
+    Ok(hand_over(packed.as_mut()))
+}
+
+/// The extended public key at a path: `xpub` on mainnet, `tpub` otherwise.
+#[wasm_bindgen(js_name = hdPublicKeyAtPath)]
+pub fn hd_public_key_at_path(
+    mnemonic: &str,
+    passphrase: &str,
+    network: &str,
+    path: &str,
+) -> Result<String, JsValue> {
+    hd_wallet(mnemonic, passphrase)
+        .xpub_at(network_from(network)?, path)
+        .map_err(err)
+}
+
+/// The extended private key at a path: `xprv` on mainnet, `tprv` otherwise.
+#[wasm_bindgen(js_name = hdExtendedPrivateKeyAtPath)]
+pub fn hd_extended_private_key_at_path(
+    mnemonic: &str,
+    passphrase: &str,
+    network: &str,
+    path: &str,
+) -> Result<String, JsValue> {
+    let xprv = hd_wallet(mnemonic, passphrase)
+        .xprv_string_at(network_from(network)?, path)
+        .map_err(err)?;
+    Ok(xprv.as_str().to_owned())
+}
+
+/// The 4-byte BIP32 master fingerprint.
+#[wasm_bindgen(js_name = hdMasterFingerprint)]
+pub fn hd_master_fingerprint(mnemonic: &str, passphrase: &str) -> Result<Vec<u8>, JsValue> {
+    Ok(hd_wallet(mnemonic, passphrase)
+        .master_fingerprint()
+        .map_err(err)?
+        .to_vec())
+}
+
+/// The compressed public key at non-hardened child `index` of an xpub/tpub.
+#[wasm_bindgen(js_name = hdPublicKeyChild)]
+pub fn hd_public_key_child(hd_public_key: &str, index: u32) -> Result<Vec<u8>, JsValue> {
+    Ok(crate::hd::hd_public_key_child(hd_public_key, index)
+        .map_err(err)?
+        .to_vec())
+}
+
+/// An xpub/tpub re-serialized with `network`'s version bytes.
+#[wasm_bindgen(js_name = hdAlignPublicKeyNetwork)]
+pub fn hd_align_public_key_network(network: &str, hd_public_key: &str) -> Result<String, JsValue> {
+    crate::hd::align_hd_public_key_network(network_from(network)?, hd_public_key).map_err(err)
+}
+
+/// A public key's P2PKH and token-aware P2PKH CashAddrs, as JSON
+/// `{publicKeyHash, address, tokenAddress}` with the hash in hex.
+///
+/// Either SEC1 length is accepted, compressed or not, since both hash to a
+/// valid script; any other length is refused rather than hashed.
+#[wasm_bindgen(js_name = bchP2pkhAddresses)]
+pub fn bch_p2pkh_addresses(network: &str, public_key: &[u8]) -> Result<String, JsValue> {
+    if public_key.len() != 33 && public_key.len() != 65 {
+        return Err(JsValue::from_str(&format!(
+            "public key must be 33 or 65 bytes, got {}",
+            public_key.len()
+        )));
+    }
+    let prefix = network_from(network)?.prefix();
+    let hash = crate::hd::hash160(public_key);
+    let encode = |kind| crate::cashaddr::Address::from_hash(prefix, kind, hash).encode();
+    Ok(serde_json::json!({
+        "publicKeyHash": crate::coins::hex_encode(&hash),
+        "address": encode(crate::cashaddr::AddressKind::P2pkh),
+        "tokenAddress": encode(crate::cashaddr::AddressKind::P2pkhToken),
+    })
+    .to_string())
+}
+
 /// Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
 /// display order, matching the shared coin-hold record. This does not sign.
 #[wasm_bindgen(js_name = transactionOutpoints)]
