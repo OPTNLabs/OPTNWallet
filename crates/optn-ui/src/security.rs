@@ -84,6 +84,7 @@ pub fn SaveWatchOnly(
                 if let Some(preview) = preview.get_untracked() {
                     if cfg!(feature = "tauri-transport") {
                         let request = Request::ImportWatchOnly {
+                            legacy_source_id: None,
                             name: preview.wallet_name,
                             account_xpub: SecretText::new(preview.account_xpub),
                             master_fingerprint: preview.master_fingerprint.unwrap_or_default(),

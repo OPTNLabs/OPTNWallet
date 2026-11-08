@@ -327,6 +327,7 @@ async fn watch_only_import_and_legacy_refusal_preserve_wallet_authority() {
     let watcher = start(Storage::default(), Checkpoints::default());
     watcher
         .wallet_security(Request::ImportWatchOnly {
+            legacy_source_id: None,
             name: "Public watch payment fixture".into(),
             account_xpub: secret(&xpub),
             master_fingerprint: String::new(),
