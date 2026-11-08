@@ -230,6 +230,7 @@ async fn encrypted_reopen_prunes_recovers_and_cli_accepts_both_peers() {
             confirmation: secret(),
             network: "regtest".into(),
             account_path: "m/44'/1'/0'".into(),
+            legacy_source_id: None,
         })
         .await
         .unwrap();
