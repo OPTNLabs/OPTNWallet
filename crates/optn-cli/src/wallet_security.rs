@@ -699,6 +699,7 @@ pub async fn run(directory: Option<PathBuf>, stdio: bool, cli: &crate::Cli) -> R
                             password(&format!("Account path (empty for {default_path}): "))?;
                         let fingerprint = password("Master fingerprint (optional): ")?;
                         Some(Request::ImportWatchOnly {
+                            legacy_source_id: None,
                             name: name.trim().into(),
                             account_xpub: material,
                             master_fingerprint: fingerprint.expose().trim().into(),

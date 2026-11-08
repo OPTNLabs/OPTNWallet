@@ -717,6 +717,18 @@ describe('release workflow', () => {
     expect(cliPreviewWorkflow).toMatch(/complete:[\s\S]*?if: always\(\)/);
   });
 
+  it('lets the Intel macOS CLI build finish on an uncached runner', () => {
+    // A cold Rust cache took this target past a flat 30 minutes, and a
+    // cancelled job saves no cache, so retries could never recover.
+    expect(cliPreviewWorkflow).toContain(
+      'timeout-minutes: ${{ matrix.timeout-minutes || 30 }}'
+    );
+    const intel = cliPreviewWorkflow.match(
+      /label: macos-x64\s+target: x86_64-apple-darwin\s+timeout-minutes: (\d+)/
+    );
+    expect(Number(intel?.[1] ?? 0)).toBeGreaterThanOrEqual(45);
+  });
+
   it('ships a CLI binary for exactly the platforms the manifest declares', () => {
     // The lists above are written out, which is readable but means a new
     // `when: "cli"` asset can be declared and never built: the release-time

@@ -2854,6 +2854,7 @@ mod tests {
         tokio::spawn(driver.run());
         let status = runtime
             .wallet_security(Request::ImportWatchOnly {
+                legacy_source_id: None,
                 name: "Public managed BCMR fixture".into(),
                 account_xpub: SecretText::new(xpub.clone()),
                 master_fingerprint: String::new(),
