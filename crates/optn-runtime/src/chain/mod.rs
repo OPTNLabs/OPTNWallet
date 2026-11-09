@@ -289,6 +289,11 @@ pub enum EndpointKind {
     ExplorerHttps,
     IpfsGatewayHttps,
     BcmrIndexerHttps,
+    /// A DNS seed: a name that resolves to BCH P2P nodes (#75 §21.3). Never a
+    /// peer itself. Each lookup can name different nodes, and a connection
+    /// made to the name lands on whichever one it resolved to, so the nodes
+    /// a seed names are the peers and the seed is how they are found.
+    BchDnsSeed,
 }
 
 impl EndpointKind {
@@ -301,7 +306,8 @@ impl EndpointKind {
             Self::ExplorerHttp
             | Self::ExplorerHttps
             | Self::IpfsGatewayHttps
-            | Self::BcmrIndexerHttps => None,
+            | Self::BcmrIndexerHttps
+            | Self::BchDnsSeed => None,
         }
     }
 
@@ -316,10 +322,12 @@ impl EndpointKind {
             Self::ElectrumTls | Self::ElectrumTcp => matches!(protocol, ProtocolFamily::Electrum),
             Self::BchnRpc => matches!(protocol, ProtocolFamily::BchnRpc),
             Self::BchnZmq => matches!(protocol, ProtocolFamily::BchnZmq),
+            // A seed carries no protocol; the nodes it names do.
             Self::ExplorerHttp
             | Self::ExplorerHttps
             | Self::IpfsGatewayHttps
-            | Self::BcmrIndexerHttps => false,
+            | Self::BcmrIndexerHttps
+            | Self::BchDnsSeed => false,
         }
     }
 }
@@ -339,6 +347,8 @@ pub enum BootstrapProject {
     Knuth,
     ElectronCash,
     FulcrumPeerNetwork,
+    /// BCH P2P nodes a DNS seed named, by DNS or through the node it led to.
+    BchPeerNetwork,
     Paytaca,
     Ipfs,
     /// General Protocols' `electrum-cash/servers` list. Declared last so a host
@@ -504,6 +514,9 @@ pub enum BootstrapFeedKind {
     NodeDnsOrDefaultPeerDiscovery,
     ElectrumServerCatalog,
     ElectrumPeerDiscovery,
+    /// Nodes found through a DNS seed: its DNS answer, or the `addr` list of
+    /// the node a seed led to.
+    P2pPeerDiscovery,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -522,7 +535,7 @@ pub const DEFAULT_BOOTSTRAP_FEEDS: &[BootstrapFeed] = &[
     BootstrapFeed {
         project: BootstrapProject::FloweeTheHub,
         kind: BootstrapFeedKind::NodeDnsOrDefaultPeerDiscovery,
-        reference: "FloweeTheHub/thehub: upstream node peer discovery",
+        reference: "Flowee/thehub: hub/server/chainparams.cpp",
     },
     BootstrapFeed {
         project: BootstrapProject::Bchd,
@@ -532,7 +545,7 @@ pub const DEFAULT_BOOTSTRAP_FEEDS: &[BootstrapFeed] = &[
     BootstrapFeed {
         project: BootstrapProject::Knuth,
         kind: BootstrapFeedKind::NodeDnsOrDefaultPeerDiscovery,
-        reference: "k-nuth/kth: upstream node peer discovery",
+        reference: "k-nuth/kth: src/network/src/settings.cpp",
     },
     BootstrapFeed {
         project: BootstrapProject::ElectronCash,
@@ -548,6 +561,11 @@ pub const DEFAULT_BOOTSTRAP_FEEDS: &[BootstrapFeed] = &[
         project: BootstrapProject::FulcrumPeerNetwork,
         kind: BootstrapFeedKind::ElectrumPeerDiscovery,
         reference: "Electrum server.peers.subscribe / Fulcrum peering",
+    },
+    BootstrapFeed {
+        project: BootstrapProject::BchPeerNetwork,
+        kind: BootstrapFeedKind::P2pPeerDiscovery,
+        reference: "DNS seed answers, or getaddr through a proxy (Bitcoin Core addrfetch)",
     },
 ];
 
@@ -575,21 +593,105 @@ impl SourceScope {
     }
 }
 
+/// How an eligible endpoint is reached (#75 §4.1).
+///
+/// Orthogonal to which sources are eligible: scope decides *which* sources a
+/// wallet may use, this decides *how* it reaches them. A route that cannot
+/// satisfy it is ineligible, and nothing falls back from Tor to a direct
+/// connection on its own. Loopback is always direct: there is no network hop
+/// to hide, and Tor cannot reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransportPolicy {
+    /// Tor on: every remote endpoint through Tor, except a node the holder
+    /// declared as their own, which already knows who is asking and is
+    /// reached directly. The behaviour before this choice existed.
+    #[default]
+    Tor,
+    /// Tor off: no proxy. CashFusion, private only over Tor, does not run.
+    Direct,
+}
+
+impl TransportPolicy {
+    /// Whether a remote destination of this ownership must be reached through
+    /// Tor. `tor_for(false)` is the rule for every public source.
+    pub const fn tor_for(self, own_infrastructure: bool) -> bool {
+        match self {
+            Self::Tor => !own_infrastructure,
+            Self::Direct => false,
+        }
+    }
+
+    /// Whether reaching `host` on a source of this ownership must use Tor.
+    pub fn requires_tor(self, own_infrastructure: bool, host: &str) -> bool {
+        !optn_core::endpoint::is_loopback_host(host) && self.tor_for(own_infrastructure)
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Tor => "Tor on",
+            Self::Direct => "Tor off",
+        }
+    }
+
+    pub const ALL: [Self; 2] = [Self::Tor, Self::Direct];
+
+    /// The stable name used in settings files and IPC.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tor => "tor",
+            Self::Direct => "direct",
+        }
+    }
+}
+
+impl std::str::FromStr for TransportPolicy {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|transport| transport.as_str() == value)
+            .ok_or_else(|| format!("unknown transport '{value}'; expected tor or direct"))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionPolicy {
     pub protocols: ProtocolSet,
     pub primary_scope: SourceScope,
     pub fallback_scope: Option<SourceScope>,
     pub preferred: Vec<SourceId>,
+    /// How the selected sources are reached.
+    pub transport: TransportPolicy,
 }
 
 impl ConnectionPolicy {
+    /// Whether two policies choose the same sources the same way, whatever
+    /// transport each reaches them over.
+    ///
+    /// Every field but `transport` is named, so a field added later has to be
+    /// placed on one side of that line or the other.
+    pub fn selects_like(&self, other: &Self) -> bool {
+        let Self {
+            protocols,
+            primary_scope,
+            fallback_scope,
+            preferred,
+            transport: _,
+        } = self;
+        *protocols == other.protocols
+            && *primary_scope == other.primary_scope
+            && *fallback_scope == other.fallback_scope
+            && *preferred == other.preferred
+    }
+
     pub fn auto() -> Self {
         Self {
             protocols: ProtocolSet::all(),
             primary_scope: SourceScope::AllEnabled,
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: TransportPolicy::default(),
         }
     }
 
@@ -599,6 +701,7 @@ impl ConnectionPolicy {
             primary_scope: SourceScope::UserInfrastructure,
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: TransportPolicy::default(),
         }
     }
 
@@ -608,6 +711,7 @@ impl ConnectionPolicy {
             primary_scope: SourceScope::Explicit(BTreeSet::from([source])),
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: TransportPolicy::default(),
         }
     }
 }
@@ -771,6 +875,14 @@ pub enum VerificationState {
     Degraded,
 }
 
+/// A registered provider and the health its chain service gives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderStatus {
+    pub source: SourceId,
+    pub protocol: ProtocolFamily,
+    pub health: ProviderHealth,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletSyncState {
     pub primary_source: Option<SourceId>,
@@ -779,6 +891,13 @@ pub struct WalletSyncState {
     pub chain_tip: Option<(u32, Hash32)>,
     pub verification: VerificationState,
     pub degraded_reason: Option<String>,
+    /// When the retained snapshot was accepted, in Unix milliseconds: its
+    /// age is the reader's clock minus this. Sealed into the checkpoint.
+    pub snapshot_at_unix_ms: Option<u64>,
+    /// The selected providers and their health at the last refresh.
+    pub providers: Vec<ProviderStatus>,
+    /// Where the verified headers stood at the last refresh.
+    pub header_checkpoint: Option<HeaderCheckpoint>,
 }
 
 impl Default for WalletSyncState {
@@ -790,6 +909,9 @@ impl Default for WalletSyncState {
             chain_tip: None,
             verification: VerificationState::Unknown,
             degraded_reason: None,
+            snapshot_at_unix_ms: None,
+            providers: Vec::new(),
+            header_checkpoint: None,
         }
     }
 }
@@ -1008,6 +1130,7 @@ mod tests {
             primary_scope: SourceScope::Explicit(BTreeSet::from([a.clone(), b.clone()])),
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: TransportPolicy::default(),
         };
         let plan = build_selection_plan(&catalog, &policy);
         assert_eq!(plan.primary, vec![b, a]);
@@ -1119,6 +1242,7 @@ mod tests {
             primary_scope: SourceScope::Explicit(BTreeSet::from([preferred.clone()])),
             fallback_scope: Some(SourceScope::PublicEnabled),
             preferred: vec![preferred.clone()],
+            transport: TransportPolicy::default(),
         };
         let plan = build_selection_plan(&catalog, &policy);
         assert_eq!(plan.primary, vec![preferred]);
@@ -1224,6 +1348,7 @@ mod tests {
             primary_scope: SourceScope::Explicit(BTreeSet::from([id.clone()])),
             fallback_scope: None,
             preferred: Vec::new(),
+            transport: TransportPolicy::default(),
         };
         let plan = build_selection_plan(&catalog, &policy);
         assert_eq!(plan.primary, vec![id]);

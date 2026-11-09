@@ -25,23 +25,44 @@ const srcPath = (rel: string) => normalizePath(resolvePath(__dirname, rel));
 // rewritten back to DesktopAppShell and React recurses until the WebView stalls.
 const modulePath = (id: string) => normalizePath(id.replace(/[?#].*$/, ''));
 
-// Inject desktop.css and the HTTP bridge into the build without touching main.tsx.
-// The HTTP bridge is imported first so window.fetch is patched before any module
-// (e.g. the price feed) issues a request.
+// Modules that must run before any library or app module, and what they
+// import from this repo. They get a chunk of their own (see the default
+// export), because an entry runs every chunk it imports before its own code:
+// inlined into the entry, they ran after the chunk holding nostr-tools and the
+// redux store.
+// - The network bridges (fetch and WebSocket through Rust, under the Tor
+//   switch). nostr-tools captures `WebSocket` when it loads, and had already
+//   taken the webview's socket.
+// - The per-window storage partition. The store configures localForage when
+//   it loads, and had already opened the shared database.
+const DESKTOP_PRELUDE = {
+  network: srcPath('src/platform/desktop/network-prelude.ts'),
+  storagePartition: srcPath('src/platform/desktop/storagePartition.ts'),
+};
+const DESKTOP_PRELUDE_MODULES = new Set([
+  DESKTOP_PRELUDE.network,
+  DESKTOP_PRELUDE.storagePartition,
+  ...[
+    'src/platform/desktop/http-bridge.ts',
+    'src/platform/desktop/socket-bridge.ts',
+    'src/platform/desktop/rendererNetwork.ts',
+  ].map(srcPath),
+]);
+
+// Inject the desktop prelude, desktop.css and the logger into the build
+// without touching main.tsx. The prelude comes first: nothing the app imports
+// may reach the network around the bridges, and the persist store must open
+// this window's own database.
 function injectDesktopStylesPlugin(): Plugin {
   return {
     name: 'optn-inject-desktop-css',
     transform(code, id) {
       if (id.endsWith('src/main.tsx') || id.endsWith('src\\main.tsx')) {
         const cssPath = resolvePath(__dirname, 'src/platform/desktop/desktop.css');
-        const httpBridgePath = resolvePath(__dirname, 'src/platform/desktop/http-bridge.ts');
         const loggerPath = resolvePath(__dirname, 'src/platform/desktop/logger.ts');
-        // Must run BEFORE state/store.ts configures localForage, so per-window
-        // storage partitioning is in place when the persist store is created.
-        const storagePartitionPath = resolvePath(__dirname, 'src/platform/desktop/storagePartition.ts');
         const prelude =
-          `import ${JSON.stringify(storagePartitionPath)};\n` +
-          `import ${JSON.stringify(httpBridgePath)};\n` +
+          `import ${JSON.stringify(DESKTOP_PRELUDE.network)};\n` +
+          `import ${JSON.stringify(DESKTOP_PRELUDE.storagePartition)};\n` +
           `import ${JSON.stringify(cssPath)};\n` +
           `import { initLogger } from ${JSON.stringify(loggerPath)}; initLogger();\n`;
         return { code: prelude + code, map: null };
@@ -228,12 +249,42 @@ export default defineConfig(async (env: ConfigEnv): Promise<UserConfig> => {
 
   const merged = mergeConfig(baseConfig, desktopAdditions);
 
+  // `tauri dev` loads the page from this server, where the release CSP in
+  // tauri.conf.json is not applied. Serve the same policy here, so the webview
+  // cannot reach the network in development either and anything that bypasses
+  // the bridges fails while it is being written, not after release. Only
+  // script-src differs: the dev server's HMR preamble is an inline script.
+  const { readFileSync } = await import('node:fs');
+  const tauriConf = JSON.parse(
+    readFileSync(resolvePath(__dirname, 'src-tauri/tauri.conf.json'), 'utf8')
+  ) as { app?: { security?: { csp?: string } } };
+  const releaseCsp = tauriConf.app?.security?.csp;
+  if (!releaseCsp || !/script-src [^;]*/.test(releaseCsp)) {
+    throw new Error('src-tauri/tauri.conf.json must define app.security.csp with a script-src');
+  }
+  const devCsp = releaseCsp.replace(/script-src [^;]*/, "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'");
+  merged.server = {
+    ...(merged.server ?? {}),
+    headers: { ...(merged.server?.headers ?? {}), 'Content-Security-Policy': devCsp },
+  };
+
   // The desktop bundle runs in Tauri's WebView2 (modern Chromium/Edge), not the
   // old mobile WebViews the base es2020 target is pinned for. mergeConfig
   // CONCATENATES the target arrays, so the conservative es2020/edge88 entries
   // survive and make esbuild fail ("cannot transform destructuring to es2020").
   // Hard-REPLACE the target with a single modern one — safe on desktop only.
   merged.build = { ...(merged.build ?? {}), target: 'chrome110' };
+
+  // The desktop prelude in a chunk of its own, so it runs before any library
+  // or app chunk (see DESKTOP_PRELUDE_MODULES). Every other module is chunked
+  // exactly as the shared config says.
+  const output = merged.build.rollupOptions?.output;
+  if (!output || Array.isArray(output) || typeof output.manualChunks !== 'function') {
+    throw new Error('vite.config.ts must define build.rollupOptions.output.manualChunks as a function');
+  }
+  const sharedManualChunks = output.manualChunks;
+  output.manualChunks = (id, meta) =>
+    DESKTOP_PRELUDE_MODULES.has(modulePath(id)) ? 'desktop-prelude' : sharedManualChunks(id, meta);
   merged.esbuild = { ...(merged.esbuild ?? {}), target: 'chrome110' };
   return merged;
 });

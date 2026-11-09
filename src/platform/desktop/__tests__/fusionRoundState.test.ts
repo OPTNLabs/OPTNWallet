@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  clearOutpointReservations,
-  fusionCoinAvailability,
   isOwnRoundKey,
   isRetiredRoundKey,
   outpointKey,
@@ -33,7 +31,8 @@ class MemoryStorage {
 
 describe('P2P fusion cross-window round state', () => {
   beforeEach(() => {
-    (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+    (globalThis as { localStorage?: unknown }).localStorage =
+      new MemoryStorage();
   });
 
   it('recognises this wallet’s own round keys and ignores other wallets’', () => {
@@ -61,28 +60,6 @@ describe('P2P fusion cross-window round state', () => {
     releaseOutpoints(7, [first]);
     expect(reservedOutpoints(7).has(first)).toBe(false);
     expect(reservedOutpoints(7).has(second)).toBe(true);
-  });
-
-  it('reports free vs reserved coins for greying Start/Fuse', () => {
-    const a = { tx_hash: 'aa'.repeat(32), tx_pos: 0 };
-    const b = { tx_hash: 'bb'.repeat(32), tx_pos: 1 };
-    reserveOutpoints(3, [outpointKey(a.tx_hash, a.tx_pos)]);
-    expect(fusionCoinAvailability(3, [a, b])).toEqual({
-      total: 2,
-      free: 1,
-      reserved: 1,
-    });
-    expect(fusionCoinAvailability(3, [a])).toEqual({
-      total: 1,
-      free: 0,
-      reserved: 1,
-    });
-    clearOutpointReservations(3);
-    expect(fusionCoinAvailability(3, [a, b])).toEqual({
-      total: 2,
-      free: 2,
-      reserved: 0,
-    });
   });
 
   it('retires finished throwaway keys so other windows stop counting ghosts', () => {

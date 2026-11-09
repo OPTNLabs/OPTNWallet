@@ -181,6 +181,9 @@ fn hd_loopback(
                     // No registry/authchain transaction is available in this
                     // fixture. Unresolved metadata must not hide owned tokens.
                     "blockchain.transaction.get" => Value::Null,
+                    // Token identity now resolves over Electrum too; this
+                    // fixture has no chain for it, so these say nothing.
+                    "blockchain.transaction.get_merkle" | "blockchain.utxo.get_info" => Value::Null,
                     "blockchain.headers.subscribe" => {
                         json!({"height":0,"hex":optn_runtime::header_verifier::CHIPNET_GENESIS_HEADER_HEX})
                     }

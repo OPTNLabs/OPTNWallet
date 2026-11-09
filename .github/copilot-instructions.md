@@ -42,5 +42,5 @@ A task is complete only after: `npm run ci:core` passes AND `git diff --stat` sh
 ## Gotchas already solved (do not regress)
 
 - Vite 8/rolldown blank screen: requires `legacy.inconsistentCjsInterop: true` + `manualChunks` function in vite.desktop.config.ts.
-- Price API CORS: server 500s when Origin header present — desktop uses Rust `optn_price_fetch` command in src-tauri, bridged via window.fetch patch in src/platform/desktop/http-bridge.ts.
+- Price API CORS: server 500s when Origin header present. Desktop sends every remote `fetch` through Rust (`optn_http_fetch` in src-tauri/src/egress.rs, via src/platform/desktop/http-bridge.ts), which sends no `Origin` and applies the Tor switch. Do not add hosts to the webview CSP.
 - Dependency bugs: check `patches/` (patch-package) before fighting node_modules.

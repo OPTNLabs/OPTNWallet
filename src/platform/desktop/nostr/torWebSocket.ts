@@ -1,10 +1,10 @@
 // A WebSocket shim that routes Nostr relay traffic through Tor for P2P CashFusion.
 //
-// nostr-tools' useWebSocketImplementation replaces the WebSocket class process-
-// wide, so chat uses it too. To avoid forcing chat onto Tor, this shim only routes
-// through the Rust Tor->WSS bridge (nostr_tor.rs) when routing is "armed" — which
-// runP2pFusion does only for the duration of a fusion round. When not armed, the
-// constructor returns a genuine native WebSocket, so chat is completely unaffected.
+// runP2pFusion gives it to each of its relay pools, and arms it only for the
+// duration of a round. Armed, it goes through the Rust Tor->WSS bridge
+// (nostr_tor.rs), Tor whatever the Tor switch says. Not armed, the constructor
+// returns the app's WebSocket: on desktop that is the socket bridge
+// (socket-bridge.ts), which follows the Tor switch like every other relay.
 //
 // Armed connections open via `nostr_tor_open` (Tor+TLS+WS handshake in Rust) and
 // exchange text frames over Tauri events, presenting the small slice of the

@@ -8,6 +8,7 @@ import { AddressCashStarter, MasterCategoryID } from './fundme/values';
 import SignClient from '@walletconnect/sign-client'
 import { WalletConnectModal } from '@walletconnect/modal';
 import { getReturnPath } from '../../utils/navigation';
+import { RemoteBackground } from '../../components/RemoteImg';
 import {
   getWalletConnectMetadataUrl,
   getWalletConnectProjectId,
@@ -751,9 +752,9 @@ useEffect(() => {
               <div 
                 key={`${campaign.tx_hash}:${campaign.tx_pos}`} 
                 className="bg-gray-900 rounded-xl overflow-hidden border border-gray-700 shadow-[0_0_15px_rgba(0,0,0,0.2)] hover:shadow-[0_0_20px_rgba(10,193,142,0.3)] hover:border-[#0AC18E] transition-all duration-300">
-                <div 
-                  className="w-full max-w-[500px] aspect-[500/120] bg-cover bg-center mx-auto" 
-                  style={{ backgroundImage: `url(${campaign.banner})` }}
+                <RemoteBackground
+                  className="w-full max-w-[500px] aspect-[500/120] bg-cover bg-center mx-auto"
+                  src={campaign.banner}
                 />
                 <button 
                   disabled={campaign.shortDescription === 'Campaign pending listing approval'}

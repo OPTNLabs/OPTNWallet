@@ -33,6 +33,7 @@ import {
   getLocalizedAddonAppName,
 } from '../../services/addons/AddonLocale';
 import FriendlyErrorPanel from '../../components/ui/FriendlyErrorPanel';
+import RemoteImg from '../../components/RemoteImg';
 
 type AppCard = {
   id: string;
@@ -259,7 +260,7 @@ const AppsView = () => {
             {app.id === 'optn.wallet.nostr-chat' ? (
               <MdChatBubbleOutline className="text-xl" aria-hidden="true" />
             ) : (
-              <img
+              <RemoteImg
                 src={app.icon}
                 alt={app.name}
                 className="h-full w-full object-contain p-1"

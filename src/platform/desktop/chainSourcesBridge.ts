@@ -207,6 +207,28 @@ export function rebuildChainRoutes(): Promise<void> {
 }
 
 /**
+ * Whether Tor is on for the network, decided in Rust (#75 §4.1): `tor` (the
+ * default) or `direct`, under which CashFusion does not run.
+ */
+export type ChainTransport = 'tor' | 'direct';
+
+export function readChainTransport(network?: string): Promise<ChainTransport> {
+  return invoke<ChainTransport>('optn_chain_transport', {
+    network: network ?? null,
+  });
+}
+
+export function setChainTransport(
+  transport: ChainTransport,
+  network?: string
+): Promise<void> {
+  return invoke('optn_chain_set_transport', {
+    transport,
+    network: network ?? null,
+  });
+}
+
+/**
  * Confirm, or withdraw confirmation, that a loopback SOCKS port is the
  * holder's own Tor.
  *

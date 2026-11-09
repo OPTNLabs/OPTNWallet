@@ -5,6 +5,7 @@ import { formatBchFromSatoshis, isChainCampaign } from '../fundmeHelpers';
 import type { DetailModalState } from '../types';
 import { DEFAULT_BANNER } from '../types';
 import { useAddonI18n } from '../../../../i18n/useAddonI18n';
+import { RemoteBackground } from '../../../../components/RemoteImg';
 import MaskedValue from '../../../../components/ui/MaskedValue';
 
 type FundMeDetailModalProps = {
@@ -67,11 +68,13 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
           style={{ WebkitOverflowScrolling: 'touch' }}
         >
           <div className="space-y-3">
-            <div
+            <RemoteBackground
               className="h-[72px] w-full rounded-2xl bg-cover bg-center"
-              style={{
-                backgroundImage: `url(${detailModal.detail?.banner || detailModal.campaign.banner || DEFAULT_BANNER})`,
-              }}
+              src={
+                detailModal.detail?.banner ||
+                detailModal.campaign.banner ||
+                DEFAULT_BANNER
+              }
             />
 
             <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] p-3">

@@ -25,6 +25,17 @@ use crate::error::{CliError, Result};
 pub const CLA_BTC: u8 = 0xe0;
 /// GET WALLET PUBLIC KEY.
 pub const INS_GET_WALLET_PUBLIC_KEY: u8 = 0x40;
+/// Class byte of the commands every Ledger app answers, whichever is open.
+pub const CLA_DASHBOARD: u8 = 0xb0;
+/// GET APP AND VERSION: which application is open, by name.
+pub const INS_GET_APP_AND_VERSION: u8 = 0x01;
+/// The only reply format GET APP AND VERSION has (`hw-app-btc`'s
+/// `getAppAndVersion` refuses any other).
+const APP_AND_VERSION_FORMAT: u8 = 1;
+
+/// Application names that are Bitcoin Cash, compared lowercased
+/// (`BCH_APP_NAMES` in `src/services/hardware/ledgerXpub.ts`).
+const BCH_APP_NAMES: [&str; 3] = ["bitcoin cash", "bch", "bitcoin-cash"];
 
 /// The app rejects longer paths, and saying so here beats a 0x6a80 from the
 /// device that the user has to interpret.
@@ -171,6 +182,90 @@ pub fn build_get_wallet_public_key(
         p2: format.code(),
         data: encode_bip32_path(path)?,
     })
+}
+
+/// Build GET APP AND VERSION.
+///
+/// A Ledger running the Bitcoin app answers a Bitcoin Cash path with keys and
+/// a Bitcoin address, and nothing in that reply says it came from the wrong
+/// app. Asking which app is open, before any key request, is what turns that
+/// into a refusal.
+pub fn build_get_app_and_version() -> Apdu {
+    Apdu {
+        cla: CLA_DASHBOARD,
+        ins: INS_GET_APP_AND_VERSION,
+        p1: 0,
+        p2: 0,
+        data: Vec::new(),
+    }
+}
+
+/// Split a device reply into its payload and the two-byte status word that
+/// ends it.
+pub fn split_status_word(reply: &[u8]) -> Result<(&[u8], u16)> {
+    let Some(split) = reply.len().checked_sub(2) else {
+        return Err(CliError::Protocol(
+            "the device's reply is too short to hold a status word".into(),
+        ));
+    };
+    let status = u16::from_be_bytes([reply[split], reply[split + 1]]);
+    Ok((&reply[..split], status))
+}
+
+/// The application open on the device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenApp {
+    pub name: String,
+    pub version: String,
+}
+
+/// Read a GET APP AND VERSION reply: the format byte, then a length-prefixed
+/// name and a length-prefixed version. The flags after them are not needed to
+/// tell which app is open, and are not read.
+pub fn parse_app_and_version(payload: &[u8]) -> Result<OpenApp> {
+    match payload.first() {
+        Some(&APP_AND_VERSION_FORMAT) => {}
+        Some(other) => {
+            return Err(CliError::Protocol(format!(
+                "the device described its app in format {other}, which this wallet does not read"
+            )))
+        }
+        None => return Err(CliError::Protocol("the device's app reply is empty".into())),
+    }
+    let mut offset = 1usize;
+    let mut text = |what: &str| -> Result<String> {
+        let Some(&length) = payload.get(offset) else {
+            return Err(CliError::Protocol(format!(
+                "the device's app reply ended before its {what}"
+            )));
+        };
+        let start = offset + 1;
+        let Some(bytes) = payload.get(start..start + usize::from(length)) else {
+            return Err(CliError::Protocol(format!(
+                "the device's app reply ended in the middle of its {what}"
+            )));
+        };
+        if !bytes.is_ascii() {
+            return Err(CliError::Protocol(format!(
+                "the device's app {what} is not ASCII"
+            )));
+        }
+        offset = start + bytes.len();
+        Ok(String::from_utf8_lossy(bytes).into_owned())
+    };
+    let name = text("name")?;
+    let version = text("version")?;
+    Ok(OpenApp { name, version })
+}
+
+/// Is `name` the Bitcoin Cash application?
+///
+/// The same rule as `ledgerAssertBitcoinCashApp` in
+/// `src/services/hardware/ledgerXpub.ts`, so every interface accepts the same
+/// apps: one of the known names, or any name containing "cash".
+pub fn is_bitcoin_cash_app(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    BCH_APP_NAMES.contains(&normalized.as_str()) || normalized.contains("cash")
 }
 
 /// Read the response: a length-prefixed public key, a length-prefixed ASCII
@@ -414,5 +509,80 @@ mod tests {
             .contains("Bitcoin Cash app"));
         // An unknown code still names itself rather than vanishing.
         assert!(describe_status_word(0x1234).unwrap().contains("0x1234"));
+    }
+
+    /// The bytes `hw-app-btc`'s `getAppAndVersion` sends:
+    /// `transport.send(0xb0, 0x01, 0x00, 0x00)` with no data.
+    #[test]
+    fn asking_which_app_is_open_is_the_dashboard_command_with_no_data() {
+        let apdu = build_get_app_and_version();
+        assert_eq!((apdu.cla, apdu.ins, apdu.p1, apdu.p2), (0xb0, 0x01, 0, 0));
+        assert_eq!(hex(&apdu.to_bytes()), "b001000000");
+    }
+
+    /// A reply as the device sends it: format 1, the name, the version, then
+    /// flags and the status word.
+    fn app_reply(format: u8, name: &[u8], version: &[u8]) -> Vec<u8> {
+        let mut reply = vec![format, name.len() as u8];
+        reply.extend_from_slice(name);
+        reply.push(version.len() as u8);
+        reply.extend_from_slice(version);
+        reply.extend_from_slice(&[0x01, 0x02]);
+        reply.extend_from_slice(&[0x90, 0x00]);
+        reply
+    }
+
+    #[test]
+    fn reads_the_open_application_and_refuses_the_wrong_one() {
+        let reply = app_reply(1, b"Bitcoin Cash", b"1.6.4");
+        let (payload, status) = split_status_word(&reply).unwrap();
+        assert_eq!(status, 0x9000);
+        let app = parse_app_and_version(payload).unwrap();
+        assert_eq!(app.name, "Bitcoin Cash");
+        assert_eq!(app.version, "1.6.4");
+        assert!(is_bitcoin_cash_app(&app.name));
+
+        for name in ["Bitcoin Cash", " bitcoin cash ", "BCH", "Bitcoin-Cash"] {
+            assert!(is_bitcoin_cash_app(name), "{name}");
+        }
+        // A Ledger in the Bitcoin app answers a BCH path with another chain's
+        // keys and says nothing about it, so these must be refusals.
+        for name in ["Bitcoin", "Bitcoin Test", "BOLOS", "Dashboard", ""] {
+            assert!(!is_bitcoin_cash_app(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_app_reply_it_cannot_read_is_refused_rather_than_guessed_at() {
+        // Any format but 1 is one `hw-app-btc` refuses too.
+        let reply = app_reply(2, b"Bitcoin Cash", b"1.6.4");
+        let (payload, _) = split_status_word(&reply).unwrap();
+        assert!(parse_app_and_version(payload).is_err());
+
+        assert!(parse_app_and_version(&[]).is_err());
+        let full = app_reply(1, b"Bitcoin Cash", b"1.6.4");
+        let (payload, _) = split_status_word(&full).unwrap();
+        // Cut inside the name, before the version length, inside the version.
+        for cut in [1, 5, 14, 16] {
+            assert!(
+                parse_app_and_version(&payload[..cut]).is_err(),
+                "an app reply cut to {cut} bytes must not parse"
+            );
+        }
+
+        let reply = app_reply(1, b"Bitcoin \xffash", b"1.6.4");
+        let (payload, _) = split_status_word(&reply).unwrap();
+        assert!(parse_app_and_version(payload).is_err());
+    }
+
+    #[test]
+    fn a_reply_with_no_status_word_is_refused() {
+        assert!(split_status_word(&[]).is_err());
+        assert!(split_status_word(&[0x90]).is_err());
+        assert_eq!(split_status_word(&[0x90, 0x00]).unwrap(), (&[][..], 0x9000));
+        assert_eq!(
+            split_status_word(&[0xaa, 0x69, 0x85]).unwrap(),
+            (&[0xaa][..], 0x6985)
+        );
     }
 }

@@ -3,6 +3,7 @@ import React from 'react';
 import type { CampaignRecord, CampaignType } from '../types';
 import { formatBchFromSatoshis, isChainCampaign } from '../fundmeHelpers';
 import { useAddonI18n } from '../../../../i18n/useAddonI18n';
+import { RemoteBackground } from '../../../../components/RemoteImg';
 
 type FundMeDiscoverViewProps = {
   campaignType: CampaignType;
@@ -118,9 +119,9 @@ const FundMeDiscoverView: React.FC<FundMeDiscoverViewProps> = ({
               onClick={() => onOpenCampaignDetail(campaign)}
               className="w-full rounded-[24px] wallet-surface-strong border border-[var(--wallet-border)] p-3 text-left transition hover:border-[#31d89a]"
             >
-              <div
+              <RemoteBackground
                 className="h-[96px] w-full rounded-2xl bg-cover bg-center"
-                style={{ backgroundImage: `url(${campaign.banner})` }}
+                src={campaign.banner}
               />
 
               <div className="mt-3 flex items-start justify-between gap-3">

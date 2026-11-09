@@ -132,7 +132,8 @@ export async function resolveFusionTransport(
   if (!settings.enabled) {
     return {
       type: 'unavailable',
-      reason: 'Tor is disabled for a remote Fusion destination.',
+      reason:
+        'CashFusion needs Tor, and Tor is off. Turn it on in Settings → Servers → Privacy & Transport.',
     };
   }
 

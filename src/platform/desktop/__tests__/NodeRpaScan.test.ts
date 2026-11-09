@@ -116,13 +116,20 @@ it('does not connect without required Tor', async () => {
   expect(mocks.invoke).not.toHaveBeenCalled();
 });
 
-it('does not scan a remote node directly when Tor is disabled', async () => {
+it('leaves a Tor-off scan to the network policy in Rust, naming no proxy', async () => {
+  // Rust scans directly only when the holder's transport is Direct, and
+  // refuses a request for no Tor wherever that transport requires it.
   mocks.tor = false;
-  await expect(scanNodeRpa(7, Network.CHIPNET, keys())).rejects.toThrow(
-    /Tor is required for Cash Code scans/
-  );
+  await scanNodeRpa(7, Network.CHIPNET, keys());
   expect(mocks.route).not.toHaveBeenCalled();
-  expect(mocks.invoke).not.toHaveBeenCalled();
+  expect(mocks.invoke).toHaveBeenCalledWith(
+    'cashcode_scan_node',
+    expect.objectContaining({
+      torRequired: false,
+      torHost: null,
+      torPort: null,
+    })
+  );
 });
 
 it('does not publish results into a switched wallet', async () => {

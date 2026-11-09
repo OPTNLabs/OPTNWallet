@@ -81,14 +81,21 @@ pub struct AsertAnchor {
     pub bits: u32,
     /// Timestamp of the block immediately preceding the anchor block.
     pub prev_time: i64,
+    /// Hash of the block after the anchor, which BCHN checkpoints ("the block
+    /// after this height *must* also be checkpointed"). It commits to the
+    /// anchor block, so a chain that crosses the anchor height must contain
+    /// it: the anchor's bits and time are only meaningful on that chain.
+    /// `None` where BCHN pins no anchor.
+    pub successor_hash: Option<Hash32>,
 }
 
 impl AsertAnchor {
-    /// Published ASERTI3-2d anchors used by Electron Cash / BCHN.
+    /// The ASERTI3-2d anchors in BCHN's `chainparams.cpp`, with the checkpoint
+    /// BCHN keeps at the height after each.
     ///
-    /// Mainnet: height 661647, bits 402971390, prev_time 1605447844.
-    /// Testnet3: height 1421481, bits 486604799, prev_time 1605445400.
-    /// Testnet4 and chipnet: height 16844, bits 486604799, prev_time 1605451779.
+    /// Mainnet: height 661647, bits 0x1804dafe, prev_time 1605447844.
+    /// Testnet3: height 1421481, bits 0x1d00ffff, prev_time 1605445400.
+    /// Testnet4 and chipnet: height 16844, bits 0x1d00ffff, prev_time 1605451779.
     ///
     /// Chipnet shares testnet4's anchor because it *is* testnet4 with later
     /// rules; the two are indistinguishable by difficulty alone.
@@ -96,27 +103,58 @@ impl AsertAnchor {
         match network {
             Network::Mainnet => Self {
                 height: 661_647,
-                bits: 402_971_390,
+                bits: 0x1804_dafe,
                 prev_time: 1_605_447_844,
+                successor_hash: Some(display_hash(
+                    "0000000000000000029e471c41818d24b8b74c911071c4ef0b4a0509f9b5a8ce",
+                )),
             },
             Network::Testnet3 => Self {
                 height: 1_421_481,
-                bits: 486_604_799,
+                bits: 0x1d00_ffff,
                 prev_time: 1_605_445_400,
+                successor_hash: Some(display_hash(
+                    "0000000023e0680a8a062b3cc289a4a341124ce7fcb6340ede207e194d73b60a",
+                )),
             },
             Network::Testnet4 | Network::Chipnet => Self {
                 height: 16_844,
-                bits: 486_604_799,
+                bits: 0x1d00_ffff,
                 prev_time: 1_605_451_779,
+                successor_hash: Some(display_hash(
+                    "00000000fb325b8f34fe80c96a5f708a08699a68bbab82dba4474d86bd743077",
+                )),
             },
             // Nominal: with no retargeting the anchor is never consulted.
             Network::Regtest => Self {
                 height: 0,
                 bits: REGTEST_MAX_BITS,
                 prev_time: 0,
+                successor_hash: None,
             },
         }
     }
+}
+
+/// A block hash as BCHN and block explorers print it, in the byte order a
+/// header carries it.
+const fn display_hash(hex: &str) -> Hash32 {
+    const fn nibble(digit: u8) -> u8 {
+        match digit {
+            b'0'..=b'9' => digit - b'0',
+            b'a'..=b'f' => digit - b'a' + 10,
+            _ => panic!("a block hash is lowercase hex"),
+        }
+    }
+    let digits = hex.as_bytes();
+    assert!(digits.len() == 64, "a block hash is 64 hex digits");
+    let mut hash = [0u8; 32];
+    let mut index = 0;
+    while index < 32 {
+        hash[31 - index] = (nibble(digits[2 * index]) << 4) | nibble(digits[2 * index + 1]);
+        index += 1;
+    }
+    hash
 }
 
 /// Previous-block context required to check the next header's expected `nBits`.
@@ -160,7 +198,23 @@ pub enum AsertError {
     InvalidAnchor(HeaderPowError),
     InvalidMaxTarget(HeaderPowError),
     ArithmeticRange,
-    UnexpectedBits { expected: u32, actual: u32 },
+    UnexpectedBits {
+        expected: u32,
+        actual: u32,
+    },
+    /// The header declares an easier target than the network ever allows
+    /// (BCHN's `powLimit`), at any height.
+    AbovePowLimit {
+        limit: u32,
+        actual: u32,
+    },
+    /// The chain crosses the ASERT anchor on a block other than the one BCHN
+    /// checkpoints there.
+    AnchorSuccessorMismatch {
+        height: u32,
+        expected: Hash32,
+        actual: Hash32,
+    },
 }
 
 /// Calculate the expected `nBits` for the block after `previous_height`.
@@ -283,15 +337,26 @@ pub fn verify_expected_bits(
     Ok(parsed)
 }
 
-/// Validate predecessor linkage, declared PoW, and (after the ASERT anchor)
-/// the expected BCH difficulty transition. Callers that already have a trusted
-/// checkpoint still have to attach [`AsertCheck`] for every locally extended
-/// header; skipping it is how a linked easy-target chain gets accepted.
+/// Validate predecessor linkage, declared PoW and, with an [`AsertCheck`]:
+/// - at every height, that the declared target is within the network's
+///   proof-of-work limit;
+/// - after the ASERT anchor, the expected BCH difficulty transition;
+/// - on crossing the anchor, that the block after it is the one BCHN
+///   checkpoints.
+///
+/// Callers that already have a trusted checkpoint still have to attach
+/// [`AsertCheck`] for every locally extended header; skipping it is how a
+/// linked easy-target chain gets accepted.
 pub fn verify_header_extension(
     expected_prev: Hash32,
     header: &[u8; HEADER_LEN],
     difficulty: Option<AsertCheck>,
 ) -> Result<ParsedHeader, HeaderExtensionError> {
+    if let Some(check) = difficulty {
+        // Before the anchor nothing else bounds the declared target: a header
+        // that met its own `0x207fffff` would otherwise pass on mainnet.
+        verify_pow_limit(check.params, header).map_err(HeaderExtensionError::Difficulty)?;
+    }
     if let Some(check) = difficulty.filter(AsertCheck::applies) {
         verify_expected_bits(
             check.params,
@@ -302,7 +367,41 @@ pub fn verify_header_extension(
         )
         .map_err(HeaderExtensionError::Difficulty)?;
     }
-    verify_link(expected_prev, header).map_err(HeaderExtensionError::Pow)
+    let parsed = verify_link(expected_prev, header).map_err(HeaderExtensionError::Pow)?;
+    if let Some(check) = difficulty {
+        verify_anchor_successor(check, &parsed).map_err(HeaderExtensionError::Difficulty)?;
+    }
+    Ok(parsed)
+}
+
+/// Refuse a header whose declared target is easier than `params.max_bits`,
+/// the network's proof-of-work limit. A malformed `nBits` is left to the
+/// proof-of-work check, which reports it as such.
+pub fn verify_pow_limit(params: AsertParams, header: &[u8; HEADER_LEN]) -> Result<(), AsertError> {
+    let parsed = parse_header(header);
+    let limit = target_from_compact(params.max_bits).map_err(AsertError::InvalidMaxTarget)?;
+    match target_from_compact(parsed.bits) {
+        Ok(target) if target > limit => Err(AsertError::AbovePowLimit {
+            limit: params.max_bits,
+            actual: parsed.bits,
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// On the block after the anchor height, require the hash BCHN checkpoints.
+fn verify_anchor_successor(check: AsertCheck, parsed: &ParsedHeader) -> Result<(), AsertError> {
+    let Some(expected) = check.anchor.successor_hash else {
+        return Ok(());
+    };
+    if check.previous_height != check.anchor.height || parsed.hash == expected {
+        return Ok(());
+    }
+    Err(AsertError::AnchorSuccessorMismatch {
+        height: check.anchor.height.saturating_add(1),
+        expected,
+        actual: parsed.hash,
+    })
 }
 
 fn target_to_compact(target: &BigUint, max_target: &BigUint) -> Result<u32, AsertError> {
@@ -349,6 +448,7 @@ mod tests {
             height: 1,
             bits: 0x1a2b3c4d,
             prev_time: 0,
+            successor_hash: None,
         };
         for (height, time) in [(1, 600), (2, 1200), (3, 1800), (10, 6000)] {
             assert_eq!(next_bits(params, anchor, height, time).unwrap(), 0x1a2b3c4d);
@@ -362,6 +462,7 @@ mod tests {
             height: 1,
             bits: 0x1d00ffff,
             prev_time: 0,
+            successor_hash: None,
         };
         assert_eq!(next_bits(params, anchor, 10, 6000).unwrap(), 0x1d00ffff);
     }
@@ -374,9 +475,160 @@ mod tests {
             height: 1,
             bits: 0x01010000,
             prev_time: 0,
+            successor_hash: None,
         };
         assert_eq!(next_bits(params, anchor, 1, 173_400).unwrap(), 0x01020000);
         assert_eq!(next_bits(params, anchor, 2, 346_800).unwrap(), 0x01040000);
+    }
+
+    /// Mainnet headers from `blockchain.block.header` (bch.imaginary.cash).
+    /// Nothing about them is taken on trust: genesis and the anchor successor
+    /// match the hashes BCHN hardcodes, and the rest are linked to them.
+    const MAINNET_GENESIS: &str = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c";
+    const MAINNET_1: &str = "010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299";
+    const MAINNET_661646: &str = "00000020ac1d4c0fdf21cfcba41d0bb00802ed3020befbedb8bbd700000000000000000008979c37cc3ff63198dc807c3b710f9df37fdc843b0db9de41bc78dbe5279f14a430b15f3ec00418d1623dd0";
+    const MAINNET_661647: &str = "000000202df7a2e0562ebbbd8dc95ca6669c4f1ba888484c2cc7e403000000000000000067418c23d8901e49555725fb2e37adfb9ed29a05833eb4774d53b63b44ba457e8937b15ffeda04183c2b1978";
+    const MAINNET_661648: &str = "000000202fe6ee2db04b6575ad185521133598e3590d787a4bed8300000000000000000042faaa7bb98abdfb6f780417b1c0eb7873cd49e048feef273d5e270e1eb223855938b15fd0e0041888420330";
+
+    fn mainnet_check(previous_height: u32, previous: &[u8; 80]) -> Option<AsertCheck> {
+        Some(AsertCheck {
+            params: AsertParams::for_network(Network::Mainnet),
+            anchor: AsertAnchor::for_network(Network::Mainnet),
+            previous_height,
+            previous_time: i64::from(crate::header_pow::parse_header(previous).time),
+        })
+    }
+
+    #[test]
+    fn a_header_at_exactly_the_pow_limit_is_accepted() {
+        let genesis = header_from_hex(MAINNET_GENESIS);
+        let block_1 = header_from_hex(MAINNET_1);
+        let genesis_hash = crate::header_pow::verify_declared_pow(&genesis)
+            .unwrap()
+            .hash;
+        assert_eq!(
+            genesis_hash,
+            display_hash("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+        );
+        let parsed = verify_header_extension(genesis_hash, &block_1, mainnet_check(0, &genesis))
+            .expect("block 1 declares exactly the mainnet limit");
+        assert_eq!(parsed.bits, DEFAULT_MAX_BITS);
+    }
+
+    #[test]
+    fn a_pre_anchor_header_easier_than_the_pow_limit_is_refused() {
+        use crate::header_pow::verify_declared_pow;
+
+        let block_1 = header_from_hex(MAINNET_1);
+        let block_1_hash = verify_declared_pow(&block_1).unwrap().hash;
+        let forged = mine_header(block_1_hash, 1_231_470_000, REGTEST_MAX_BITS);
+        assert!(
+            verify_declared_pow(&forged).is_ok(),
+            "the forged header meets the easy target it declares"
+        );
+        assert!(!AsertCheck {
+            params: AsertParams::mainnet(),
+            anchor: AsertAnchor::for_network(Network::Mainnet),
+            previous_height: 1,
+            previous_time: 0,
+        }
+        .applies());
+
+        let error = verify_header_extension(block_1_hash, &forged, mainnet_check(1, &block_1))
+            .expect_err("far below the ASERT anchor, the limit still holds");
+        assert_eq!(
+            error,
+            HeaderExtensionError::Difficulty(AsertError::AbovePowLimit {
+                limit: DEFAULT_MAX_BITS,
+                actual: REGTEST_MAX_BITS,
+            })
+        );
+
+        // Without a difficulty context nothing knows the network's limit.
+        assert!(verify_header_extension(block_1_hash, &forged, None).is_ok());
+    }
+
+    #[test]
+    fn crossing_the_mainnet_anchor_requires_the_block_bchn_checkpoints() {
+        let before = header_from_hex(MAINNET_661646);
+        let anchor_block = header_from_hex(MAINNET_661647);
+        let successor = header_from_hex(MAINNET_661648);
+        let anchor = AsertAnchor::for_network(Network::Mainnet);
+        assert_eq!(
+            i64::from(crate::header_pow::parse_header(&before).time),
+            anchor.prev_time,
+            "the anchor's prev_time is block 661646's"
+        );
+
+        let before_hash = crate::header_pow::verify_declared_pow(&before)
+            .unwrap()
+            .hash;
+        let anchor_parsed =
+            verify_header_extension(before_hash, &anchor_block, mainnet_check(661_646, &before))
+                .expect("the anchor block itself");
+        assert_eq!(anchor_parsed.bits, anchor.bits);
+
+        let successor_parsed = verify_header_extension(
+            anchor_parsed.hash,
+            &successor,
+            mainnet_check(661_647, &anchor_block),
+        )
+        .expect("the first ASERT block, on BCHN's checkpointed chain");
+        assert_eq!(Some(successor_parsed.hash), anchor.successor_hash);
+
+        // The same header against a different pinned successor: crossing the
+        // anchor on any other chain is refused.
+        let other = AsertAnchor {
+            successor_hash: Some([0x11; 32]),
+            ..anchor
+        };
+        let error = verify_header_extension(
+            anchor_parsed.hash,
+            &successor,
+            Some(AsertCheck {
+                anchor: other,
+                ..mainnet_check(661_647, &anchor_block).unwrap()
+            }),
+        )
+        .expect_err("not the checkpointed block");
+        assert_eq!(
+            error,
+            HeaderExtensionError::Difficulty(AsertError::AnchorSuccessorMismatch {
+                height: 661_648,
+                expected: [0x11; 32],
+                actual: successor_parsed.hash,
+            })
+        );
+    }
+
+    #[test]
+    fn anchor_successors_are_bchns_checkpoints() {
+        let hex = |network: Network| {
+            let mut hash = AsertAnchor::for_network(network)
+                .successor_hash
+                .expect("pinned");
+            hash.reverse();
+            hash.iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        assert_eq!(
+            hex(Network::Mainnet),
+            "0000000000000000029e471c41818d24b8b74c911071c4ef0b4a0509f9b5a8ce"
+        );
+        assert_eq!(
+            hex(Network::Testnet3),
+            "0000000023e0680a8a062b3cc289a4a341124ce7fcb6340ede207e194d73b60a"
+        );
+        assert_eq!(hex(Network::Testnet4), hex(Network::Chipnet));
+        assert_eq!(
+            hex(Network::Chipnet),
+            "00000000fb325b8f34fe80c96a5f708a08699a68bbab82dba4474d86bd743077"
+        );
+        assert_eq!(
+            AsertAnchor::for_network(Network::Regtest).successor_hash,
+            None
+        );
     }
 
     #[test]
@@ -421,6 +673,7 @@ mod tests {
             height: 1,
             bits: 0x207f_ffff,
             prev_time: 0,
+            successor_hash: None,
         };
         let prev = [7u8; 32];
         // Fast blocks pull the expected target below the proof-of-work floor.

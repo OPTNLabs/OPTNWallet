@@ -53,6 +53,8 @@ Bitcoin Cash network (Chipnet for development dogfood).
 | Wallet / Tor / gather / completion                                 | `FusionP2pService.ts`                                                               |
 | Auto clock + UTXO wake                                             | `useAutoFusion.ts`                                                                  |
 | UI (P2P panel, Auto controls)                                      | `P2pFusionTransportPreview.tsx`, `AutoFusionControls.tsx`, `CashFusionSettings.tsx` |
+| The same protocol in Rust (pure state machines, no I/O)           | `crates/optn-fusion/src/p2p/` — interop vectors both ways: `test-vectors/p2p-fusion.json` (TS → Rust), `test-vectors/p2p-fusion-rust.json` (Rust → TS) |
+| Rust host over Nostr and Tor (CLI, docker lab)                    | `crates/optn-fusion-native/src/p2p_round.rs` — `optn fusion --p2p`, `OPTN_FUSION_MODE=p2p` in `packages/docker-dev` |
 
 Protocol message version: **`ROUND_MSG_VERSION = 4`** (`fusionRound.ts`).
 Version 4 is incompatible with v3/v2 and rejects other versions.
@@ -640,6 +642,9 @@ round key; local 10-minute ghost only (`recordBlamedSessionKey`). See
 | `__tests__/FusionRunnerService.test.ts`      | Auto vs manual depth, cooldown, no-eligible idle        |
 | `__tests__/fusionWalletLease.test.ts`        | Lease + Auto cooldown claim / wake                      |
 | `cargo test` `fusion::schnorr`               | Rust `BlindIssuer` + requester parity                   |
+| `cargo test -p optn-fusion p2p`              | Rust round: TS vectors, whole simulated rounds, faults  |
+| `nostr/__tests__/p2pRustInterop.test.ts`     | TS peers accept what a Rust peer sends                  |
+| `cargo test -p optn-fusion-native --test p2p_local_relay` | Ten Rust hosts fuse through a real relay   |
 | Chipnet live multi-window                    | On-chain CoinJoin (manual; not assumed green in CI)     |
 
 In-memory multi-peer success proves the **state machine and crypto wiring**.

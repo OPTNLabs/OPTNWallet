@@ -88,9 +88,19 @@ pub fn service(
 ) -> optn_runtime::wallet_security::WalletSecurity {
     let checkpoints =
         optn_chain_native::wallet_checkpoint::WalletCheckpointDirectory(root.join(".state"));
-    optn_runtime::wallet_security::WalletSecurity::new(
+    // A wallet this desktop migrated keeps its holds in the desktop's hold
+    // files. Without them the runtime refuses to fuse it, so an unresolvable
+    // directory fails closed rather than open.
+    let host_holds = crate::coin_holds::holds_directory(&app).ok();
+    let security = optn_runtime::wallet_security::WalletSecurity::new(
         Box::new(optn_platform_native::wallet_storage::NativeWalletStorage::new(root)),
         Some(Box::new(NativeBiometrics(app))),
     )
-    .with_checkpoints(Box::new(checkpoints))
+    .with_checkpoints(Box::new(checkpoints));
+    match host_holds {
+        Some(directory) => security.with_host_holds(Box::new(
+            crate::coin_holds::DesktopHostHolds::new(directory),
+        )),
+        None => security,
+    }
 }

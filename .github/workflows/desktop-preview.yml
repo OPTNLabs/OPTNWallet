@@ -38,8 +38,16 @@ jobs:
     #
     # A timeout here is self-perpetuating: the run dies before "Post Rust cache",
     # so nothing is saved and the next run is uncached and slow for the same
-    # reason. 90 leaves the slowest observed leg about 35 minutes of headroom.
-    timeout-minutes: 90
+    # reason. 90 left the slowest observed leg about 35 minutes of headroom
+    # until MDK chat was built in: SQLCipher's vendored OpenSSL and the
+    # OpenMLS stack took an uncached linux-x64 build to 77 minutes, and
+    # linux-arm64 past 90. 120 restores the headroom.
+    #
+    # On Linux the compile is not what fills it. In run 38038915265 the
+    # linux-x64 RPM bundle took 105 minutes (08:48 to 10:33) and linux-arm64
+    # was cancelled inside it: the RPM bundler's time grows with the debug
+    # binary, which MDK made larger. See "Line-table debug info" below.
+    timeout-minutes: 120
     env:
       # macOS runners have less memory; the Vite frontend build (Tauri beforeBuildCommand)
       # OOMs at Node's default heap. Raise it for all platforms (harmless on Windows/Linux).
@@ -113,6 +121,21 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: ${{ matrix.rust-targets || matrix.target }}
+
+      # MDK chat's store is SQLCipher on OpenSSL built from source, whose
+      # configure needs a full Perl. Git Bash's Perl lacks modules it uses.
+      - name: Use Strawberry Perl for OpenSSL
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl.exe" >> "$GITHUB_ENV"
+
+      # Linux previews keep only line tables of debug info, so a panic still
+      # names its file and line, and the binary the RPM bundler compresses is
+      # far smaller. Set before "Rust cache" so the cache key includes it.
+      # Every bundle, upload and check below is unchanged.
+      - name: Line-table debug info for Linux packages
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: echo "CARGO_PROFILE_DEV_DEBUG=line-tables-only" >> "$GITHUB_ENV"
 
       - name: Rust cache
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2

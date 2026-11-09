@@ -62,19 +62,17 @@ export async function scanNodeRpa(
       );
     }
   };
-  const route = isLocalFusionDestination(host)
-    ? { type: 'direct' as const }
-    : torRequired
-      ? await resolveFusionTransport(host, {
+  // With Tor off the scan asks Rust for no Tor, and Rust decides from the
+  // holder's network policy: direct only if they chose it, refused otherwise.
+  const route =
+    isLocalFusionDestination(host) || !torRequired
+      ? { type: 'direct' as const }
+      : await resolveFusionTransport(host, {
           enabled: true,
           auto: torAuto,
           host: torHost,
           manualPort: torPort,
-        })
-      : {
-          type: 'unavailable' as const,
-          reason: 'Tor is required for Cash Code scans to remote nodes.',
-        };
+        });
   if (route.type === 'unavailable')
     throw new Error(`RPA node scan: ${route.reason}`);
   // Unknown birthday means full history, never silently scan only recent blocks.

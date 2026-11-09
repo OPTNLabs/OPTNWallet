@@ -89,25 +89,11 @@ export const SERVER_MIN_OUTPUT_SATS = 10_000;
  */
 export const SERVER_AUTOFUSE_INACTIVE_MS = 600_000;
 
-/**
- * plugin.py DEFAULT_MAX_COINS = 20 — max inputs one wallet puts in a batch.
- * assert DEFAULT_MAX_COINS > 10 in EC.
- */
-export const EC_DEFAULT_MAX_COINS = 20;
-
 /** plugin.py MAX_LIMIT_FUSE_DEPTH = 10 */
 export const EC_MAX_FUSE_DEPTH = 10;
 
-/**
- * Accept unconfirmed UTXOs as fusion inputs (height ≤ 0).
- *
- * Policy (mainnet + chipnet): fuse 0-conf immediately — no “wait for a block”
- * before the next Auto round. EC-maintainer direction endorses this for BCH;
- * classic EC client still excludes unconfirmed in select_coins / validation.py,
- * which we intentionally do not copy. Selection + peer blame lookup both honor
- * this flag so rounds can chain on fresh CoinJoin outputs without confirmation.
- */
-export const ACCEPT_UNCONFIRMED_FUSION_INPUTS = true;
+// Which coins a round takes (DEFAULT_MAX_COINS = 20, unconfirmed coins
+// eligible) is optn-core fusion::coin_selection, shared with every surface.
 
 /**
  * There is no block-wait between Auto rounds. The only post-success delay is

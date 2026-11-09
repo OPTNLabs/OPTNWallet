@@ -1,9 +1,10 @@
 //! ServerHello and wallet contribution validation for server CashFusion.
 //!
-//! Output amounts are randomized in the renderer because that layer owns the
-//! wallet address database. Native code treats those plans as untrusted input:
-//! it checks every fee/value invariant, registers every feasible tier, and only
-//! selects the matching plan after the live server sends `FusionBegin`.
+//! [`crate::allocate`] plans a contribution's outputs; a desktop renderer only
+//! supplies fresh output scripts from its address database. The round still
+//! treats the plans it is handed as untrusted input: it checks every fee/value
+//! invariant against the live ServerHello, registers every feasible tier, and
+//! only selects the matching plan after the live server sends `FusionBegin`.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -15,6 +16,10 @@ pub const MAX_COMPONENTS: usize = 40;
 pub const MAX_FEE: u64 = 45_000;
 pub const MIN_TX_COMPONENTS: usize = 11;
 pub const MIN_OUTPUT: u64 = 10_000;
+/// Every satoshi there will ever be. A tier or fee above it can never be
+/// funded. Refusing it also keeps every advertised value exact wherever it is
+/// carried as a JavaScript number.
+pub const MAX_MONEY: u64 = 21_000_000 * 100_000_000;
 // Electron Cash's reference server advertises 6 decades x 12 E12 values = 72
 // tiers. Bound hostile replies while leaving headroom for compatible servers.
 const MAX_TIERS: usize = 128;
@@ -29,7 +34,7 @@ pub struct ExpectedHello {
     pub max_excess_fee: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FusionTierPlan {
     pub tier: u64,
@@ -48,7 +53,10 @@ fn canonical_tiers(tiers: &[u64]) -> Result<Vec<u64>, String> {
         return Err("server advertised an invalid number of tiers".into());
     }
     let mut canonical = tiers.to_vec();
-    if canonical.iter().any(|tier| *tier < MIN_OUTPUT) {
+    if canonical
+        .iter()
+        .any(|tier| *tier < MIN_OUTPUT || *tier > MAX_MONEY)
+    {
         return Err("server advertised an invalid tier".into());
     }
     canonical.sort_unstable();
@@ -59,24 +67,55 @@ fn canonical_tiers(tiers: &[u64]) -> Result<Vec<u64>, String> {
     Ok(canonical)
 }
 
-pub fn validate_server_hello(hello: &pb::ServerHello) -> Result<(), String> {
-    canonical_tiers(&hello.tiers)?;
-    if hello.component_feerate > MAX_COMPONENT_FEERATE {
+/// Electron Cash's client-side limits on a server's parameters (`fusion.py`).
+/// A server outside them is refused before any coin is touched.
+fn check_limits(
+    tiers: &[u64],
+    num_components: u32,
+    component_feerate: u64,
+    min_excess_fee: u64,
+    max_excess_fee: u64,
+) -> Result<(), String> {
+    canonical_tiers(tiers)?;
+    if component_feerate > MAX_COMPONENT_FEERATE {
         return Err("excessive component feerate from server".into());
     }
-    if hello.min_excess_fee > 400 {
+    if min_excess_fee > 400 {
         return Err("excessive min excess fee from server".into());
     }
-    if hello.min_excess_fee > hello.max_excess_fee {
+    if min_excess_fee > max_excess_fee || max_excess_fee > MAX_MONEY {
         return Err("bad config on server: fees".into());
     }
-    if hello.num_components < 17 {
+    // At least 1.5 x MIN_TX_COMPONENTS, rounded up.
+    if num_components < 17 {
         return Err("bad config on server: too few components".into());
     }
-    if hello.num_components as usize > MAX_COMPONENTS {
+    if num_components as usize > MAX_COMPONENTS {
         return Err("bad config on server: too many components".into());
     }
     Ok(())
+}
+
+pub fn validate_server_hello(hello: &pb::ServerHello) -> Result<(), String> {
+    check_limits(
+        &hello.tiers,
+        hello.num_components,
+        hello.component_feerate,
+        hello.min_excess_fee,
+        hello.max_excess_fee,
+    )
+}
+
+/// [`validate_server_hello`] for a snapshot a caller hands back, before it is
+/// planned against.
+pub fn validate_expected_hello(hello: &ExpectedHello) -> Result<(), String> {
+    check_limits(
+        &hello.tiers,
+        hello.num_components,
+        hello.component_feerate,
+        hello.min_excess_fee,
+        hello.max_excess_fee,
+    )
 }
 
 pub fn validate_hello_match(
@@ -268,6 +307,48 @@ mod tests {
         assert!(validate_server_hello(&duplicate)
             .unwrap_err()
             .contains("duplicate tiers"));
+    }
+
+    /// The limits the desktop renderer used to check on its own, now checked
+    /// once, natively, for the wire and for a handed-back snapshot alike.
+    #[test]
+    fn hello_limits_follow_electron_cash() {
+        let refused = |change: fn(&mut pb::ServerHello), why: &str| {
+            let mut bad = hello();
+            change(&mut bad);
+            let error = validate_server_hello(&bad).unwrap_err();
+            assert!(error.contains(why), "{error}");
+            let expected = ExpectedHello {
+                tiers: bad.tiers.clone(),
+                num_components: bad.num_components,
+                component_feerate: bad.component_feerate,
+                min_excess_fee: bad.min_excess_fee,
+                max_excess_fee: bad.max_excess_fee,
+            };
+            assert_eq!(validate_expected_hello(&expected).unwrap_err(), error);
+        };
+        refused(
+            |h| h.component_feerate = MAX_COMPONENT_FEERATE + 1,
+            "feerate",
+        );
+        refused(|h| h.min_excess_fee = 401, "min excess fee");
+        refused(
+            |h| {
+                h.min_excess_fee = 100;
+                h.max_excess_fee = 50;
+            },
+            "fees",
+        );
+        refused(|h| h.max_excess_fee = MAX_MONEY + 1, "fees");
+        refused(|h| h.num_components = 16, "too few components");
+        refused(|h| h.tiers = vec![], "number of tiers");
+        refused(|h| h.tiers = vec![MIN_OUTPUT - 1], "invalid tier");
+        refused(|h| h.tiers = vec![MAX_MONEY + 1], "invalid tier");
+
+        let mut least = hello();
+        least.num_components = 17;
+        least.tiers = vec![MIN_OUTPUT, MAX_MONEY];
+        validate_server_hello(&least).unwrap();
     }
 
     #[test]

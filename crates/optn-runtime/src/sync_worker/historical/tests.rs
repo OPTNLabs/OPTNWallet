@@ -1166,7 +1166,7 @@ async fn ordinary_publication_rechecks_revocation_and_stages_every_insert() {
                 service.revocation().revoke();
             }
             assert!(worker
-                .publish_headers(candidate_view, staged, Some(&revision), &service)
+                .publish_headers(candidate_view, staged, Some(&revision), &service, None)
                 .is_err());
             assert_eq!(snapshot(&store), before);
             assert!(store.hash_at(TIP + 1).is_none());

@@ -43,6 +43,7 @@ import {
 import { isTxConfirmed } from '../../utils/txConfirmation';
 import { isFusionTransaction } from './fusionCoinDepth';
 import { useFusionDepthRevision } from './useFusionDepthRevision';
+import { useElectrumPoolNotice } from './useElectrumPoolNotice';
 import HomeConnectPopup from '../../components/home/HomeConnectPopup';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import { useHomeConnect } from '../../features/home/useHomeConnect';
@@ -140,6 +141,7 @@ const Home: React.FC = () => {
     );
   });
   const currentNetwork = useSelector(selectCurrentNetwork);
+  const electrumNotice = useElectrumPoolNotice(currentNetwork);
   const unit = unitFor(currentNetwork);
   const bchUsdQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']?.price
@@ -375,6 +377,19 @@ const Home: React.FC = () => {
         <NetworkContextBanner network={currentNetwork} />
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-4">
+          {electrumNotice ? (
+            <SectionCard className="shrink-0 p-3">
+              <p className="text-sm font-semibold wallet-text-strong">
+                Electrum servers are off for this wallet
+              </p>
+              <p className="mt-1 text-sm wallet-muted">
+                {electrumNotice} The balance and activity on this screen come
+                from Electrum servers, so they will not update until one is
+                selected.
+              </p>
+            </SectionCard>
+          ) : null}
+
           <SectionCard
             className={`shrink-0 border-2 p-3 ${
               currentNetwork === Network.CHIPNET

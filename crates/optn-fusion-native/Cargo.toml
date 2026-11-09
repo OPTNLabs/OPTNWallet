@@ -1,0 +1,30 @@
+[package]
+name = "optn-fusion-native"
+version = "1.7.3"
+edition = "2021"
+license = "MIT"
+description = "Native CashFusion host for OPTN Wallet: chain lookups, the depth record on disk, and the server round driver shared by every native surface."
+
+# The CLI, the docker runner and the desktop run rounds through this one crate,
+# so a change to how a round is driven lands on every surface at once. It holds
+# no renderer, shell or platform code.
+[dependencies]
+optn-core = { path = "../optn-core", version = "=1.7.3" }
+# Auto Fusion's policy and timing, shared with every interface.
+optn-app = { path = "../optn-app", version = "=1.7.3" }
+optn-fusion = { path = "../optn-fusion", version = "=1.7.3" }
+optn-runtime = { path = "../optn-runtime", version = "=1.7.3" }
+optn-transport = { path = "../optn-transport", version = "=1.7.3" }
+optn-chain-native = { path = "../optn-chain-native", version = "=1.7.3" }
+# P2P rounds speak Nostr through the same Rust relay layer as chat.
+optn-nostr = { path = "../optn-nostr", version = "=1.7.3" }
+futures = "0.3"
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+zeroize = "1"
+
+[dev-dependencies]
+# An in-process relay for whole P2P rounds in tests.
+nostr-sdk = { version = "0.45.4", default-features = false, features = ["ring", "rustls-tls-webpki-roots", "local-relay"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread"] }

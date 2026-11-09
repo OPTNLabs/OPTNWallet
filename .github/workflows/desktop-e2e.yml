@@ -61,6 +61,12 @@ jobs:
       - name: Build unbundled debug desktop binary
         run: npx tauri build --debug --no-bundle
 
+      # The shell's own unit tests, on the dependency graph the build above just
+      # compiled. Nothing else runs them, which is how a test calling a function
+      # another change had moved stopped compiling without anyone seeing it.
+      - name: Desktop shell unit tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+
       - name: Run WebdriverIO E2E suite
         env:
           TAURI_E2E_APP_BINARY: ${{ github.workspace }}/src-tauri/target/debug/optn-wallet-desktop

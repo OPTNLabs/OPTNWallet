@@ -1,5 +1,6 @@
 import { hexToBin } from '@bitauth/libauth';
 import { Network } from '../state/slices/networkSlice';
+import { networkProfile } from '../utils/networkProfile';
 import { zeroize } from '../utils/secureMemory';
 // Seeds, BIP32 and addresses are derived by crates/optn-core (src/hd.rs), the
 // same code the CLI and the desktop runtime use. This file keeps the wallet's
@@ -16,9 +17,13 @@ import {
   hdPublicKeyChild as corePublicKeyChild,
 } from '../wasm/optn-core';
 
-/** The core takes the network as a string; this is the only mapping needed. */
+/**
+ * The core takes the network as a string and parses every Network name
+ * (testnet3 and testnet4 included), so the name crosses unchanged rather than
+ * every test chain becoming chipnet.
+ */
 function coreNetwork(network: Network): string {
-  return network === Network.MAINNET ? 'mainnet' : 'chipnet';
+  return network;
 }
 
 /**
@@ -39,7 +44,6 @@ function callCore<T>(call: () => T): T {
   }
 }
 
-import { networkProfile } from '../utils/networkProfile';
 export type DerivedBchKeyMaterial = {
   publicKey: Uint8Array;
   privateKey: Uint8Array;

@@ -1,0 +1,35 @@
+{
+  "content": "{\"type\":\"round_ack\",\"nonce\":\"interop-0001\",\"roundId\":\"r-test\"}",
+  "from_nostr_tools": {
+    "content": "Am5R+eyjxg26tYBAH6ftcQPOeh3axKCLJPhE3nFQXJ1VdK3YpEvCn52Bkxb9IMVsdxqrs8tFL+h/STMv3YzGE6XhJlB3k2CdW6t0yX02ncmwxUKyBwV1cm1TusLNKLW+UOpehwrvr6OMva6xo20SJGEz4UCZv6m7cZC12FRFNlYLW1tlbyC6XC1iytlXtYMdYcTHFtCrRdoaFJlj+cSVyhsA5Q0oFZ/TBpV7Lwl5S1ovpcYUbVTPJo0izmbmqydD/qYqvVyQJwZnA9iwOlP0fxAnt7fKL0QloMSO+K5+p0Oh/MnEXxtxamnppzzAIuh1ThY8kKDIdsqNmfxRPueklH/Q24W8RAFgbU6rG7oG0rkiomu+2eSd6dGXjf2cBmrdGfR3GlK3nuAcsQ5Ul8Ppu2jQA34K92JAZdVA2vHZznmxl9X2SJBASyRQtAuVrNjHVg7oMiAzQGSbXRerY7B4k2Uq/+xTJj0oGSDv8HOgNhmPwApKCtozGdSuA8+0GixWwVcfclD/yVceemfVA9x3k075EdR6/MJVS4/DQ7hzwTBFZCgLNgWUhK/MRv0GCpO/tcAjOFY+eNwedjP+fD3LaJD2OlsdJLVL8cvbwGpRxbm9CijMi1LqGJJL2997GSvuIBB0wfA1JGniHT6GGCAkjFomnfSH26vmRZ+wcOLJ2ClqWnv3CJhla6tEbwROoGr8buw1s0nExBxtDW9cYmufT9U7kX1M0/e3spxojB40f4altQ1Qw6e9PieoNk5Y+hkQDdxp5jFFBbtKKP19aljLFQI1PtHwfhmHxoIEm0ekXKKYA+F00zGzwS2dz7N9WyQuk6g19rpQruRDOkIRxRzi2cw6p82fWQHiuVKLnEQ9CcqLMlwtiuuiCLQYM2rzYqnoKkUhO01Y0NrnYEYSMRy1J5CKMWyZLdm8RmWxNKAVdID8wDEKYBlf3qPIh9UWmj1N2n6JZAl+MLCXzkMs/PZaSMrZfTvsdUq3lqvx9TEXycoUild8uX0rnJp7c2edNaUMMPJN0QU4M004NSqlRW/AWtRYFqDbs08K3tss2zYL6CWlAvQ50v1hJVekdSSVW9aywGrbI/alWagk0rF0UCEr71XzdBlqCM89FXaE1rRoWWZgF//36ONsIEzSb81+7JCGzOpH3YdLjgtWeiOaVDrHPqVscDUVqoNNsasIU/SprKQF/z8TRTYLOgLZuPD5cHz0fIWDoZhLjyu+R+f8ux48kI2OYaW77OlqMOq+U97VzfB5g9qStqiy1pgaRuIZQahLyiIbamlK989yeDrLRT0/x4TO+0uVi2/K1/+18m/5ektt+Ga9a9bNVhk4ezcjPZWVa6gtuubIK0fGktDfHldPbEMJglD98TSeAChRwaTI1Nyz/D22FkbGYBlZvzJHdgdRhbhb4nnU1MREgqs/eOoA3iG++swVg1B0tHzDUx30kERlRy8=",
+    "created_at": 1791560293,
+    "id": "d26abc4a771bce14f682e828f8665296c06e565c03bb040352565a1aa636c109",
+    "kind": 1059,
+    "pubkey": "54ea8a32913e55c8b3c926445ff956514cd489fa60ac0d3cd8a1b245291d9f54",
+    "sig": "a7953ff74e82c18ae1fe37ea87797398e8d44f677c81f1f2834649f9fd1415da0c2b48ba5128522e5ccef3c79a6e45a7b6ba73f19cb8ee92586da3b91dcdfbf2",
+    "tags": [
+      [
+        "p",
+        "4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
+      ]
+    ]
+  },
+  "from_rust": {
+    "content": "Av4GX1jLP5j89+45oZ3H8MHg4Sije98x1yG0H2a2Rx9TOv8Sy6JK0NIzE8BtEyZXbmHVSP/viZSkleYzVCaQ594e5/qM7uAt75yu9BXx79f5RZXwg14Eu4hSwG0tmVTcuepkutfdg8h4xYsdppZdqpH0Mg+rp9plF+A6JCFDqAdQVYrSL7pDQ7ASBNzVxq1m9pcThSccqUt7vpUDczlc2a8r865w7aQYs0SdmA0157kLxbQq967wXFbND8iQCDHqfJ5PAp1tCbqeWQitqXii3hFCbjJmuMiiirmpW+CicF0P0Phm0f61vDYEiZSuGM/SgPOMJV9Qx2B8WAnlX6AvdAj9596Y/RZnW9VP0MGJ7sZBQBgkAh7h5JIJEtDUES26dT+0p/baw9caffGf1jbSkNeGiMNZ8Bya2vtKZGPjTNYUL2YTzeFne6ruxMm+O+KqRXjtRnHkXzfc/dFdhJek5w6aNrRpqYaHohfIvVfUbP5iMZVpV5Ti/7JSb4Q2D9G4t3yAJNP6ENBkQjjib/cghx1WO7bafwUwRucPorSTbCPObuCgO4/Z2HECcitBx2vXzq3HrnezCLzv6QDAKY9ZnksaTN2BcQGNdwTJ0gvVeIfy+z/2sAnmtZbsD9FeIfvRLF+ai/34JnzNeFXdl3eXw06+fGIGlWxLEJNptXCfkFIFO7qqx2vk5IYWYIzEtOIuep+SODQ5dK9cNODKv6c0tk4zyr4LEVSJ1VDAoKzeccdRq1dsJOTC51eVy7pAWHWs8qaDpiSEMe3Ch2k/gPG4A8200F7cdaSsDOKlDzGN2Unih9wBcvqyRgzg1qIsDaw6n9meNUDIkpiAP046rEiIgaLyV2ezd/UQ/MRPe5oKn+5aItO/frkONPw+lobTI+pK5WEIhzztFJ2Kt4ftyC+5SpL7ZItvHJIJqwp0zRz7OZUlH4FUCkaCnAtI0ToLMVp+kqFO3IDcLW/yg/qJEWnrebUbNdglXQJGaBKyqBG8Q/QUhckHTycUmGpiqaMf0r1E4OMmZCHo14GEht8O+7zqju1DDpXGS9u8Ri7Lsq3Bf947JJXkmlL30hOFOmsJWCYzBgU6bLnvfSCS57rk3wuBf79qKg8o8b6+wUATNruk7J7mUYKIti6irlstY+iWclbL34FNBM214Guw6N/2SB1JFX/0st1KG/K6CHUEV6fRpD1IPPkJTjj2SI/7PdY4/DpYHCs4yNQ7JZAP3e6K/NfR83EESrJkm8f/2KV+/FdSbTEWTWWbgRROvqNXrleJgm5IqN3xe/e8YqH+uSJGtCVNKO5Me3RchGUDKlEpHy5L8Mv1GGEXWu7jrILhu+amziRlZoR9j06YrrBnnoSTdhzm7i3vkTBiRwBDHlZtoGxK7nCZZGC67PvzEL32gfzL1VHkHkzf+5ZJUBv0LTBzUNLTgGKNstxKoLytWmrbIWONEZ/i9as=",
+    "created_at": 1791528635,
+    "id": "6031850b16dfcd7d011189b36f9fcc0dcf3a234bc20b4b309e6644b07acbd273",
+    "kind": 1059,
+    "pubkey": "1c836586d2771741b50b902432acab96e9000d1f1f7e495d61408dd16e8e1495",
+    "sig": "7fdafe59c17dd5c08128618d1294735167e00eff16ce6f85c6534af5fb589a7cef364fdb6c675484bee2a548c408c4d5f172c6febb0f85d77f24ec4d656b6553",
+    "tags": [
+      [
+        "p",
+        "4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
+      ]
+    ]
+  },
+  "note": "NIP-17 interop between rust-nostr (optn-nostr) and nostr-tools. Test-only keys; they hold nothing. from_rust is written by the ignored Rust test write_interop_fixture.",
+  "receiver_pubkey_hex": "4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+  "receiver_secret_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "sender_pubkey_hex": "466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27"
+}

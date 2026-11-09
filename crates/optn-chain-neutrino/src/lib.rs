@@ -1097,12 +1097,12 @@ async fn connect_peer(
         } => {
             let token = format!("optn-cf-{}", nonce());
             let proxy = format!("{proxy_host}:{proxy_port}");
-            let target = format!("{host}:{port}");
+            // As a pair, so an IPv6 literal reaches the proxy as an address.
             let socks = tokio::time::timeout(
                 TOR_CONNECT_TIMEOUT,
                 tokio_socks::tcp::Socks5Stream::connect_with_password(
                     proxy.as_str(),
-                    target.as_str(),
+                    (host, port),
                     &token,
                     &token,
                 ),

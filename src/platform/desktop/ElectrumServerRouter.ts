@@ -26,6 +26,7 @@ import { getBackend } from './backendSelection';
 import { nodeSync, nodeBroadcast, type NodeSyncResult } from './Bip37Backend';
 import { parseNodeTarget } from '../../utils/servers/userNodes';
 import { getElectrumServers } from '../../utils/servers/ElectrumServers';
+import { electrumPool, notSelectedError, poolEntries } from './electrumPool';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import { Network } from '../../state/slices/networkSlice';
 
@@ -130,6 +131,10 @@ export function invalidateNodeScan(): void {
  *
  * If the live host is not in the *current* network pool, drop it so the next
  * connect/request rebuilds against the right servers.
+ *
+ * The pool is the holder's source selection, from Rust. When it allows no
+ * Electrum server (Privacy, own infrastructure without one, BIP37 or Neutrino
+ * only), every call fails here, before any connection, and says why.
  */
 async function dropStaleNetworkSocket(
   upstream: ReturnType<typeof UpstreamElectrumServer>
@@ -138,6 +143,18 @@ async function dropStaleNetworkSocket(
   if (getBackend(network).kind === 'node') {
     await upstream.electrumDisconnect();
     return;
+  }
+  const pool = await electrumPool(network);
+  if (poolEntries(pool).length === 0) {
+    try {
+      await upstream.electrumDisconnect();
+    } catch {
+      /* nothing was open */
+    }
+    throw notSelectedError(
+      pool.reason ??
+        'The selected Electrum servers use plain TCP, which this client cannot open.'
+    );
   }
   const servers = getElectrumServers(network);
   if (servers.length === 0) return;

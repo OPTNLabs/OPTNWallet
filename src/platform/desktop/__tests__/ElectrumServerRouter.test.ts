@@ -47,6 +47,26 @@ vi.mock('../Bip37Backend', () => ({
 vi.mock('../../../utils/servers/userNodes', () => ({
   parseNodeTarget: vi.fn(),
 }));
+// The holder's source selection, from Rust: a usable pool unless a test
+// says the policy allows no Electrum.
+type Pool = {
+  allowed: boolean;
+  reason: string | null;
+  servers: Array<{ host: string; port: number; tls: boolean }>;
+};
+const usablePool: Pool = {
+  allowed: true,
+  reason: null,
+  servers: [{ host: 'chipnet.example.com', port: 50002, tls: true }],
+};
+let pool: Pool = usablePool;
+vi.mock('../electrumPool', () => ({
+  electrumPool: vi.fn(async () => pool),
+  poolEntries: (p: Pool) =>
+    p.servers.filter((s) => s.tls).map((s) => `${s.host}:${s.port}`),
+  notSelectedError: (reason: string) =>
+    new Error(`electrum-not-selected: ${reason}`),
+}));
 vi.mock('../../../utils/servers/ElectrumServers', () => ({
   getElectrumServers: vi.fn((network: string) =>
     network === 'mainnet' ? ['mainnet.example.com'] : ['chipnet.example.com']
@@ -62,6 +82,7 @@ describe('ElectrumServerRouter cross-network address guard', () => {
     currentNetwork = 'chipnet';
     currentWallet = 1;
     backend = { kind: 'auto' };
+    pool = usablePool;
     upstreamRequest.mockResolvedValue([]);
     upstreamRequestMany.mockImplementation(async (calls: unknown[]) =>
       calls.map(() => [])
@@ -70,6 +91,29 @@ describe('ElectrumServerRouter cross-network address guard', () => {
     upstreamEnsureFresh.mockResolvedValue(undefined);
     upstreamDisconnect.mockResolvedValue(true);
     upstreamGetCurrentServer.mockReturnValue(null);
+  });
+
+  it('refuses before any connection when the selection allows no Electrum', async () => {
+    pool = {
+      allowed: false,
+      reason: "This wallet's source selection does not use Electrum servers.",
+      servers: [],
+    };
+    const { default: ElectrumServer } = await import('../ElectrumServerRouter');
+    const server = ElectrumServer();
+    await expect(
+      server.request('blockchain.address.listunspent', CHIPNET_ADDR)
+    ).rejects.toThrow(/^electrum-not-selected: .*does not use Electrum/);
+    await expect(server.electrumConnect()).rejects.toThrow(
+      /electrum-not-selected/
+    );
+    await expect(
+      server.requestMany([
+        { method: 'blockchain.address.listunspent', params: [CHIPNET_ADDR] },
+      ])
+    ).rejects.toThrow(/electrum-not-selected/);
+    expect(upstreamRequest).not.toHaveBeenCalled();
+    expect(upstreamRequestMany).not.toHaveBeenCalled();
   });
 
   it('does not share an in-flight node scan across wallets', async () => {

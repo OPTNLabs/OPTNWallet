@@ -86,10 +86,12 @@ mod tests {
 
     /// Classes the renderer uses that `style.css` has never defined.
     ///
-    /// Every one of these renders unstyled today. That is a real defect --
-    /// `.error` and `.warn` mean a failure message displays as ordinary body
-    /// text -- but writing seventeen rules is a design decision rather than a
-    /// mechanical fix, so they are recorded rather than invented.
+    /// Every one of these renders unstyled today. Writing their rules is a
+    /// design decision rather than a mechanical fix, so they are recorded
+    /// rather than invented. Failure and caution text (`.error`,
+    /// `.field-error`, `.warn`, `.warning`) were the defect that mattered --
+    /// a failure read as ordinary body text -- and now use `--danger` and
+    /// `--warning`.
     ///
     /// The list may shrink. It must not grow: a new undefined class is a new
     /// unstyled control, and this is the only thing that would notice.
@@ -100,8 +102,6 @@ mod tests {
         "coin-control",
         "cosigner",
         "device-section",
-        "error",
-        "field-error",
         "hardware-section",
         "multisig-section",
         "row",
@@ -109,9 +109,102 @@ mod tests {
         "source-value",
         "stack",
         "threshold-select",
-        "warn",
-        "warning",
     ];
+
+    /// The colour tokens of one theme block, by name.
+    fn tokens(selector: &str) -> Vec<(String, String)> {
+        let at = STYLE
+            .find(&format!("{selector} {{"))
+            .unwrap_or_else(|| panic!("{selector} is not in style.css"));
+        let block = &STYLE[at..];
+        let block = &block[..block.find('}').expect("a closed block")];
+        block
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.trim().strip_prefix("--")?.split_once(':')?;
+                Some((
+                    name.trim().to_owned(),
+                    value.trim().trim_end_matches(';').to_owned(),
+                ))
+            })
+            .collect()
+    }
+
+    /// WCAG relative luminance of a `#rrggbb` colour.
+    fn luminance(hex: &str) -> f64 {
+        let hex = hex.strip_prefix('#').expect("a hex colour");
+        let channel = |at: usize| {
+            let value = f64::from(u8::from_str_radix(&hex[at..at + 2], 16).unwrap()) / 255.0;
+            if value <= 0.039_28 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4)
+    }
+
+    /// `value` as `#rrggbb`: a translucent `rgba(...)` is laid over `under`,
+    /// as it is drawn.
+    fn solid(value: &str, under: &str) -> String {
+        let Some(parts) = value
+            .strip_prefix("rgba(")
+            .and_then(|rest| rest.strip_suffix(')'))
+        else {
+            return value.to_owned();
+        };
+        let parts: Vec<f64> = parts
+            .split(',')
+            .map(|part| part.trim().parse().unwrap())
+            .collect();
+        let under = under.strip_prefix('#').expect("an opaque hex colour");
+        let mut out = String::from("#");
+        for (index, top) in parts[..3].iter().enumerate() {
+            let below =
+                f64::from(u8::from_str_radix(&under[index * 2..index * 2 + 2], 16).unwrap());
+            let mixed = top * parts[3] + below * (1.0 - parts[3]);
+            out.push_str(&format!("{:02x}", mixed.round() as u8));
+        }
+        out
+    }
+
+    fn contrast(a: &str, b: &str) -> f64 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// #71: body text stays readable, at WCAG 4.5:1, in all four modes and
+    /// the default. Text, secondary text, failures and cautions are each
+    /// checked against both the page and the surfaces drawn on it.
+    #[test]
+    fn text_meets_wcag_contrast_in_every_mode() {
+        for selector in [
+            ":root",
+            ".app-shell.theme-light",
+            ".app-shell.theme-gray",
+            ".app-shell.dark",
+            ".app-shell.theme-dark",
+        ] {
+            let tokens = tokens(selector);
+            let token = |name: &str| {
+                tokens
+                    .iter()
+                    .find(|(token, _)| token == name)
+                    .map(|(_, value)| value.clone())
+                    .unwrap_or_else(|| panic!("{selector} has no --{name}"))
+            };
+            let page = token("bg");
+            for background in [page.clone(), solid(&token("surface"), &page)] {
+                for text in ["text", "muted", "danger", "warning"] {
+                    let ratio = contrast(&token(text), &background);
+                    assert!(
+                        ratio >= 4.5,
+                        "{selector}: --{text} on {background} is {ratio:.2}:1"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn no_new_class_is_left_unstyled() {

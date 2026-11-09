@@ -71,6 +71,11 @@ pub struct Client {
     /// Empty means this client may not use a proxy at all, which refuses
     /// remote hosts rather than dialling them directly.
     trusted_socks_ports: Vec<u16>,
+    /// The holder's Tor switch for this network, and whether this host is a
+    /// node they declared as their own (#75 §4.1). Tor on, and public,
+    /// until the shared settings say otherwise.
+    transport: optn_runtime::chain::TransportPolicy,
+    own_infrastructure: bool,
 }
 
 impl Client {
@@ -86,7 +91,27 @@ impl Client {
             tls,
             timeout_secs,
             trusted_socks_ports: Vec::new(),
+            transport: optn_runtime::chain::TransportPolicy::default(),
+            own_infrastructure: false,
         })
+    }
+
+    /// Follow the holder's Tor switch, and their declaration that this host
+    /// is their own node.
+    pub fn following(
+        mut self,
+        transport: optn_runtime::chain::TransportPolicy,
+        own_infrastructure: bool,
+    ) -> Self {
+        self.transport = transport;
+        self.own_infrastructure = own_infrastructure;
+        self
+    }
+
+    /// Whether this connection must go through Tor under the holder's switch.
+    fn requires_tor(&self) -> bool {
+        self.transport
+            .requires_tor(self.own_infrastructure, &self.host)
     }
 
     /// Declare which loopback SOCKS ports the holder confirmed are their Tor.
@@ -97,6 +122,10 @@ impl Client {
     pub fn trusting_socks_ports(mut self, ports: Vec<u16>) -> Self {
         self.trusted_socks_ports = ports;
         self
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
     }
 
     pub fn endpoint(&self) -> String {
@@ -195,14 +224,15 @@ impl Client {
     }
 
     async fn connect(&self, addr: &str) -> Result<TcpStream> {
-        let local_route = tor_route(&self.host, TorStatus::Absent);
-        let route = if local_route.is_refused() {
+        // Tor off, loopback, or the holder's own node with Tor on: direct.
+        // Otherwise verified Tor or nothing.
+        let route = if self.requires_tor() {
             route_for_host(
                 &self.host,
                 tor_status_with_trust(&self.trusted_socks_ports).await,
             )?
         } else {
-            local_route
+            TorRoute::Direct
         };
         match route {
             TorRoute::Direct => TcpStream::connect(addr)
@@ -422,6 +452,26 @@ mod tests {
             route_for_host("127.0.0.1", TorStatus::Absent).unwrap(),
             TorRoute::Direct
         );
+    }
+
+    #[test]
+    fn the_holders_tor_switch_decides_the_route() {
+        use optn_runtime::chain::TransportPolicy;
+        let public = || Client::new("electrum.example".into(), 50002, true, 1).unwrap();
+        // Tor on by default: a public host needs Tor.
+        assert!(public().requires_tor());
+        // Their own node is direct with Tor on.
+        assert!(!public()
+            .following(TransportPolicy::Tor, true)
+            .requires_tor());
+        // Tor off: nothing is proxied.
+        assert!(!public()
+            .following(TransportPolicy::Direct, false)
+            .requires_tor());
+        // Loopback never needs Tor.
+        assert!(!Client::new("127.0.0.1".into(), 50001, false, 1)
+            .unwrap()
+            .requires_tor());
     }
 
     #[test]

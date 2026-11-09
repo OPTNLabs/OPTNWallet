@@ -210,6 +210,17 @@ impl CoinHolds {
     }
 }
 
+/// Where a host keeps the holds of a wallet it migrated into the runtime: the
+/// desktop's per-wallet hold file, named by the wallet's legacy id.
+///
+/// The runtime only reads it. Holds are taken and lifted through the host's
+/// own commands, which enforce who may lift which hold; all the runtime needs
+/// is which coins are not its to offer. Without this store a migrated wallet's
+/// held coins are invisible here, and their absence proves nothing.
+pub trait HostHoldStore: Send {
+    fn load(&self, wallet_id: u32) -> Result<CoinHolds, String>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

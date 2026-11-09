@@ -13,6 +13,10 @@ description = "CashFusion protocol engine for OPTN Wallet: server and P2P rounds
 optn-core = { path = "../optn-core", version = "=1.7.3" }
 
 aes = "0.8"
+# The P2P output onion's layers (AES-256-GCM, as the TypeScript peers use).
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+# Onion blobs travel as standard base64, as `btoa` writes them.
+base64 = "0.22"
 cbc = { version = "0.1", features = ["alloc"] }
 hex = "0.4"
 futures-util = "0.3"

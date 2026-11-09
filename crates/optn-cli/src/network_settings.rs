@@ -44,7 +44,7 @@ pub async fn build_stack(
             )
         }
     };
-    optn_chain_native::build_native_chain_stack_via(
+    let stack = optn_chain_native::build_native_chain_stack_via(
         selection.catalog,
         selection.policy,
         &network.to_string(),
@@ -54,7 +54,36 @@ pub async fn build_stack(
             trusted: &trusted,
         },
     )
-    .await
+    .await;
+    // Kept for a later run's failover, in the cache the desktop keeps too,
+    // with every peer the holder set a disposition for kept however old.
+    // Settings that cannot be read leave the cache as it is.
+    if !stack.discovered_peers.is_empty() && network != Network::Regtest {
+        if let (Some(file), Ok(envelope)) = (
+            discovered_file(network, directory),
+            shared_envelope(network, directory),
+        ) {
+            let keep = envelope
+                .map(|envelope| envelope.overlay.bootstrap_overrides.into_keys().collect())
+                .unwrap_or_default();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs());
+            let _ = file.record(network, &stack.discovered_peers, &keep, now);
+        }
+    }
+    stack
+}
+
+fn discovered_file(
+    network: Network,
+    directory: Option<&Path>,
+) -> Option<optn_chain_native::discovered_peers_file::DiscoveredPeersFile> {
+    config_directory(directory).map(|directory| {
+        optn_chain_native::discovered_peers_file::DiscoveredPeersFile::new(
+            directory.join(format!("discovered-peers-{network}.json")),
+        )
+    })
 }
 
 pub fn export_sources(network: Network, directory: Option<&Path>) -> Result<String, String> {
@@ -94,8 +123,11 @@ pub fn configure_sources(
             optn_runtime::network_config::promote_legacy_policy(&mut envelope);
             let (catalog, _) = resolve_shipped_chain_selection(network, Some(&envelope))
                 .map_err(|error| format!("invalid network settings: {error:?}"))?;
-            envelope.overlay.connection_policy =
-                optn_runtime::source_selection::policy(&catalog, selection)?;
+            envelope.overlay.connection_policy = optn_runtime::source_selection::policy(
+                &catalog,
+                selection,
+                envelope.overlay.connection_policy.transport,
+            )?;
             Ok(envelope)
         })
         .map(|_| ())
@@ -121,7 +153,11 @@ pub fn select_source(
             let (catalog, _) = resolve_shipped_chain_selection(network, Some(&envelope))
                 .map_err(|error| format!("invalid network settings: {error:?}"))?;
             let id = optn_runtime::chain::SourceId::new(source);
-            let policy = ConnectionPolicy::exact(id.clone(), protocol);
+            // Pinning a source changes which one is used, never how.
+            let policy = ConnectionPolicy {
+                transport: envelope.overlay.connection_policy.transport,
+                ..ConnectionPolicy::exact(id.clone(), protocol)
+            };
             if !optn_runtime::chain::build_selection_plan(&catalog, &policy)
                 .primary
                 .contains(&id)
@@ -299,6 +335,7 @@ fn parse_endpoint_kind(value: &str) -> Result<EndpointKind, String> {
         "node-zmq" => Ok(EndpointKind::BchnZmq),
         "ipfs-gateway" => Ok(EndpointKind::IpfsGatewayHttps),
         "bcmr-indexer" => Ok(EndpointKind::BcmrIndexerHttps),
+        "p2p-seed" => Ok(EndpointKind::BchDnsSeed),
         "explorer-https" => Ok(EndpointKind::ExplorerHttps),
         "explorer-http" => Ok(EndpointKind::ExplorerHttp),
         other => Err(format!("unknown endpoint kind '{other}'")),
@@ -344,6 +381,100 @@ pub fn set_policy_preset(
         .map(|_| ())
 }
 
+/// Turn Tor on or off for this network. Which sources are selected is left
+/// exactly as it was.
+/// Trust, or stop trusting, the SOCKS proxy on `127.0.0.1:port` as the
+/// holder's Tor: the same edit the desktop's Privacy & Transport makes. A
+/// greeting alone never proves Tor; the holder's declaration is the
+/// provenance, and every surface reads it from this one overlay.
+pub fn set_trusted_socks_port(
+    network: Network,
+    directory: Option<&Path>,
+    port: u16,
+    trusted: bool,
+) -> Result<Vec<u16>, String> {
+    if port == 0 {
+        return Err("0 is not a port".into());
+    }
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    let mut ports = Vec::new();
+    NetworkConfigFile::new(directory.join(file_name(network))).update(|existing| {
+        let mut envelope = existing.unwrap_or_else(|| {
+            NetworkConfigEnvelope::current(
+                optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
+                Default::default(),
+            )
+        });
+        optn_runtime::network_config::promote_legacy_policy(&mut envelope);
+        let trusted_ports = &mut envelope.overlay.trusted_socks_ports;
+        trusted_ports.retain(|entry| *entry != port);
+        if trusted {
+            trusted_ports.push(port);
+            trusted_ports.sort_unstable();
+        }
+        ports = trusted_ports.clone();
+        Ok(envelope)
+    })?;
+    Ok(ports)
+}
+
+pub fn set_transport(
+    network: Network,
+    directory: Option<&Path>,
+    transport: optn_runtime::chain::TransportPolicy,
+) -> Result<(), String> {
+    let directory =
+        config_directory(directory).ok_or("network configuration directory is unavailable")?;
+    NetworkConfigFile::new(directory.join(file_name(network)))
+        .update(|existing| {
+            let mut envelope = existing.unwrap_or_else(|| {
+                NetworkConfigEnvelope::current(
+                    optn_runtime::network_config::SHIPPED_CATALOG_VERSION,
+                    Default::default(),
+                )
+            });
+            optn_runtime::network_config::promote_legacy_policy(&mut envelope);
+            envelope.overlay.connection_policy.transport = transport;
+            Ok(envelope)
+        })
+        .map(|_| ())
+}
+
+/// The holder's Tor switch for `network`, and whether `host` is a node they
+/// declared as their own. Unreadable settings read as Tor on and not their
+/// own: a broken file must never be what allows a direct connection.
+pub fn transport_for_host(
+    network: Network,
+    directory: Option<&Path>,
+    host: &str,
+) -> (optn_runtime::chain::TransportPolicy, bool) {
+    let Ok(Some(selection)) = shared_chain_selection(network, directory) else {
+        return (optn_runtime::chain::TransportPolicy::default(), false);
+    };
+    let host = host.trim_end_matches('.');
+    let own = selection.catalog.iter().any(|source| {
+        source.is_enabled()
+            && source.is_user_infrastructure()
+            && source.endpoints.iter().any(|endpoint| {
+                endpoint
+                    .host
+                    .trim_end_matches('.')
+                    .eq_ignore_ascii_case(host)
+            })
+    });
+    (selection.policy.transport, own)
+}
+
+/// `on` or `off`, as typed after `network tor`.
+pub fn parse_tor_switch(value: &str) -> Result<optn_runtime::chain::TransportPolicy, String> {
+    match value.trim() {
+        "on" => Ok(optn_runtime::chain::TransportPolicy::Tor),
+        "off" => Ok(optn_runtime::chain::TransportPolicy::Direct),
+        _ => Err("Use network tor on|off.".into()),
+    }
+}
+
 /// The durable source catalog and policy shared by native wallet surfaces.
 ///
 /// The CLI has no private network-settings shape: it either uses this exact
@@ -360,8 +491,18 @@ pub fn shared_chain_selection(
     configured_directory: Option<&Path>,
 ) -> Result<Option<SharedChainSelection>, String> {
     let envelope = shared_envelope(network, configured_directory)?;
-    let (catalog, policy) = resolve_shipped_chain_selection(network, envelope.as_ref())
-        .map_err(|error| format!("cannot enforce network settings: {error:?}"))?;
+    // Servers discovered from peer lists rank after every shipped one, with
+    // the holder's dispositions applied; see `optn_runtime::bootstrap`.
+    let discovered = if network == Network::Regtest {
+        Vec::new()
+    } else {
+        discovered_file(network, configured_directory)
+            .map(|file| file.load(network))
+            .unwrap_or_default()
+    };
+    let (catalog, policy) =
+        optn_runtime::bootstrap::resolve_with_discovered(network, envelope.as_ref(), &discovered)
+            .map_err(|error| format!("cannot enforce network settings: {error:?}"))?;
     Ok(Some(SharedChainSelection { catalog, policy }))
 }
 
@@ -380,38 +521,111 @@ pub fn trusted_socks_ports(network: Network, configured_directory: Option<&Path>
         .unwrap_or_default()
 }
 
-/// Load the desktop-selected encrypted Electrum endpoint for one network.
-///
-/// Missing settings deliberately return `None`, preserving the CLI's built-in
-/// network default. A present but unsupported or corrupt setting returns an
-/// error: falling back would violate an explicit user selection.
-pub fn shared_electrum(
+/// Load the desktop-selected encrypted Electrum endpoint for one network: the
+/// first of [`shared_electrum_servers`].
+#[cfg(test)]
+fn shared_electrum(
     network: Network,
     configured_directory: Option<&Path>,
 ) -> Result<Option<ElectrumEndpoint>, String> {
+    Ok(shared_electrum_servers(network, configured_directory)?
+        .and_then(|servers| servers.into_iter().next()))
+}
+
+/// The encrypted Electrum servers an Electrum-only command may use on one
+/// network, in the order the shared settings rank them.
+///
+/// The one server the desktop's older fields name, when they name one. Under
+/// any other selection (Auto, Privacy, a preset), every encrypted Electrum
+/// endpoint the shared selection plan picks, primary sources first: the same
+/// servers `rescan` and the desktop would use, never a default of the CLI's.
+///
+/// Missing settings return `None`, preserving the CLI's built-in network
+/// default. A direct BCH P2P selection, plaintext Electrum, or a selection with
+/// no Electrum at all is refused: falling back would violate it.
+pub fn shared_electrum_servers(
+    network: Network,
+    configured_directory: Option<&Path>,
+) -> Result<Option<Vec<ElectrumEndpoint>>, String> {
     let Some(envelope) = shared_envelope(network, configured_directory)? else {
         return Ok(None);
     };
-    let servers = legacy_network_servers_from_overlay(&envelope.overlay).map_err(|error| {
-        format!("cannot enforce network settings in an Electrum-only command: {error}")
-    })?;
-    if servers.peer.is_some() {
-        return Err(
-            "shared network settings include a direct BCH P2P route that this Electrum-only CLI cannot enforce"
-                .into(),
-        );
+    let legacy = legacy_network_servers_from_overlay(&envelope.overlay);
+    if let Ok(servers) = &legacy {
+        if servers.peer.is_some() {
+            return Err(
+                "shared network settings include a direct BCH P2P route that this Electrum-only CLI cannot enforce"
+                    .into(),
+            );
+        }
+        if let Some(entry) = &servers.electrum {
+            let endpoint = parse_electrum_endpoint(entry, network.default_port())
+                .map_err(|error| format!("invalid shared Electrum endpoint: {error}"))?;
+            if !endpoint.encrypted() {
+                return Err("shared network settings selected plaintext Electrum".into());
+            }
+            return Ok(Some(vec![endpoint]));
+        }
     }
-    let Some(entry) = servers.electrum else {
-        return Err(
-            "shared network settings contain no Electrum route; refusing a default server".into(),
-        );
+    let selected = selected_electrum_servers(network, configured_directory)?;
+    if !selected.is_empty() {
+        return Ok(Some(selected));
+    }
+    Err(match legacy {
+        Err(error) => {
+            format!("cannot enforce network settings in an Electrum-only command: {error}")
+        }
+        Ok(_) => {
+            "shared network settings contain no Electrum route; refusing a default server".into()
+        }
+    })
+}
+
+/// Every encrypted Electrum endpoint the shared selection plan picks, primary
+/// sources before fallback ones, each once.
+fn selected_electrum_servers(
+    network: Network,
+    configured_directory: Option<&Path>,
+) -> Result<Vec<ElectrumEndpoint>, String> {
+    let Some(selection) = shared_chain_selection(network, configured_directory)? else {
+        return Ok(Vec::new());
     };
-    let endpoint = parse_electrum_endpoint(&entry, network.default_port())
-        .map_err(|error| format!("invalid shared Electrum endpoint: {error}"))?;
-    if !endpoint.encrypted() {
-        return Err("shared network settings selected plaintext Electrum".into());
+    if !selection
+        .policy
+        .protocols
+        .contains(optn_runtime::chain::ProtocolFamily::Electrum)
+    {
+        return Ok(Vec::new());
     }
-    Ok(Some(endpoint))
+    let plan = optn_runtime::chain::build_selection_plan(&selection.catalog, &selection.policy);
+    let mut servers: Vec<ElectrumEndpoint> = Vec::new();
+    for source in plan
+        .primary
+        .iter()
+        .chain(plan.fallback.iter())
+        .filter_map(|id| selection.catalog.get(id))
+    {
+        for endpoint in &source.endpoints {
+            if endpoint.kind != optn_runtime::chain::EndpointKind::ElectrumTls {
+                continue;
+            }
+            let Some(port) = endpoint.port else {
+                continue;
+            };
+            let Ok(server) = parse_electrum_endpoint(&format!("{}:{port}", endpoint.host), port)
+            else {
+                continue;
+            };
+            if server.encrypted()
+                && !servers
+                    .iter()
+                    .any(|known| known.host() == server.host() && known.port() == server.port())
+            {
+                servers.push(server);
+            }
+        }
+    }
+    Ok(servers)
 }
 
 fn shared_envelope(
@@ -632,6 +846,91 @@ mod tests {
         );
     }
 
+    #[test]
+    fn switching_tor_keeps_the_selection() {
+        use optn_runtime::chain::TransportPolicy;
+        assert_eq!(parse_tor_switch("on"), Ok(TransportPolicy::Tor));
+        assert_eq!(parse_tor_switch("off"), Ok(TransportPolicy::Direct));
+        assert!(parse_tor_switch("direct").is_err());
+
+        let directory = TestDirectory::new();
+        let mut overlay = legacy_electrum("127.0.0.1");
+        overlay.connection_policy =
+            ConnectionPolicy::exact(overlay.user_sources[0].id.clone(), ProtocolFamily::Electrum);
+        let pinned = overlay.connection_policy.clone();
+        directory.write(Network::Chipnet, overlay);
+        set_transport(
+            Network::Chipnet,
+            Some(&directory.0),
+            TransportPolicy::Direct,
+        )
+        .unwrap();
+        let selection = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.policy.transport, TransportPolicy::Direct);
+        assert!(selection.policy.selects_like(&pinned));
+    }
+
+    /// The CLI declares a Tor proxy the way the desktop does, in the same
+    /// overlay, so a headless runner can fuse without the desktop.
+    #[test]
+    fn trusting_a_tor_port_is_one_shared_overlay_edit() {
+        let directory = TestDirectory::new();
+        directory.write(Network::Chipnet, UserNetworkOverlay::default());
+        assert_eq!(
+            set_trusted_socks_port(Network::Chipnet, Some(&directory.0), 9150, true).unwrap(),
+            vec![9150]
+        );
+        assert_eq!(
+            set_trusted_socks_port(Network::Chipnet, Some(&directory.0), 9050, true).unwrap(),
+            vec![9050, 9150]
+        );
+        // Trusting twice keeps one entry; removing leaves the other.
+        set_trusted_socks_port(Network::Chipnet, Some(&directory.0), 9050, true).unwrap();
+        assert_eq!(
+            set_trusted_socks_port(Network::Chipnet, Some(&directory.0), 9150, false).unwrap(),
+            vec![9050]
+        );
+        assert_eq!(
+            trusted_socks_ports(Network::Chipnet, Some(&directory.0)),
+            vec![9050]
+        );
+        assert!(set_trusted_socks_port(Network::Chipnet, Some(&directory.0), 0, true).is_err());
+        // Other networks are untouched.
+        assert!(trusted_socks_ports(Network::Mainnet, Some(&directory.0)).is_empty());
+    }
+
+    #[test]
+    fn pinning_a_source_keeps_the_chosen_transport() {
+        use optn_runtime::chain::TransportPolicy;
+        let directory = TestDirectory::new();
+        let mut overlay = UserNetworkOverlay::default();
+        overlay.connection_policy.transport = TransportPolicy::Direct;
+        directory.write(Network::Chipnet, overlay);
+        let (catalog, _) = resolve_shipped_chain_selection(Network::Chipnet, None).unwrap();
+        let id = catalog
+            .iter()
+            .find(|source| source.endpoints[0].kind == EndpointKind::ElectrumTls)
+            .unwrap()
+            .id
+            .clone();
+        select_source(
+            Network::Chipnet,
+            Some(&directory.0),
+            id.as_str(),
+            ProtocolFamily::Electrum,
+        )
+        .unwrap();
+        let pinned = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pinned.policy.transport, TransportPolicy::Direct);
+        assert!(pinned
+            .policy
+            .selects_like(&ConnectionPolicy::exact(id, ProtocolFamily::Electrum)));
+    }
+
     #[tokio::test]
     async fn send_dry_run_drives_spend_to_on_a_loopback_electrum() {
         use clap::Parser;
@@ -786,6 +1085,17 @@ mod tests {
                             json!([{"tx_hash":expected_txid,"height":5}])
                         }
                         "blockchain.scripthash.get_mempool" => json!([]),
+                        // Asked alongside each lookup for the block height.
+                        "blockchain.transaction.get_merkle" => {
+                            json!({"block_height": 5, "merkle": [], "pos": 0})
+                        }
+                        // The token's authbase: this fixture holds no authchain,
+                        // so its identity stays unresolved and its coin visible.
+                        "blockchain.transaction.get"
+                            if request["params"][0] != json!(expected_txid) =>
+                        {
+                            Value::Null
+                        }
                         "blockchain.transaction.get" => {
                             assert_eq!(request["params"], json!([expected_txid, false]));
                             lookups += 1;
@@ -1091,6 +1401,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Under the desktop's default Auto selection, Electrum-only commands use
+    /// the selection's own servers, in plan order, never a CLI default.
+    #[test]
+    fn auto_selection_offers_its_own_electrum_servers_in_order() {
+        let directory = TestDirectory::new();
+        directory.write(Network::Chipnet, UserNetworkOverlay::default());
+        let servers = shared_electrum_servers(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .expect("present configuration");
+        let selection = shared_chain_selection(Network::Chipnet, Some(&directory.0))
+            .unwrap()
+            .unwrap();
+        let plan = optn_runtime::chain::build_selection_plan(&selection.catalog, &selection.policy);
+        let planned: Vec<(String, u16)> = plan
+            .primary
+            .iter()
+            .filter_map(|id| selection.catalog.get(id))
+            .flat_map(|source| source.endpoints.iter())
+            .filter(|endpoint| endpoint.kind == EndpointKind::ElectrumTls)
+            .map(|endpoint| (endpoint.host.clone(), endpoint.port.unwrap()))
+            .collect();
+        assert!(!planned.is_empty());
+        let offered: Vec<(String, u16)> = servers
+            .iter()
+            .map(|server| (server.host().to_owned(), server.port()))
+            .collect();
+        assert_eq!(offered[..planned.len()], planned[..]);
+        assert!(servers.iter().all(ElectrumEndpoint::encrypted));
+        assert_eq!(
+            shared_electrum(Network::Chipnet, Some(&directory.0))
+                .unwrap()
+                .map(|server| server.host().to_owned()),
+            Some(planned[0].0.clone())
+        );
     }
 
     #[test]

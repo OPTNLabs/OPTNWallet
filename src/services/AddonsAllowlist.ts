@@ -6,6 +6,7 @@ import {
   type AddonPermission,
 } from '../types/addons';
 import { isNativePlatform } from '../utils/platform';
+import { isBuiltinAddon } from './addons/AddonTrust';
 
 /**
  * Global allowlist for addon HTTP calls.
@@ -185,7 +186,7 @@ export function assertUrlAllowedForAddon(
   const hostname = normalizeDomain(parsed.hostname);
   const isLocalDevUrl =
     (options?.devMode ?? isDevEnvironment()) &&
-    manifest.trustTier === 'internal' &&
+    isBuiltinAddon(manifest) &&
     parsed.protocol === 'http:' &&
     (hostname === 'localhost' || hostname === '127.0.0.1');
 

@@ -455,6 +455,11 @@ pub struct AppState {
     pub hd_addresses: Option<HdAddressAllocation>,
     /// Runtime-owned recovery records; never part of an untrusted guest response.
     pub payment_outbox: Vec<optn_core::payment::PaymentRecord>,
+    /// How many CashFusion rounds each coin has been through (Electron
+    /// Cash's `fuse_depth`). Runtime-owned and sealed with the wallet's
+    /// checkpoint, so a hard stop cannot lose a round already recorded.
+    /// `None` until the open wallet records or restores one.
+    pub fusion_depth: Option<optn_core::fusion::depth::FusionDepthBook>,
     /// Runtime-owned chain projection. A missing balance means no complete observation.
     pub wallet_sync: WalletSyncView,
     pub spend: Option<SpendPlan>,
@@ -573,6 +578,7 @@ impl AppState {
             wallet: None,
             hd_addresses: None,
             payment_outbox: Vec::new(),
+            fusion_depth: None,
             wallet_sync: WalletSyncView::empty(),
             spend: None,
             fee_preferences: FeePreferences::app_default(),
@@ -927,6 +933,7 @@ impl AppState {
                 self.coins.clear();
                 self.hd_addresses = None;
                 self.payment_outbox.clear();
+                self.fusion_depth = None;
                 self.wallet_sync = WalletSyncView::empty();
                 self.pledges.clear();
                 self.spend = None;
@@ -1486,6 +1493,7 @@ impl AppState {
         self.coins.clear();
         self.hd_addresses = None;
         self.payment_outbox.clear();
+        self.fusion_depth = None;
         self.wallet_sync = WalletSyncView::empty();
         self.pledges.clear();
         self.spend = None;
@@ -1515,6 +1523,7 @@ impl AppState {
         self.wallet = None;
         self.hd_addresses = None;
         self.payment_outbox.clear();
+        self.fusion_depth = None;
         self.wallet_sync = WalletSyncView::empty();
         self.spend = None;
         self.coins.clear();
@@ -2030,6 +2039,37 @@ impl IdentityStatus {
     }
 }
 
+/// What established a verified identity's authhead.
+///
+/// The registry always matched the hash committed on chain; this says how the
+/// chain position carrying that commitment was learned. Kept apart from
+/// [`IdentityStatus`] because "is this current" and "how do we know" are
+/// different questions, and a holder deciding whether to act on a name needs
+/// both. Ordered weakest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum IdentityAssurance {
+    /// Not recorded: nothing was established, or the record predates this.
+    #[default]
+    Unattested,
+    /// A chain server reported the authchain and that its head is unspent.
+    /// The server could have hidden a newer head or described a chain that
+    /// does not exist; the registry it led to still matched its hash.
+    ServerReported,
+    /// The holder's own validating node supplied every hop and the head's
+    /// unspent state.
+    NodeValidated,
+}
+
+/// How a verified identity was established.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IdentityBasis {
+    pub assurance: IdentityAssurance,
+    /// The authhead's identity output is `OP_RETURN`. The identity is burned:
+    /// nobody can publish a newer registry for it, so this one is final. That
+    /// part needs no server's word -- the output cannot be spent.
+    pub burned: bool,
+}
+
 /// A token's name as this wallet currently knows it.
 ///
 /// Only ever built from a registry whose committed hash matched. A name that
@@ -2041,9 +2081,25 @@ pub struct TokenIdentity {
     pub decimals: u8,
     pub status: IdentityStatus,
     pub presentation: TokenPresentation,
+    /// How the authhead behind a verified or last-known name was established.
+    pub basis: IdentityBasis,
 }
 
 impl TokenIdentity {
+    /// A short caveat for renderers that show one line, or `None` when the
+    /// name is current on the holder's own evidence.
+    ///
+    /// A current name a server vouched for still says so: the registry is
+    /// authentic, but which registry is current rests on that server.
+    pub const fn caveat(&self) -> Option<&'static str> {
+        match (self.status, self.basis.assurance) {
+            (IdentityStatus::Verified, IdentityAssurance::ServerReported) => {
+                Some("as reported by server")
+            }
+            (status, _) => status.caveat(),
+        }
+    }
+
     /// Presentation is not identity evidence. Only known authenticated states
     /// may carry it across a persistence or renderer boundary.
     pub fn authenticated_presentation(&self) -> TokenPresentation {
@@ -2366,6 +2422,40 @@ pub struct WalletSyncView {
     pub scan_coverage: Option<ScanCoverageView>,
     /// A rescan the holder asked for that has not produced a result yet.
     pub rescan_requested: Option<u32>,
+    /// When the shown snapshot was accepted, in Unix milliseconds. Its age is
+    /// the viewer's clock minus this; the view is not republished as it ages.
+    pub snapshot_at_unix_ms: Option<u64>,
+    /// The selected providers and the health the runtime gave them at the
+    /// last refresh.
+    pub providers: Vec<ProviderStatusView>,
+    /// Where the verified headers stood at the last refresh.
+    pub header_checkpoint: Option<HeaderCheckpointView>,
+}
+
+/// How the runtime rates one of the selected providers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderHealthView {
+    Unknown,
+    Healthy,
+    Degraded,
+    Offline,
+}
+
+/// One selected provider in the wallet's sync status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderStatusView {
+    pub source: String,
+    /// The protocol's label, such as "Fulcrum / Electrum".
+    pub protocol: String,
+    pub health: ProviderHealthView,
+}
+
+/// Where the verified headers stood at the last refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeaderCheckpointView {
+    pub height: u32,
+    /// Who vouches for the view's starting point, such as "shipped-reviewed".
+    pub provenance: String,
 }
 
 impl WalletSyncView {
@@ -2383,6 +2473,9 @@ impl WalletSyncView {
             error: None,
             scan_coverage: None,
             rescan_requested: None,
+            snapshot_at_unix_ms: None,
+            providers: Vec::new(),
+            header_checkpoint: None,
         }
     }
 
@@ -2395,6 +2488,58 @@ impl Default for WalletSyncView {
     fn default() -> Self {
         Self::empty()
     }
+}
+
+/// How old a snapshot accepted at `snapshot_at_unix_ms` is at `now_unix_ms`,
+/// for the holder. A clock behind the snapshot reads as just now, never as a
+/// negative age.
+pub fn snapshot_age_label(snapshot_at_unix_ms: u64, now_unix_ms: u64) -> String {
+    let minutes = now_unix_ms.saturating_sub(snapshot_at_unix_ms) / 60_000;
+    match minutes {
+        0 => "updated just now".into(),
+        1..=59 => format!("updated {minutes} min ago"),
+        60..=2_879 => format!("updated {} h ago", minutes / 60),
+        _ => format!("updated {} days ago", minutes / 1_440),
+    }
+}
+
+/// The selected providers that are degraded or offline, for the holder, or
+/// `None` while every known provider is usable.
+pub fn provider_health_summary(providers: &[ProviderStatusView]) -> Option<String> {
+    let troubled: Vec<String> = providers
+        .iter()
+        .filter_map(|provider| {
+            let state = match provider.health {
+                ProviderHealthView::Degraded => "degraded",
+                ProviderHealthView::Offline => "offline",
+                ProviderHealthView::Unknown | ProviderHealthView::Healthy => return None,
+            };
+            Some(format!(
+                "{} ({}) {state}",
+                provider.source, provider.protocol
+            ))
+        })
+        .collect();
+    (!troubled.is_empty()).then(|| {
+        format!(
+            "{} of {} providers not usable: {}",
+            troubled.len(),
+            providers.len(),
+            troubled.join(", ")
+        )
+    })
+}
+
+/// Where the verified headers stand, and who vouches for where they began.
+pub fn header_checkpoint_label(checkpoint: &HeaderCheckpointView) -> String {
+    let anchor = match checkpoint.provenance.as_str() {
+        "shipped-reviewed" => " from the checkpoint shipped with the wallet",
+        "self-derived" => " from a start derived on this device",
+        "sampled-independent-sources" => " from a checkpoint sampled across independent sources",
+        "user-provided" => " from a checkpoint you provided",
+        _ => "",
+    };
+    format!("Headers verified to {}{anchor}", checkpoint.height)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3168,6 +3313,7 @@ mod tests {
                 decimals: 2,
                 status,
                 presentation: Default::default(),
+                basis: Default::default(),
             }
         }
 
@@ -6353,5 +6499,69 @@ mod amount_tests {
             assert!(!text.is_empty(), "{error:?} has no message");
             assert!(text.ends_with('.'), "{error:?} is not a sentence");
         }
+    }
+}
+
+#[cfg(test)]
+mod sync_status_labels {
+    use super::*;
+
+    #[test]
+    fn snapshot_age_reads_in_the_largest_whole_unit() {
+        let at = 1_760_000_000_000;
+        let minute = 60_000;
+        for (elapsed, label) in [
+            (0, "updated just now"),
+            (minute - 1, "updated just now"),
+            (minute, "updated 1 min ago"),
+            (59 * minute, "updated 59 min ago"),
+            (60 * minute, "updated 1 h ago"),
+            (47 * 60 * minute, "updated 47 h ago"),
+            (48 * 60 * minute, "updated 2 days ago"),
+        ] {
+            assert_eq!(snapshot_age_label(at, at + elapsed), label);
+        }
+        assert_eq!(snapshot_age_label(at, at - minute), "updated just now");
+    }
+
+    #[test]
+    fn provider_summary_names_only_the_unusable_ones() {
+        let provider = |source: &str, health| ProviderStatusView {
+            source: source.into(),
+            protocol: "BIP37".into(),
+            health,
+        };
+        assert_eq!(provider_health_summary(&[]), None);
+        assert_eq!(
+            provider_health_summary(&[
+                provider("a", ProviderHealthView::Healthy),
+                provider("b", ProviderHealthView::Unknown),
+            ]),
+            None
+        );
+        assert_eq!(
+            provider_health_summary(&[
+                provider("a", ProviderHealthView::Healthy),
+                provider("b", ProviderHealthView::Offline),
+                provider("c", ProviderHealthView::Degraded),
+            ])
+            .as_deref(),
+            Some("2 of 3 providers not usable: b (BIP37) offline, c (BIP37) degraded")
+        );
+    }
+
+    #[test]
+    fn header_label_names_its_anchor_when_known() {
+        let label = |provenance: &str| {
+            header_checkpoint_label(&HeaderCheckpointView {
+                height: 900_000,
+                provenance: provenance.into(),
+            })
+        };
+        assert_eq!(
+            label("shipped-reviewed"),
+            "Headers verified to 900000 from the checkpoint shipped with the wallet"
+        );
+        assert_eq!(label("something-newer"), "Headers verified to 900000");
     }
 }

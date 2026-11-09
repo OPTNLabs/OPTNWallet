@@ -6,9 +6,13 @@
 
 use crate::chain_runtime::catalog_and_policy_from_app_state;
 use optn_app::{AppState, NetworkServers, ServerKind};
+use optn_chain_native::discovered_peers_file::DiscoveredPeersFile;
 use optn_chain_native::network_config::NetworkConfigFile;
 use optn_core::network::Network;
-use optn_runtime::chain::{ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceOrigin};
+use optn_runtime::bootstrap::DiscoveredPeer;
+use optn_runtime::chain::{
+    ConnectionPolicy, Endpoint, EndpointKind, SourceCatalog, SourceOrigin, TransportPolicy,
+};
 use optn_runtime::network_config::{
     legacy_network_servers_from_overlay, legacy_server_policy, promote_legacy_policy,
     resolve_shipped_chain_selection, NetworkConfigEnvelope, NetworkConfigStore, UserNetworkOverlay,
@@ -17,6 +21,9 @@ use optn_runtime::network_config::{
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Told which network's settings were just saved.
+type ChangeListener = Arc<dyn Fn(Network) + Send + Sync>;
 
 /// Tauri-owned files, one per chain network because the runtime envelope has no
 /// network discriminator.
@@ -36,6 +43,12 @@ pub struct NetworkSettingsStore {
     // A network edit snapshots the selected network before saving, then
     // publishes it. Serialize that sequence with network switches.
     pub(crate) write_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Where the per-network caches of discovered servers live, beside the
+    /// settings files and never inside them.
+    directory: PathBuf,
+    /// Called after every save through this store, whatever screen made it.
+    /// Set once at startup.
+    listener: Arc<std::sync::RwLock<Option<ChangeListener>>>,
 }
 
 impl NetworkSettingsStore {
@@ -48,7 +61,109 @@ impl NetworkSettingsStore {
             chipnet: NetworkConfigFile::new(directory.join("network-chipnet.json")),
             regtest: NetworkConfigFile::new(directory.join("network-regtest.json")),
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
+            directory,
+            listener: Arc::default(),
         }
+    }
+
+    /// Be told, after each save, which network's settings changed: the
+    /// selection, the Tor switch, proxy trust or an import. A cache of
+    /// discovered servers is not a setting and tells nobody.
+    pub fn on_change(&self, listener: impl Fn(Network) + Send + Sync + 'static) {
+        if let Ok(mut slot) = self.listener.write() {
+            *slot = Some(Arc::new(listener));
+        }
+    }
+
+    fn changed(&self, network: Network) {
+        let listener = self
+            .listener
+            .read()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(Arc::clone));
+        if let Some(listener) = listener {
+            listener(network);
+        }
+    }
+
+    fn discovered_file(&self, network: Network) -> DiscoveredPeersFile {
+        DiscoveredPeersFile::new(
+            self.directory
+                .join(format!("discovered-peers-{network}.json")),
+        )
+    }
+
+    /// Servers discovered from peer lists for this network. A cache: missing
+    /// or unreadable reads as none. A locally mined chain has no public peers.
+    pub fn discovered_peers(&self, network: Network) -> Vec<DiscoveredPeer> {
+        if network == Network::Regtest {
+            return Vec::new();
+        }
+        self.discovered_file(network).load(network)
+    }
+
+    /// Keep servers this network's sources advertised, and nodes its seeds
+    /// named. Never a settings edit: nothing is revoked or rebuilt because of
+    /// it. Peers the holder set a disposition for are kept however old, so
+    /// that disposition stays in force; with the settings unreadable nothing
+    /// is written, so none is lost.
+    pub fn record_discovered_peers(
+        &self,
+        network: Network,
+        peers: &[DiscoveredPeer],
+    ) -> Result<bool, String> {
+        if peers.is_empty() || network == Network::Regtest {
+            return Ok(false);
+        }
+        let keep = self
+            .file_for(network)
+            .load()?
+            .map(|envelope| envelope.overlay.bootstrap_overrides.into_keys().collect())
+            .unwrap_or_default();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        self.discovered_file(network)
+            .record(network, peers, &keep, now)
+    }
+
+    /// `catalog` as routes are built and listed from it: plus the servers
+    /// discovered for this network, ranked last, with the holder's
+    /// dispositions for them applied.
+    ///
+    /// Kept out of `chain_selection`, which decides when routes must be
+    /// rebuilt, so learning of a server never interrupts wallet sync. Only a
+    /// catalog that already reaches public bootstrap sources gains them: an
+    /// idle install's empty catalog stays empty, and the old server fields'
+    /// "only my server" stays only that server.
+    pub fn with_discovered(&self, network: Network, catalog: SourceCatalog) -> SourceCatalog {
+        if !catalog
+            .iter()
+            .any(|source| matches!(source.origin, SourceOrigin::Bootstrap { .. }))
+        {
+            return catalog;
+        }
+        let peers = self.discovered_peers(network);
+        if peers.is_empty() {
+            return catalog;
+        }
+        let overrides = self
+            .file_for(network)
+            .load()
+            .ok()
+            .flatten()
+            .map(|envelope| envelope.overlay.bootstrap_overrides)
+            .unwrap_or_default();
+        let mut merged = optn_runtime::bootstrap::with_discovered_peers(catalog, &peers);
+        for (id, disposition) in &overrides {
+            if merged
+                .get(id)
+                .is_some_and(optn_runtime::bootstrap::is_discovered)
+            {
+                let _ = merged.set_disposition(id, *disposition);
+            }
+        }
+        merged
     }
 
     pub fn export_portable(&self, network: Network) -> Result<String, String> {
@@ -56,9 +171,9 @@ impl NetworkSettingsStore {
     }
 
     pub fn import_portable(&self, network: Network, json: &str) -> Result<(), String> {
-        self.file_for(network)
-            .import_portable(network, json)
-            .map(|_| ())
+        self.file_for(network).import_portable(network, json)?;
+        self.changed(network);
+        Ok(())
     }
 
     /// Restore every network into a clone, publishing only after all reads
@@ -102,6 +217,18 @@ impl NetworkSettingsStore {
             .transpose()
     }
 
+    /// How this network's selected sources are reached.
+    ///
+    /// A missing file is the default rule. An unreadable one is an error and
+    /// never permission to relax it.
+    pub fn transport(&self, network: Network) -> Result<TransportPolicy, String> {
+        Ok(self
+            .file_for(network)
+            .load()?
+            .map(|envelope| envelope.overlay.connection_policy.transport)
+            .unwrap_or_default())
+    }
+
     /// Loopback SOCKS ports the holder has confirmed are their own Tor.
     ///
     /// A missing or unreadable file yields none. That direction is the only
@@ -123,16 +250,23 @@ impl NetworkSettingsStore {
     pub fn save_for_network(&self, state: &AppState, network: Network) -> Result<(), String> {
         let file = self.file_for(network);
         file.update(|existing| {
-            let catalog_version = match existing {
+            let (catalog_version, transport) = match existing {
                 Some(existing) => {
                     legacy_network_servers_from_overlay(&existing.overlay)?;
-                    existing.bootstrap_catalog_version_seen
+                    (
+                        existing.bootstrap_catalog_version_seen,
+                        existing.overlay.connection_policy.transport,
+                    )
                 }
-                None => LEGACY_SERVER_CATALOG_VERSION.into(),
+                None => (LEGACY_SERVER_CATALOG_VERSION.into(), Default::default()),
             };
-            envelope_from_state(state, network, catalog_version)
-        })
-        .map(|_| ())
+            let mut envelope = envelope_from_state(state, network, catalog_version)?;
+            // The server fields say which servers, never how they are reached.
+            envelope.overlay.connection_policy.transport = transport;
+            Ok(envelope)
+        })?;
+        self.changed(network);
+        Ok(())
     }
 
     /// Edit the durable overlay for one network.
@@ -147,16 +281,16 @@ impl NetworkSettingsStore {
         network: Network,
         edit: impl FnOnce(&mut UserNetworkOverlay) -> Result<(), String>,
     ) -> Result<(), String> {
-        self.file_for(network)
-            .update(|existing| {
-                let mut envelope = existing.unwrap_or_else(|| {
-                    NetworkConfigEnvelope::current(SHIPPED_CATALOG_VERSION, Default::default())
-                });
-                promote_legacy_policy(&mut envelope);
-                edit(&mut envelope.overlay)?;
-                Ok(envelope)
-            })
-            .map(|_| ())
+        self.file_for(network).update(|existing| {
+            let mut envelope = existing.unwrap_or_else(|| {
+                NetworkConfigEnvelope::current(SHIPPED_CATALOG_VERSION, Default::default())
+            });
+            promote_legacy_policy(&mut envelope);
+            edit(&mut envelope.overlay)?;
+            Ok(envelope)
+        })?;
+        self.changed(network);
+        Ok(())
     }
 
     /// Select the file whose contents belong exclusively to this chain network.
@@ -441,6 +575,120 @@ mod tests {
         assert_eq!(
             build_selection_plan(&catalog, &policy),
             build_selection_plan(&defaults, &default_policy)
+        );
+    }
+
+    /// The server fields and the transport selector edit one file. Saving the
+    /// servers keeps the transport, and no transport makes them unsavable.
+    #[test]
+    fn saving_server_fields_keeps_the_chosen_transport() {
+        for transport in [TransportPolicy::Direct, TransportPolicy::Tor] {
+            let directory = TestDirectory::new();
+            let store = directory.store();
+            let mut state = AppState::default();
+            state
+                .servers
+                .set(Network::Chipnet, ServerKind::Electrum, "127.0.0.1:1")
+                .unwrap();
+            store.save_for_network(&state, Network::Chipnet).unwrap();
+            store
+                .update_overlay(Network::Chipnet, |overlay| {
+                    overlay.connection_policy.transport = transport;
+                    Ok(())
+                })
+                .unwrap();
+            state
+                .servers
+                .set(Network::Chipnet, ServerKind::Electrum, "127.0.0.1:2")
+                .unwrap();
+            store.save_for_network(&state, Network::Chipnet).unwrap();
+
+            let envelope = store.chipnet.load().unwrap().unwrap();
+            assert_eq!(
+                envelope.overlay.connection_policy.transport, transport,
+                "{transport:?}"
+            );
+            let mut restored = AppState::default();
+            directory.store().restore(&mut restored).unwrap();
+            assert_eq!(restored.servers, state.servers, "{transport:?}");
+            let (_, policy) = store.chain_selection(Network::Chipnet).unwrap().unwrap();
+            assert_eq!(policy.transport, transport);
+            assert_eq!(store.transport(Network::Chipnet), Ok(transport));
+        }
+        // Nothing saved yet is the default rule; an unreadable file is not.
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        assert_eq!(
+            store.transport(Network::Mainnet),
+            Ok(TransportPolicy::default())
+        );
+        fs::write(directory.0.join("network-mainnet.json"), "not json").unwrap();
+        assert!(store.transport(Network::Mainnet).is_err());
+    }
+
+    /// Discovered servers join a public catalog last, keep the holder's bans,
+    /// and never reach an empty or "only my server" catalog.
+    #[test]
+    fn discovered_servers_join_only_public_catalogs_and_keep_bans() {
+        use optn_runtime::chain::{SourceDisposition, SourceId};
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let network = Network::Mainnet;
+        let peer = DiscoveredPeer {
+            endpoint: Endpoint {
+                kind: EndpointKind::ElectrumTls,
+                host: "found.example.org".into(),
+                port: Some(50002),
+            },
+            advertised_by: SourceId::new("bootstrap:electrum-tls:shipped.example:50002"),
+        };
+        let id = SourceId::new("bootstrap:electrum-tls:found.example.org:50002");
+        assert!(store
+            .record_discovered_peers(network, std::slice::from_ref(&peer))
+            .unwrap());
+        assert!(!store
+            .record_discovered_peers(network, std::slice::from_ref(&peer))
+            .unwrap());
+        assert_eq!(store.discovered_peers(network), vec![peer.clone()]);
+        assert!(store.discovered_peers(Network::Chipnet).is_empty());
+        assert!(!store
+            .record_discovered_peers(Network::Regtest, &[peer])
+            .unwrap());
+
+        let shipped = optn_runtime::bootstrap::shipped_source_catalog(network);
+        let routes = store.with_discovered(network, shipped.clone());
+        assert!(routes.get(&id).unwrap().is_enabled());
+        assert_eq!(routes.iter().count(), shipped.iter().count() + 1);
+        // No public bootstrap source, nothing added.
+        assert!(store
+            .with_discovered(network, SourceCatalog::default())
+            .get(&id)
+            .is_none());
+        // The holder's ban holds.
+        store
+            .update_overlay(network, |overlay| {
+                overlay
+                    .bootstrap_overrides
+                    .insert(id.clone(), SourceDisposition::Banned);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            store
+                .with_discovered(network, shipped)
+                .get(&id)
+                .unwrap()
+                .disposition,
+            SourceDisposition::Banned
+        );
+        // And recording is never a settings edit.
+        let before = fs::read(directory.0.join("network-mainnet.json")).unwrap();
+        let mut other = store.discovered_peers(network);
+        other[0].endpoint.host = "other.example.org".into();
+        store.record_discovered_peers(network, &other).unwrap();
+        assert_eq!(
+            fs::read(directory.0.join("network-mainnet.json")).unwrap(),
+            before
         );
     }
 

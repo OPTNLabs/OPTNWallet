@@ -5,6 +5,7 @@ import type { MlsGroupRecord } from '../../../platform/desktop/nostr/mls';
 import {
   buildChatInbox,
   classifyChatPeer,
+  isInboxMessage,
 } from '../chatInbox';
 
 const message = (
@@ -114,5 +115,26 @@ describe('chat inbox sections', () => {
     expect(inbox.dm.map((item) => item.id)).toEqual(['bob']);
     expect(inbox['private-group'].map((item) => item.id)).toEqual(['priv-room']);
     expect(inbox['open-group'].map((item) => item.id)).toEqual(['open-room']);
+  });
+
+  it('counts group messages, which MLS carries as kind 9', () => {
+    const fromBob = message({
+      id: 'g9',
+      from: 'bob',
+      text: 'in the group',
+      roomId: 'mdk:room',
+      kind: 9,
+      at: 5,
+    });
+    expect(isInboxMessage(fromBob)).toBe(true);
+    expect(isInboxMessage({ ...fromBob, kind: 7 })).toBe(false);
+    const inbox = buildChatInbox({
+      messages: [fromBob],
+      groups: [group({ roomId: 'mdk:room', visibility: 'open' })],
+      mePubKey: 'me',
+      activePeer: null,
+      query: '',
+    });
+    expect(inbox['open-group'][0]?.last?.id).toBe('g9');
   });
 });
