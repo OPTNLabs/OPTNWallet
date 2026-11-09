@@ -160,6 +160,12 @@ it('opens the existing birthday control from Wallet & security and goes back one
   });
 
   fireEvent.click(screen.getByRole('button', { name: 'Back', exact: true }));
+  expect(screen.getByRole('button', { name: 'Back', exact: true })).toHaveClass(
+    'wallet-btn-secondary'
+  );
+  expect(
+    screen.getByRole('button', { name: 'Back', exact: true })
+  ).not.toHaveClass('wallet-btn-danger');
   expect(
     screen.getByRole('heading', { level: 2, name: 'Wallet & security' })
   ).toBeInTheDocument();

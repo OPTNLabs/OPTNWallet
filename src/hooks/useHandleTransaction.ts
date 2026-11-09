@@ -104,7 +104,7 @@ const useHandleTransaction = (
           contractFunctionInputs,
           changeAddress,
           selectedUtxos,
-          true
+          false
         );
 
       // await Toast.show({
@@ -166,7 +166,8 @@ const useHandleTransaction = (
       // If we didn't get a txid, treat as an error even if no errorMessage was returned.
       if (!transactionID?.txid) {
         const msg =
-          transactionID?.errorMessage ?? 'Broadcast failed (no txid returned).';
+          transactionID?.errorMessage?.trim() ||
+          'Broadcast failed (no txid returned).';
         setErrorMessage(msg);
         await Toast.show({ text: `Error: ${msg}` });
         setShowTxIdPopup(false);

@@ -1,10 +1,12 @@
 // src/components/transaction/TransactionActions.tsx
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Popup from './Popup';
 import Draggable from 'react-draggable';
 import { TransactionOutput, UTXO } from '../../../types/types';
 import { useI18n } from '../../../i18n/useI18n';
+import TxSummary from '../../../components/confirm/TxSummary';
+import { summarizeBuilderReview } from '../builderReview';
 
 interface TransactionActionsProps {
   loading: boolean;
@@ -29,12 +31,41 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
   const [isPopupOpen, setIsPopupOpen] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const nodeRef = useRef<HTMLDivElement | null>(null);
+  const confirmedRef = useRef(false);
   const sliderWidth = 200;
   const handleWidth = 48;
   const threshold = sliderWidth * 0.7;
+  const review = useMemo(() => {
+    if (!rawTX) return null;
+    try {
+      return summarizeBuilderReview(selectedUtxos, txOutputs);
+    } catch {
+      return null;
+    }
+  }, [rawTX, selectedUtxos, txOutputs]);
+
+  useEffect(() => {
+    if (!rawTX) setIsPopupOpen(false);
+    confirmedRef.current = false;
+  }, [rawTX]);
+
+  const confirmSend = () => {
+    if (
+      loading ||
+      sendingLocked ||
+      !review ||
+      review.unaccountedTokens.length ||
+      confirmedRef.current
+    )
+      return;
+    confirmedRef.current = true;
+    handleClose();
+    sendTransaction();
+  };
 
   // Function to open the popup
   const handleOpenPopup = () => {
+    confirmedRef.current = false;
     setIsPopupOpen(true);
   };
 
@@ -90,10 +121,27 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
             <h2 className="text-2xl font-bold mb-4">
               {t('builder.confirmTransaction')}
             </h2>
-            <p className="font-bold text-xl mb-6 text-center wallet-danger-text">
-              {t('builder.warning')}
-            </p>
-            <p className="font-semibold text-sm text-center mb-6 wallet-danger-text">
+            {review ? (
+              <div className="w-full max-h-[48vh] overflow-y-auto mb-4">
+                <TxSummary
+                  inputsRaw={selectedUtxos}
+                  outputsRaw={txOutputs}
+                  feeSats={review.feeSats}
+                  txSizeBytes={rawTX.length / 2}
+                />
+              </div>
+            ) : (
+              <p role="alert">
+                Transaction details could not be verified. Build it again.
+              </p>
+            )}
+            {review?.unaccountedTokens.length ? (
+              <p role="alert" className="wallet-danger-text mb-4">
+                This transaction does not account for every input token. Check
+                the outputs and rebuild before sending.
+              </p>
+            ) : null}
+            <p className="font-semibold text-sm text-center mb-4 wallet-danger-text">
               {t('builder.sendWarning')}
             </p>
             <div className="relative w-[200px] h-12 wallet-surface-strong rounded-lg overflow-hidden border border-[var(--wallet-border)]">
@@ -116,19 +164,29 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
                 position={position}
                 onDrag={(e, data) => {
                   void e;
-                  if (!loading) setPosition({ x: data.x, y: 0 });
+                  if (
+                    !loading &&
+                    !sendingLocked &&
+                    review &&
+                    !review.unaccountedTokens.length
+                  )
+                    setPosition({ x: data.x, y: 0 });
                 }}
                 onStop={(e, data) => {
                   void e;
-                  if (data.x >= threshold && !loading) {
-                    handleClose();
-                    sendTransaction();
+                  if (data.x >= threshold) {
+                    confirmSend();
                   } else {
                     setPosition({ x: 0, y: 0 });
                   }
                 }}
                 bounds={{ left: 0, right: sliderWidth - handleWidth }}
-                disabled={loading}
+                disabled={
+                  loading ||
+                  sendingLocked ||
+                  !review ||
+                  review.unaccountedTokens.length > 0
+                }
               >
                 <div
                   ref={nodeRef}
@@ -142,6 +200,19 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
                 </div>
               </Draggable>
             </div>
+            <button
+              type="button"
+              onClick={confirmSend}
+              disabled={
+                loading ||
+                sendingLocked ||
+                !review ||
+                review.unaccountedTokens.length > 0
+              }
+              className="wallet-btn-danger mt-3 focus:not-sr-only sr-only"
+            >
+              Confirm and send transaction
+            </button>
           </div>
         </Popup>
       )}

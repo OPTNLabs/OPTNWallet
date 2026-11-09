@@ -12,6 +12,11 @@ import OutboundTransactionTracker, {
 } from '../services/OutboundTransactionTracker';
 import { reconcileOutboundTransactions } from '../services/OutboundTransactionReconciler';
 import { runOutboundReconcile } from '../services/RefreshCoordinator';
+import {
+  getUiFixtureOutboundRecords,
+  isUiFixtureEnabled,
+  uiFixtureScenario,
+} from '../ui-fixtures/fixtureData';
 
 export function outpointKey(txHash: string, txPos: number): string {
   return `${txHash}:${txPos}`;
@@ -34,6 +39,13 @@ export default function useOutboundTransactions(
 
   const load = useCallback(
     async (walletIdToLoad = walletId) => {
+      if (isUiFixtureEnabled()) {
+        const active = uiFixtureScenario().startsWith('send')
+          ? []
+          : getUiFixtureOutboundRecords();
+        if (currentWalletIdRef.current === walletIdToLoad) setRecords(active);
+        return;
+      }
       const active =
         await OutboundTransactionTracker.listActive(walletIdToLoad);
       if (currentWalletIdRef.current === walletIdToLoad) setRecords(active);
@@ -43,6 +55,10 @@ export default function useOutboundTransactions(
 
   const refresh = useCallback(async () => {
     if (!walletId || walletId <= 0) {
+      return;
+    }
+    if (isUiFixtureEnabled()) {
+      await load();
       return;
     }
     if (refreshingWalletIdsRef.current.has(walletId)) {
@@ -70,6 +86,10 @@ export default function useOutboundTransactions(
   const release = useCallback(
     async (txid: string) => {
       if (!walletId || walletId <= 0) return false;
+      if (isUiFixtureEnabled()) {
+        await load();
+        return false;
+      }
       await runOutboundReconcile(walletId, () =>
         reconcileOutboundTransactions(walletId)
       );
@@ -97,6 +117,7 @@ export default function useOutboundTransactions(
   useEffect(() => {
     if (!enabled) return;
     void load();
+    if (isUiFixtureEnabled()) return;
     void refresh();
     return OutboundTransactionTracker.subscribe((record, previousState) => {
       void load();

@@ -122,4 +122,103 @@ describe('PendingOutboundPanel', () => {
     expect(html).toContain('role="status"');
     expect(html).not.toContain('aria-modal="true"');
   });
+
+  it('surfaces the Fusion verification lock and keeps recovery actions touch-sized', () => {
+    const html = renderToStaticMarkup(
+      <I18nContext.Provider
+        value={{
+          locale: 'en',
+          setLocale: () => undefined,
+          t: (key) => translations.en[key],
+        }}
+      >
+        <PendingOutboundPanel
+          records={[
+            {
+              txid: 'c'.repeat(64),
+              rawTx: '',
+              walletId: 1,
+              source: 'cashfusion',
+              privacyRoute: 'tor-only',
+              state: 'submitted',
+              verificationPending: true,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              spentOutpoints: [],
+            },
+          ]}
+          onClose={() => undefined}
+          onRefresh={() => undefined}
+          onRelease={() => undefined}
+        />
+      </I18nContext.Provider>
+    );
+
+    expect(html).toContain('Awaiting verification');
+    expect(html).toContain(
+      'Wallet sync must confirm this Fusion transaction before its inputs can be reused.'
+    );
+    expect(html).toContain('min-h-[44px]');
+    expect(html).not.toContain('Release send lock');
+  });
+
+  it('explains release and clear-lock actions beside the action button', () => {
+    const staleHtml = renderToStaticMarkup(
+      <I18nContext.Provider
+        value={{
+          locale: 'en',
+          setLocale: () => undefined,
+          t: (key) => translations.en[key],
+        }}
+      >
+        <PendingOutboundPanel
+          records={[
+            {
+              txid: 'd'.repeat(64),
+              rawTx: '',
+              walletId: 1,
+              source: 'test',
+              state: 'broadcasting',
+              createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+              updatedAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+              spentOutpoints: [],
+            },
+          ]}
+          onRelease={() => undefined}
+        />
+      </I18nContext.Provider>
+    );
+
+    expect(staleHtml).toContain('Release send lock');
+    expect(staleHtml).toContain('pending-outbound-release-');
+
+    const submittedHtml = renderToStaticMarkup(
+      <I18nContext.Provider
+        value={{
+          locale: 'en',
+          setLocale: () => undefined,
+          t: (key) => translations.en[key],
+        }}
+      >
+        <PendingOutboundPanel
+          records={[
+            {
+              txid: 'e'.repeat(64),
+              rawTx: '',
+              walletId: 1,
+              source: 'test',
+              state: 'submitted',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              spentOutpoints: [],
+            },
+          ]}
+          onRelease={() => undefined}
+        />
+      </I18nContext.Provider>
+    );
+
+    expect(submittedHtml).toContain('Clear pending lock');
+    expect(submittedHtml).toContain('pending-outbound-clear-');
+  });
 });

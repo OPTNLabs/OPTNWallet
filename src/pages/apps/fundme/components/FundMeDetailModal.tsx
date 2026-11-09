@@ -6,6 +6,7 @@ import type { DetailModalState } from '../types';
 import { DEFAULT_BANNER } from '../types';
 import { useAddonI18n } from '../../../../i18n/useAddonI18n';
 import { RemoteBackground } from '../../../../components/RemoteImg';
+import MaskedValue from '../../../../components/ui/MaskedValue';
 
 type FundMeDetailModalProps = {
   detailModal: DetailModalState | null;
@@ -20,6 +21,7 @@ type FundMeDetailModalProps = {
   onCancel: () => void;
   actionBusy?: boolean;
   actionStatus?: string | null;
+  actionTxid?: string | null;
 };
 
 const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
@@ -35,6 +37,7 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
   onCancel,
   actionBusy,
   actionStatus,
+  actionTxid,
 }) => {
   const { t: addonT } = useAddonI18n();
   if (!detailModal) return null;
@@ -215,6 +218,23 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
                     {actionStatus ||
                       'Refund, claim, stop, and cancel are available when your wallet and the campaign state allow them.'}
                   </p>
+                  {actionTxid ? (
+                    <div className="mt-2 flex items-center gap-1 text-xs wallet-muted">
+                      <span>
+                        {addonT('module.transactionId', 'Transaction ID')}:
+                      </span>
+                      <MaskedValue
+                        value={actionTxid}
+                        label={addonT('module.transactionId', 'Transaction ID')}
+                        ariaLabel={addonT(
+                          'module.transactionId',
+                          'Transaction ID'
+                        )}
+                        copySuccessMessageKey="history.transactionCopied"
+                        className="max-w-full"
+                      />
+                    </div>
+                  ) : null}
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     <button
                       type="button"

@@ -478,6 +478,7 @@ export default class BcmrService {
   ): Promise<IdentityRegistry | null> {
     const uris = Array.isArray(uriOrUris) ? uriOrUris : [uriOrUris];
     const net: Network = store.getState().network.currentNetwork;
+    let nativeMetadataMissing = false;
 
     try {
       return await runWithFailover(
@@ -498,6 +499,10 @@ export default class BcmrService {
 
           const imported = normalizeTokenIndexSnapshot(authbase, data);
           if (!imported) {
+            nativeMetadataMissing =
+              Boolean(data.category) &&
+              !data.identity_snapshot &&
+              !data.bcmr?.identity_snapshot;
             throw new Error(`Invalid tokenindex BCMR response from ${uri}`);
           }
 
@@ -512,6 +517,9 @@ export default class BcmrService {
         }
       );
     } catch {
+      if (nativeMetadataMissing) {
+        throw new BcmrRegistryNotFoundError(authbase);
+      }
       return null;
     }
   }
@@ -644,9 +652,16 @@ export default class BcmrService {
     const iconUri = uris?.icon;
     if (!iconUri) return null;
 
+    // IPFS gateway URLs are still content-addressed IPFS resources. Do not
+    // return them directly to <img>: third-party gateways commonly omit the
+    // CORP/CORS headers needed by a wallet served from localhost or a native
+    // WebView. Route them through the configured gateway/fetch path below.
+    const configuredGatewayUri = resolveIpfsGatewayUrl(iconUri);
+    const isIpfsResource = Boolean(configuredGatewayUri);
+
     if (
-      iconUri.startsWith('http://') ||
-      iconUri.startsWith('https://') ||
+      (!isIpfsResource &&
+        (iconUri.startsWith('http://') || iconUri.startsWith('https://'))) ||
       iconUri.startsWith('data:') ||
       iconUri.startsWith('blob:') ||
       iconUri.startsWith('/')
@@ -687,14 +702,12 @@ export default class BcmrService {
     try {
       resp = await ipfsFetch(iconUri);
     } catch {
-      const gatewayUri = resolveIpfsGatewayUrl(iconUri);
-      ICON_CACHE.set(filePath, gatewayUri);
-      return gatewayUri;
+      ICON_CACHE.set(filePath, configuredGatewayUri);
+      return configuredGatewayUri;
     }
     if (!resp.ok) {
-      const gatewayUri = resolveIpfsGatewayUrl(iconUri);
-      ICON_CACHE.set(filePath, gatewayUri);
-      return gatewayUri;
+      ICON_CACHE.set(filePath, configuredGatewayUri);
+      return configuredGatewayUri;
     }
 
     let buf: Uint8Array;

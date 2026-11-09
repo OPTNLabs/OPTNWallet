@@ -45,4 +45,28 @@ describe('useTransactionHistoryFetch', () => {
       })
     );
   });
+
+  it('exposes a failed history refresh and clears it when retry starts', async () => {
+    refreshWalletTransactionHistory.mockRejectedValueOnce(new Error('offline'));
+    const { result } = renderHook(() =>
+      useTransactionHistoryFetch({
+        walletIdParam: '42',
+        isInitialized: false,
+        transactionCount: 0,
+        sessionGeneration: 7,
+        dispatch: vi.fn() as never,
+      })
+    );
+
+    await act(async () => {
+      await result.current.fetchTransactionHistory();
+    });
+    expect(result.current.error).toBe(true);
+
+    await act(async () => {
+      await result.current.fetchTransactionHistory();
+    });
+    expect(result.current.error).toBe(false);
+    expect(refreshWalletTransactionHistory).toHaveBeenCalledTimes(2);
+  });
 });

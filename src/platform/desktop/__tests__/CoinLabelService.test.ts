@@ -51,15 +51,23 @@ describe('CoinLabelService', () => {
     );
   });
 
+  it('propagates label write failures so callers do not report false success', async () => {
+    runMock.mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+    const { setCoinLabel } = await import('../CoinLabelService');
+    await expect(setCoinLabel(5, 'outpoint', 'aa:0', 'salary')).rejects.toThrow(
+      'disk full'
+    );
+  });
+
   it('outpointKey formats tx:pos', async () => {
     const { outpointKey } = await import('../CoinLabelService');
     expect(outpointKey('abc', 2)).toBe('abc:2');
   });
 
   it('exportCoinLabelsCsv includes header and rows', async () => {
-    stepMock
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(false);
+    stepMock.mockReturnValueOnce(true).mockReturnValueOnce(false);
     getAsObjectMock.mockReturnValueOnce({
       kind: 'txid',
       ref_key: 'tx1',

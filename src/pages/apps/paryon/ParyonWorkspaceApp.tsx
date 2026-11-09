@@ -9,8 +9,9 @@ import {
   resolveParyonWorkspaceSnapshot,
 } from '../../../services/paryon/ParyonService';
 import {
-  executeBorrowLoan,
-  executeStakeLiquidity,
+  prepareBorrowLoan,
+  prepareStakeLiquidity,
+  type ParyonPreparedTransaction,
 } from '../../../services/paryon/transactions';
 import { buildParyonExecutionPlans } from '../../../services/paryon/execution';
 import {
@@ -30,9 +31,19 @@ import {
 import type { ParyonLiveMarketState } from '../../../services/paryon/native';
 import type { ParyonExecutionPlan } from '../../../services/paryon/types';
 import { ContainedSwipeConfirmModal } from '../mint-cashtokens-poc/components/uiPrimitives';
+import {
+  canConfirmParyonAction,
+  matchesParyonPreview,
+  paryonConfirmationLabel,
+} from './actionConfirmation';
 import { getReturnPath } from '../../../utils/navigation';
+import { useI18n } from '../../../i18n/useI18n';
 import WalletScreen from '../../../components/ui/WalletScreen';
 import SegmentedSubnav from '../../../components/ui/SegmentedSubnav';
+import MaskedValue from '../../../components/ui/MaskedValue';
+import InfoButton from '../../../components/ui/InfoButton';
+import PageHeader from '../../../components/ui/PageHeader';
+import RouteExitFooter from '../../../components/ui/RouteExitFooter';
 
 type Props = {
   sdk: AddonSDK;
@@ -88,6 +99,7 @@ function stateTone(
 
 export default function ParyonWorkspaceApp({ sdk, app }: Props) {
   const { t: addonT } = useAddonI18n();
+  const { t: walletT } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const network = sdk.wallet.getContext().network;
@@ -111,6 +123,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
   const [loadingNativeSnapshot, setLoadingNativeSnapshot] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [statusTxid, setStatusTxid] = useState<string | null>(null);
   const [borrowForm, setBorrowForm] = useState<BorrowForm>({
     borrowAmount: '100.00',
     collateralBch: '0.25',
@@ -126,6 +139,12 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     preview: null,
     action: null,
   });
+  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [preparingReview, setPreparingReview] = useState(false);
+  const [preparedTransaction, setPreparedTransaction] =
+    useState<ParyonPreparedTransaction | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const prepareRequestRef = useRef(0);
   const lastDebugLogRef = useRef<string | null>(null);
 
   const writeEnabled = nativeSnapshot?.market.writeEnabled ?? false;
@@ -373,6 +392,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       contractCount: snapshot.contractCount,
       loadError,
       statusMessage,
+      statusTxid,
       writeEnabled,
       writeWarning,
       oraclePriceCentsPerBch: market.oraclePriceCentsPerBch?.toString() ?? null,
@@ -439,84 +459,164 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     selectedPosition,
     snapshot,
     statusMessage,
+    statusTxid,
     view,
     writeEnabled,
     writeWarning,
   ]);
 
   const openPreview = (preview: ParyonActionPreview) => {
+    const requestId = ++prepareRequestRef.current;
+    setConfirmError(null);
+    setPreparedTransaction(null);
     setConfirmState({
       open: true,
       preview,
       action:
         view === 'borrow' ? 'borrow' : view === 'stake' ? 'stake' : 'redeem',
     });
+    if (view === 'redeem' || !preview.canProceed || !nativeSnapshot) return;
+
+    setPreparingReview(true);
+    void (async () => {
+      try {
+        const prepared =
+          view === 'borrow'
+            ? await prepareBorrowLoan({
+                sdk,
+                snapshot,
+                nativeSnapshot,
+                borrowAmountText: borrowForm.borrowAmount,
+                collateralBchText: borrowForm.collateralBch,
+              })
+            : await prepareStakeLiquidity({
+                sdk,
+                snapshot,
+                nativeSnapshot,
+                stakeAmountText: stakeForm.stakeAmount,
+              });
+        if (prepareRequestRef.current !== requestId) return;
+        setPreparedTransaction(prepared);
+      } catch (error) {
+        if (prepareRequestRef.current !== requestId) return;
+        setConfirmError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (prepareRequestRef.current === requestId) setPreparingReview(false);
+      }
+    })();
   };
 
   const closePreview = () => {
+    prepareRequestRef.current += 1;
+    setPreparingReview(false);
+    setPreparedTransaction(null);
     setConfirmState({ open: false, preview: null, action: null });
   };
 
+  const currentConfirmPreview =
+    confirmState.action === 'borrow'
+      ? borrowPreview
+      : confirmState.action === 'stake'
+        ? stakePreview
+        : confirmState.action === 'redeem'
+          ? redeemPreview
+          : null;
+  const reviewMatchesCurrentPreview = matchesParyonPreview(
+    confirmState.preview,
+    currentConfirmPreview
+  );
+
   const confirmPreview = async () => {
-    if (!confirmState.preview) return;
+    if (!confirmState.preview || confirmLoading) return;
+    if (
+      confirmState.action !== 'redeem' &&
+      (!preparedTransaction || preparingReview)
+    ) {
+      setConfirmError('The exact transaction is still being prepared.');
+      return;
+    }
+    if (!reviewMatchesCurrentPreview) {
+      setConfirmError(
+        'Live market or wallet state changed. Close this review and prepare it again.'
+      );
+      return;
+    }
+    if (
+      !canConfirmParyonAction(
+        confirmState.action,
+        confirmState.preview.canProceed,
+        writeEnabled
+      )
+    ) {
+      setConfirmError(
+        confirmState.action === 'redeem'
+          ? confirmState.preview.blockedReason ?? 'This preview is not ready.'
+          : writeWarning
+      );
+      return;
+    }
     if (confirmState.action === 'borrow') {
       if (!nativeSnapshot) {
         setStatusMessage('Live wallet state is still loading.');
+        setStatusTxid(null);
+        setConfirmError(
+          'Live wallet state is still loading. Close this review and try again once it is ready.'
+        );
         return;
       }
       try {
-        setStatusMessage(
-          'Building and broadcasting the live borrow transaction…'
-        );
-        const result = await executeBorrowLoan({
-          sdk,
-          snapshot,
-          nativeSnapshot,
-          borrowAmountText: borrowForm.borrowAmount,
-          collateralBchText: borrowForm.collateralBch,
-        });
-        setStatusMessage(
-          `Borrow transaction broadcast${result.txid ? `: ${result.txid}` : ''}.`
-        );
+        setConfirmLoading(true);
+        setStatusTxid(null);
+        setStatusMessage('Broadcasting the reviewed borrow transaction…');
+        const result = await sdk.tx.broadcast(preparedTransaction!.hex);
+        if (result.errorMessage) throw new Error(result.errorMessage);
+        setStatusMessage('Borrow transaction broadcast.');
+        setStatusTxid(result.txid ?? null);
         closePreview();
         return;
       } catch (error) {
-        setStatusMessage(
-          error instanceof Error ? error.message : String(error)
-        );
+        const message = error instanceof Error ? error.message : String(error);
+        setStatusTxid(null);
+        setStatusMessage(message);
+        setConfirmError(message);
         return;
+      } finally {
+        setConfirmLoading(false);
       }
     }
     if (confirmState.action === 'stake') {
       if (!nativeSnapshot) {
         setStatusMessage('Live wallet state is still loading.');
+        setStatusTxid(null);
+        setConfirmError(
+          'Live wallet state is still loading. Close this review and try again once it is ready.'
+        );
         return;
       }
       try {
-        setStatusMessage(
-          'Building and broadcasting the live stake transaction…'
-        );
-        const result = await executeStakeLiquidity({
-          sdk,
-          snapshot,
-          nativeSnapshot,
-          stakeAmountText: stakeForm.stakeAmount,
-        });
-        setStatusMessage(
-          `Stake transaction broadcast${result.txid ? `: ${result.txid}` : ''}.`
-        );
+        setConfirmLoading(true);
+        setStatusTxid(null);
+        setStatusMessage('Broadcasting the reviewed stake transaction…');
+        const result = await sdk.tx.broadcast(preparedTransaction!.hex);
+        if (result.errorMessage) throw new Error(result.errorMessage);
+        setStatusMessage('Stake transaction broadcast.');
+        setStatusTxid(result.txid ?? null);
         closePreview();
         return;
       } catch (error) {
-        setStatusMessage(
-          error instanceof Error ? error.message : String(error)
-        );
+        const message = error instanceof Error ? error.message : String(error);
+        setStatusTxid(null);
+        setStatusMessage(message);
+        setConfirmError(message);
         return;
+      } finally {
+        setConfirmLoading(false);
       }
     }
     setStatusMessage(
       `${confirmState.preview.title} preview staged inside OPTN Wallet.`
     );
+    setStatusTxid(null);
     closePreview();
   };
 
@@ -589,7 +689,22 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       ) : null}
 
       {statusMessage ? (
-        <StatusBanner tone="positive">{statusMessage}</StatusBanner>
+        <StatusBanner tone="positive">
+          <div>{statusMessage}</div>
+          {statusTxid ? (
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-white/60">
+                {walletT('history.transactionId')}
+              </span>
+              <MaskedValue
+                value={statusTxid}
+                label={walletT('history.transactionId')}
+                copySuccessMessageKey="history.transactionCopied"
+                className="text-xs text-white"
+              />
+            </div>
+          ) : null}
+        </StatusBanner>
       ) : null}
 
       <StatusBanner
@@ -677,10 +792,39 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
                   >
                     {thread.freshness}
                   </Badge>
+                  <InfoButton
+                    id={`paryon-thread-freshness-${thread.name}`}
+                    ariaLabel={addonT(
+                      'module.threadFreshnessHelp',
+                      'Explain thread freshness'
+                    )}
+                    content={addonT(
+                      'module.threadFreshnessHelp',
+                      'Fresh means the latest verified contract state is available. Stale or degraded data keeps writes disabled until a fresh state is indexed.'
+                    )}
+                  />
                 </div>
                 {thread.preferredOutpoint ? (
-                  <div className="mt-2 break-all text-[0.72rem] leading-5 text-white/58">
-                    {thread.preferredOutpoint}
+                  <div className="mt-2 flex items-center gap-2 text-[0.72rem] leading-5 text-white/58">
+                    <span className="shrink-0">
+                      {addonT(
+                        'module.preferredOutpoint',
+                        'Preferred contract output'
+                      )}
+                      :
+                    </span>
+                    <MaskedValue
+                      value={thread.preferredOutpoint}
+                      label={addonT(
+                        'module.preferredOutpoint',
+                        'Preferred contract output'
+                      )}
+                      ariaLabel={addonT(
+                        'module.preferredOutpoint',
+                        'Preferred contract output'
+                      )}
+                      className="min-w-0 break-all text-[0.72rem] text-white/75"
+                    />
                   </div>
                 ) : null}
                 {thread.warnings.length > 0 ? (
@@ -986,14 +1130,6 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
           </div>
         </div>
       </details>
-
-      <button
-        type="button"
-        className="wallet-btn-danger mt-2 w-full rounded-full px-4 py-3 text-sm font-semibold"
-        onClick={() => navigate(backTarget)}
-      >
-        Back
-      </button>
     </div>
   );
 
@@ -1308,8 +1444,10 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
   return (
     <WalletScreen maxWidthClassName="max-w-md" className="text-white">
       <div className="space-y-4">
+        <PageHeader title={app.name} compact />
         {renderNav()}
         {renderView()}
+        <RouteExitFooter label="Back" onBack={() => navigate(backTarget)} />
       </div>
 
       {confirmState.open ? (
@@ -1328,12 +1466,68 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
                 ? confirmState.preview.blockedReason
                 : undefined
           }
-          canConfirm={Boolean(confirmState.preview?.canProceed)}
+          canConfirm={
+            canConfirmParyonAction(
+              confirmState.action,
+              Boolean(confirmState.preview?.canProceed),
+              writeEnabled
+            ) &&
+            reviewMatchesCurrentPreview &&
+            !confirmError &&
+            !preparingReview &&
+            (confirmState.action === 'redeem' || preparedTransaction != null)
+          }
+          loading={confirmLoading}
+          confirmationMode={
+            confirmState.action === 'redeem' ? 'button' : 'slide'
+          }
+          confirmationLabel={paryonConfirmationLabel(confirmState.action)}
           onCancel={closePreview}
           onConfirm={() => void confirmPreview()}
         >
           {confirmState.preview ? (
             <div className="space-y-3">
+              {confirmState.action === 'redeem' ? (
+                <p className="wallet-card p-3 text-sm">
+                  Preview only. Finishing this review will not build, sign, or
+                  send a transaction.
+                </p>
+              ) : null}
+              {confirmError ? (
+                <p
+                  role="alert"
+                  className="wallet-warning-panel rounded-xl p-3 text-sm"
+                >
+                  {confirmError} No transaction was sent while this review was
+                  being prepared.
+                </p>
+              ) : null}
+              {preparingReview ? (
+                <p
+                  role="status"
+                  aria-live="polite"
+                  className="wallet-card p-3 text-sm"
+                >
+                  Preparing the exact transaction from the current wallet and
+                  live contract state…
+                </p>
+              ) : null}
+              {preparedTransaction ? (
+                <div className="wallet-card space-y-1 p-3 text-sm">
+                  <div className="font-semibold">Exact transaction ready</div>
+                  <div>
+                    Network fee: {formatBchSats(preparedTransaction.feeSats)}
+                  </div>
+                  <div>
+                    Wallet inputs:{' '}
+                    {formatBchSats(preparedTransaction.inputSats)}
+                  </div>
+                  <div>
+                    Outputs: {formatBchSats(preparedTransaction.outputSats)} ·{' '}
+                    {preparedTransaction.transactionByteLength} bytes
+                  </div>
+                </div>
+              ) : null}
               <PreviewMetric
                 label={confirmState.preview.primaryMetricLabel}
                 value={confirmState.preview.primaryMetricValue}
@@ -1461,6 +1655,7 @@ function ActionScreen({
   form: React.ReactNode;
 }) {
   const { t: addonT } = useAddonI18n();
+  const { t: walletT } = useI18n();
   return (
     <ScreenShell title={title} subtitle={subtitle} onBack={onBack}>
       <div className="space-y-3">
@@ -1536,7 +1731,14 @@ function ActionScreen({
             {plan.target ? (
               <div className="mt-3 rounded-2xl border border-white/10 bg-black/12 px-3 py-3 text-sm leading-6 text-white/82">
                 Target: {plan.target.label} · {plan.target.state} ·{' '}
-                {plan.target.txHash.slice(0, 12)}…
+                <MaskedValue
+                  value={plan.target.txHash}
+                  label={walletT('history.transactionId')}
+                  ariaLabel={walletT('history.transactionId')}
+                  copySuccessMessageKey="history.transactionCopied"
+                  embedded
+                  className="align-middle text-white"
+                />
               </div>
             ) : null}
             <div className="mt-3 grid gap-2">

@@ -134,6 +134,21 @@ const rootReducer = combineReducers({
   walletReconfiguration: walletReconfigurationReducer,
 });
 
+/**
+ * Create an isolated, non-persisted store for disposable UI fixtures and
+ * component-level render harnesses. Fixture state must never share wallet
+ * data with the persisted application store.
+ */
+export function createNonPersistedStore() {
+  return configureStore({
+    reducer: rootReducer,
+    middleware: (getDefaultMiddleware) =>
+      getDefaultMiddleware({
+        serializableCheck: false,
+      }),
+  });
+}
+
 const persistedReducer = persistReducer(persistConfig, rootReducer);
 
 export const store = configureStore({

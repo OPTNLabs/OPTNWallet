@@ -86,6 +86,7 @@ function SessionProposalModal() {
 
   return (
     <WalletPopupSheet
+      dismissLabel={t('wc.reject')}
       onDismiss={() => {
         if (!submitting) void handleReject();
       }}

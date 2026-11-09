@@ -2,6 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* PageHeader owns the persistent network affordance. Keep legacy banners in
+   DOM for routes without a header, but prevent duplicate full-width banners on
+   normal wallet pages. */
+body:has(.wallet-page-header-logo) .network-context-banner {
+  display: none;
+}
+
 /* ---------- BASE: make the app fill the screen ---------- */
 @layer base {
   /* Fill screen + remove default margins */
@@ -52,26 +59,26 @@
     --navbar-height: 0px; /* keep your var */
 
     /* Wallet theme variables (light by default) */
-    --wallet-bg: #eef4f1;
+    --wallet-bg: #f4f6f8;
     --wallet-bg-gradient: radial-gradient(
         110% 68% at 50% -18%,
-        rgba(109, 230, 178, 0.14) 0%,
-        rgba(109, 230, 178, 0) 55%
+        rgba(25, 183, 115, 0.08) 0%,
+        rgba(25, 183, 115, 0) 55%
       ),
-      linear-gradient(180deg, #f9fcfa 0%, #eef4f1 56%, #e8f0ea 100%);
-    --wallet-text: #1f352c;
-    --wallet-text-strong: #132f24;
-    --wallet-border: #c8ddd0;
-    --wallet-card-bg: rgba(255, 255, 255, 0.82);
-    --wallet-surface: #f6faf8;
-    --wallet-surface-strong: #eef6f1;
+      linear-gradient(180deg, #ffffff 0%, #f4f6f8 56%, #eceff2 100%);
+    --wallet-text: #374151;
+    --wallet-text-strong: #111827;
+    --wallet-border: #d5d9df;
+    --wallet-card-bg: rgba(255, 255, 255, 0.9);
+    --wallet-surface: #ffffff;
+    --wallet-surface-strong: #f1f3f5;
 
     --wallet-accent: #18b374;
     --wallet-accent-strong: #0a9a62;
-    --wallet-accent-soft: #bdeed7;
-    --wallet-link: #0e8e5b;
+    --wallet-accent-soft: #c8efdc;
+    --wallet-link: #087f54;
     --wallet-focus-ring: rgba(24, 179, 116, 0.28);
-    --wallet-shadow-card: 0 10px 24px rgba(17, 46, 33, 0.08),
+    --wallet-shadow-card: 0 10px 24px rgba(17, 24, 39, 0.08),
       0 1px 1px rgba(255, 255, 255, 0.76) inset;
     --wallet-shadow-btn: 0 8px 16px rgba(16, 120, 76, 0.18),
       0 1px 0 rgba(255, 255, 255, 0.24) inset;
@@ -99,20 +106,20 @@
       #1cae73 55%,
       #119662 100%
     );
-    --wallet-btn-secondary-bg: #d7e3db;
-    --wallet-btn-secondary-hover: #c8d8ce;
-    --wallet-btn-secondary-text: #183126;
+    --wallet-btn-secondary-bg: #e5e7eb;
+    --wallet-btn-secondary-hover: #d9dde3;
+    --wallet-btn-secondary-text: #1f2937;
 
     --wallet-segment-active-bg: #19b575;
     --wallet-segment-active-text: #ffffff;
-    --wallet-segment-inactive-bg: #dbe7df;
-    --wallet-segment-inactive-hover: #cedbd2;
-    --wallet-segment-inactive-text: #264637;
+    --wallet-segment-inactive-bg: #e5e7eb;
+    --wallet-segment-inactive-hover: #d9dde3;
+    --wallet-segment-inactive-text: #334155;
 
     --wallet-selectable-active-bg: #e9fbf1;
     --wallet-selectable-active-border: #9edfc0;
     --wallet-selectable-inactive-bg: rgba(255, 255, 255, 0.76);
-    --wallet-selectable-inactive-border: #cddfd2;
+    --wallet-selectable-inactive-border: #d5d9df;
 
     --wallet-scrollbar-thumb: rgba(0, 0, 0, 0.2);
     --wallet-scrollbar-thumb-hover: rgba(0, 0, 0, 0.4);
@@ -122,7 +129,7 @@
 
     --wallet-nav-from: rgba(38, 196, 133, 0.92);
     --wallet-nav-to: rgba(100, 217, 164, 0.92);
-    --wallet-nav-text: #f6fff9;
+    --wallet-nav-text: #123d2c;
   }
 
   html.dark {
@@ -236,34 +243,7 @@
     --wallet-nav-to: rgba(45, 168, 111, 0.85);
   }
 
-  html.dark.theme-dark {
-    --wallet-bg: #000000;
-    --wallet-bg-gradient: linear-gradient(
-      180deg,
-      #070707 0%,
-      #000000 60%,
-      #000000 100%
-    );
-    --wallet-text: #d5d5d5;
-    --wallet-text-strong: #f3f3f3;
-    --wallet-border: #262626;
-    --wallet-card-bg: rgba(10, 10, 10, 0.9);
-    --wallet-surface: #0a0a0a;
-    --wallet-surface-strong: #131313;
-    --wallet-accent-soft: #10291e;
-    --wallet-btn-secondary-bg: #131313;
-    --wallet-btn-secondary-hover: #1e1e1e;
-    --wallet-btn-secondary-text: #f3f3f3;
-    --wallet-segment-inactive-bg: #131313;
-    --wallet-segment-inactive-hover: #1e1e1e;
-    --wallet-segment-inactive-text: #d5d5d5;
-    --wallet-selectable-active-bg: #16231d;
-    --wallet-selectable-active-border: #2d5a44;
-    --wallet-selectable-inactive-bg: rgba(10, 10, 10, 0.85);
-    --wallet-selectable-inactive-border: #262626;
-    --wallet-nav-from: rgba(49, 219, 144, 0.82);
-    --wallet-nav-to: rgba(30, 150, 99, 0.82);
-  }
+  /* Dark mode uses the OPTN green surfaces rather than true black. */
 
   /*
    * A skin restyles chrome on top of the chosen mode; it must not become a
@@ -430,7 +410,7 @@
   }
 
   .wallet-btn-danger {
-    @apply inline-flex items-center justify-center rounded-[14px] px-4 py-2.5 font-semibold text-white transition duration-200 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex min-h-[44px] items-center justify-center rounded-[14px] px-4 py-2.5 font-semibold text-white transition duration-200 disabled:cursor-not-allowed disabled:opacity-60;
     background-color: var(--wallet-danger-solid);
     box-shadow: 0 10px 20px rgba(152, 29, 29, 0.24);
   }
@@ -484,7 +464,7 @@
   }
 
   .wallet-customize-toggle {
-    @apply inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-semibold transition;
+    @apply inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-semibold transition;
     border-color: var(--wallet-border);
     color: var(--wallet-text-strong);
     background-color: var(--wallet-surface-strong);
@@ -869,6 +849,38 @@
     animation: wallet-fade-up 180ms ease-out;
   }
 
+  @media (max-height: 560px) {
+    .wallet-page {
+      padding-top: 0.5rem !important;
+      padding-bottom: calc(var(--safe-bottom) + 0.5rem) !important;
+    }
+
+    .wallet-page-header-logo {
+      width: 100% !important;
+      max-width: 10rem;
+      max-height: 3rem;
+      object-fit: contain;
+    }
+
+    .onboarding-landing main {
+      gap: 0.75rem !important;
+      padding-top: 4.5rem !important;
+    }
+
+    .onboarding-landing main > div:first-child img {
+      width: auto !important;
+      max-height: 8rem;
+    }
+
+    .onboarding-landing main > .wallet-card {
+      padding: 1rem !important;
+    }
+
+    .onboarding-landing-actions {
+      margin-top: 1rem !important;
+    }
+  }
+
   /*
    * Arabic uses a semantic RTL document direction, but the wallet shell has
    * an established physical layout (bottom navigation order, icon/action
@@ -995,7 +1007,7 @@
  * the one currently applied.
  */
 .theme-swatch-light {
-  background: linear-gradient(135deg, #ffffff 0%, #eef4f1 100%);
+  background: linear-gradient(135deg, #ffffff 0%, #f4f6f8 100%);
 }
 .theme-swatch-gray {
   background: linear-gradient(135deg, #252b34 0%, #1c2128 100%);
@@ -1004,5 +1016,5 @@
   background: linear-gradient(135deg, #0b3327 0%, #06251c 100%);
 }
 .theme-swatch-dark {
-  background: linear-gradient(135deg, #131313 0%, #000000 100%);
+  background: linear-gradient(135deg, #0b3327 0%, #06251c 100%);
 }

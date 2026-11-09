@@ -2,14 +2,10 @@
 
 import React, { useState } from 'react';
 import Popup from './Popup';
-import { shortenTxHash } from '../../../utils/shortenHash';
-import { useSelector } from 'react-redux';
-import { RootState } from '../../../state/store';
-import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
-import { PREFIX } from '../../../utils/constants';
 import { UTXO } from '../../../types/types';
 import SweepPaperWallet from '../../../components/SweepPaperWallet';
 import { useI18n } from '../../../i18n/useI18n';
+import MaskedValue from '../../../components/ui/MaskedValue';
 // import { Network } from 'cashscript';
 
 interface AddressSelectionProps {
@@ -47,10 +43,6 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
     useState(false); // State for wallet addresses popup
   const [showContractAddressesPopup, setShowContractAddressesPopup] =
     useState(false);
-
-  const currentNetwork = useSelector((state: RootState) =>
-    selectCurrentNetwork(state)
-  );
 
   // Toggle selection for regular wallet addresses
   const toggleAddressSelection = (address: string) => {
@@ -136,9 +128,16 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                 );
 
                 return (
-                  <button
+                  <div
                     key={addressObj.address}
                     onClick={() => toggleAddressSelection(addressObj.address)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      toggleAddressSelection(addressObj.address);
+                    }}
+                    role="button"
+                    tabIndex={0}
                     className={`w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal focus:outline-none ${
                       isSelected
                         ? 'wallet-selectable-active'
@@ -149,20 +148,25 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                     <div className="flex flex-col">
                       <span className="font-medium">
                         {t('builder.bchAddress')}:{' '}
-                        {shortenTxHash(
-                          addressObj.address,
-                          PREFIX[currentNetwork].length
-                        )}
+                        <MaskedValue
+                          value={addressObj.address}
+                          label={t('builder.bchAddress')}
+                          ariaLabel={t('builder.bchAddress')}
+                          embedded
+                        />
                       </span>
                       <span className="text-sm wallet-muted">
                         {t('builder.tokenAddress')}:{' '}
-                        {shortenTxHash(
-                          addressObj.tokenAddress,
-                          PREFIX[currentNetwork].length
-                        )}
+                        <MaskedValue
+                          value={addressObj.tokenAddress}
+                          label={t('builder.tokenAddress')}
+                          ariaLabel={t('builder.tokenAddress')}
+                          className="text-xs"
+                          embedded
+                        />
                       </span>
                     </div>
-                  </button>
+                  </div>
                 );
               })
             )}
@@ -189,7 +193,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                   );
 
                 return (
-                  <button
+                  <div
                     key={contractObj.address}
                     onClick={() =>
                       toggleContractSelection(
@@ -197,6 +201,16 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                         contractObj.abi
                       )
                     }
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      toggleContractSelection(
+                        contractObj.address,
+                        contractObj.abi
+                      );
+                    }}
+                    role="button"
+                    tabIndex={0}
                     className={`w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal focus:outline-none ${
                       isSelected
                         ? 'wallet-selectable-active'
@@ -210,13 +224,16 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                       </span>
                       <span className="text-sm wallet-muted">
                         {t('builder.contractAddress')}:{' '}
-                        {shortenTxHash(
-                          contractObj.address,
-                          PREFIX[currentNetwork].length
-                        )}
+                        <MaskedValue
+                          value={contractObj.address}
+                          label={t('builder.contractAddress')}
+                          ariaLabel={t('builder.contractAddress')}
+                          className="text-xs"
+                          embedded
+                        />
                       </span>
                     </div>
-                  </button>
+                  </div>
                 );
               })
             )}

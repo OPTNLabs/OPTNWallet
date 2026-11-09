@@ -66,6 +66,7 @@ a {
 }
 
 .app-shell.theme-green,
+.app-shell.theme-dark,
 .app-shell.dark {
   --bg: #06251c;
   --surface: #0b3327;
@@ -89,7 +90,6 @@ a {
   --danger: #ff8f86;
   --warning: #f2cc60;
 }
-
 .app-shell.skin-cyberpunk {
   --accent: #39ff14;
   --accent-text: #03150d;

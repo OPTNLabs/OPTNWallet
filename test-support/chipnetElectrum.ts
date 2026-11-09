@@ -12,10 +12,10 @@ import WebSocket from 'ws';
 export const CHIPNET_SERVERS = [
   'electrum-chipnet.optnlabs.com',
   'chipnet.imaginary.cash',
-  'chipnet.bch.ninja',
+  'chipnet.c3-soft.com:64004',
 ];
 
-const PORT = 50004;
+const DEFAULT_PORT = 50004;
 
 export type ElectrumCall = [id: number, method: string, params: unknown[]];
 
@@ -27,12 +27,15 @@ export type ElectrumResult = {
 
 /** One connection, one batch of calls, resolved when every id has answered. */
 export function rpc(
-  host: string,
+  server: string,
   calls: ElectrumCall[],
   timeoutMs = 30_000
 ): Promise<ElectrumResult> {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`wss://${host}:${PORT}`);
+    const match = server.match(/^([^:]+):(\d{1,5})$/);
+    const host = match?.[1] ?? server;
+    const port = Number(match?.[2] ?? DEFAULT_PORT);
+    const ws = new WebSocket(`wss://${host}:${port}`);
     const results: Record<number, unknown> = {};
     let done = false;
 
@@ -44,7 +47,7 @@ export function rpc(
       } catch {
         /* already closed */
       }
-      resolve({ host, err, results });
+      resolve({ host: server, err, results });
     };
 
     const timer = setTimeout(() => finish('timeout'), timeoutMs);

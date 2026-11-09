@@ -161,7 +161,7 @@ export const localeCriticalOverrides: Partial<
     'receive.close': 'Fechar',
     'receive.receiveQr': 'QR de recebimento',
     'receive.qrCopyDescription':
-      'Toque no QR para copiar o payload atual. Feche para voltar.',
+      'Toque no QR para mostrar ou ocultar o payload completo. Feche para voltar.',
     'receive.copyQrPayload': 'Copiar payload do QR de recebimento',
     'receive.bip21Title': 'Solicitação de pagamento BIP21',
     'receive.bip21Description':
@@ -358,7 +358,7 @@ export const localeCriticalOverrides: Partial<
     'receive.close': 'Đóng',
     'receive.receiveQr': 'QR nhận',
     'receive.qrCopyDescription':
-      'Chạm QR để sao chép payload hiện tại. Đóng để quay lại.',
+      'Chạm QR để hiện hoặc ẩn toàn bộ payload. Đóng để quay lại.',
     'receive.copyQrPayload': 'Sao chép payload QR nhận',
     'receive.bip21Title': 'Yêu cầu thanh toán BIP21',
     'receive.bip21Description':
@@ -543,7 +543,8 @@ export const localeCriticalOverrides: Partial<
     'receive.noVaultFunds': '尚未偵測到 Quantumroot 保管庫資金。',
     'receive.close': '關閉',
     'receive.receiveQr': '接收 QR',
-    'receive.qrCopyDescription': '點擊 QR 以複製目前 payload。關閉即可返回。',
+    'receive.qrCopyDescription':
+      '點擊 QR 以顯示或隱藏完整 payload。關閉即可返回。',
     'receive.copyQrPayload': '複製接收 QR payload',
     'receive.bip21Title': 'BIP21 付款請求',
     'receive.bip21Description': '將金額、標籤與訊息編碼至 QR payload。',
@@ -744,7 +745,7 @@ export const localeCriticalOverrides: Partial<
     'receive.close': 'Fermer',
     'receive.receiveQr': 'QR de réception',
     'receive.qrCopyDescription':
-      'Touchez le QR pour copier le payload actuel. Fermez pour revenir.',
+      'Touchez le QR pour afficher ou masquer le payload complet. Fermez pour revenir.',
     'receive.copyQrPayload': 'Copier le payload QR de réception',
     'receive.bip21Title': 'Demande de paiement BIP21',
     'receive.bip21Description':
@@ -940,7 +941,7 @@ export const localeCriticalOverrides: Partial<
     'receive.close': '닫기',
     'receive.receiveQr': '수신 QR',
     'receive.qrCopyDescription':
-      '현재 payload를 복사하려면 QR을 탭하세요. 닫으면 돌아갑니다.',
+      '전체 payload를 표시하거나 숨기려면 QR을 탭하세요. 닫으면 돌아갑니다.',
     'receive.copyQrPayload': '수신 QR payload 복사',
     'receive.bip21Title': 'BIP21 결제 요청',
     'receive.bip21Description':
@@ -1138,7 +1139,7 @@ export const localeCriticalOverrides: Partial<
     'receive.close': '閉じる',
     'receive.receiveQr': '受取 QR',
     'receive.qrCopyDescription':
-      'QR をタップして現在の payload をコピーします。閉じると戻ります。',
+      'QR をタップして payload 全体を表示または非表示にします。閉じると戻ります。',
     'receive.copyQrPayload': '受取 QR payload をコピー',
     'receive.bip21Title': 'BIP21 支払いリクエスト',
     'receive.bip21Description':
@@ -1345,7 +1346,7 @@ export const localeCriticalOverrides: Partial<
     'receive.close': 'Закрыть',
     'receive.receiveQr': 'QR получения',
     'receive.qrCopyDescription':
-      'Нажмите QR, чтобы скопировать текущую нагрузку. Закройте окно, чтобы вернуться.',
+      'Нажмите QR, чтобы показать или скрыть полную нагрузку. Закройте окно, чтобы вернуться.',
     'receive.copyQrPayload': 'Копировать нагрузку QR получения',
     'receive.bip21Title': 'Платёжный запрос BIP21',
     'receive.bip21Description':
@@ -1542,7 +1543,7 @@ export const localeCriticalOverrides: Partial<
     'receive.close': 'Rufe',
     'receive.receiveQr': 'QR na karɓa',
     'receive.qrCopyDescription':
-      'Danna QR don kwafe payload na yanzu. Rufe don komawa.',
+      'Danna QR don nuna ko ɓoye cikakken payload. Rufe don komawa.',
     'receive.copyQrPayload': 'Kwafi payload na QR na karɓa',
     'receive.bip21Title': 'Buƙatar biyan BIP21',
     'receive.bip21Description':

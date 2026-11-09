@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { getElectrumServers, getInfraUrlPools } from '../servers/InfraUrls';
+import {
+  getBcmrNativeTokenUrls,
+  getElectrumServers,
+  getInfraUrlPools,
+} from '../servers/InfraUrls';
 import { Network } from '../../state/slices/networkSlice';
 
 describe('InfraUrls', () => {
@@ -32,5 +36,24 @@ describe('InfraUrls', () => {
       'https://bcmr.optnlabs.com/api',
       'https://bcmr-chipnet.paytaca.com/api',
     ]);
+
+    expect(
+      getBcmrNativeTokenUrls(
+        Network.CHIPNET,
+        '4a3cac0663c121e976c7ad6783dfadab0d05c0700ef1d2cc75a0579a6ea431f4'
+      )
+    ).toEqual([
+      'https://tokenindex.optnlabs.com/v1/token/4a3cac0663c121e976c7ad6783dfadab0d05c0700ef1d2cc75a0579a6ea431f4',
+    ]);
+  });
+
+  it('keeps only live Chipnet WSS routes in the browser pool', () => {
+    const servers = getInfraUrlPools(Network.CHIPNET).electrumServers;
+    expect(servers).toEqual([
+      'electrum-chipnet.optnlabs.com',
+      'chipnet.imaginary.cash',
+      'chipnet.c3-soft.com:64004',
+    ]);
+    expect(servers).not.toContain('chipnet.bch.ninja');
   });
 });

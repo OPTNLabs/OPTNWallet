@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { logError, logWarn } from '../errorHandling';
+import { logError, logWarn, toErrorMessage } from '../errorHandling';
+import { classifyBroadcastFailure } from '../broadcastErrors';
 
 describe('error handling secret redaction', () => {
   afterEach(() => {
@@ -60,5 +61,19 @@ describe('error handling secret redaction', () => {
     expect(JSON.stringify(consoleWarn.mock.calls[0])).not.toContain(
       'signature value'
     );
+  });
+
+  it('never returns an empty message for blank provider errors', () => {
+    expect(toErrorMessage(new Error(''), 'Broadcast failed.')).toBe(
+      'Broadcast failed.'
+    );
+    expect(toErrorMessage({ message: '  ' }, 'Broadcast failed.')).toBe(
+      'Broadcast failed.'
+    );
+    expect(classifyBroadcastFailure('')).toEqual({
+      ambiguous: false,
+      userMessage:
+        'Error sending transaction: Broadcast failed without a reason.',
+    });
   });
 });

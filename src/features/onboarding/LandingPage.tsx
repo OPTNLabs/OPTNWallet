@@ -57,7 +57,7 @@ const LandingPage = ({ surface }: LandingPageProps) => {
   const { t } = useI18n();
 
   return (
-    <section className="min-h-[100dvh] wallet-surface flex flex-col justify-center items-center px-4 relative">
+    <section className="onboarding-landing min-h-[100dvh] wallet-surface flex flex-col justify-center items-center px-4 relative">
       <div className="safe-area-top" />
 
       <div className="absolute top-0 left-0 right-0 z-10 px-4 pt-[calc(var(--safe-top)+1.15rem)]">
@@ -89,8 +89,11 @@ const LandingPage = ({ surface }: LandingPageProps) => {
           <h1 className="text-lg font-bold lg:text-xl wallet-text-strong mx-auto max-w-md text-center">
             {t('onboarding.poweredBy')}
           </h1>
+          <p className="mt-2 max-w-md text-sm wallet-muted">
+            {t('onboarding.helpDescription')}
+          </p>
 
-          <div className="flex w-full flex-col sm:flex-row sm:flex-wrap gap-3 sm:gap-4 mt-10 sm:mt-12 lg:mt-20 justify-center">
+          <div className="onboarding-landing-actions flex w-full flex-col sm:flex-row sm:flex-wrap gap-3 sm:gap-4 mt-10 sm:mt-12 lg:mt-20 justify-center">
             <Link
               to="/createwallet"
               className="wallet-btn-primary w-full sm:w-auto py-3 px-10 rounded-lg sm:mx-2 sm:my-2 shadow-md"
@@ -144,6 +147,7 @@ const LandingPage = ({ surface }: LandingPageProps) => {
             ]}
             numbered={false}
             className="max-w-none"
+            onFinish={() => setShowHelp(false)}
           />
         </Popup>
       )}

@@ -13,6 +13,7 @@ import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { NetworkSettings } from './NetworkSettings';
 import { DerivationPathSettings } from './DerivationPathSettings';
 import { ServerSettings } from './ServerSettings';
+import ExplorerSettings from './ExplorerSettings';
 import { ConsolePanel } from './ConsolePanel';
 import { ExperimentalSettings } from './ExperimentalSettings';
 import { NostrSettings } from '../nostr/NostrSettings';
@@ -141,6 +142,7 @@ const Settings: React.FC = () => {
       'rebuild-wallet': 'settingsRows.rebuildWallet',
       nostr: 'settingsRows.nostr',
       server: 'settingsRows.server',
+      explorer: 'settingsRows.explorer',
       console: 'settingsRows.console',
       experimental: 'settingsRows.experimental',
       addons: 'settingsRows.addons',
@@ -170,6 +172,7 @@ const Settings: React.FC = () => {
       'rebuild-wallet': 'settingsRows.rebuildWalletDescription',
       nostr: 'settingsRows.nostrDescription',
       server: 'settingsRows.serverDescription',
+      explorer: 'settingsRows.explorerDescription',
       console: 'settingsRows.consoleDescription',
       experimental: 'settingsRows.experimentalDescription',
       addons: 'settingsRows.addonsDescription',
@@ -299,6 +302,8 @@ const Settings: React.FC = () => {
         return <DerivationPathSettings />;
       case 'server':
         return <ServerSettings backRef={serverBack} />;
+      case 'explorer':
+        return <ExplorerSettings />;
       case 'console':
         return <ConsolePanel />;
       case 'experimental':
@@ -346,6 +351,8 @@ const Settings: React.FC = () => {
         return t('settingsPanels.rebuildWallet');
       case 'server':
         return desktop ? 'Network' : t('settingsPanels.server');
+      case 'explorer':
+        return t('settingsRows.explorer');
       case 'wallet-info':
         return t('settingsPanels.walletInfo');
       case 'birthday':
@@ -448,33 +455,6 @@ const Settings: React.FC = () => {
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader title={t('app.settings')} compact />
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 -mt-8">
-          <div aria-hidden="true" />
-          <h1 className="justify-self-center text-[1.6rem] font-bold tracking-[-0.04em] wallet-text-strong">
-            {t('app.settings')}
-          </h1>
-          <button
-            onClick={toggleMode}
-            className="justify-self-end flex items-center gap-2 rounded-full wallet-surface-strong border border-[var(--wallet-border)] px-2 py-1.5 text-sm font-semibold wallet-text-strong whitespace-nowrap"
-            aria-label={t('app.toggleTheme')}
-          >
-            <MdSunny className="text-[12px] wallet-muted" />
-            <span
-              className={`relative inline-flex h-5 w-10 items-center rounded-full border transition-colors ${
-                mode === 'dark'
-                  ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
-                  : 'wallet-surface border-[var(--wallet-border)]'
-              }`}
-            >
-              <span
-                className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                  mode === 'dark' ? 'translate-x-5' : 'translate-x-0'
-                }`}
-              />
-            </span>
-            <MdModeNight className="text-[12px] wallet-muted" />
-          </button>
-        </div>
 
         <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-hidden">
           {!selectedOption ? (
@@ -482,7 +462,35 @@ const Settings: React.FC = () => {
               <div className="flex h-full min-h-0 flex-col gap-4">
                 <div className="grid min-h-0 flex-1 grid-cols-1 gap-2.5 overflow-y-auto overscroll-contain pr-1">
                   <SectionCard className="p-0">
-                    <SectionHeader title={t('app.quickAccess')} compact />
+                    <SectionHeader
+                      title={t('app.quickAccess')}
+                      compact
+                      action={
+                        <button
+                          onClick={toggleMode}
+                          className="flex h-8 shrink-0 items-center gap-1 rounded-full wallet-surface-strong border border-[var(--wallet-border)] px-1.5 text-xs font-semibold wallet-text-strong whitespace-nowrap"
+                          aria-label={t('app.toggleTheme')}
+                        >
+                          <MdSunny className="text-[11px] wallet-muted" />
+                          <span
+                            className={`relative inline-flex h-4 w-8 items-center rounded-full border transition-colors ${
+                              mode === 'dark'
+                                ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
+                                : 'wallet-surface border-[var(--wallet-border)]'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                                mode === 'dark'
+                                  ? 'translate-x-4'
+                                  : 'translate-x-0'
+                              }`}
+                            />
+                          </span>
+                          <MdModeNight className="text-[11px] wallet-muted" />
+                        </button>
+                      }
+                    />
                     {renderRows(visibleWalletRows)}
                   </SectionCard>
 
@@ -499,7 +507,7 @@ const Settings: React.FC = () => {
 
                 <button
                   onClick={() => setIsLogoutPopupOpen(true)}
-                  className="wallet-btn-danger w-full py-3 text-base"
+                  className="wallet-btn-secondary w-full py-3 text-base"
                 >
                   {t('app.logOut')}
                 </button>
@@ -531,7 +539,7 @@ const Settings: React.FC = () => {
               </SectionCard>
               <div className="mt-auto pb-2 pt-3">
                 <button
-                  className="wallet-btn-danger w-full py-3 text-base font-semibold"
+                  className="wallet-btn-secondary w-full py-3 text-base font-semibold"
                   onClick={handleBack}
                 >
                   {t('app.back')}

@@ -8,6 +8,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { ContractAddressRecord, UTXO } from '../../types/types';
 import AddressSelection from '../../components/transaction/AddressSelection';
@@ -37,11 +38,16 @@ import {
   getPreferredBchChangeAddress,
 } from '../../utils/changeAddressPreference';
 import { useI18n } from '../../i18n/useI18n';
+import RouteExitFooter from '../../components/ui/RouteExitFooter';
+import { getReturnPath } from '../../utils/navigation';
 
 const noopSetUtxos: Dispatch<SetStateAction<UTXO[]>> = () => undefined;
 
 const Transaction: React.FC = () => {
   const { t } = useI18n();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/actions');
   // Removed local walletId state
   const [addresses, setAddresses] = useState<
     { address: string; tokenAddress: string }[]
@@ -258,6 +264,7 @@ const Transaction: React.FC = () => {
     inputs: { [key: string]: string },
     abiInputs: { name: string; type: string }[]
   ) => {
+    setRawTX('');
     setContractFunctionInputs(inputs);
     await handleContractFunctionSelect(contractFunction, inputs, abiInputs);
   };
@@ -288,6 +295,7 @@ const Transaction: React.FC = () => {
   );
 
   const setChangeAddressWithOverride = useCallback((address: string) => {
+    setRawTX('');
     setHasManualChangeSelection(true);
     setChangeAddress(address);
   }, []);
@@ -339,6 +347,7 @@ const Transaction: React.FC = () => {
         : legacyDefault;
 
     if (changeAddress !== nextDefault) {
+      setRawTX('');
       setChangeAddress(nextDefault);
     }
   }, [
@@ -409,8 +418,13 @@ const Transaction: React.FC = () => {
     <ErrorBoundary>
       <WalletScreen maxWidthClassName="max-w-xl" scrollable={false}>
         <div className="flex h-full min-h-0 flex-col gap-3">
-          <PageHeader title={t('builder.customSend')} compact />
-
+          <PageHeader
+            title={t('builder.customSend')}
+            subtitle={
+              currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+            }
+            compact
+          />
           <SectionCard className="mb-2 p-3 wallet-step-card">
             <div className="flex items-center justify-between gap-3">
               <div className="wallet-kicker">{t('builder.flow')}</div>
@@ -560,7 +574,6 @@ const Transaction: React.FC = () => {
                       selectedContractAddresses={selectedContractAddresses}
                       totalSelectedUtxoAmount={totalSelectedUtxoAmount}
                       handleUtxoClick={handleUtxoClick}
-                      currentNetwork={currentNetwork}
                     />
                   </>
                 )}
@@ -712,6 +725,11 @@ const Transaction: React.FC = () => {
               </div>
             </div>
           </SectionCard>
+
+          <RouteExitFooter
+            label={t('apps.back')}
+            onBack={() => navigate(backTarget)}
+          />
 
           <ErrorAndStatusPopups
             showRawTxPopup={showRawTxPopup}

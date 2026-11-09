@@ -1,12 +1,12 @@
 import { TokenMetaMap } from './types';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
 import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
 } from '../../utils/tokenPresentation';
 
 export function copyTextToClipboard(text: string) {
-  void copyToClipboard(text);
+  void copyWithFeedback(text);
 }
 
 export function formatFtAmount(amount: bigint, decimals: number) {

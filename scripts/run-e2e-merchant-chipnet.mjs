@@ -12,11 +12,11 @@ const projectRoot = process.cwd();
 // expose the mnemonic to the frontend bundle.
 loadDotenv({ path: path.join(projectRoot, '.env'), override: false });
 
-const mnemonic = process.env.OPTN_MERCHANT_E2E_MNEMONIC?.trim();
+const mnemonic = process.env.OPTN_E2E_MNEMONIC?.trim();
 
 if (!mnemonic) {
   console.error(
-    'OPTN_MERCHANT_E2E_MNEMONIC is required. Provide it in your local test environment; this runner never prints it.'
+    'OPTN_E2E_MNEMONIC is required. Provide it in your local test environment; this runner never prints it.'
   );
   process.exit(2);
 }

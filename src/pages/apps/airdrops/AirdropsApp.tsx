@@ -8,6 +8,8 @@ import AirdropDistributionScreen from './screens/AirdropDistributionScreen';
 import { useAirdropWalletInventory } from './hooks/useAirdropWalletInventory';
 import type { AirdropWorkspace } from './types';
 import { getReturnPath } from '../../../utils/navigation';
+import PageHeader from '../../../components/ui/PageHeader';
+import RouteExitFooter from '../../../components/ui/RouteExitFooter';
 
 type AirdropsAppProps = {
   sdk: AddonSDK;
@@ -15,7 +17,7 @@ type AirdropsAppProps = {
   app: AddonAppDefinition;
 };
 
-const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
+const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
@@ -29,27 +31,9 @@ const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
   });
 
   return (
-    <div className="container mx-auto max-w-md h-full min-h-0 px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
+    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] min-h-0 px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
       <div className="flex-none">
-        <div className="flex justify-center">
-          <img
-            src="/assets/images/OPTNWelcome1.png"
-            alt="OPTN"
-            className="h-auto w-full max-w-[260px] object-contain"
-          />
-        </div>
-        <div className="mt-4 flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold wallet-text-strong tracking-[-0.02em]">
-            {app.name}
-          </h1>
-          <button
-            type="button"
-            onClick={() => navigate(backTarget)}
-            className="wallet-btn-danger px-4 py-2"
-          >
-            {addonT('common.back', 'Back')}
-          </button>
-        </div>
+        <PageHeader title="Airdrop" />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pt-4 pr-1">
@@ -82,6 +66,10 @@ const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
           ) : null}
         </div>
       </div>
+      <RouteExitFooter
+        label={addonT('common.back', 'Back')}
+        onBack={() => navigate(backTarget)}
+      />
     </div>
   );
 };

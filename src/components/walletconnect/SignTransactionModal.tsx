@@ -1,6 +1,6 @@
 // inside src/components/walletconnect/SignTransactionModal.tsx
 
-import { useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '../../state/store';
 import {
@@ -11,16 +11,23 @@ import {
 } from '../../state/slices/walletconnectSlice';
 import { enqueueNotification } from '../../state/slices/notificationsSlice';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
-import { SATSINBITCOIN } from '../../utils/constants';
-import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
+import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
+import { transactionPreview } from '../../services/connect/transactionPreview';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import useOutboundTransactions from '../../hooks/useOutboundTransactions';
-import { shortenAddress } from '../../utils/shortenHash';
-import WalletTooltip from '../ui/WalletTooltip';
-import { FiChevronDown, FiChevronUp } from 'react-icons/fi';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 import { toErrorMessage } from '../../utils/errorHandling';
 import { useI18n } from '../../i18n/useI18n';
+import ConnectorWalletEffectSummary from '../connect/ConnectorWalletEffectSummary';
+import ConnectorTransactionSummary from '../connect/ConnectorTransactionSummary';
+import MaskedConnectorDescription from '../connect/MaskedConnectorDescription';
+import { describeConnectorRequest } from '../../services/connect/requestDescription';
+import WalletPopupSheet from '../ui/WalletPopupSheet';
+import MaskedValue from '../ui/MaskedValue';
+import InfoButton from '../ui/InfoButton';
+import NetworkContextBanner from '../ui/NetworkContextBanner';
+import { isUiFixtureEnabled } from '../../ui-fixtures/fixtureData';
 
 function isStaleWalletConnectError(error: unknown): boolean {
   const message = toErrorMessage(error).toLowerCase();
@@ -37,7 +44,9 @@ function isStaleWalletConnectError(error: unknown): boolean {
 export function SignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
   const { t } = useI18n();
+  const titleId = useId();
   const walletId = useSelector(selectWalletId);
+  const network = useSelector(selectCurrentNetwork);
   const signTxRequest = useSelector(
     (state: RootState) => state.walletconnect.pendingSignTx
   );
@@ -46,35 +55,32 @@ export function SignTransactionModal() {
   );
   const { hasUnresolved } = useOutboundTransactions(walletId);
 
-  const [inputsExpanded, setInputsExpanded] = useState(false);
-  const [outputsExpanded, setOutputsExpanded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
+
+  const tx = signTxRequest?.params?.request?.params?.transaction;
+  const rawSourceOutputs =
+    signTxRequest?.params?.request?.params?.sourceOutputs;
+  const preview = useMemo(() => {
+    if (!tx) return null;
+    try {
+      return transactionPreview(tx, rawSourceOutputs ?? []);
+    } catch {
+      // Keep malformed requests visible so the user can reject them.
+      return null;
+    }
+  }, [rawSourceOutputs, tx]);
 
   if (!signTxRequest) return null;
 
   const { topic, params } = signTxRequest;
   const { request } = params;
-  const tx = request.params?.transaction;
-  const sourceOutputs = request.params?.sourceOutputs ?? [];
   const userPrompt = request.params?.userPrompt ?? '';
+  const requestDescription = describeConnectorRequest(userPrompt);
   const shouldBroadcast = !!request.params?.broadcast;
   const dappMetadata = activeSessions?.[topic]?.peer?.metadata;
-  const inputs = tx?.inputs || [];
-  const outputs = tx?.outputs || [];
-
-  type TxAmountCarrier = { valueSatoshis: unknown };
-  type TxToken = {
-    category: unknown;
-    amount?: unknown;
-    nft?: { capability?: string; commitment?: unknown };
-  };
-  type TxOutput = TxAmountCarrier & {
-    lockingBytecode: unknown;
-    token?: TxToken;
-  };
-  type TxInputSource = TxAmountCarrier & {
-    outpointTransactionHash: unknown;
-    outpointIndex: number;
-  };
+  const inputs = preview?.inputs ?? [];
+  const outputs = preview?.outputs ?? [];
 
   function parsePushData(bytecode: Uint8Array): string[] {
     const result: string[] = [];
@@ -91,14 +97,11 @@ export function SignTransactionModal() {
     return result;
   }
 
-  function toCashAddress(
-    bytecode: unknown,
-    prefix: 'bitcoincash' | 'bchtest' | 'bchreg' = 'bitcoincash'
-  ): string {
+  function toCashAddress(bytecode: Uint8Array): string {
     try {
       const result = lockingBytecodeToCashAddress({
-        prefix,
-        bytecode: ensureUint8Array(bytecode),
+        prefix: PREFIX[network],
+        bytecode,
       });
       return typeof result === 'string' ? `⚠️ ${result}` : result.address;
     } catch {
@@ -106,32 +109,52 @@ export function SignTransactionModal() {
     }
   }
 
-  const totalInput: bigint = (sourceOutputs as TxInputSource[]).reduce(
-    (sum: bigint, o) => sum + parseSatoshis(o.valueSatoshis),
-    0n
-  );
-  const totalOutput: bigint = (outputs as TxOutput[]).reduce(
-    (sum: bigint, o) => sum + parseSatoshis(o.valueSatoshis),
-    0n
-  );
-  const fee = totalInput - totalOutput;
+  function describeLockingDestination(bytecode: Uint8Array) {
+    try {
+      const result = lockingBytecodeToCashAddress({
+        prefix: PREFIX[network],
+        bytecode,
+      });
+      return typeof result === 'string'
+        ? { label: t('wc.lockingScript'), value: `0x${binToHex(bytecode)}` }
+        : { label: t('wc.address'), value: result.address };
+    } catch {
+      return { label: t('wc.lockingScript'), value: `0x${binToHex(bytecode)}` };
+    }
+  }
+
   const broadcastLocked = shouldBroadcast && hasUnresolved;
   const dappUrl = dappMetadata?.url
     ? normalizeExternalUrl(dappMetadata.url)
     : null;
 
   const handleSign = async () => {
-    if (broadcastLocked) return;
+    if (isUiFixtureEnabled() || broadcastLocked || !preview || inFlight.current)
+      return;
+    inFlight.current = true;
+    setBusy(true);
     try {
-      await dispatch(respondWithTxSignature(signTxRequest)).unwrap();
+      const outcome = await dispatch(
+        respondWithTxSignature(signTxRequest)
+      ).unwrap();
+      const outcomeMessage =
+        outcome.kind === 'broadcasted'
+          ? t('wc.signedAndBroadcast')
+          : outcome.kind === 'submitted'
+            ? t('wc.signedAndSubmitted')
+            : outcome.kind === 'failed'
+              ? t('wc.broadcastFailedReturned', {
+                  message: outcome.message,
+                })
+              : outcome.kind === 'not_attempted_hardware'
+                ? t('wc.signedOnHardwareReturned')
+                : t('wc.signedReturned');
       dispatch(
         enqueueNotification({
           id: `walletconnect:tx:signed:${topic}:${signTxRequest.id}`,
           kind: 'walletconnect',
           title: t('wc.transactionApprovedTitle'),
-          body: dappMetadata?.name
-            ? t('wc.transactionSentBody', { name: dappMetadata.name })
-            : t('wc.transactionResponseSentBody'),
+          body: outcomeMessage,
           createdAt: Date.now(),
         })
       );
@@ -166,10 +189,16 @@ export function SignTransactionModal() {
           createdAt: Date.now(),
         })
       );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   };
 
   const handleCancel = async () => {
+    if (isUiFixtureEnabled() || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
     try {
       await dispatch(respondWithTxError(signTxRequest)).unwrap();
       dispatch(
@@ -212,223 +241,298 @@ export function SignTransactionModal() {
           createdAt: Date.now(),
         })
       );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   };
 
   return (
-    <div className="wallet-popup-backdrop">
-      <div className="wallet-popup-panel max-w-2xl w-full flex flex-col space-y-4">
-        <h3 className="text-xl font-bold text-center">
-          {t('wc.signTransactionRequest')}
-        </h3>
-
-        <div className="overflow-y-auto max-h-[60vh] space-y-4 pr-1">
-          {dappMetadata && (
-            <div className="text-sm wallet-muted">
-              <div>
-                <strong>{t('wc.dappName')}:</strong> {dappMetadata.name}
-              </div>
-              <div>
-                <strong>{t('wc.domain')}:</strong>{' '}
-                {dappUrl ? (
-                  <a
-                    href={dappUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="wallet-link underline"
-                  >
-                    {dappMetadata.url}
-                  </a>
-                ) : (
-                  <span className="wallet-muted break-all">
-                    {dappMetadata.url}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {userPrompt && (
-            <p className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 wallet-text-strong">
-              <strong>{t('wc.prompt')}:</strong> {userPrompt}
-            </p>
-          )}
-
-          {broadcastLocked && (
-            <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 wallet-text-strong">
-              {t('wc.broadcastLocked')}
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <button
-              type="button"
-              onClick={() => setInputsExpanded(!inputsExpanded)}
-              className="flex items-center gap-2 text-sm font-semibold wallet-text-strong"
-            >
-              {inputsExpanded ? <FiChevronUp /> : <FiChevronDown />}
-              {t('wc.inputs', { count: inputs.length })}
-            </button>
-            {inputsExpanded && (
-              <div className="space-y-1">
-                {inputs.map((_: unknown, i: number) => {
-                  const source = sourceOutputs[i];
-                  const txid = binToHex(
-                    ensureUint8Array(source.outpointTransactionHash)
-                  );
-                  const value = parseSatoshis(source.valueSatoshis);
-                  return (
-                    <div key={i} className="ml-2">
-                      <div>
-                        {t('wc.txid')}:{' '}
-                        <span className="font-mono break-all">{txid}</span>
-                      </div>
-                      <div>
-                        {t('wc.index')}: {source.outpointIndex}
-                      </div>
-                      <div>{Number(value) / SATSINBITCOIN} BCH</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <button
-              type="button"
-              onClick={() => setOutputsExpanded(!outputsExpanded)}
-              className="flex items-center gap-2 text-sm font-semibold wallet-text-strong"
-            >
-              {outputsExpanded ? <FiChevronUp /> : <FiChevronDown />}
-              {t('wc.outputs', { count: outputs.length })}
-            </button>
-            {outputsExpanded && (
-              <div className="space-y-1">
-                {(outputs as TxOutput[]).map((output, i: number) => {
-                  const value = parseSatoshis(output.valueSatoshis);
-                  const lockingBytecode = ensureUint8Array(
-                    output.lockingBytecode
-                  );
-                  const isOpReturn = lockingBytecode[0] === 0x6a;
-                  const token = output.token;
-
-                  if (isOpReturn) {
-                    const parsed = parsePushData(lockingBytecode);
-                    return (
-                      <div
-                        key={i}
-                        className="ml-2 space-y-1 border-b border-[var(--wallet-border)] pb-2 text-sm"
-                      >
-                        <strong>{t('wc.opReturnOutput')}</strong>
-                        {parsed.map((data, j) => (
-                          <div
-                            key={j}
-                            className="font-mono wallet-muted break-words"
-                          >
-                            {data}
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  }
-
-                  const address = toCashAddress(lockingBytecode, 'bitcoincash');
-                  return (
-                    <div
-                      key={i}
-                      className="ml-2 border-b border-[var(--wallet-border)] pb-2 space-y-1"
-                    >
-                      <div>
-                        {t('wc.address')}:{' '}
-                        <span
-                          className="font-mono wallet-link break-all cursor-pointer"
-                          data-tooltip-id={`address-tooltip-${i}`}
-                          data-tooltip-content={address}
-                        >
-                          {shortenAddress(address)}
-                        </span>
-                        <WalletTooltip
-                          id={`address-tooltip-${i}`}
-                          place="top"
-                          clickable={true}
-                          content={address}
-                        />
-                      </div>
-                      <div>{Number(value) / SATSINBITCOIN} BCH</div>
-                      {token && (
-                        <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 space-y-1">
-                          <div>
-                            <strong>{t('wc.tokenCategory')}:</strong>{' '}
-                            <span className="font-mono break-all">
-                              {binToHex(ensureUint8Array(token.category))}
-                            </span>
-                          </div>
-                          {token.amount !== undefined && token.amount !== null && (
-                            <div>
-                              <strong>{t('wc.fungibleAmount')}:</strong>{' '}
-                              {String(parseSatoshis(token.amount))}
-                            </div>
-                          )}
-                          {token.nft && (
-                            <>
-                              <div>
-                                <strong>{t('wc.nftCapability')}:</strong>{' '}
-                                {token.nft.capability}
-                              </div>
-                              {token.nft.commitment && (
-                                <div>
-                                  <strong>{t('wc.nftCommitment')}:</strong>{' '}
-                                  <span className="font-mono break-all">
-                                    {binToHex(
-                                      ensureUint8Array(token.nft.commitment)
-                                    )}
-                                  </span>
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="text-sm border-t border-[var(--wallet-border)] pt-2">
-            <div>
-              {t('wc.totalInput')}: {Number(totalInput) / SATSINBITCOIN} BCH
-            </div>
-            <div>
-              {t('wc.totalOutput')}: {Number(totalOutput) / SATSINBITCOIN} BCH
-            </div>
-            <div className="font-semibold">
-              {t('wc.estimatedFee')}: {Number(fee) / SATSINBITCOIN} BCH
-            </div>
-            <div>
-              {t('wc.broadcast')}: {shouldBroadcast ? t('wc.yes') : t('wc.no')}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex justify-around pt-2">
+    <WalletPopupSheet
+      maxWidthClassName="max-w-2xl"
+      onDismiss={busy ? undefined : handleCancel}
+      dismissLabel={t('wc.rejectRequest')}
+      showDismissButton={false}
+      ariaLabelledBy={titleId}
+      footer={
+        <div className="grid grid-cols-2 gap-3 pb-[var(--safe-bottom)]">
           <button
+            type="button"
+            onClick={handleCancel}
+            className="wallet-btn-danger min-h-[48px] w-full"
+            disabled={busy}
+          >
+            {t('wc.rejectRequest')}
+          </button>
+          <button
+            type="button"
             onClick={handleSign}
-            className="wallet-btn-primary"
-            disabled={broadcastLocked}
+            className="wallet-btn-primary min-h-[48px] w-full"
+            disabled={broadcastLocked || !preview || busy}
             title={broadcastLocked ? t('wc.waitPrevious') : undefined}
           >
             {broadcastLocked && shouldBroadcast
               ? t('wc.waitingForSync')
-              : t('wc.sign')}
-          </button>
-          <button onClick={handleCancel} className="wallet-btn-danger">
-            {t('wc.cancel')}
+              : busy
+                ? t('wc.working')
+                : shouldBroadcast
+                  ? t('txReview.signAndBroadcast')
+                  : t('txReview.signAndReturn')}
           </button>
         </div>
+      }
+    >
+      <div className="-mx-6 -mt-6">
+        <header className="sticky top-0 z-10 border-b border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-6 pb-4 pt-5">
+          <h3
+            id={titleId}
+            className="text-xl font-bold text-center wallet-text-strong"
+          >
+            {t(requestDescription.titleKey)}
+          </h3>
+          <p className="mt-1 text-center text-sm wallet-muted">
+            {t('txReview.reviewBeforeSigning')}
+          </p>
+          {(requestDescription.detail || dappMetadata) && (
+            <div className="mt-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-3 py-2 text-sm">
+              {dappMetadata && (
+                <div className="font-semibold wallet-text-strong">
+                  {dappMetadata.name || t('wc.unknownDapp')}
+                </div>
+              )}
+              {dappMetadata?.url && (
+                <div className="mt-1 text-xs wallet-muted">
+                  <span>{t('txReview.requestedBy')} </span>
+                  {dappUrl ? (
+                    <a
+                      href={dappUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="wallet-link break-all underline"
+                    >
+                      {dappMetadata.url}
+                    </a>
+                  ) : (
+                    <span className="break-all">{dappMetadata.url}</span>
+                  )}
+                </div>
+              )}
+              {requestDescription.detail && (
+                <div className="mt-2 text-xs wallet-muted">
+                  <span className="font-semibold">
+                    {t('txReview.appDescription')}:
+                  </span>{' '}
+                  <MaskedConnectorDescription value={requestDescription.detail} />
+                </div>
+              )}
+            </div>
+          )}
+          <NetworkContextBanner network={network} className="mt-3" />
+        </header>
+
+        <div className="space-y-4 px-6 py-4">
+          {broadcastLocked && (
+            <div className="flex items-start gap-2 text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 wallet-text-strong">
+              <span className="min-w-0 flex-1">{t('wc.broadcastLocked')}</span>
+              <InfoButton
+                id="walletconnect-broadcast-lock-help"
+                ariaLabel={t('outbox.stateHelpLabel')}
+                content={t('wc.broadcastLocked')}
+              />
+            </div>
+          )}
+
+          {!preview && (
+            <div
+              role="alert"
+              className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 wallet-text-strong"
+            >
+              {t('wc.unsupportedTransaction')}
+            </div>
+          )}
+
+          {preview && (
+            <ConnectorWalletEffectSummary
+              preview={preview}
+              walletId={walletId}
+              tokenLabel={requestDescription.tokenLabel}
+            />
+          )}
+
+          {preview && (
+            <ConnectorTransactionSummary
+              operation={
+                shouldBroadcast ? 'sign-and-broadcast' : 'sign-and-return'
+              }
+              preview={preview}
+            />
+          )}
+
+          <details className="rounded-xl border border-[var(--wallet-border)] px-3 py-2">
+            <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold wallet-text-strong">
+              {t('txReview.technicalDetails')}{' '}
+              <span className="font-normal wallet-muted">
+                ({inputs.length} inputs · {outputs.length} outputs)
+              </span>
+            </summary>
+            <div className="mt-3 space-y-4">
+              <section aria-labelledby="walletconnect-inputs-title">
+                <h4
+                  id="walletconnect-inputs-title"
+                  className="text-sm font-semibold wallet-text-strong"
+                >
+                  {t('wc.inputs', { count: inputs.length })}
+                </h4>
+                <div className="mt-2 space-y-2">
+                  {inputs.map((source, i: number) => {
+                    const txid = binToHex(source.outpointTransactionHash);
+                    const value = source.valueSatoshis;
+                    const sourceDestination = describeLockingDestination(
+                      source.lockingBytecode
+                    );
+                    return (
+                      <div
+                        key={i}
+                        className="rounded-xl border border-[var(--wallet-border)] p-3 text-sm"
+                      >
+                        <div className="font-semibold wallet-text-strong">
+                          {t('wc.inputNumber', { number: i + 1 })}
+                        </div>
+                        <div className="mt-1">
+                          {sourceDestination.label}:{' '}
+                          <MaskedValue
+                            value={sourceDestination.value}
+                            label={sourceDestination.label}
+                            ariaLabel={sourceDestination.label}
+                            prefixLength={5}
+                            suffixLength={5}
+                            preserveCashAddressPrefix
+                            maskLength={8}
+                            revealOnClick
+                            className="max-w-full break-all"
+                          />
+                        </div>
+                        <div className="mt-1">
+                          {t('wc.previousTransaction')}:{' '}
+                          <MaskedValue
+                            value={txid}
+                            label={t('history.transactionId')}
+                            ariaLabel={t('history.transactionId')}
+                            copySuccessMessageKey="history.transactionCopied"
+                            className="max-w-full break-all"
+                          />
+                        </div>
+                        <div>
+                          {t('wc.outputIndex')}: {source.outpointIndex}
+                        </div>
+                        <div>{Number(value) / SATSINBITCOIN} BCH</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section aria-labelledby="walletconnect-outputs-title">
+                <h4
+                  id="walletconnect-outputs-title"
+                  className="text-sm font-semibold wallet-text-strong"
+                >
+                  {t('wc.outputs', { count: outputs.length })}
+                </h4>
+                <div className="mt-2 space-y-2">
+                  {outputs.map((output, i: number) => {
+                    const value = output.valueSatoshis;
+                    const lockingBytecode = output.lockingBytecode;
+                    const isOpReturn = lockingBytecode[0] === 0x6a;
+                    const token = output.token;
+
+                    if (isOpReturn) {
+                      const parsed = parsePushData(lockingBytecode);
+                      return (
+                        <div
+                          key={i}
+                          className="rounded-xl border border-[var(--wallet-border)] p-3 text-sm"
+                        >
+                          <strong>{t('wc.opReturnOutput')}</strong>
+                          {parsed.map((data, j) => (
+                            <div
+                              key={j}
+                              className="mt-1 font-mono wallet-muted break-words"
+                            >
+                              {data}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }
+
+                    const address = toCashAddress(lockingBytecode);
+                    return (
+                      <div
+                        key={i}
+                        className="rounded-xl border border-[var(--wallet-border)] p-3 text-sm space-y-1"
+                      >
+                        <div className="font-semibold wallet-text-strong">
+                          {t('wc.outputNumber', { number: i + 1 })}
+                        </div>
+                        <div>
+                          {t('wc.address')}:{' '}
+                          <MaskedValue
+                            value={address}
+                            label={t('wc.address')}
+                            ariaLabel={t('receive.copyAddress')}
+                            copySuccessMessageKey="receive.addressCopied"
+                            prefixLength={5}
+                            suffixLength={5}
+                            preserveCashAddressPrefix
+                            maskLength={8}
+                            revealOnClick
+                            className="max-w-full break-all"
+                          />
+                        </div>
+                        <div>{Number(value) / SATSINBITCOIN} BCH</div>
+                        {token && (
+                          <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 space-y-1">
+                            <div>
+                              <strong>{t('wc.tokenCategory')}:</strong>{' '}
+                              <span className="font-mono break-all">
+                                {binToHex(token.category)}
+                              </span>
+                            </div>
+                            {token.amount !== undefined &&
+                              token.amount !== null && (
+                                <div>
+                                  <strong>{t('wc.fungibleAmount')}:</strong>{' '}
+                                  {String(token.amount)}
+                                </div>
+                              )}
+                            {token.nft && (
+                              <>
+                                <div>
+                                  <strong>{t('wc.nftCapability')}:</strong>{' '}
+                                  {token.nft.capability}
+                                </div>
+                                {token.nft.commitment && (
+                                  <div>
+                                    <strong>{t('wc.nftCommitment')}:</strong>{' '}
+                                    <span className="font-mono break-all">
+                                      {binToHex(token.nft.commitment)}
+                                    </span>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </div>
+          </details>
+        </div>
       </div>
-    </div>
+    </WalletPopupSheet>
   );
 }

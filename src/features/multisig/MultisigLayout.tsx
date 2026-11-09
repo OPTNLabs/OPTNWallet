@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Navigate,
   Outlet,
@@ -22,6 +22,9 @@ import { Network, setNetwork } from '../../state/slices/networkSlice';
 import MultisigBackButton from './MultisigBackButton';
 import useOutboundTransactions from '../../hooks/useOutboundTransactions';
 import PendingOutboundPanel from '../transaction/components/PendingOutboundPanel';
+import { useI18n } from '../../i18n/useI18n';
+import { useWalletConfirm } from '../../components/WalletConfirmDialog';
+import { OUTBOUND_RELEASE_DELAY_MS } from '../../services/OutboundTransactionTracker';
 
 export default function MultisigLayout() {
   const { wallet_id: routeWalletId } = useParams();
@@ -30,6 +33,8 @@ export default function MultisigLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const routeId = Number(routeWalletId);
+  const { t } = useI18n();
+  const confirm = useWalletConfirm();
   const isHome = location.pathname === multisigRoute(routeId);
   const [navBarHeight, setNavBarHeight] = useState(0);
   const [routeWalletValid, setRouteWalletValid] = useState<boolean | null>(
@@ -38,6 +43,7 @@ export default function MultisigLayout() {
   const [isPendingPanelOpen, setIsPendingPanelOpen] = useState(true);
   const { outboundTransactions, reconciling, refresh, release } =
     useOutboundTransactions(routeWalletValid ? routeId : null);
+  const pendingReleaseConfirmationInFlight = useRef(false);
   // Broadcasted records remain active for spend-lock safety, but are no longer
   // pending network handoff and should not cover the workspace UI.
   const networkPendingOutboundTransactions = outboundTransactions.filter(
@@ -138,7 +144,27 @@ export default function MultisigLayout() {
           records={networkPendingOutboundTransactions}
           refreshing={reconciling}
           onRefresh={() => void refresh()}
-          onRelease={(txid) => void release(txid)}
+          onRelease={(txid) => {
+            if (pendingReleaseConfirmationInFlight.current) return;
+            const record = networkPendingOutboundTransactions.find(
+              (item) => item.txid === txid
+            );
+            if (!record) return;
+            pendingReleaseConfirmationInFlight.current = true;
+            const message =
+              record.state === 'submitted'
+                ? t('outbox.clearPendingTitle')
+                : t('outbox.releaseStaleTitle', {
+                    minutes: Math.round(OUTBOUND_RELEASE_DELAY_MS / 60000),
+                  });
+            void confirm(message)
+              .then(async (confirmed) => {
+                if (confirmed) await release(txid);
+              })
+              .finally(() => {
+                pendingReleaseConfirmationInFlight.current = false;
+              });
+          }}
           onClose={() => setIsPendingPanelOpen(false)}
           compact
           blocking={false}

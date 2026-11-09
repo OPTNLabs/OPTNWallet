@@ -7,6 +7,9 @@ import WalletManager from '../../apis/WalletManager/WalletManager';
 import WalletScreen from '../../components/ui/WalletScreen';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { Network } from '../../state/slices/networkSlice';
+import PageHeader from '../../components/ui/PageHeader';
+import RouteExitFooter from '../../components/ui/RouteExitFooter';
+import MaskedValue from '../../components/ui/MaskedValue';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import { WalletType } from '../../types/wallet';
 import {
@@ -30,8 +33,8 @@ import { deriveLocalWalletCosignerMetadata } from '../../services/WalletPublicMe
 import { multisigRoute } from '../../navigation/routes';
 import MultisigCosignerQr from './MultisigCosignerQr';
 import BottomNavBar from '../../components/BottomNavBar';
-import { copyToClipboard } from '../../utils/clipboard';
-import MultisigBackButton from './MultisigBackButton';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
+import MultisigError from './MultisigError';
 
 import { networkProfile } from '../../utils/networkProfile';
 type CosignerDraft = {
@@ -173,7 +176,7 @@ export default function MultisigSetup() {
   };
 
   const copyValue = async (value: string) => {
-    const copied = await copyToClipboard(value);
+    const copied = await copyWithFeedback(value);
     if (!copied) return;
     setCopiedValue(value);
     window.setTimeout(() => {
@@ -497,17 +500,13 @@ export default function MultisigSetup() {
           reserveBottomNavSpace
         >
           <div className="flex h-full min-h-0 flex-col gap-3">
-            <MultisigBackButton
-              className="self-start"
-              onClick={() => {
-                setError('');
-                if (screen === 'create') {
-                  setCreateStep(1);
-                  setScreen('list');
-                  return;
-                }
-                navigate(-1);
-              }}
+            <PageHeader
+              title={
+                screen === 'create'
+                  ? 'Create a multisig wallet'
+                  : 'Multisig wallets'
+              }
+              compact
             />
             <div
               ref={stepScrollRef}
@@ -613,9 +612,7 @@ export default function MultisigSetup() {
                       </div>
                     )}
                     {multisigWalletsError && (
-                      <p role="alert" className="text-xs text-red-400">
-                        {multisigWalletsError}
-                      </p>
+                      <MultisigError message={multisigWalletsError} />
                     )}
                     <button
                       type="button"
@@ -687,11 +684,7 @@ export default function MultisigSetup() {
                         </p>
                       </div>
                     </section>
-                    {error && (
-                      <p role="alert" className="text-sm text-red-400">
-                        {error}
-                      </p>
-                    )}
+                    {error && <MultisigError message={error} />}
                     {createStep === 1 && (
                       <>
                         <section className="wallet-card space-y-4 p-4">
@@ -1033,9 +1026,13 @@ export default function MultisigSetup() {
                                       : 'Copy'}
                                   </button>
                                 </div>
-                                <p className="mt-1 break-all font-mono text-[10px] wallet-text-strong">
-                                  {preview.descriptors.policyId}
-                                </p>
+                                <MaskedValue
+                                  value={preview.descriptors.policyId}
+                                  label="Policy ID"
+                                  ariaLabel="Policy ID"
+                                  copySuccessMessageKey="history.transactionCopied"
+                                  className="mt-1 text-[10px]"
+                                />
                               </div>
                               {preview.address && (
                                 <div className="mt-3 flex items-center gap-3 rounded-lg border border-[var(--wallet-border)] p-2">
@@ -1060,9 +1057,12 @@ export default function MultisigSetup() {
                                           : 'Copy'}
                                       </button>
                                     </div>
-                                    <p className="mt-1 break-all font-mono text-[10px] wallet-muted">
-                                      {preview.previewAddress}
-                                    </p>
+                                    <MaskedValue
+                                      value={preview.previewAddress}
+                                      label="First receive preview"
+                                      ariaLabel="First receive preview"
+                                      className="mt-1 text-[10px] wallet-muted"
+                                    />
                                     <p className="mt-1 wallet-muted">
                                       This is index 0. The receive screen
                                       reserves an index only when you choose to
@@ -1137,6 +1137,18 @@ export default function MultisigSetup() {
                 )}
               </div>
             )}
+            <RouteExitFooter
+              label="Back"
+              onBack={() => {
+                setError('');
+                if (screen === 'create') {
+                  setCreateStep(1);
+                  setScreen('list');
+                  return;
+                }
+                navigate(-1);
+              }}
+            />
           </div>
           {cosignerQr && (
             <MultisigCosignerQr

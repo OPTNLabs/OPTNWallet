@@ -40,6 +40,9 @@ import type {
 import { AddonModuleI18nProvider } from '../../../i18n/AddonModuleI18nProvider';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
 import { RemoteBackground } from '../../../components/RemoteImg';
+import { maskSensitiveValue } from '../../../utils/maskSensitiveValue';
+import PageHeader from '../../../components/ui/PageHeader';
+import RouteExitFooter from '../../../components/ui/RouteExitFooter';
 
 interface Pledge {
   campaignID: string;
@@ -374,7 +377,7 @@ const CampaignDetailScreen: React.FC = () => {
           //toast.info(`Pledge sent! TxID:\n${result}`);
           await Toast.show({
             text: addonT('module.pledgeSent', 'Pledge sent! TxID:\n{txid}', {
-              txid: result,
+              txid: maskSensitiveValue(result),
             }),
           });
           console.log('Broadcasted, txid: ' + result);
@@ -449,7 +452,7 @@ const CampaignDetailScreen: React.FC = () => {
             console.log('Broadcasted, txid: ' + result);
             Toast.show({
               text: addonT('module.claimed', 'Claimed! TxID:\n{txid}', {
-                txid: result,
+                txid: maskSensitiveValue(result),
               }),
             });
 
@@ -525,7 +528,7 @@ const CampaignDetailScreen: React.FC = () => {
                   'module.campaignCanceled',
                   'Campaign canceled. TxID:\n{txid}',
                   {
-                    txid: result,
+                    txid: maskSensitiveValue(result),
                   }
                 ),
               });
@@ -609,7 +612,7 @@ const CampaignDetailScreen: React.FC = () => {
               'module.refundSubmitted',
               'Refund submitted. TxID:\n{txid}',
               {
-                txid: result,
+                txid: maskSensitiveValue(result),
               }
             ),
           });
@@ -662,7 +665,7 @@ const CampaignDetailScreen: React.FC = () => {
                 'module.campaignStopped',
                 'Campaign stopped. TxID:\n{txid}',
                 {
-                  txid: result,
+                  txid: maskSensitiveValue(result),
                 }
               ),
             });
@@ -717,7 +720,7 @@ const CampaignDetailScreen: React.FC = () => {
         .then((result: string) => {
           Toast.show({
             text: addonT('module.consolidated', 'Consolidated. TxID:\n{txid}', {
-              txid: result,
+              txid: maskSensitiveValue(result),
             }),
           });
           console.log('Broadcasted, txid: ' + result);
@@ -1023,7 +1026,7 @@ const CampaignDetailScreen: React.FC = () => {
   };
 
   return (
-    <div className="h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] w-full overflow-y-auto overscroll-contain touch-pan-y bg-black text-gray-50">
+    <div className="flex h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] w-full flex-col overflow-y-auto overscroll-contain touch-pan-y bg-black text-gray-50">
       {/* Welcome Image */}
       <div className="flex justify-center mt-4">
         <img
@@ -1033,13 +1036,8 @@ const CampaignDetailScreen: React.FC = () => {
         />
       </div>
 
-      <div className="flex justify-between items-center mb-6">
-        <button
-          onClick={() => navigate(backTarget)}
-          className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded z-20"
-        >
-          {addonT('common.back', 'Back')}
-        </button>
+      <div className="mx-auto mb-4 w-full max-w-6xl px-4">
+        <PageHeader title={addonT('module.title', 'Campaign')} compact />
       </div>
 
       <div className="absolute inset-0 bg-gradient-to-b from-[#0AC18E]/20 to-transparent" />
@@ -1699,6 +1697,12 @@ const CampaignDetailScreen: React.FC = () => {
           )}
         </div>
       )}
+      <div className="mx-auto mt-auto w-full max-w-md px-4 pb-3">
+        <RouteExitFooter
+          label={addonT('common.back', 'Back')}
+          onBack={() => navigate(backTarget)}
+        />
+      </div>
     </div>
   );
 };

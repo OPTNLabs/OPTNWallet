@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
-import { Toast } from '@capacitor/toast';
 import { Network } from '../../state/slices/networkSlice';
 import { AssetType } from '../../hooks/simple-send/types';
 import { parseBip21Uri } from '../../utils/bip21';
@@ -9,6 +8,7 @@ import {
   scanBarcodeSafely,
 } from '../../utils/barcodeScanner';
 import { useI18n } from '../../i18n/useI18n';
+import { showWalletNotification } from '../../utils/copyWithFeedback';
 
 type UseRecipientScannerParams = {
   setRecipient: (value: string) => void;
@@ -38,30 +38,32 @@ export function useRecipientScanner({
 
       const scanned = result?.ScanResult?.trim();
       if (!scanned) {
-        await Toast.show({ text: t('home.noQrCode') });
+        await showWalletNotification(t('home.noQrCode'));
         return;
       }
 
       const parsed = parseBip21Uri(scanned, currentNetwork);
+      if (parsed.invalidAmount) {
+        await showWalletNotification(t('send.invalidBip21Amount'));
+        return;
+      }
       if (parsed.isValidAddress) {
         setRecipient(parsed.normalizedAddress);
         if (parsed.amountRaw && assetType === 'bch') {
           setAssetType('bch');
           setAmountBch(parsed.amountRaw);
-          await Toast.show({ text: t('send.recipientAmountLoaded') });
+          await showWalletNotification(t('send.recipientAmountLoaded'));
           return;
         }
-        await Toast.show({ text: t('send.recipientLoaded') });
+        await showWalletNotification(t('send.recipientLoaded'));
         return;
       }
 
       setRecipient(scanned);
-      await Toast.show({ text: t('send.verifyRecipient') });
+      await showWalletNotification(t('send.verifyRecipient'));
     } catch (e) {
       console.error('QR scan failed:', e);
-      await Toast.show({
-        text: getBarcodeScannerErrorMessage(e),
-      });
+      await showWalletNotification(getBarcodeScannerErrorMessage(e));
     } finally {
       setScanBusy(false);
     }

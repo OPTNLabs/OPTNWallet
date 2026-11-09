@@ -1,4 +1,6 @@
 // vite.config.ts
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as resolvePath } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,13 +32,18 @@ type RollupWarning = {
 // since it's the same verified-correct output; their own wasm()/
 // topLevelAwait() plugins simply have nothing left to do for this package.
 function tinySecp256k1SyncLoaderPlugin(): Plugin {
-  const targetPath = normalizePath(resolvePath(__dirname, 'src/platform/web/tinySecp256k1SyncLoader.ts'));
+  const targetPath = normalizePath(
+    resolvePath(__dirname, 'src/platform/web/tinySecp256k1SyncLoader.ts')
+  );
   return {
     name: 'optn-tiny-secp256k1-sync-loader',
     enforce: 'pre',
     async resolveId(source, importer, options) {
       if (!importer) return null;
-      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      const resolved = await this.resolve(source, importer, {
+        ...options,
+        skipSelf: true,
+      });
       if (!resolved) return null;
       const normalized = normalizePath(resolved.id).split(/[?#]/, 1)[0];
       const normalizedImporter = normalizePath(importer).split(/[?#]/, 1)[0];
@@ -56,8 +63,14 @@ function tinySecp256k1SyncLoaderPlugin(): Plugin {
 
 export default defineConfig(({ mode }) => {
   const BROWSER_CONDITIONS = ['browser', 'module', 'import', 'default'];
+  const dependencyCacheKey = createHash('sha256')
+    .update(readFileSync(resolvePath(__dirname, 'package.json')))
+    .update(readFileSync(resolvePath(__dirname, 'package-lock.json')))
+    .digest('hex')
+    .slice(0, 16);
   const webCacheDir =
-    process.env.OPTN_VITE_CACHE_DIR ?? 'node_modules/.vite-web';
+    process.env.OPTN_VITE_CACHE_DIR ??
+    `node_modules/.vite-web/${dependencyCacheKey}`;
 
   return {
     base: mode === 'development' ? '/' : './',
@@ -82,8 +95,14 @@ export default defineConfig(({ mode }) => {
           for (const chunk of Object.values(bundle)) {
             if (chunk.type !== 'chunk') continue;
             for (const id of Object.keys(chunk.modules)) {
-              if (/(?:^|\/)node_modules\/(?:elliptic|crypto-browserify|browserify-sign|create-ecdh)\//.test(normalizePath(id))) {
-                this.error(`Vulnerable crypto dependency in ${chunk.fileName}: ${id}`);
+              if (
+                /(?:^|\/)node_modules\/(?:elliptic|crypto-browserify|browserify-sign|create-ecdh)\//.test(
+                  normalizePath(id)
+                )
+              ) {
+                this.error(
+                  `Vulnerable crypto dependency in ${chunk.fileName}: ${id}`
+                );
               }
             }
           }
@@ -151,7 +170,8 @@ export default defineConfig(({ mode }) => {
           warn(warning);
         },
         output: {
-          manualChunks: (id) => (id.includes('sql.js') ? 'sql-wasm' : undefined),
+          manualChunks: (id) =>
+            id.includes('sql.js') ? 'sql-wasm' : undefined,
         },
       },
     },

@@ -96,7 +96,6 @@ it('browses without probes and sends explicit selection through the old UI', asy
       fusionSettings={<button>Automatic Fusion server selection</button>}
       nostrSettings={<button>Existing Nostr relay pool</button>}
       feeSettings={<button>Existing fee control</button>}
-      explorerSettings={<button>Existing explorer control</button>}
     />
   );
   await screen.findByTestId('chain-sources-public');
@@ -207,11 +206,6 @@ it('browses without probes and sends explicit selection through the old UI', asy
   expect(screen.getByTestId('chain-source-public')).toBeInTheDocument();
   act(() => backRef.current?.());
   expect(backRef.current).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /Explorer/ }));
-  expect(
-    screen.getByRole('button', { name: 'Existing explorer control' })
-  ).toBeInTheDocument();
-  act(() => backRef.current?.());
   fireEvent.click(screen.getByRole('button', { name: 'Transaction fees' }));
   expect(
     screen.getByRole('button', { name: 'Existing fee control' })

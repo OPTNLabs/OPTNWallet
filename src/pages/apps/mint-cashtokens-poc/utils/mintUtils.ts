@@ -2,6 +2,7 @@ import type { TransactionOutput } from '../../../../types/types';
 import type {
   TxSummaryInput,
   TxSummaryOutput,
+  TxSummaryToken,
 } from '../../../../components/confirm/TxSummary';
 import {
   validateCapabilityAwareMintDrafts,
@@ -136,7 +137,25 @@ export function asTxSummaryInputs(utxos: MintAppUtxo[]): TxSummaryInput[] {
     vout: u.tx_pos,
     sats: Number(utxoValue(u)),
     token: !!u.token,
+    ...(u.token ? { tokenDetails: asTxSummaryToken(u.token) } : {}),
   }));
+}
+
+function asTxSummaryToken(
+  token: NonNullable<MintAppUtxo['token']>
+): TxSummaryToken {
+  return {
+    category: token.category,
+    amount: String(token.amount),
+    ...(token.nft
+      ? {
+          nft: {
+            capability: token.nft.capability,
+            commitment: token.nft.commitment,
+          },
+        }
+      : {}),
+  };
 }
 
 export function asTxSummaryOutputs(
@@ -157,6 +176,7 @@ export function asTxSummaryOutputs(
       address: o.recipientAddress,
       sats: Number(o.amount ?? 0),
       kind: o.token ? ('token' as const) : ('bch' as const),
+      ...(o.token ? { tokenDetails: asTxSummaryToken(o.token) } : {}),
     };
   });
 }

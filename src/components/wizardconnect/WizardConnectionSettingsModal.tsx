@@ -6,6 +6,7 @@ import WizardDappAvatar from './WizardDappAvatar';
 import { useI18n } from '../../i18n/useI18n';
 import { formatDate } from '../../i18n/format';
 import { wizardConnectionStatus } from '../../utils/connectionStatus';
+import InfoButton from '../ui/InfoButton';
 
 interface Props {
   connectionId: string;
@@ -52,8 +53,13 @@ const WizardConnectionSettingsModal: React.FC<Props> = ({
             <p className="font-bold text-lg sm:text-xl leading-tight break-words">
               {title}
             </p>
-            <span className="wallet-muted text-xs sm:text-sm">
+            <span className="flex items-center justify-center gap-1 wallet-muted text-xs sm:text-sm">
               {t(wizardConnectionStatus(connection.status.status))}
+              <InfoButton
+                id="wizard-connection-settings-status-help"
+                ariaLabel={t('connection.statusHelpLabel')}
+                content={t('connection.statusHelp')}
+              />
             </span>
             <div className="mt-1 text-xs sm:text-sm leading-relaxed break-words">
               {description ? (

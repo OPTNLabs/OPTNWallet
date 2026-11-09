@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ServerSettings } from '../ServerSettings';
 
@@ -108,4 +108,27 @@ it('uses one desktop routing destination, retaining fees and the mobile controls
   expect(
     screen.queryByRole('button', { name: /Network sources/ })
   ).not.toBeInTheDocument();
+});
+
+it('announces reconnect failures and keeps server controls touch-sized', async () => {
+  mock.desktop = false;
+  mock.adapter.mockReturnValue({
+    getCurrentServer: () => null,
+    reconnect: vi.fn().mockRejectedValue(new Error('offline')),
+  });
+  render(<ServerSettings />);
+
+  const connect = screen.getByRole('button', { name: 'server.connect' });
+  expect(connect).toHaveClass('min-h-[44px]');
+  expect(screen.getByRole('button', { name: 'server.auto' })).toHaveClass(
+    'min-h-[44px]'
+  );
+  expect(screen.getByRole('button', { name: 'server.manual' })).toHaveClass(
+    'min-h-[44px]'
+  );
+
+  fireEvent.click(connect);
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'server.connectionFailed: offline'
+  );
 });

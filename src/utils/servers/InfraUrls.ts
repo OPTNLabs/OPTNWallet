@@ -24,17 +24,13 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
     // this app connects over WSS, and most Fulcrum servers publish only a raw
     // TCP-SSL port (50002) with no WSS listener, so seeding those unverified
     // would just add dead endpoints to the failover pool. OPTN's own server is
-    // kept first (first-party infra) even though an external probe couldn't
-    // reach it (likely geo/temporary).
+    // kept first (first-party infra). The C3-Soft endpoint uses its explicit
+    // WSS port; chipnet.bch.ninja is raw-TLS reachable but its WSS handshake
+    // fails, so it must not be in this browser/mobile pool.
     electrumServers: [
       'electrum-chipnet.optnlabs.com',
       'chipnet.imaginary.cash',
-      'chipnet.bch.ninja',
-      // NOTE: blackie.c3-soft.com is deliberately NOT here. Its chipnet service
-      // is on a non-standard port, while the default 50002/50004 reaches its
-      // MAINNET Fulcrum — a bare host entry here would silently return mainnet
-      // UTXOs/history under the chipnet label. The three chipnet-specific hosts
-      // above serve chipnet on the standard ports.
+      'chipnet.c3-soft.com:64004',
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
     bcmrNativeBaseUrls: ['https://tokenindex.optnlabs.com/v1'],
@@ -348,7 +344,10 @@ export function getBcmrNativeTokenUrls(
   category: string
 ): string[] {
   const { bcmrNativeBaseUrls } = getInfraUrlPools(network);
-  return bcmrNativeBaseUrls.map((base) => `${base}/token/${category}/bcmr`);
+  // The summary endpoint is 200 for indexed tokens even when BCMR is absent;
+  // its nullable `bcmr` field lets clients distinguish missing metadata from
+  // an infrastructure failure without generating expected 404s.
+  return bcmrNativeBaseUrls.map((base) => `${base}/token/${category}`);
 }
 
 // Servers that only expose the raw Electrum TCP-SSL port (50002) and have NO

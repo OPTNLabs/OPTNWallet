@@ -4,7 +4,7 @@ import {
   Contract,
   ElectrumNetworkProvider,
   SignatureTemplate,
-  HashType,
+  SighashType,
 } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import parseInputValue from '../../utils/parseInputValue';
@@ -119,7 +119,6 @@ export default function ContractManager(): ContractManagerApi {
       }
 
       const provider = new ElectrumNetworkProvider(currentNetwork);
-      const addressType = 'p2sh32';
       const prefix = cashAddressPrefix(currentNetwork);
 
       if (
@@ -137,7 +136,6 @@ export default function ContractManager(): ContractManagerApi {
 
       const contract = new Contract(artifact as ContractCtorArtifact, parsedArgs, {
         provider,
-        addressType,
       });
 
       const balance = await contract.getBalance();
@@ -176,7 +174,7 @@ export default function ContractManager(): ContractManagerApi {
         balance,
         utxos: formattedUTXOs,
         abi: artifact.abi,
-        redeemScript: contract.redeemScript,
+        redeemScript: contract.bytecode,
         unlock: serializeUnlockFunctions(contract.unlock),
       };
     } catch (error) {
@@ -256,7 +254,7 @@ export default function ContractManager(): ContractManagerApi {
       new Date().toISOString(),
       JSON.stringify(artifact),
       JSON.stringify(abi),
-      JSON.stringify(contract.redeemScript),
+      JSON.stringify(contract.bytecode),
       JSON.stringify(serializeUnlockFunctions(contract.unlock)),
     ];
 
@@ -704,8 +702,7 @@ export default function ContractManager(): ContractManagerApi {
       parsedConstructorArgs,
       {
         provider: new ElectrumNetworkProvider(state.network.currentNetwork),
-        addressType: 'p2sh32',
-      }
+              }
     );
 
     const abiFunction = contractInstance.abi.find(
@@ -743,14 +740,14 @@ export default function ContractManager(): ContractManagerApi {
               throw new Error(`Private key not found for sigaddr '${addr}'.`);
             }
 
-            return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
+            return new SignatureTemplate(pk, SighashType.SIGHASH_ALL);
           }
 
           if (v.startsWith('sigkey:')) {
             const keyMaterial = v.slice('sigkey:'.length).trim();
             if (!keyMaterial)
               throw new Error(`Invalid sigkey for '${input.name}'.`);
-            return new SignatureTemplate(keyMaterial, HashType.SIGHASH_ALL);
+            return new SignatureTemplate(keyMaterial, SighashType.SIGHASH_ALL);
           }
 
           throw new Error(
@@ -765,7 +762,7 @@ export default function ContractManager(): ContractManagerApi {
     const unlocker = contract.unlock[contractFunction](...args);
 
     return {
-      lockingBytecode: contract.redeemScript,
+      lockingBytecode: contract.bytecode,
       unlocker,
     };
   }

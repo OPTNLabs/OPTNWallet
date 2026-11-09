@@ -62,8 +62,7 @@ type SourcePage =
   | 'privacy'
   | 'sync'
   | 'fusion'
-  | 'fees'
-  | 'explorer';
+  | 'fees';
 type DirectoryPage = Extract<SourcePage, 'public' | 'own' | 'custom'>;
 
 const DIRECTORY_CONFIG: Record<
@@ -255,7 +254,6 @@ function statusLine(source: ChainSource): { text: string; tone: string } {
 
 type ChainSourcesSettingsProps = {
   initialPage?: 'overview' | 'nostr';
-  explorerSettings?: ReactNode;
   feeSettings?: ReactNode;
   fusionSettings?: ReactNode;
   nostrSettings?: ReactNode;
@@ -264,7 +262,6 @@ type ChainSourcesSettingsProps = {
 
 export function ChainSourcesSettings({
   initialPage = 'overview',
-  explorerSettings,
   feeSettings,
   fusionSettings,
   nostrSettings,
@@ -871,21 +868,6 @@ export function ChainSourcesSettings({
                 <span aria-hidden="true">›</span>
               </button>
             )}
-            <button
-              type="button"
-              className="wallet-surface-strong flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] p-3 text-left"
-              onClick={() => navigate('explorer')}
-            >
-              <span>
-                <span className="block text-sm font-semibold wallet-text-strong">
-                  Explorer
-                </span>
-                <span className="block text-[11px] wallet-muted">
-                  Choose the explorer used by existing wallet links
-                </span>
-              </span>
-              <span className="text-xs wallet-muted">Open</span>
-            </button>
           </nav>
         </>
       )}
@@ -1868,25 +1850,6 @@ export function ChainSourcesSettings({
             This source is no longer present in the Rust catalog.
           </p>
         ))}
-
-      {page === 'explorer' && (
-        <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3">
-          <p className="text-xs font-semibold wallet-text-strong">
-            Explorer links follow the current network policy
-          </p>
-          <p className="text-xs wallet-muted">
-            Choose the explorer and custom link formats used by this wallet.
-          </p>
-          <p className="text-[11px] wallet-muted">
-            Current routing: {CHAIN_POLICY_LABELS[view.policy]}
-          </p>
-          {explorerSettings ?? (
-            <p className="text-xs wallet-muted">
-              Explorer settings are unavailable right now.
-            </p>
-          )}
-        </div>
-      )}
 
       {error && (
         <p role="alert" className="text-xs text-red-400">

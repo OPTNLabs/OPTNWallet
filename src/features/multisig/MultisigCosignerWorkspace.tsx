@@ -28,7 +28,11 @@ import {
 } from '../../services/multisig/MultisigSpendSessionService';
 import { loadMultisigPolicy } from '../../services/multisig/MultisigStorageService';
 import { signMultisigPsbtLocally } from '../../services/multisig/MultisigSignerService';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
+import MaskedValue from '../../components/ui/MaskedValue';
+import { useI18n } from '../../i18n/useI18n';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MultisigError from './MultisigError';
 
 type SignStage = 'receive' | 'review' | 'export';
 
@@ -36,7 +40,8 @@ const toBch = (satoshis: bigint): string =>
   (Number(satoshis) / 100_000_000).toFixed(8);
 
 const equalBytes = (left: Uint8Array, right: Uint8Array): boolean =>
-  left.length === right.length && left.every((value, index) => value === right[index]);
+  left.length === right.length &&
+  left.every((value, index) => value === right[index]);
 
 function validateIncomingPsbt(
   policy: MultisigPolicy,
@@ -70,7 +75,9 @@ function validateIncomingPsbt(
       script.requiredSignatures !== policy.threshold ||
       script.totalSignatures !== policy.signers.length
     ) {
-      throw new Error(`Input ${inputIndex} does not match this multisig policy.`);
+      throw new Error(
+        `Input ${inputIndex} does not match this multisig policy.`
+      );
     }
     if (input.derivations.length !== script.keys.length) {
       throw new Error(
@@ -90,7 +97,9 @@ function validateIncomingPsbt(
         throw new Error(`Input ${inputIndex} has an invalid cosigner path.`);
       }
       if (!script.keys.some((key) => equalBytes(key, derivation.publicKey))) {
-        throw new Error(`Input ${inputIndex} has a key outside its redeem script.`);
+        throw new Error(
+          `Input ${inputIndex} has a key outside its redeem script.`
+        );
       }
     }
     for (const signature of input.partialSignatures) {
@@ -104,6 +113,7 @@ function validateIncomingPsbt(
 }
 
 export default function MultisigCosignerWorkspace() {
+  const { t } = useI18n();
   const { wallet_id: routeWalletId } = useParams();
   const policyWalletId = Number(routeWalletId);
   const signerWalletId = useSelector(selectWalletId);
@@ -155,9 +165,8 @@ export default function MultisigCosignerWorkspace() {
       ) ?? 0n,
     [parsed]
   );
-  const feeSatoshis = inputSatoshis >= outputSatoshis
-    ? inputSatoshis - outputSatoshis
-    : null;
+  const feeSatoshis =
+    inputSatoshis >= outputSatoshis ? inputSatoshis - outputSatoshis : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -200,7 +209,11 @@ export default function MultisigCosignerWorkspace() {
         }
       } catch (cause) {
         if (!cancelled) {
-          setError(cause instanceof Error ? cause.message : 'Could not load the signer workspace.');
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : 'Could not load the signer workspace.'
+          );
         }
       } finally {
         if (!cancelled) setBusy(false);
@@ -216,7 +229,9 @@ export default function MultisigCosignerWorkspace() {
     if (!qrFrames) return;
     const timer = window.setInterval(() => {
       setQrUri(qrFrames.next());
-      setFrameNumber((current) => (current >= qrFrames.count ? 1 : current + 1));
+      setFrameNumber((current) =>
+        current >= qrFrames.count ? 1 : current + 1
+      );
     }, 800);
     return () => window.clearInterval(timer);
   }, [qrFrames]);
@@ -244,7 +259,9 @@ export default function MultisigCosignerWorkspace() {
       setImportText('');
       setScanProgress(1);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not accept the PSBT.');
+      setError(
+        cause instanceof Error ? cause.message : 'Could not accept the PSBT.'
+      );
     } finally {
       setBusy(false);
     }
@@ -261,7 +278,9 @@ export default function MultisigCosignerWorkspace() {
         void acceptPsbt(progress.psbt);
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not read the QR frame.');
+      setError(
+        cause instanceof Error ? cause.message : 'Could not read the QR frame.'
+      );
     }
   };
 
@@ -280,14 +299,20 @@ export default function MultisigCosignerWorkspace() {
       }
       setError('Not enough UR frames. Paste every frame, one per line.');
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not read the pasted PSBT.');
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'Could not read the pasted PSBT.'
+      );
     }
   };
 
   const sign = async () => {
     if (!psbtBytes || !parsed || !policy || !sessionId) return;
     if (!signerWalletId || signerWalletId === policyWalletId) {
-      setError('Open this policy alongside the standard mnemonic wallet on this device.');
+      setError(
+        'Open this policy alongside the standard mnemonic wallet on this device.'
+      );
       return;
     }
     if (!authorizationConfirmed) {
@@ -319,7 +344,9 @@ export default function MultisigCosignerWorkspace() {
       setCopied(false);
       setStage('export');
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not sign the PSBT.');
+      setError(
+        cause instanceof Error ? cause.message : 'Could not sign the PSBT.'
+      );
     } finally {
       setBusy(false);
     }
@@ -342,6 +369,7 @@ export default function MultisigCosignerWorkspace() {
 
   return (
     <MultisigPage>
+      {policy?.network && <NetworkContextBanner network={policy.network} />}
       <section className="wallet-card space-y-3 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--wallet-accent-strong)]">
           Cosigner signing
@@ -361,14 +389,16 @@ export default function MultisigCosignerWorkspace() {
         )}
       </section>
 
-      {busy && !policy && <p className="text-sm wallet-muted">Loading policy…</p>}
+      {busy && !policy && (
+        <p className="text-sm wallet-muted">Loading policy…</p>
+      )}
 
       {stage === 'receive' && (
         <section className="wallet-card space-y-3 p-4">
           <h2 className="font-semibold wallet-text-strong">Receive proposal</h2>
           <p className="text-xs wallet-muted">
-            Scan the coordinator&apos;s QR. For an animated UR, scan every frame;
-            duplicates and out-of-order frames are safe.
+            Scan the coordinator&apos;s QR. For an animated UR, scan every
+            frame; duplicates and out-of-order frames are safe.
           </p>
           <button
             type="button"
@@ -417,27 +447,53 @@ export default function MultisigCosignerWorkspace() {
             <div className="flex items-center justify-between gap-3">
               <h2 className="font-semibold wallet-text-strong">Review spend</h2>
               <span className="rounded-full border border-[var(--wallet-border)] px-2 py-1 text-[10px] uppercase wallet-muted">
-                {parsed.inputs.some((input) => input.token) ? 'CashTokens' : 'BCH'}
+                {parsed.inputs.some((input) => input.token)
+                  ? 'CashTokens'
+                  : 'BCH'}
               </span>
             </div>
             <div className="grid gap-2 text-xs wallet-muted sm:grid-cols-2">
-              <p>Inputs: {parsed.inputs.length} · outputs: {parsed.outputs.length}</p>
-              <p>Required: {policy.threshold} of {policy.signers.length}</p>
+              <p>
+                Inputs: {parsed.inputs.length} · outputs:{' '}
+                {parsed.outputs.length}
+              </p>
+              <p>
+                Required: {policy.threshold} of {policy.signers.length}
+              </p>
               <p>Input value: {toBch(inputSatoshis)} BCH</p>
               <p>Output value: {toBch(outputSatoshis)} BCH</p>
-              <p>Fee: {feeSatoshis === null ? 'invalid' : `${toBch(feeSatoshis)} BCH`}</p>
-              <p className="break-all font-mono">TX: {unsignedTxHash}</p>
+              <p>
+                Fee:{' '}
+                {feeSatoshis === null ? 'invalid' : `${toBch(feeSatoshis)} BCH`}
+              </p>
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="shrink-0">{t('history.transactionId')}:</span>
+                <MaskedValue
+                  value={unsignedTxHash}
+                  label={t('history.transactionId')}
+                  copySuccessMessageKey="receive.copied"
+                  className="min-w-0 break-all text-xs"
+                />
+              </div>
             </div>
             <div className="space-y-1 rounded-xl border border-[var(--wallet-border)] p-3">
-              <p className="text-xs font-semibold wallet-text-strong">Cosigner progress</p>
+              <p className="text-xs font-semibold wallet-text-strong">
+                Cosigner progress
+              </p>
               {statuses.map((inputStatuses, index) => {
-                const signed = inputStatuses.filter((status) => status.signed).length;
+                const signed = inputStatuses.filter(
+                  (status) => status.signed
+                ).length;
                 return (
                   <p key={index} className="text-[11px] wallet-muted">
                     Input {index}: {signed} of {policy.threshold} signatures
                     {inputStatuses.map((status) => (
-                      <span key={status.publicKeyHex} className="ml-2 font-mono">
-                        {status.signed ? '✓' : '○'}{status.fingerprintHex.toUpperCase()}
+                      <span
+                        key={status.publicKeyHex}
+                        className="ml-2 font-mono"
+                      >
+                        {status.signed ? '✓' : '○'}
+                        {status.fingerprintHex.toUpperCase()}
                       </span>
                     ))}
                   </p>
@@ -450,7 +506,9 @@ export default function MultisigCosignerWorkspace() {
                   <input
                     type="checkbox"
                     checked={authorizationConfirmed}
-                    onChange={(event) => setAuthorizationConfirmed(event.target.checked)}
+                    onChange={(event) =>
+                      setAuthorizationConfirmed(event.target.checked)
+                    }
                     className="mt-0.5 accent-[var(--wallet-accent)]"
                   />
                   <span>
@@ -486,7 +544,7 @@ export default function MultisigCosignerWorkspace() {
               <button
                 type="button"
                 className="wallet-btn-secondary w-full py-2 text-sm"
-                onClick={() => void copyToClipboard(qrUri).then(setCopied)}
+                onClick={() => void copyWithFeedback(qrUri).then(setCopied)}
               >
                 {copied ? 'Copied signed UR text' : 'Copy signed UR text'}
               </button>
@@ -506,7 +564,7 @@ export default function MultisigCosignerWorkspace() {
         </>
       )}
 
-      {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
+      {error && <MultisigError message={error} />}
       {(stage === 'review' || stage === 'export') && (
         <button
           type="button"

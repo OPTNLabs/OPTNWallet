@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Capacitor } from '@capacitor/core';
-import BcmrService from '../services/BcmrService';
+import BcmrService, {
+  isBcmrRegistryNotFoundError,
+} from '../services/BcmrService';
 import { resolveIpfsGatewayUrl } from '../utils/ipfs';
 import { isDesktopPlatform } from '../utils/platform';
 import { store } from '../state/store';
@@ -16,10 +18,11 @@ const bcmr = new BcmrService();
 const metadataCache = new Map<string, SharedTokenMetadata>();
 const metadataFailureCache = new Map<
   string,
-  { state: SharedTokenMetadata; ts: number }
+  { state: SharedTokenMetadata; ts: number; ttlMs: number }
 >();
 const inflightMetadata = new Map<string, Promise<SharedTokenMetadata | null>>();
 export const METADATA_FAILURE_TTL_MS = 5_000;
+export const METADATA_MISSING_TTL_MS = 5 * 60_000;
 export const METADATA_REFRESH_TTL_MS = 5 * 60_000;
 
 function desktopScope(): string {
@@ -152,6 +155,14 @@ function buildErrorMetadata(
   };
 }
 
+function buildUnresolvedMetadata(category: string): SharedTokenMetadata {
+  return {
+    ...buildLoadingMetadata(category),
+    status: 'ready',
+    identityStatus: 'unresolved',
+  };
+}
+
 function markRefreshing(metadata: SharedTokenMetadata): SharedTokenMetadata {
   return {
     ...metadata,
@@ -166,7 +177,7 @@ function shouldRetryFailure(category: string): boolean {
   const failure = metadataFailureCache.get(category);
   if (!failure) return false;
   const age = Date.now() - failure.ts;
-  if (age >= METADATA_FAILURE_TTL_MS) {
+  if (age >= failure.ttlMs) {
     metadataFailureCache.delete(category);
     return false;
   }
@@ -177,11 +188,11 @@ function getFailureRetryDelayMs(category: string): number | undefined {
   const failure = metadataFailureCache.get(category);
   if (!failure) return undefined;
   const age = Date.now() - failure.ts;
-  if (age >= METADATA_FAILURE_TTL_MS) {
+  if (age >= failure.ttlMs) {
     metadataFailureCache.delete(category);
     return undefined;
   }
-  return METADATA_FAILURE_TTL_MS - age;
+  return failure.ttlMs - age;
 }
 
 export function normalizeSharedTokenCategories(categories: string[]): string[] {
@@ -328,8 +339,15 @@ export async function resolveTokenMetadata(
         return fallback;
       }
 
-      const failure = buildErrorMetadata(normalized, error);
-      metadataFailureCache.set(normalized, { state: failure, ts: Date.now() });
+      const missing = isBcmrRegistryNotFoundError(error);
+      const failure = missing
+        ? buildUnresolvedMetadata(normalized)
+        : buildErrorMetadata(normalized, error);
+      metadataFailureCache.set(normalized, {
+        state: failure,
+        ts: Date.now(),
+        ttlMs: missing ? METADATA_MISSING_TTL_MS : METADATA_FAILURE_TTL_MS,
+      });
       return failure;
     } finally {
       inflightMetadata.delete(normalized);
@@ -357,6 +375,9 @@ export function isTokenMetadataRefreshDue(
   now = Date.now()
 ): boolean {
   if (!metadata) return true;
+  if (metadata.identityStatus === 'unresolved' && !metadata.snapshot) {
+    return false;
+  }
   if (metadata.status === 'error' && !metadata.snapshot) return false;
 
   const lastFetch = metadata.lastFetch ?? metadata.snapshot?.lastFetch ?? null;
@@ -499,7 +520,10 @@ export default function useSharedTokenMetadata(categories: string[]) {
 
         next[category] = shouldRefresh ? markRefreshing(cached) : cached;
 
-        if (cached.status === 'error') {
+        if (
+          cached.status === 'error' ||
+          (cached.identityStatus === 'unresolved' && !cached.snapshot)
+        ) {
           const delay = getFailureRetryDelayMs(category);
           if (delay !== undefined) {
             retryAfterMs =

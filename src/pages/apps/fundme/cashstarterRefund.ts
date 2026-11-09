@@ -103,14 +103,6 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
   // Build transaction      
 
     const p2pkhUnlocker: Unlocker = {
-      generateLockingBytecode: () => {    // Return the locking bytecode (scriptPubKey) for the P2PKH output
-        const result = cashAddressToLockingBytecode(usersAddress);
-
-        if (typeof result === 'string') {
-          throw new Error(`Failed to convert CashAddress to locking bytecode: ${result}`);
-        }
-        return result.bytecode;
-      },
       generateUnlockingBytecode: () => {    // Return an empty array or a placeholder for the unlocking bytecode (scriptSig)
         return Uint8Array.from([]);
       }
@@ -125,9 +117,9 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
     const txDetails = await new TransactionBuilder({ provider });
     try {
       txDetails
-        .addInput(refundUTXO, contractCashStarterRefund.unlock.refund())
-        .addInput(contractUTXO, contractCashStarter.unlock.externalFunction())
-        .addInput(selectedNFT, p2pkhUnlocker)
+        .addInput(refundUTXO as any, contractCashStarterRefund.unlock.refund())
+        .addInput(contractUTXO as any, contractCashStarter.unlock.externalFunction())
+        .addInput(selectedNFT as any, p2pkhUnlocker)
         .addOutput({  //refundUTXO back to refund contract
           to: AddressTokensCashStarterRefund,  
           amount: refundUTXO.satoshis,
@@ -206,7 +198,7 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
           valueSatoshis: BigInt(refundUTXO.satoshis),
           contract: {
             abiFunction: contractCashStarterRefund.artifact.abi,
-            redeemScript: contractCashStarterRefund.redeemScript,
+            redeemScript: contractCashStarterRefund.bytecode,
             artifact: contractCashStarterRefund.artifact,
           },
           token: {
@@ -224,7 +216,7 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
           valueSatoshis: BigInt(contractUTXO.satoshis),
           contract: {
             abiFunction: contractCashStarter.artifact.abi,
-            redeemScript: contractCashStarter.redeemScript,
+            redeemScript: contractCashStarter.bytecode,
             artifact: contractCashStarter.artifact,
           },
           token: {

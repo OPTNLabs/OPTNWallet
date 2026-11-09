@@ -6,11 +6,11 @@ import {
   queryAuthHead,
   stripChaingraphHexBytes,
 } from '../apis/ChaingraphManager/ChaingraphManager';
-import { shortenTxHash } from '../utils/shortenHash';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 import { normalizeExternalUrl } from '../utils/externalUrl';
 import TokenIdentityBadge from './ui/TokenIdentityBadge';
 import RemoteImg from './RemoteImg';
+import MaskedValue from './ui/MaskedValue';
 import { resolveTokenPresentation } from '../utils/tokenPresentation';
 import { type BcmrSnapshot } from '../types/bcmr';
 import { useI18n } from '../i18n/useI18n';
@@ -246,7 +246,13 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <h3 className="font-semibold wallet-text-strong">
-            {t('token.id')}: {shortenTxHash(tokenId)}
+            {t('token.id')}:{' '}
+            <MaskedValue
+              value={tokenId}
+              label={t('token.id')}
+              ariaLabel={t('token.id')}
+              embedded
+            />
           </h3>
         </div>
         <TokenIdentityBadge
@@ -272,7 +278,16 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
       </p>
       <p>
         {t('token.authHead')}:{' '}
-        {authHead ? shortenTxHash(authHead) : t('token.unavailable')}
+        {authHead ? (
+          <MaskedValue
+            value={authHead}
+            label={t('token.authHead')}
+            ariaLabel={t('token.authHead')}
+            embedded
+          />
+        ) : (
+          t('token.unavailable')
+        )}
       </p>
       {loading && <p className="wallet-muted">{t('token.loading')}</p>}
       {bcmrError && (

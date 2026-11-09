@@ -11,9 +11,11 @@ const config: CapacitorConfig = {
   // bundledWebRuntime: false,
   plugins: {
     SplashScreen: {
-      launchShowDuration: 2000, // time (ms) to show splash
-      launchAutoHide: true, // auto‑hide after duration
-      backgroundColor: '#ffffffff', // white background
+      // Keep the branded splash in place until React is ready. Hiding it on a
+      // fixed timer exposes a blank WebView while the WASM startup gates run.
+      launchShowDuration: 0,
+      launchAutoHide: false,
+      backgroundColor: '#0d2a1fff',
       androidSplashResourceName: 'splash', // uses drawable named “splash”
       iosSplashResourceName: 'splash', // uses asset named “splash”
       showSpinner: false,

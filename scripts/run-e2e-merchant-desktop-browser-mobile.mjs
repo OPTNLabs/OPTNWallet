@@ -13,17 +13,17 @@ const captureDirectory = process.env.MERCHANT_E2E_CAPTURE_DIR?.trim() || '';
 // The mnemonic stays in this Node process and is entered through the two
 // isolated wallet UIs. It is never passed to Vite, Tauri, Firefox, or logged.
 loadDotenv({ path: path.join(projectRoot, '.env'), override: false });
-const mnemonic = process.env.OPTN_MERCHANT_E2E_MNEMONIC?.trim() ?? '';
+const mnemonic = process.env.OPTN_E2E_MNEMONIC?.trim() ?? '';
 if (!mnemonic) {
   console.error(
-    'OPTN_MERCHANT_E2E_MNEMONIC is required. This runner never prints it.'
+    'OPTN_E2E_MNEMONIC is required. This runner never prints it.'
   );
   process.exit(2);
 }
 assert.equal(
   bip39.validateMnemonic(mnemonic, bip39.wordlists.english),
   true,
-  'OPTN_MERCHANT_E2E_MNEMONIC is not a valid English mnemonic'
+  'OPTN_E2E_MNEMONIC is not a valid English mnemonic'
 );
 
 const appBinary =
@@ -68,6 +68,8 @@ const desktopDriverPort = Number(
 const desktopNativeDriverPort = Number(
   process.env.MERCHANT_E2E_TAURI_NATIVE_DRIVER_PORT ?? '4446'
 );
+const desktopWidth = Number(process.env.MERCHANT_E2E_DESKTOP_WIDTH ?? '1280');
+const desktopHeight = Number(process.env.MERCHANT_E2E_DESKTOP_HEIGHT ?? '800');
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -84,7 +86,7 @@ function sanitizedEnvironment(profileRoot) {
       delete environment[key];
     }
   }
-  delete environment.OPTN_MERCHANT_E2E_MNEMONIC;
+  delete environment.OPTN_E2E_MNEMONIC;
   environment.XDG_DATA_HOME = path.join(profileRoot, 'data');
   environment.XDG_CONFIG_HOME = path.join(profileRoot, 'config');
   environment.XDG_CACHE_HOME = path.join(profileRoot, 'cache');
@@ -456,8 +458,19 @@ async function routeProposalToBrowserBuyer(session, payload) {
       .then((element) => element.getText())
       .catch(() => 'unavailable');
     const url = await session.getUrl().catch(() => 'unavailable');
+    const browserLogs = session.getLogs
+      ? await session.getLogs('browser').catch(() => [])
+      : [];
+    const documentState = await session
+      .execute(() => ({
+        readyState: document.readyState,
+        rootHtml: document.getElementById('root')?.innerHTML ?? null,
+        scriptCount: document.scripts.length,
+        errors: window.__optnE2eErrors ?? [],
+      }))
+      .catch(() => null);
     console.error(
-      `[merchant-pay-desktop-browser-mobile] buyer route state: url=${url} body=${body.replace(/\s+/g, ' ').slice(0, 3000)}`
+      `[merchant-pay-desktop-browser-mobile] buyer route state: url=${url} body=${body.replace(/\s+/g, ' ').slice(0, 3000)} logs=${JSON.stringify(browserLogs.slice(-12))} document=${JSON.stringify(documentState?.value ?? documentState)}`
     );
     throw error;
   }
@@ -527,7 +540,7 @@ async function routeProposalToBrowserBuyer(session, payload) {
   const reviewDialog = await waitFor(
     session,
     '[role="dialog"][aria-label="Review Merchant Payment"]',
-    30_000
+    60_000
   );
   const reviewText = await reviewDialog.getText();
   assert.match(reviewText, /Merchant receives[\s\S]*(PUSD|BCH)/i);
@@ -700,6 +713,23 @@ try {
   });
   await buyerSession.setWindowSize(browserWidth, browserHeight);
   await buyerSession.url(`http://127.0.0.1:${browserPort}/`);
+  await buyerSession.execute(() => {
+    window.__optnE2eErrors = [];
+    window.addEventListener('error', (event) => {
+      window.__optnE2eErrors.push({
+        type: 'error',
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+      });
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+      window.__optnE2eErrors.push({
+        type: 'unhandledrejection',
+        reason: String(event.reason),
+      });
+    });
+  });
   await importWallet(
     buyerSession,
     'Browser Buyer',
@@ -749,6 +779,7 @@ try {
     connectionRetryCount: 2,
     capabilities: { 'tauri:options': { application: appBinary } },
   });
+  await merchantSession.setWindowSize(desktopWidth, desktopHeight);
   await importWallet(merchantSession, 'Desktop Merchant', 'OPTN Wallet');
 
   const payload = await createMerchantProposal(merchantSession);

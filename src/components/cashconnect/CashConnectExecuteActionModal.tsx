@@ -1,12 +1,18 @@
 import { formatSegment } from '@cashconnect-js/nostr/wallet';
 import { useDispatch, useSelector } from 'react-redux';
+import { useRef, useState } from 'react';
 import type { AppDispatch, RootState } from '../../state/store';
 import {
   approveCashConnectActionAction,
   rejectCashConnectActionAction,
 } from '../../state/slices/cashconnectSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
+import { toErrorMessage } from '../../utils/errorHandling';
+import { showWalletNotification } from '../../utils/copyWithFeedback';
+import { useI18n } from '../../i18n/useI18n';
 import WalletPopupSheet from '../ui/WalletPopupSheet';
+import NetworkContextBanner from '../ui/NetworkContextBanner';
+import { isUiFixtureEnabled } from '../../ui-fixtures/fixtureData';
 
 function formatMeta(
   segments: Array<string | { type: string }> | undefined
@@ -30,34 +36,80 @@ function formatBalance(category: string, amount: bigint): string {
 
 export default function CashConnectExecuteActionModal() {
   const dispatch = useDispatch<AppDispatch>();
+  const { t } = useI18n();
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
   const pending = useSelector(
     (state: RootState) => state.cashconnect.pendingAction
   );
   if (!pending) return null;
 
-  const { session, response } = pending;
+  const { session, request, response } = pending;
   const dappUrl = normalizeExternalUrl(session.dapp.url);
   const title = formatMeta(response.meta?.title) || session.template.name;
   const description = formatMeta(response.meta?.description);
+  const balanceChanges = Object.entries(response.balanceChanges);
+  const transactionCount = response.transactions.length;
+
+  const handleApprove = async () => {
+    if (isUiFixtureEnabled() || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      await dispatch(approveCashConnectActionAction()).unwrap();
+      await showWalletNotification(t('cashconnect.actionApproved'));
+    } catch (error) {
+      await showWalletNotification(
+        t('cashconnect.actionApprovalFailed', {
+          message: toErrorMessage(error),
+        })
+      );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (isUiFixtureEnabled() || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      await dispatch(rejectCashConnectActionAction()).unwrap();
+      await showWalletNotification(t('cashconnect.actionRejected'));
+    } catch (error) {
+      await showWalletNotification(
+        t('cashconnect.actionRejectionFailed', {
+          message: toErrorMessage(error),
+        })
+      );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
 
   return (
     <WalletPopupSheet
-      onDismiss={() => dispatch(rejectCashConnectActionAction())}
+      dismissLabel={t('cashconnect.reject')}
+      onDismiss={() => void handleReject()}
       footer={
         <div className="grid grid-cols-2 gap-3">
           <button
             type="button"
-            className="wallet-btn-primary px-3 py-2"
-            onClick={() => dispatch(approveCashConnectActionAction())}
+            className="wallet-btn-primary min-h-[44px] px-3 py-2"
+            onClick={() => void handleApprove()}
+            disabled={busy}
           >
-            Approve
+            {busy ? t('cashconnect.working') : t('cashconnect.approveRequest')}
           </button>
           <button
             type="button"
-            className="wallet-btn-danger px-3 py-2"
-            onClick={() => dispatch(rejectCashConnectActionAction())}
+            className="wallet-btn-danger min-h-[44px] px-3 py-2"
+            onClick={() => void handleReject()}
+            disabled={busy}
           >
-            Reject
+            {t('cashconnect.reject')}
           </button>
         </div>
       }
@@ -77,9 +129,33 @@ export default function CashConnectExecuteActionModal() {
       {description ? (
         <p className="mt-3 text-sm wallet-muted">{description}</p>
       ) : null}
+      <NetworkContextBanner network={session.chain} className="mt-4" />
+      <div className="wallet-card mt-4 p-3 text-sm">
+        <p className="font-semibold">{t('cashconnect.whatRequestDoes')}</p>
+        <p className="mt-1 break-all">
+          {t('cashconnect.action')}: {request.action}
+        </p>
+        <p className="mt-1">
+          {t('cashconnect.approvingReturns', {
+            count: transactionCount,
+            name: session.dapp.name,
+          })}
+        </p>
+        {transactionCount > 1 ? (
+          <p className="mt-2 wallet-warning-panel rounded-lg p-2">
+            {t('cashconnect.multipleTransactions')}
+          </p>
+        ) : null}
+      </div>
       <div className="mt-4 text-sm space-y-1">
-        <p className="font-semibold">Balance change</p>
-        {Object.entries(response.balanceChanges).map(([category, amount]) => (
+        <p className="font-semibold">{t('cashconnect.balanceChange')}</p>
+        <p className="wallet-muted">
+          {t('cashconnect.sourceOutputsUnavailable')}
+        </p>
+        {balanceChanges.length === 0 ? (
+          <p className="wallet-muted">{t('cashconnect.noBalanceChange')}</p>
+        ) : null}
+        {balanceChanges.map(([category, amount]) => (
           <p key={category}>{formatBalance(category, amount)}</p>
         ))}
       </div>

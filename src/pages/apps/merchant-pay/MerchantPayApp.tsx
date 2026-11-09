@@ -12,17 +12,17 @@ import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors'
 import { selectMerchantPayDefaultConversionBps } from '../../../state/slices/preferencesSlice';
 import type { RootState } from '../../../state/store';
 import WalletScreen from '../../../components/ui/WalletScreen';
+import RouteExitFooter from '../../../components/ui/RouteExitFooter';
+import PageHeader from '../../../components/ui/PageHeader';
 import { QrStreamDisplay } from '../../../components/qr/QrStreamDisplay';
 import { getReturnPath } from '../../../utils/navigation';
 import {
   CauldronApiClient,
   fetchNormalizedCauldronPools,
-  type CauldronPool,
 } from '../../../services/cauldron';
 import { fetchCurrentLiquidityPoolsFromChain } from '../cauldron/preflight';
 import { parseDecimalToAtomic } from '../../../services/cauldron/amount';
 import { formatAtomicTokenAmount } from '../../../utils/tokenPresentation';
-import { shortenAddress } from '../../../utils/shortenHash';
 import { useExplorerLink } from '../../../utils/servers/useExplorerLink';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 import MerchantAmountPad from './MerchantAmountPad';
@@ -43,7 +43,10 @@ import {
   type MerchantPaymentMonitorStatus,
   type MerchantPaymentObservation,
 } from './merchantPaymentMonitoring';
-import { copyToClipboard } from '../../../utils/clipboard';
+import { copyWithFeedback } from '../../../utils/copyWithFeedback';
+import { useMerchantPools } from './useMerchantPools';
+import MaskedValue from '../../../components/ui/MaskedValue';
+import { useI18n } from '../../../i18n/useI18n';
 
 type MerchantPayAppProps = {
   sdk: AddonSDK;
@@ -280,17 +283,7 @@ function localizeMerchantPayError(
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
-  if (await copyToClipboard(text)) return;
-
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', 'true');
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  document.body.removeChild(textarea);
+  await copyWithFeedback(text);
 }
 
 function NoticeBanner({ notice }: { notice: Notice }) {
@@ -409,6 +402,7 @@ function MerchantPaymentStatusCard({
   copy: { title: string; message: string };
   explorerUrl: string | null;
 }) {
+  const { t } = useI18n();
   const isConfirmed = status === 'confirmed';
   const confirmations = isConfirmed ? 1 : 0;
 
@@ -438,10 +432,15 @@ function MerchantPaymentStatusCard({
         </div>
         {paymentMonitor?.txid ? (
           <div className="flex items-center justify-between gap-3">
-            <span className="wallet-muted">Transaction ID</span>
-            <span className="font-mono font-semibold wallet-text-strong">
-              {paymentMonitor.txid.slice(0, 8)}…{paymentMonitor.txid.slice(-4)}
-            </span>
+            <span className="wallet-muted">{t('history.transactionId')}</span>
+            <MaskedValue
+              value={paymentMonitor.txid}
+              label={t('history.transactionId')}
+              ariaLabel={t('history.transactionId')}
+              copySuccessMessageKey="history.transactionCopied"
+              embedded
+              className="font-semibold"
+            />
           </div>
         ) : null}
         <div className="flex items-center justify-between gap-3">
@@ -475,6 +474,8 @@ function MerchantPaymentDetails({
   requestExpiresIn: string | null;
   onCopy: () => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <details className="wallet-card shrink-0 rounded-[22px] p-3">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold wallet-text-strong">
@@ -504,9 +505,13 @@ function MerchantPaymentDetails({
         </div>
         <div className="flex items-start justify-between gap-3">
           <span className="wallet-muted">Merchant address</span>
-          <span className="max-w-[64%] break-all text-right font-medium wallet-text-strong">
-            {shortenAddress(paymentRequest.merchantAddress)}
-          </span>
+          <MaskedValue
+            value={paymentRequest.merchantAddress}
+            label={t('send.address')}
+            copySuccessMessageKey="receive.addressCopied"
+            embedded
+            className="max-w-[64%] truncate text-right text-xs font-medium wallet-text-strong"
+          />
         </div>
         <div className="flex items-center justify-between gap-3">
           <span className="wallet-muted">Exchange route</span>
@@ -544,6 +549,7 @@ export default function MerchantPayApp({
   app,
 }: MerchantPayAppProps) {
   const { locale, t: addonT } = useAddonI18n();
+  const { t: walletT } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
@@ -575,9 +581,6 @@ export default function MerchantPayApp({
     converted: SplitAmountDisplay;
     direct: SplitAmountDisplay;
   }>({ converted: 'target', direct: 'source' });
-  const [stablecoinPools, setStablecoinPools] = useState<CauldronPool[]>([]);
-  const [poolsLoading, setPoolsLoading] = useState(true);
-  const [poolLoadError, setPoolLoadError] = useState<string | null>(null);
   const [draftQuote, setDraftQuote] = useState<MerchantQuotePreview | null>(
     null
   );
@@ -618,6 +621,18 @@ export default function MerchantPayApp({
       ) ?? getDefaultMerchantStablecoin(currentNetwork)
     );
   }, [currentNetwork, merchantStablecoins, selectedStablecoinId]);
+
+  const {
+    pools: stablecoinPools,
+    setPools: setStablecoinPools,
+    loading: poolsLoading,
+    error: poolLoadError,
+    retry: retryPoolLoad,
+  } = useMerchantPools({
+    network: currentNetwork,
+    apiClient,
+    tokenId: selectedStablecoin?.tokenId,
+  });
 
   const selectedDecimals =
     merchantAsset === 'bch' ? 8 : selectedStablecoin?.decimals ?? 2;
@@ -723,54 +738,12 @@ export default function MerchantPayApp({
     setPaymentRequest(null);
     setPaymentMonitor(null);
     setRequestPreparing(false);
-    setPoolLoadError(null);
     setQuoteMessage({
       tone: 'muted',
       key: 'module.enterAmount',
       fallback: 'Enter amount.',
     });
   }, [currentNetwork, defaultConversionBps, merchantStablecoins]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!selectedStablecoin?.tokenId) {
-      setStablecoinPools([]);
-      setPoolsLoading(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    setPoolsLoading(true);
-    setPoolLoadError(null);
-    setStablecoinPools([]);
-
-    void (async () => {
-      try {
-        const pools = await fetchNormalizedCauldronPools(
-          currentNetwork,
-          apiClient,
-          selectedStablecoin.tokenId
-        );
-        if (cancelled) return;
-        setStablecoinPools(pools);
-      } catch (error) {
-        if (cancelled) return;
-        console.warn('[MerchantPay] failed to load merchant pools', error);
-        setStablecoinPools([]);
-        setPoolLoadError(
-          'Unable to load merchant pools right now. Try again in a moment.'
-        );
-      } finally {
-        if (!cancelled) setPoolsLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [apiClient, currentNetwork, selectedStablecoin?.tokenId]);
 
   // Warm the chain-derived LP outpoint cache while the merchant is entering
   // the amount. Request creation can then reuse the result instead of making
@@ -1456,35 +1429,19 @@ export default function MerchantPayApp({
           className="flex h-full min-h-0 flex-col gap-3"
           data-addon-id={manifest.id}
         >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[16px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_20%,var(--wallet-surface-strong))] shadow-lg">
-                <img
-                  src="/assets/images/OPTNUIkeyline2.png"
-                  alt="OPTN"
-                  className="h-7 w-7 object-contain"
-                />
-              </div>
-              <div className="min-w-0">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.22em] wallet-muted opacity-70">
-                  {addonT('module.title', 'Merchant Pay')}
-                </div>
-                <h1 className="truncate text-xl font-extrabold leading-tight wallet-text-strong tracking-[-0.02em]">
-                  {addonT('module.title', app.name || 'Merchant Pay')}
-                </h1>
-                <p className="mt-0.5 text-[11px] leading-4 wallet-muted">
-                  {screenTitle}
-                </p>
-              </div>
+          <PageHeader
+            title={addonT('module.title', app.name || 'Merchant Pay')}
+            compact
+          />
+          <div className="-mt-2 flex items-center gap-3 px-1">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[14px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_20%,var(--wallet-surface-strong))]">
+              <img
+                src="/assets/images/OPTNUIkeyline2.png"
+                alt="OPTN"
+                className="h-6 w-6 object-contain"
+              />
             </div>
-
-            <button
-              type="button"
-              onClick={handleBack}
-              className="wallet-btn-danger shrink-0 px-3 py-1.5 text-[11px]"
-            >
-              {addonT('common.back', 'Back')}
-            </button>
+            <p className="text-[11px] leading-4 wallet-muted">{screenTitle}</p>
           </div>
 
           <NoticeBanner notice={notice} />
@@ -1782,6 +1739,15 @@ export default function MerchantPayApp({
                             )
                           : addonT('module.enterAmount', 'Enter amount.')}
                     </span>
+                    {poolLoadError && !poolsLoading ? (
+                      <button
+                        type="button"
+                        onClick={retryPoolLoad}
+                        className="wallet-btn-secondary min-h-11 shrink-0 px-3 py-2 text-xs"
+                      >
+                        {addonT('common.retry', 'Retry')}
+                      </button>
+                    ) : null}
                     {draftQuote ? (
                       <span className="font-semibold wallet-text-strong">
                         {draftQuote.customerPaysDisplay}
@@ -1922,9 +1888,14 @@ export default function MerchantPayApp({
                           {paymentMonitorCopy.title}
                         </span>
                         {paymentMonitor?.txid ? (
-                          <span className="font-mono text-[10px] wallet-muted">
-                            {paymentMonitor.txid.slice(0, 8)}…
-                          </span>
+                          <MaskedValue
+                            value={paymentMonitor.txid}
+                            label={walletT('history.transactionId')}
+                            ariaLabel={walletT('history.transactionId')}
+                            copySuccessMessageKey="history.transactionCopied"
+                            embedded
+                            className="max-w-[8rem] truncate text-[10px] wallet-muted"
+                          />
                         ) : null}
                       </div>
                       <div className="mt-1 wallet-muted">
@@ -1997,6 +1968,10 @@ export default function MerchantPayApp({
               </div>
             )}
           </div>
+          <RouteExitFooter
+            label={addonT('common.back', 'Back')}
+            onBack={handleBack}
+          />
         </div>
       </WalletScreen>
 

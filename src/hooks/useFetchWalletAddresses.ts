@@ -1,5 +1,9 @@
 import { useEffect } from 'react';
 import TransactionService from '../services/TransactionService';
+import {
+  getUiFixtureAddressPairs,
+  isUiFixtureEnabled,
+} from '../ui-fixtures/fixtureData';
 
 const useFetchWalletAddresses = (
   walletId: number | null,
@@ -11,6 +15,16 @@ const useFetchWalletAddresses = (
 ) => {
   useEffect(() => {
     if (walletId === null) return;
+
+    if (isUiFixtureEnabled()) {
+      const fixtureAddresses = getUiFixtureAddressPairs();
+      setAddresses(fixtureAddresses);
+      setChangeAddress(
+        fixtureAddresses[1]?.address ?? fixtureAddresses[0]?.address ?? ''
+      );
+      setErrorMessage(null);
+      return;
+    }
 
     let isActive = true;
 

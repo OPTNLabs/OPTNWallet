@@ -10,6 +10,8 @@ import { useFundMeCampaigns } from './useFundMeCampaigns';
 import type { CampaignType, ViewMode } from './types';
 import { isChainCampaign } from './fundmeHelpers';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
+import RouteExitFooter from '../../../components/ui/RouteExitFooter';
+import PageHeader from '../../../components/ui/PageHeader';
 import {
   cancelCampaign,
   claimCampaign,
@@ -33,6 +35,7 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
   const [donationDraft, setDonationDraft] = useState<string>('');
   const [actionBusy, setActionBusy] = useState(false);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [actionTxid, setActionTxid] = useState<string | null>(null);
   const {
     walletAddress,
     network,
@@ -76,11 +79,11 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
   ) => {
     setActionBusy(true);
     setActionStatus(null);
+    setActionTxid(null);
     try {
       const result = await action();
-      setActionStatus(
-        result.txid ? `Broadcast ${result.txid}` : 'Broadcast requested.'
-      );
+      setActionStatus('Broadcast requested.');
+      setActionTxid(result.txid);
     } catch (error) {
       setActionStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -91,25 +94,16 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
   return (
     <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-2 pb-3 flex flex-col overflow-hidden wallet-page">
       <div className="flex-none">
+        <PageHeader
+          title={`${app.name} (${addonT('module.demo', 'Demo')})`}
+          compact
+        />
         <div className="flex justify-center pt-1">
           <img
             src="/assets/images/fundme.png"
             alt="FundMe"
             className="h-16 w-16 object-contain"
           />
-        </div>
-
-        <div className="mt-2 grid grid-cols-[1fr_auto] items-center gap-3">
-          <h1 className="text-2xl font-bold wallet-text-strong tracking-[-0.02em]">
-            {app.name} ({addonT('module.demo', 'Demo')})
-          </h1>
-          <button
-            type="button"
-            onClick={() => navigate(backTarget)}
-            className="wallet-btn-danger justify-self-end px-4 py-2"
-          >
-            {addonT('common.back', 'Back')}
-          </button>
         </div>
 
         <div className="mt-2 grid grid-cols-2 gap-2">
@@ -165,6 +159,11 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
         )}
       </div>
 
+      <RouteExitFooter
+        label={addonT('common.back', 'Back')}
+        onBack={() => navigate(backTarget)}
+      />
+
       <FundMeDetailModal
         detailModal={detailModal}
         latestKnownBlockLabel={latestKnownBlockLabel}
@@ -173,6 +172,7 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
         onDonationDraftChange={setDonationDraft}
         actionBusy={actionBusy}
         actionStatus={actionStatus}
+        actionTxid={actionTxid}
         onDonate={() =>
           selectedChainCampaign
             ? void runCampaignAction(() =>

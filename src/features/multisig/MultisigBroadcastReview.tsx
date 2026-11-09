@@ -9,7 +9,6 @@ type MultisigBroadcastReviewProps = {
   open: boolean;
   recipient: string;
   amountSats: bigint;
-  inputSumSats: bigint;
   feeSats: bigint;
   outputs: WatchOnlyBuildOutput[];
   selectedInputs: UTXO[];
@@ -74,7 +73,6 @@ export default function MultisigBroadcastReview({
   open,
   recipient,
   amountSats,
-  inputSumSats,
   feeSats,
   outputs,
   selectedInputs,
@@ -90,7 +88,7 @@ export default function MultisigBroadcastReview({
   const review: ReviewState = {
     rawTx: rawTxHex,
     feeSats: Number(feeSats),
-    totalSats: Number(inputSumSats),
+    totalSats: Number(amountSats + feeSats),
     finalOutputs: toReviewOutputs(outputs, network),
   };
 
@@ -103,7 +101,6 @@ export default function MultisigBroadcastReview({
       amountBch={(Number(amountSats) / 100_000_000).toFixed(8)}
       fiatSummary={{ amountUsd: 0, feeUsd: 0, totalUsd: 0 }}
       selectedCategory=""
-      amountToken=""
       tokenMeta={{}}
       displayNameFor={(category) => category}
       selectedForTx={selectedInputs}

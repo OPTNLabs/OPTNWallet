@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isValidElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
+import { Provider } from 'react-redux';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { AddonAppDefinition, AddonManifest } from '../../../types/addons';
+import { createNonPersistedStore } from '../../../state/store';
 import { renderDeclarativeScreen } from '../marketplaceScreenResolver';
 import ParyonWorkspaceApp from '../paryon/ParyonWorkspaceApp';
 import { I18nContext } from '../../../i18n/I18nContext';
@@ -39,6 +41,8 @@ describe('Paryon workspace resolver', () => {
     },
   } as unknown as AddonSDK;
 
+  const renderStore = createNonPersistedStore();
+
   it('returns the Paryon workspace screen', () => {
     const rendered = renderDeclarativeScreen({
       screenId: 'ParyonWorkspaceApp',
@@ -58,17 +62,19 @@ describe('Paryon workspace resolver', () => {
       <MemoryRouter
         initialEntries={['/apps/optn.builtin.demo:paryonWorkspaceApp']}
       >
-        <I18nContext.Provider
-          value={{
-            locale: 'en',
-            setLocale: vi.fn(),
-            t: (key, values) => translate('en', key, values),
-          }}
-        >
-          <AddonModuleI18nProvider moduleId="paryon">
-            <ParyonWorkspaceApp sdk={sdk} app={app} />
-          </AddonModuleI18nProvider>
-        </I18nContext.Provider>
+        <Provider store={renderStore}>
+          <I18nContext.Provider
+            value={{
+              locale: 'en',
+              setLocale: vi.fn(),
+              t: (key, values) => translate('en', key, values),
+            }}
+          >
+            <AddonModuleI18nProvider moduleId="paryon">
+              <ParyonWorkspaceApp sdk={sdk} app={app} />
+            </AddonModuleI18nProvider>
+          </I18nContext.Provider>
+        </Provider>
       </MemoryRouter>
     );
 
@@ -116,17 +122,19 @@ describe('Paryon workspace resolver', () => {
       <MemoryRouter
         initialEntries={['/apps/optn.builtin.demo:paryonWorkspaceApp']}
       >
-        <I18nContext.Provider
-          value={{
-            locale: 'en',
-            setLocale: vi.fn(),
-            t: (key, values) => translate('en', key, values),
-          }}
-        >
-          <AddonModuleI18nProvider moduleId="paryon">
-            <ParyonWorkspaceApp sdk={chipnetSdk} app={app} />
-          </AddonModuleI18nProvider>
-        </I18nContext.Provider>
+        <Provider store={renderStore}>
+          <I18nContext.Provider
+            value={{
+              locale: 'en',
+              setLocale: vi.fn(),
+              t: (key, values) => translate('en', key, values),
+            }}
+          >
+            <AddonModuleI18nProvider moduleId="paryon">
+              <ParyonWorkspaceApp sdk={chipnetSdk} app={app} />
+            </AddonModuleI18nProvider>
+          </I18nContext.Provider>
+        </Provider>
       </MemoryRouter>
     );
 

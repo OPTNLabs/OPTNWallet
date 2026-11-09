@@ -38,6 +38,10 @@ describe('Bip44AccountPathFields UI', () => {
     });
 
     expect(accountIndex).toHaveValue('0');
+    expect(accountIndex).toHaveClass('min-h-11');
+    expect(
+      screen.getByRole('textbox', { name: 'BIP44 coin type' })
+    ).toHaveClass('min-h-11');
     await user.clear(accountIndex);
     await user.type(accountIndex, '7');
 
@@ -68,7 +72,15 @@ describe('Bip44AccountPathFields UI', () => {
 
     await user.clear(screen.getByRole('textbox', { name: 'BIP44 coin type' }));
 
-    expect(screen.getByText('Coin type is required.')).toBeInTheDocument();
+    const error = screen.getByRole('alert');
+    expect(error).toHaveTextContent('Coin type is required.');
+    expect(error).toHaveAttribute('id', 'bip44-path-error');
+    expect(
+      screen.getByRole('textbox', { name: 'BIP44 coin type' })
+    ).toHaveAttribute('aria-describedby', 'bip44-path-error');
+    expect(
+      screen.getByRole('textbox', { name: 'BIP44 coin type' })
+    ).toHaveAttribute('aria-invalid', 'true');
     expect(onValidityChange).toHaveBeenLastCalledWith(false);
     expect(onChange).not.toHaveBeenCalled();
   });

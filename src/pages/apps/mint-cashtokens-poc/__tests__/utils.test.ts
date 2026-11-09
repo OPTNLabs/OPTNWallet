@@ -73,15 +73,26 @@ describe('mint-cashtokens-poc/utils', () => {
       { recipientAddress: 'bitcoincash:q1', amount: 1000 },
       { recipientAddress: 'bitcoincash:q2', amount: 2000n },
       { opReturn: ['6d02', 'test'] },
-      { recipientAddress: 'bitcoincash:q3', amount: 'invalid' as unknown as number },
+      {
+        recipientAddress: 'bitcoincash:q3',
+        amount: 'invalid' as unknown as number,
+      },
     ];
 
     expect(sumOutputs(outputs)).toBe(3000n);
   });
 
   it('mergeWalletUtxos combines all lists and de-duplicates by tx hash + vout', () => {
-    const shared = makeUtxo({ tx_hash: 'z'.repeat(64), tx_pos: 1, value: 1000 });
-    const unique = makeUtxo({ tx_hash: 'y'.repeat(64), tx_pos: 0, value: 2000 });
+    const shared = makeUtxo({
+      tx_hash: 'z'.repeat(64),
+      tx_pos: 1,
+      value: 1000,
+    });
+    const unique = makeUtxo({
+      tx_hash: 'y'.repeat(64),
+      tx_pos: 0,
+      value: 2000,
+    });
 
     const result = mergeWalletUtxos({
       utxos: [shared],
@@ -98,7 +109,11 @@ describe('mint-cashtokens-poc/utils', () => {
   });
 
   it('mergeWalletUtxos accepts the TransactionService snapshot shape', () => {
-    const genesis = makeUtxo({ tx_hash: 'g'.repeat(64), tx_pos: 0, value: 1500 });
+    const genesis = makeUtxo({
+      tx_hash: 'g'.repeat(64),
+      tx_pos: 0,
+      value: 1500,
+    });
 
     const result = mergeWalletUtxos({
       utxos: [genesis],
@@ -123,7 +138,11 @@ describe('mint-cashtokens-poc/utils', () => {
   });
 
   it('validateCategoryReuseRules allows multiple NFT outputs from a genesis source', () => {
-    const genesis = makeUtxo({ tx_hash: 'b'.repeat(64), tx_pos: 0, token: null });
+    const genesis = makeUtxo({
+      tx_hash: 'b'.repeat(64),
+      tx_pos: 0,
+      token: null,
+    });
     const sourceByKey = new Map<string, UTXO>([['s1', genesis]]);
 
     const okResult = validateCategoryReuseRules(
@@ -131,12 +150,22 @@ describe('mint-cashtokens-poc/utils', () => {
         makeDraft({
           id: '1',
           sourceKey: 's1',
-          config: { ...makeDraft().config, mintType: 'NFT', nftCapability: 'none', nftCommitment: '01' },
+          config: {
+            ...makeDraft().config,
+            mintType: 'NFT',
+            nftCapability: 'none',
+            nftCommitment: '01',
+          },
         }),
         makeDraft({
           id: '2',
           sourceKey: 's1',
-          config: { ...makeDraft().config, mintType: 'NFT', nftCapability: 'none', nftCommitment: '02' },
+          config: {
+            ...makeDraft().config,
+            mintType: 'NFT',
+            nftCapability: 'none',
+            nftCommitment: '02',
+          },
         }),
       ],
       sourceByKey
@@ -166,12 +195,22 @@ describe('mint-cashtokens-poc/utils', () => {
         makeDraft({
           id: '1',
           sourceKey: 's1',
-          config: { ...makeDraft().config, mintType: 'NFT', nftCapability: 'none', nftCommitment: 'seed' },
+          config: {
+            ...makeDraft().config,
+            mintType: 'NFT',
+            nftCapability: 'none',
+            nftCommitment: 'seed',
+          },
         }),
         makeDraft({
           id: '2',
           sourceKey: 's1',
-          config: { ...makeDraft().config, mintType: 'NFT', nftCapability: 'none', nftCommitment: 'seed' },
+          config: {
+            ...makeDraft().config,
+            mintType: 'NFT',
+            nftCapability: 'none',
+            nftCommitment: 'seed',
+          },
         }),
       ],
       sourceByKey
@@ -187,12 +226,24 @@ describe('mint-cashtokens-poc/utils', () => {
   it('asTxSummaryInputs maps selected utxos to summary format', () => {
     const inputs = asTxSummaryInputs([
       makeUtxo({ tx_hash: 'tx1', tx_pos: 0, value: 700, token: null }),
-      makeUtxo({ tx_hash: 'tx2', tx_pos: 1, value: 800, amount: 123, token: { amount: 1, category: 'cat' } }),
+      makeUtxo({
+        tx_hash: 'tx2',
+        tx_pos: 1,
+        value: 800,
+        amount: 123,
+        token: { amount: 1, category: 'cat' },
+      }),
     ]);
 
     expect(inputs).toEqual([
       { txid: 'tx1', vout: 0, sats: 700, token: false },
-      { txid: 'tx2', vout: 1, sats: 800, token: true },
+      {
+        txid: 'tx2',
+        vout: 1,
+        sats: 800,
+        token: true,
+        tokenDetails: { category: 'cat', amount: '1' },
+      },
     ]);
   });
 
@@ -200,13 +251,31 @@ describe('mint-cashtokens-poc/utils', () => {
     const outputs: TransactionOutput[] = [
       { recipientAddress: 'bitcoincash:q1', amount: 1000 },
       { opReturn: ['6d02', 'hello'] },
-      { recipientAddress: 'bitcoincash:q2', amount: 546, token: { amount: 1, category: 'cat' } },
+      {
+        recipientAddress: 'bitcoincash:q2',
+        amount: 546,
+        token: {
+          amount: 1,
+          category: 'cat',
+          nft: { capability: 'minting', commitment: 'abcd' },
+        },
+      },
     ];
 
     expect(asTxSummaryOutputs(outputs)).toEqual([
       { index: 0, address: 'bitcoincash:q1', sats: 1000, kind: 'bch' },
       { index: 1, address: 'OP_RETURN', sats: 0, kind: 'bch' },
-      { index: 2, address: 'bitcoincash:q2', sats: 546, kind: 'token' },
+      {
+        index: 2,
+        address: 'bitcoincash:q2',
+        sats: 546,
+        kind: 'token',
+        tokenDetails: {
+          category: 'cat',
+          amount: '1',
+          nft: { capability: 'minting', commitment: 'abcd' },
+        },
+      },
     ]);
     expect(asTxSummaryOutputs(undefined)).toEqual([]);
   });

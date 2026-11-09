@@ -96,6 +96,19 @@ describe('desktop watch-only preview', () => {
     expect(preview.accountPath).toBe("m/44'/1'/0'");
   });
 
+  it('derives a chipnet address from the Android watch-only tpub vector', () => {
+    const chipnetAccountTpub =
+      'tpubDC5FSnBiZDMmhiuCmWAYsLwgLYrrT9rAqvTySfuCCrgsWz8wxMXUS9Tb9iVMvcRbvFcAHGkMD5Kx8koh4GquNGNTfohfk7pgjhaPCdXpoba';
+
+    const preview = deriveWatchOnlyAccountPreview(
+      Network.CHIPNET,
+      chipnetAccountTpub
+    );
+
+    expect(preview.receive.address).toMatch(/^bchtest:q/);
+    expect(preview.change.address).toMatch(/^bchtest:q/);
+  });
+
   it('saves and opens without an xPub preview step; single-sig and multisig for PSBT', () => {
     const html = renderToStaticMarkup(
       <Provider store={store}>
@@ -149,7 +162,8 @@ describe('desktop watch-only preview', () => {
       </Provider>
     );
 
-    expect(html).toContain('Master fingerprint (optional)');
+    expect(html).toContain('Master fingerprint');
+    expect(html).toContain('(optional)');
     expect(html).toContain('8 hex characters');
   });
 

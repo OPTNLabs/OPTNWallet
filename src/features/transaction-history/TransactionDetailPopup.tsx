@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { Link } from 'react-router-dom';
 import Popup from '../../components/transaction/Popup';
 import StatusChip from '../../components/ui/StatusChip';
 import type {
@@ -8,23 +9,24 @@ import type {
 } from '../../types/types';
 import ElectrumService from '../../services/ElectrumService';
 import TransactionManager from '../../apis/TransactionManager/TransactionManager';
-import {
-  getCoinLabel,
-  setCoinLabel,
-} from '../../platform/desktop/CoinLabelService';
 import { addTransactions } from '../../state/slices/transactionSlice';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import { isTxConfirmed } from '../../utils/txConfirmation';
 import { useI18n } from '../../i18n/useI18n';
 import { formatDate, formatNumber } from '../../i18n/format';
 import type { SupportedLocale } from '../../i18n/types';
+import { handleExternalLinkClick } from '../../utils/openExternalLink';
+import { deriveWalletTransactionEffect } from './transactionEffect';
+import MaskedValue from '../../components/ui/MaskedValue';
+import InfoButton from '../../components/ui/InfoButton';
+import { logError } from '../../utils/errorHandling';
 
 type Props = {
   txid: string;
   txHeight: number;
-  // `null` when the chain policy permits no explorer for this wallet. Not an
-  // error state: see utils/servers/useExplorerLink.
+  // `null` only when the selected explorer template cannot produce a URL.
   explorerUrl: string | null;
+  explorerReason?: string | null;
   walletAddresses: Set<string>;
   onClose: () => void;
 };
@@ -92,9 +94,12 @@ function Section({
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="font-mono text-xs break-all wallet-text-strong">
-                    {row.address}
-                  </div>
+                  <MaskedValue
+                    value={row.address}
+                    label={t('send.address')}
+                    copySuccessMessageKey="receive.addressCopied"
+                    className="block max-w-full break-all text-xs"
+                  />
                   {typeof row.outputIndex === 'number' ? (
                     <div className="text-xs wallet-muted mt-1">
                       {t('history.output')} #{row.outputIndex}
@@ -122,6 +127,7 @@ export default function TransactionDetailPopup({
   txid,
   txHeight,
   explorerUrl,
+  explorerReason,
   walletAddresses,
   onClose,
 }: Props) {
@@ -131,7 +137,7 @@ export default function TransactionDetailPopup({
   const [details, setDetails] = useState<TransactionDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [txLabel, setTxLabel] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,9 +181,8 @@ export default function TransactionDetailPopup({
         }
       } catch (err) {
         if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : t('history.loadDetailsFailed')
-          );
+          logError('TransactionDetailPopup.loadDetails', err, { txid });
+          setError(t('history.loadDetailsFailed'));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -188,33 +193,7 @@ export default function TransactionDetailPopup({
     return () => {
       cancelled = true;
     };
-  }, [txid, walletId, dispatch, t]);
-
-  useEffect(() => {
-    if (walletId <= 0 || !txid) {
-      setTxLabel(null);
-      return;
-    }
-    let cancelled = false;
-    void getCoinLabel(walletId, 'txid', txid).then((label) => {
-      if (!cancelled) setTxLabel(label);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [walletId, txid]);
-
-  const editTxLabel = useCallback(async () => {
-    if (walletId <= 0) return;
-    const next = window.prompt(
-      'Label this transaction (empty to clear). Personal note only.',
-      txLabel ?? ''
-    );
-    if (next === null) return;
-    await setCoinLabel(walletId, 'txid', txid, next);
-    const cleaned = next.trim();
-    setTxLabel(cleaned ? cleaned.slice(0, 200) : null);
-  }, [walletId, txid, txLabel]);
+  }, [txid, walletId, dispatch, t, retryCount]);
 
   const markedInputs = useMemo(
     () => markWalletParticipants(details?.inputs ?? [], walletAddresses),
@@ -224,39 +203,36 @@ export default function TransactionDetailPopup({
     () => markWalletParticipants(details?.outputs ?? [], walletAddresses),
     [details?.outputs, walletAddresses]
   );
+  const walletEffect = details
+    ? deriveWalletTransactionEffect(details, walletAddresses)
+    : null;
 
   return (
     <Popup closePopups={onClose} closeButtonText={t('history.closeDetails')}>
       <div className="space-y-4 p-1">
         <div>
           <div className="text-xs wallet-muted mb-1">
-            {t('history.transaction')}
+            {t('history.transactionId')}
           </div>
-          <div className="font-mono text-sm break-all wallet-text-strong">
-            {txid}
-          </div>
-          {walletId > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-xs wallet-muted">Label</span>
-              <span className="wallet-text-strong">
-                {txLabel || <span className="wallet-muted italic">none</span>}
-              </span>
-              <button
-                type="button"
-                className="text-xs underline wallet-muted hover:wallet-text-strong"
-                onClick={() => void editTxLabel()}
-              >
-                Edit
-              </button>
-            </div>
-          )}
+          <MaskedValue
+            value={txid}
+            label={t('history.transactionId')}
+            ariaLabel={t('history.copyTransaction')}
+            copySuccessMessageKey="history.transactionCopied"
+            className="block w-full text-sm"
+          />
         </div>
 
         <section className="wallet-card p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xs wallet-muted mb-1">
-                {t('history.status')}
+              <div className="flex items-center gap-1 text-xs wallet-muted mb-1">
+                <span>{t('history.status')}</span>
+                <InfoButton
+                  id="transaction-status-help"
+                  ariaLabel={t('history.statusHelpLabel')}
+                  content={t('history.statusHelp')}
+                />
               </div>
               <div className="text-sm wallet-text-strong">
                 {loading
@@ -303,6 +279,20 @@ export default function TransactionDetailPopup({
                   : formatSats(details?.feeSats, locale, t('history.unknown'))}
               </div>
             </div>
+            <div>
+              <div className="text-xs wallet-muted">
+                {t('history.walletEffect')}
+              </div>
+              <div className="wallet-text-strong">
+                {loading
+                  ? '…'
+                  : formatSats(
+                      walletEffect?.bchDeltaSats,
+                      locale,
+                      t('history.unknown')
+                    )}
+              </div>
+            </div>
             <div className="col-span-2">
               <div className="text-xs wallet-muted">
                 {t('history.timestamp')}
@@ -324,9 +314,25 @@ export default function TransactionDetailPopup({
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-sm underline wallet-text-strong"
+                  onClick={(event) =>
+                    handleExternalLinkClick(
+                      event,
+                      t('history.openExplorerFailed')
+                    )
+                  }
                 >
                   {t('history.openExplorer')}
                 </a>
+              ) : explorerReason ? (
+                <p className="text-sm wallet-muted" role="status">
+                  {explorerReason}{' '}
+                  <Link
+                    to="/settings?panel=explorer"
+                    className="underline wallet-text-strong"
+                  >
+                    {t('history.openExplorerSettings')}
+                  </Link>
+                </p>
               ) : null}
             </div>
           </div>
@@ -337,7 +343,16 @@ export default function TransactionDetailPopup({
             {t('history.loadingDetails')}
           </div>
         ) : error ? (
-          <div className="wallet-card p-4 text-sm wallet-muted">{error}</div>
+          <div className="wallet-card p-4" role="alert">
+            <p className="text-sm wallet-danger-text">{error}</p>
+            <button
+              type="button"
+              className="wallet-btn-secondary mt-3 min-h-[44px] px-4 py-2 text-sm"
+              onClick={() => setRetryCount((count) => count + 1)}
+            >
+              {t('builder.tryAgain')}
+            </button>
+          </div>
         ) : (
           <>
             <Section title={t('history.senders')} rows={markedInputs} />

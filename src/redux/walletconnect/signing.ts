@@ -19,9 +19,12 @@ import { parseExtendedJson } from '../../utils/parseExtendedJson';
 import type { ContractInfo } from '../../types/wcInterfaces';
 import TransactionService from '../../services/TransactionService';
 import { ensureUint8Array } from '../../utils/binary';
+import { transactionPreview } from '../../services/connect/transactionPreview';
 import { PREFIX } from '../../utils/constants';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { normalizeWalletAddressCandidate } from './helpers';
 import { zeroize } from '../../utils/secureMemory';
+import { toErrorMessage } from '../../utils/errorHandling';
 import {
   trezorSignTransaction,
   pathToAddressN,
@@ -46,6 +49,12 @@ type SignedTxObject = {
   signedTransactionHash: string;
 };
 
+export type WalletConnectBroadcastOutcome =
+  | { kind: 'not_requested' }
+  | { kind: 'not_attempted_hardware' }
+  | { kind: 'broadcasted' | 'submitted'; txid: string | null }
+  | { kind: 'failed'; message: string };
+
 export async function signWalletConnectTransactionRequest(
   signTxRequest: WalletKitTypes.SessionRequest,
   state: RootState
@@ -53,6 +62,7 @@ export async function signWalletConnectTransactionRequest(
   id: number;
   topic: string;
   signedTxObject: SignedTxObject;
+  broadcastOutcome: WalletConnectBroadcastOutcome;
 }> {
   const { id, topic, params } = signTxRequest;
   const rawParams = params.request.params as unknown;
@@ -69,11 +79,14 @@ export async function signWalletConnectTransactionRequest(
   ) {
     throw new Error('Malformed WalletConnect transaction request');
   }
+  transactionPreview(txDetails, sourceOutputs);
 
   const walletId = state.wallet_id.currentWalletId!;
   const keys = await KeyService.retrieveKeys(walletId);
   if (!keys.length) throw new Error('No key available');
-  const networkPrefix = PREFIX[state.network.currentNetwork];
+  const selectedNetwork =
+    selectCurrentNetwork(state) ?? state.network.currentNetwork;
+  const networkPrefix = PREFIX[selectedNetwork];
 
   // Hardware wallet branch — device signs instead of software key
   const hwState = (state as unknown as Record<string, unknown>)
@@ -88,7 +101,7 @@ export async function signWalletConnectTransactionRequest(
       sourceOutputs,
       addressToKey,
       networkPrefix,
-      network: state.network.currentNetwork,
+      network: selectedNetwork,
       accountPath: state.wallet_id.derivationPath || undefined,
       hwType: hwState.type as 'trezor' | 'ledger',
     });
@@ -100,6 +113,9 @@ export async function signWalletConnectTransactionRequest(
       id,
       topic,
       signedTxObject: { signedTransaction: signed, signedTransactionHash },
+      broadcastOutcome: request.broadcast
+        ? { kind: 'not_attempted_hardware' }
+        : { kind: 'not_requested' },
     };
   }
   const keyAddressSet = new Set(
@@ -229,6 +245,10 @@ export async function signWalletConnectTransactionRequest(
       signedTransactionHash: txid,
     };
 
+    let broadcastOutcome: WalletConnectBroadcastOutcome = {
+      kind: 'not_requested',
+    };
+
     if (request.broadcast) {
       try {
         const sessionMeta =
@@ -257,12 +277,21 @@ export async function signWalletConnectTransactionRequest(
         if (sent.errorMessage) {
           throw new Error(sent.errorMessage);
         }
-      } catch {
-        console.warn('Broadcast failed, returning signed hex anyway');
+        broadcastOutcome = {
+          kind:
+            sent.broadcastState === 'submitted' ? 'submitted' : 'broadcasted',
+          txid: sent.txid,
+        };
+      } catch (error) {
+        broadcastOutcome = { kind: 'failed', message: toErrorMessage(error) };
+        console.warn('WalletConnect broadcast failed', {
+          requestId: id,
+          error: broadcastOutcome.message,
+        });
       }
     }
 
-    return { id, topic, signedTxObject };
+    return { id, topic, signedTxObject, broadcastOutcome };
   } finally {
     for (const key of usedKeys) {
       zeroize(key);

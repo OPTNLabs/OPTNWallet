@@ -317,8 +317,9 @@ describe('multisig descriptor to CashScript mocknet broadcast', () => {
       vout: 1,
     });
     expect(changeUtxos[0].satoshis).toBe(proposal.changeSats);
-    await expect(
-      provider.sendRawTransaction(rawTransactionHex)
-    ).rejects.toThrow(/already submitted/);
+    const duplicateBroadcastTxid =
+      await provider.sendRawTransaction(rawTransactionHex);
+    expect(duplicateBroadcastTxid).toBe(broadcastTxid);
+    expect(await provider.getUtxos(changeAddress.address)).toHaveLength(1);
   });
 });

@@ -18,16 +18,21 @@ const useFetchWalletData = (
   // setSelectedAddresses: React.Dispatch<React.SetStateAction<string[]>>,
   setChangeAddress: React.Dispatch<React.SetStateAction<string>>,
   setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>,
-  options: { deferAfterPaint?: boolean } = {}
+  options: { deferAfterPaint?: boolean; retryKey?: number } = {}
 ) => {
   const deferAfterPaint = options.deferAfterPaint ?? false;
+  const retryKey = options.retryKey ?? 0;
 
   useEffect(() => {
-    if (walletId === null) return;
+    if (walletId === null) {
+      setErrorMessage(null);
+      return;
+    }
 
     let isActive = true;
 
     const fetchData = async () => {
+      setErrorMessage(null);
       try {
         const { addresses, utxos, contractAddresses } =
           await TransactionService.fetchAddressesAndUTXOs(walletId);
@@ -97,6 +102,7 @@ const useFetchWalletData = (
     setErrorMessage,
     setUtxos,
     deferAfterPaint,
+    retryKey,
   ]);
 };
 

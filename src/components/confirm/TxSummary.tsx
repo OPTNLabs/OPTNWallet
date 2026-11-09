@@ -1,11 +1,19 @@
 import { useI18n } from '../../i18n/useI18n';
 import { formatNumber } from '../../i18n/format';
+import MaskedValue from '../ui/MaskedValue';
+
+export type TxSummaryToken = {
+  category: string;
+  amount: string;
+  nft?: { capability: string; commitment: string };
+};
 
 export type TxSummaryInput = {
   txid: string;
   vout: number;
   sats: number;
   token?: boolean;
+  tokenDetails?: TxSummaryToken;
 };
 
 export type TxSummaryOutput = {
@@ -13,6 +21,7 @@ export type TxSummaryOutput = {
   address: string;
   sats: number;
   kind: 'bch' | 'token';
+  tokenDetails?: TxSummaryToken;
 };
 
 type Props = {
@@ -48,15 +57,26 @@ function toNum(v: unknown): number {
   }
 }
 
-function shortRef(txid: string, vout: number) {
-  const a = txid.slice(0, 8);
-  const b = txid.slice(-6);
-  return `${a}…${b}:${vout}`;
-}
-
-function shortAddr(addr: string) {
-  if (addr.length <= 24) return addr;
-  return `${addr.slice(0, 10)}…${addr.slice(-8)}`;
+function tokenDetails(value: unknown): TxSummaryToken | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const token = value as Record<string, unknown>;
+  if (typeof token.category !== 'string') return undefined;
+  const nft =
+    token.nft && typeof token.nft === 'object'
+      ? (token.nft as Record<string, unknown>)
+      : null;
+  return {
+    category: token.category,
+    amount: String(token.amount ?? 0),
+    ...(nft
+      ? {
+          nft: {
+            capability: String(nft.capability ?? 'none'),
+            commitment: String(nft.commitment ?? ''),
+          },
+        }
+      : {}),
+  };
 }
 
 function normalizeInputs(
@@ -71,6 +91,9 @@ function normalizeInputs(
         vout: Number(row.vout ?? 0),
         sats: toNum(row.sats ?? 0),
         token: !!row.token,
+        tokenDetails:
+          (row.tokenDetails as TxSummaryToken | undefined) ??
+          tokenDetails(row.token),
       };
     });
   }
@@ -82,6 +105,9 @@ function normalizeInputs(
       vout: Number(row.tx_pos ?? 0),
       sats: toNum(row.value ?? row.amount ?? 0),
       token: !!row.token,
+      tokenDetails:
+        (row.tokenDetails as TxSummaryToken | undefined) ??
+        tokenDetails(row.token),
     };
   });
 }
@@ -98,6 +124,9 @@ function normalizeOutputs(
         address: String(row.address ?? ''),
         sats: toNum(row.sats ?? 0),
         kind: row.kind === 'token' ? 'token' : 'bch',
+        tokenDetails:
+          (row.tokenDetails as TxSummaryToken | undefined) ??
+          tokenDetails(row.token),
       };
     });
   }
@@ -117,6 +146,9 @@ function normalizeOutputs(
       address: String(row.recipientAddress ?? ''),
       sats: toNum(row.amount ?? 0),
       kind: row.token ? ('token' as const) : ('bch' as const),
+      tokenDetails:
+        (row.tokenDetails as TxSummaryToken | undefined) ??
+        tokenDetails(row.token),
     };
   });
 }
@@ -170,13 +202,21 @@ export default function TxSummary(props: Props) {
             >
               <div className="min-w-0">
                 <div className="font-mono text-sm sm:text-base truncate">
-                  {shortRef(i.txid, i.vout)}
+                  <MaskedValue
+                    value={i.txid}
+                    label={t('history.transactionId')}
+                    ariaLabel={t('history.transactionId')}
+                    copySuccessMessageKey="history.transactionCopied"
+                    className="max-w-full truncate align-middle"
+                  />
+                  :{i.vout}
                 </div>
                 <div className="text-sm wallet-muted">
                   {i.token
                     ? t('txSummary.tokenInput')
                     : t('txSummary.bchInput')}
                 </div>
+                {i.tokenDetails && <TokenDetails token={i.tokenDetails} />}
               </div>
 
               <div className="text-sm sm:text-base font-semibold whitespace-nowrap">
@@ -209,8 +249,19 @@ export default function TxSummary(props: Props) {
                     : t('txSummary.bch')}
                 </div>
                 <div className="font-mono text-sm sm:text-base break-all">
-                  {shortAddr(o.address)}
+                  {o.address === 'OP_RETURN' ? (
+                    o.address
+                  ) : (
+                    <MaskedValue
+                      value={o.address}
+                      label={t('receive.copyAddress')}
+                      ariaLabel={t('receive.copyAddress')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      className="max-w-full break-all"
+                    />
+                  )}
                 </div>
+                {o.tokenDetails && <TokenDetails token={o.tokenDetails} />}
               </div>
 
               <div className="text-sm sm:text-base font-semibold whitespace-nowrap">
@@ -243,6 +294,26 @@ export default function TxSummary(props: Props) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function TokenDetails({ token }: { token: TxSummaryToken }) {
+  return (
+    <div className="mt-2 text-sm space-y-1 wallet-muted">
+      <div className="break-all">
+        Category: <span className="font-mono">{token.category}</span>
+      </div>
+      <div>Fungible amount: {token.amount} base units</div>
+      {token.nft && (
+        <>
+          <div>NFT capability: {token.nft.capability}</div>
+          <div className="break-all">
+            NFT commitment:{' '}
+            <span className="font-mono">{token.nft.commitment || 'empty'}</span>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -11,16 +11,18 @@ import { StealthBadge } from '../../components/StealthBadge';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import type { RootState } from '../../state/store';
 import { useI18n } from '../../i18n/useI18n';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MaskedValue from '../../components/ui/MaskedValue';
 
 type ReviewCardProps = {
   open: boolean;
   review: ReviewState;
   recipient: string;
+  networkLabel?: string;
   assetType: AssetType;
   amountBch: string;
   fiatSummary: { amountUsd: number; feeUsd: number; totalUsd: number };
   selectedCategory: string;
-  amountToken: string;
   tokenMeta: TokenMetaMap;
   displayNameFor: (category: string) => string;
   selectedForTx: SimpleSendInput[];
@@ -39,11 +41,11 @@ export function ReviewCard({
   open,
   review,
   recipient,
+  networkLabel,
   assetType,
   amountBch,
   fiatSummary,
   selectedCategory,
-  amountToken,
   tokenMeta,
   displayNameFor,
   selectedForTx,
@@ -72,16 +74,87 @@ export function ReviewCard({
     return keys;
   }, [rpaRecord]);
   const HANDLE_SIZE = 56;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  const isSendingRef = useRef(isSending);
   const trackRef = useRef<HTMLDivElement>(null);
+  const confirmedRef = useRef(false);
   const [dragX, setDragX] = useState(0);
   const [maxX, setMaxX] = useState(0);
   const [slideCompleted, setSlideCompleted] = useState(false);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
+  onCloseRef.current = onClose;
+  isSendingRef.current = isSending;
+
+  useEffect(() => {
+    if (!open) return;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const dialog = dialogRef.current;
+    const getFocusable = () =>
+      Array.from(
+        dialog?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter(
+        (element) =>
+          !element.closest('[hidden]') &&
+          element.getAttribute('aria-hidden') !== 'true'
+      );
+
+    if (closeButtonRef.current && !closeButtonRef.current.disabled) {
+      closeButtonRef.current.focus();
+    } else {
+      getFocusable()[0]?.focus();
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (!isSendingRef.current) {
+          event.preventDefault();
+          onCloseRef.current();
+        }
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+      const focusable = getFocusable();
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog?.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!dialog?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus();
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) {
       setDragX(0);
       setSlideCompleted(false);
+      confirmedRef.current = false;
       setMaxX(0);
       setShowTechnicalDetails(false);
     }
@@ -109,30 +182,13 @@ export function ReviewCard({
     };
   }, [open]);
 
-  const visibleRecipient = useMemo(() => {
-    if (!recipient) return '';
-    const colonIndex = recipient.indexOf(':');
-    const prefix = colonIndex >= 0 ? recipient.slice(0, colonIndex + 1) : '';
-    const body = colonIndex >= 0 ? recipient.slice(colonIndex + 1) : recipient;
-    if (body.length <= 10) return `${prefix}${body}`;
-    return `${prefix}${body.slice(0, 5)}…${body.slice(-5)}`;
-  }, [recipient]);
-
   const technicalInputs = useMemo(
     () =>
       selectedForTx.map((u) => {
         const key = outpointKey(u.tx_hash, u.tx_pos);
         return {
           key,
-          address: (() => {
-            const raw = u.address ?? '';
-            const withoutPrefix = raw.includes(':')
-              ? raw.slice(raw.indexOf(':') + 1)
-              : raw;
-            return withoutPrefix.length > 12
-              ? `${withoutPrefix.slice(0, 8)}…${withoutPrefix.slice(-6)}`
-              : withoutPrefix;
-          })(),
+          address: u.address ?? '',
           sats: Number(u.amount ?? u.value ?? 0),
           pending: typeof u.height === 'number' ? u.height <= 0 : false,
           depth: walletId > 0 ? coinDepth(walletId, key) : 0,
@@ -155,13 +211,6 @@ export function ReviewCard({
         }
 
         const rawAddress = out.recipientAddress || '';
-        const withoutPrefix = rawAddress.includes(':')
-          ? rawAddress.slice(rawAddress.indexOf(':') + 1)
-          : rawAddress;
-        const shortAddress =
-          withoutPrefix.length > 12
-            ? `${withoutPrefix.slice(0, 8)}…${withoutPrefix.slice(-6)}`
-            : withoutPrefix;
         const tokenLabel = out.token
           ? out.token.nft
             ? `${displayNameFor(out.token.category)} NFT`
@@ -170,7 +219,7 @@ export function ReviewCard({
 
         return {
           key: `${rawAddress}-${i}`,
-          label: shortAddress,
+          label: rawAddress,
           value: tokenLabel,
           sats: Number(out.amount || 0),
         };
@@ -206,12 +255,68 @@ export function ReviewCard({
       : 0;
   }, [review.finalOutputs]);
 
+  const reviewedTokenOutput = useMemo(() => {
+    if (assetType === 'bch' || !selectedCategory) return null;
+    const category = selectedCategory.toLowerCase();
+    return (
+      review.finalOutputs.find(
+        (output) =>
+          !('opReturn' in output) &&
+          output.token?.category.toLowerCase() === category &&
+          (assetType === 'nft' ? !!output.token.nft : !output.token.nft)
+      ) ?? null
+    );
+  }, [assetType, review.finalOutputs, selectedCategory]);
+
+  const reviewedToken =
+    reviewedTokenOutput && !('opReturn' in reviewedTokenOutput)
+      ? reviewedTokenOutput.token
+      : undefined;
+  const reviewedTokenRecipient =
+    reviewedTokenOutput && !('opReturn' in reviewedTokenOutput)
+      ? reviewedTokenOutput.recipientAddress
+      : '';
+  const reviewTokenIssue =
+    assetType !== 'bch' && !reviewedToken
+      ? 'The built transaction does not contain the selected CashToken output. Close this review and prepare it again.'
+      : '';
+  const canConfirmReview = !reviewTokenIssue;
+  const reviewedTokenPresentation = selectedCategory
+    ? resolveTokenPresentation(selectedCategory, tokenMeta[selectedCategory])
+    : null;
+  const reviewedFtAmount =
+    assetType === 'ft' && reviewedToken && reviewedTokenPresentation
+      ? formatFtAmount(
+          BigInt(reviewedToken.amount ?? 0),
+          reviewedTokenPresentation.decimals
+        )
+      : '';
+  const reviewedNft = assetType === 'nft' ? reviewedToken?.nft : undefined;
+  const reviewedNftCapabilityLabel = reviewedNft
+    ? reviewedNft.capability === 'minting'
+      ? t('assets.mintingNfts')
+      : reviewedNft.capability === 'mutable'
+        ? t('assets.mutableNfts')
+        : t('assets.plainNfts')
+    : '';
+  const reviewedNftCapabilityDescription = reviewedNft
+    ? reviewedNft.capability === 'minting'
+      ? t('assets.mintingNftsDescription')
+      : reviewedNft.capability === 'mutable'
+        ? t('assets.mutableNftsDescription')
+        : t('assets.plainNftsDescription')
+    : '';
+
   if (!open) return null;
 
   const threshold = Math.max(0, maxX - 1);
   const progressRatio = Math.min(1, Math.max(0, dragX / Math.max(1, maxX)));
   const nearingSend =
-    !isSending && !slideCompleted && maxX > 0 && progressRatio >= 0.9;
+    canConfirmReview &&
+    !isSending &&
+    !slideCompleted &&
+    maxX > 0 &&
+    progressRatio >= 0.9;
   const progressHue = Math.round(progressRatio * 120);
   const pendingTrackBg = `hsl(${progressHue} 80% 95%)`;
   const pendingTrackBorder = `hsl(${progressHue} 65% 80%)`;
@@ -220,14 +325,26 @@ export function ReviewCard({
   const pendingHandle = `hsl(${progressHue} 82% 44%)`;
   const pendingHandleShadow = `0 8px 24px hsla(${progressHue}, 82%, 44%, 0.35)`;
 
+  const confirm = () => {
+    if (
+      !canConfirmReview ||
+      slideCompleted ||
+      isSending ||
+      confirmedRef.current
+    )
+      return;
+    confirmedRef.current = true;
+    setDragX(maxX);
+    setSlideCompleted(true);
+    onConfirmSend();
+  };
+
   const handleStop = (_: unknown, data: { x: number }) => {
     if (slideCompleted || isSending || maxX <= 0) return;
 
     const finalX = Math.min(Math.max(0, data.x), maxX);
     if (finalX >= threshold) {
-      setDragX(maxX);
-      setSlideCompleted(true);
-      onConfirmSend();
+      confirm();
       return;
     }
 
@@ -239,26 +356,37 @@ export function ReviewCard({
 
   return (
     <div
+      ref={dialogRef}
       className="wallet-popup-backdrop z-[1100] p-4"
       role="dialog"
       aria-modal="true"
+      aria-labelledby="send-review-title"
+      aria-describedby="send-review-guidance"
+      tabIndex={-1}
     >
       <div className="wallet-popup-panel w-full max-w-xl p-0 overflow-hidden">
         <div className="px-5 pt-4 pb-4 wallet-surface border-b border-[var(--wallet-border)]">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xl font-bold wallet-text-strong">
+              <h2
+                id="send-review-title"
+                className="text-xl font-bold wallet-text-strong"
+              >
                 {t('send.reviewTitle')}
-              </div>
-              <div className="text-sm wallet-muted mt-1">
+              </h2>
+              <p
+                id="send-review-guidance"
+                className="text-sm wallet-muted mt-1"
+              >
                 {t('send.verifySlide')}
-              </div>
+              </p>
             </div>
             <button
+              ref={closeButtonRef}
               type="button"
               onClick={onClose}
               disabled={isSending}
-              className="wallet-btn-secondary px-3 py-1.5 text-xs"
+              className="wallet-btn-secondary min-h-[44px] px-3 py-1.5 text-xs"
             >
               {t('receive.close')}
             </button>
@@ -268,6 +396,9 @@ export function ReviewCard({
               {reviewContext}
             </div>
           )}
+          {networkLabel ? (
+            <NetworkContextBanner network={networkLabel} className="mt-3" />
+          ) : null}
         </div>
 
         <div className="p-4 space-y-4 max-h-[56vh] overflow-y-auto">
@@ -276,24 +407,42 @@ export function ReviewCard({
               <div className="wallet-kicker">{t('send.summary')}</div>
             </div>
             <div className="text-sm space-y-2">
+              <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-3 py-2.5">
+                <div className="text-xs font-semibold wallet-text-strong">
+                  {t('send.walletEffect')}
+                </div>
+                <div className="mt-1 text-xs wallet-muted">
+                  {t('send.walletEffectDescription')}
+                </div>
+              </div>
+              {networkLabel ? (
+                <div className="wallet-stat-row">
+                  <span className="font-medium">{t('send.network')}</span>
+                  <span className="wallet-text-strong">{networkLabel}</span>
+                </div>
+              ) : null}
               <div className="wallet-stat-row">
                 <span className="font-medium">{t('send.to')}</span>
-                <span
-                  className="font-mono truncate max-w-[60%] wallet-text-strong"
-                  title={recipient}
-                >
-                  {visibleRecipient}
-                </span>
+                <MaskedValue
+                  value={recipient}
+                  label={t('send.to')}
+                  ariaLabel={t('receive.copyAddress')}
+                  copySuccessMessageKey="receive.addressCopied"
+                  className="max-w-[60%] truncate wallet-text-strong"
+                />
               </div>
               {review.rpaStealthAddress && (
                 <div className="wallet-stat-row">
-                  <span className="font-medium">Stealth address</span>
-                  <span
-                    className="font-mono break-all text-right max-w-[70%] wallet-text-strong"
-                    title={review.rpaStealthAddress}
-                  >
-                    {review.rpaStealthAddress}
+                  <span className="font-medium">
+                    {t('send.stealthAddress')}
                   </span>
+                  <MaskedValue
+                    value={review.rpaStealthAddress}
+                    label={t('send.stealthAddress')}
+                    ariaLabel={t('receive.copyAddress')}
+                    copySuccessMessageKey="receive.addressCopied"
+                    className="max-w-[70%] break-all text-right wallet-text-strong"
+                  />
                 </div>
               )}
 
@@ -312,16 +461,75 @@ export function ReviewCard({
                 </div>
               )}
 
-              {assetType !== 'bch' && (
+              {assetType !== 'bch' && reviewedToken && (
                 <div className="wallet-stat-row">
                   <span className="font-medium">{t('send.asset')}</span>
                   <span className="font-mono wallet-text-strong">
                     {assetType.toUpperCase()} ·{' '}
                     {selectedCategory ? displayNameFor(selectedCategory) : '—'}
-                    {assetType === 'ft' && amountToken
-                      ? ` · amount: ${amountToken}`
+                    {assetType === 'ft' && reviewedFtAmount
+                      ? ` · ${reviewedFtAmount}`
                       : ''}
                   </span>
+                </div>
+              )}
+
+              {assetType !== 'bch' && reviewedToken && (
+                <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] p-3">
+                  <div>
+                    <div className="text-xs font-medium wallet-muted">
+                      {t('send.tokenCategory')}
+                    </div>
+                    <div className="mt-1 break-all font-mono text-xs wallet-text-strong">
+                      {reviewedToken.category}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium wallet-muted">
+                      {t('send.to')}
+                    </div>
+                    <div className="mt-1 font-mono text-xs wallet-text-strong">
+                      <MaskedValue
+                        value={reviewedTokenRecipient}
+                        label={t('send.to')}
+                        ariaLabel={t('receive.copyAddress')}
+                        copySuccessMessageKey="receive.addressCopied"
+                        className="max-w-full break-all text-xs"
+                      />
+                    </div>
+                  </div>
+                  {reviewedNft && (
+                    <>
+                      <div className="wallet-stat-row items-start">
+                        <span className="font-medium">
+                          {t('builder.nftCapability')}
+                        </span>
+                        <span className="text-right wallet-text-strong">
+                          {reviewedNftCapabilityLabel}
+                        </span>
+                      </div>
+                      <div className="text-xs wallet-muted">
+                        {reviewedNftCapabilityDescription}
+                      </div>
+                      <div>
+                        <div className="text-xs font-medium wallet-muted">
+                          {t('send.nftCommitment')}
+                        </div>
+                        <div className="mt-1 break-all font-mono text-xs wallet-text-strong">
+                          {reviewedNft.commitment || '—'}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {reviewTokenIssue && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-[var(--wallet-danger-border)] bg-[var(--wallet-danger-bg)] p-3 text-sm text-[var(--wallet-danger-text)]"
+                >
+                  {reviewTokenIssue}
                 </div>
               )}
 
@@ -385,7 +593,7 @@ export function ReviewCard({
           <div className="rounded-2xl border border-[var(--wallet-border)] wallet-surface-strong p-3 text-sm">
             <button
               type="button"
-              className="flex w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-3 py-2.5 text-left shadow-sm"
+              className="flex min-h-[44px] w-full items-center justify-between rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-card-bg)] px-3 py-2.5 text-left shadow-sm"
               onClick={() => setShowTechnicalDetails((prev) => !prev)}
             >
               <span className="font-semibold wallet-text-strong">
@@ -453,7 +661,17 @@ export function ReviewCard({
                       >
                         <div className="min-w-0">
                           <div className="font-mono wallet-text-strong truncate">
-                            {input.address}
+                            {input.address ? (
+                              <MaskedValue
+                                value={input.address}
+                                label={t('receive.copyAddress')}
+                                ariaLabel={t('receive.copyAddress')}
+                                copySuccessMessageKey="receive.addressCopied"
+                                className="max-w-[14rem] truncate align-middle"
+                              />
+                            ) : (
+                              '—'
+                            )}
                             {input.depth > 0 && (
                               <FusionBadge
                                 depth={input.depth}
@@ -490,7 +708,17 @@ export function ReviewCard({
                       >
                         <div className="min-w-0">
                           <div className="font-mono wallet-text-strong truncate">
-                            {output.label}
+                            {output.label === 'OP_RETURN' || !output.label ? (
+                              output.label || '—'
+                            ) : (
+                              <MaskedValue
+                                value={output.label}
+                                label={t('receive.copyAddress')}
+                                ariaLabel={t('receive.copyAddress')}
+                                copySuccessMessageKey="receive.addressCopied"
+                                className="max-w-[14rem] truncate align-middle"
+                              />
+                            )}
                           </div>
                           <div className="wallet-muted truncate">
                             {output.value}
@@ -509,7 +737,11 @@ export function ReviewCard({
         </div>
 
         <div className="px-4 pb-4 pt-3 wallet-surface border-t border-[var(--wallet-border)]">
-          <div className="text-[14px] wallet-muted mb-2.5 px-1">
+          <div
+            role="status"
+            aria-live="polite"
+            className="text-[14px] wallet-muted mb-2.5 px-1"
+          >
             {isSending
               ? sendStatus || t('send.sending')
               : slideCompleted
@@ -597,7 +829,9 @@ export function ReviewCard({
                 setDragX(Math.min(Math.max(0, data.x), maxX))
               }
               onStop={handleStop}
-              disabled={isSending || slideCompleted || maxX <= 0}
+              disabled={
+                !canConfirmReview || isSending || slideCompleted || maxX <= 0
+              }
             >
               <div
                 className="absolute left-0 top-0 h-14 w-14 rounded-[18px] flex items-center justify-center text-xl select-none transition-colors"
@@ -619,6 +853,14 @@ export function ReviewCard({
               </div>
             </Draggable>
           </div>
+          <button
+            type="button"
+            className="sr-only focus:not-sr-only focus:mt-3 focus:block focus:w-full wallet-btn-primary"
+            disabled={!canConfirmReview || isSending || slideCompleted}
+            onClick={confirm}
+          >
+            {t('send.slideToConfirm')}
+          </button>
         </div>
       </div>
     </div>

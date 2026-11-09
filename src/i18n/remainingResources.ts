@@ -7,6 +7,47 @@ import type { BaseLocale } from './types';
  */
 export const remainingTranslations = {
   en: {
+    'txReview.requestSummary': 'Review this transaction request',
+    'txReview.transactionRequest': 'Transaction request',
+    'txReview.cauldronSwap': 'Cauldron swap',
+    'txReview.cauldronPayment': 'Cauldron payment',
+    'txReview.cauldronPoolCreate': 'Create Cauldron pool',
+    'txReview.cauldronPoolWithdraw': 'Withdraw Cauldron pool',
+    'txReview.appDescription': 'App-provided description',
+    'txReview.requestedBy': 'Requested by',
+    'txReview.reviewBeforeSigning':
+      'WalletConnect request · review before signing',
+    'txReview.network': 'Network',
+    'txReview.action': 'Wallet action',
+    'txReview.signAndBroadcast': 'Sign and broadcast',
+    'txReview.signAndReturn': 'Sign and return to the app',
+    'txReview.requestFee': 'Transaction fee (entire request)',
+    'txReview.estimatedNetworkFee': 'Network fee',
+    'txReview.walletEffect': 'What changes in this wallet',
+    'txReview.walletEffectHelp':
+      'These amounts are matched to this wallet’s inputs and change.',
+    'txReview.verifyingWalletEffect':
+      'Verifying this wallet’s inputs and change…',
+    'txReview.walletEffectUnavailable':
+      'Wallet-owned inputs and change could not be verified from this request. Review the whole transaction carefully before signing.',
+    'txReview.bcmr': 'BCMR',
+    'txReview.bcmrStatus': 'BCMR: {status}',
+    'txReview.bcmrIdentifying': 'BCMR: Identifying token…',
+    'txReview.identifyingToken': 'Identifying token…',
+    'txReview.matchedWalletEffect':
+      'Matched {inputs} wallet input(s) and {outputs} wallet output(s) by locking bytecode. Whole-transaction fees can include other participants.',
+    'txReview.spend': 'You spend',
+    'txReview.receive': 'You receive',
+    'txReview.token': 'token',
+    'txReview.nft': 'NFT',
+    'txReview.tokenIdentity': 'Token identity',
+    'txReview.appLabel': 'App label',
+    'txReview.technicalDetails': 'Technical transaction details',
+    'txReview.feeScope':
+      'This fee is calculated from the complete request. The wallet effect identifies the inputs and change that belong to this wallet.',
+    'txReview.technicalTotals': 'Technical transaction totals',
+    'txReview.totalInput': 'Total input',
+    'txReview.totalOutput': 'Total output',
     'wc.noActiveSessions': 'No active WalletConnect sessions yet.',
     'wc.activeSessions': 'Active WalletConnect Sessions',
     'wc.noSessions': 'No active sessions.',
@@ -24,12 +65,14 @@ export const remainingTranslations = {
     'wc.messageToSign': 'Message to Sign',
     'wc.sign': 'Sign',
     'wc.cancel': 'Cancel',
+    'wc.rejectRequest': 'Reject request',
     'wc.signTransactionRequest': 'Sign Transaction Request',
     'wc.prompt': 'Prompt',
     'wc.inputs': 'Inputs ({count})',
     'wc.outputs': 'Outputs ({count})',
     'wc.opReturnOutput': 'OP_RETURN Output',
     'wc.address': 'Address',
+    'wc.lockingScript': 'Locking script',
     'wc.tokenCategory': 'Token Category',
     'wc.fungibleAmount': 'Fungible Amount',
     'wc.nftCapability': 'NFT Capability',
@@ -51,6 +94,10 @@ export const remainingTranslations = {
     'wc.invalidLockingBytecode': 'Invalid locking bytecode',
     'wc.txid': 'TXID',
     'wc.index': 'Index',
+    'wc.inputNumber': 'Input {number}',
+    'wc.outputNumber': 'Output {number}',
+    'wc.previousTransaction': 'Previous transaction',
+    'wc.outputIndex': 'Output index',
     'wc.connectionUri': 'Connection URI',
     'wc.enterUri': 'Enter WalletConnect URI',
     'wc.scanQr': 'Scan QR',
@@ -94,6 +141,15 @@ export const remainingTranslations = {
     'wc.messageRejectFailedBody':
       'Failed to reject WalletConnect message request.',
     'wc.transactionApprovedTitle': 'WalletConnect transaction approved',
+    'wc.signedAndBroadcast': 'Signed and broadcast by this wallet.',
+    'wc.signedAndSubmitted':
+      'Signed and submitted. Watch transaction history before sending again.',
+    'wc.broadcastFailedReturned':
+      'Signed transaction returned to the app, but wallet broadcast failed: {message}. The app may still submit it.',
+    'wc.signedOnHardwareReturned':
+      'Signed on the hardware wallet and returned to the app. Wallet broadcast was not attempted; the app may submit it.',
+    'wc.signedReturned':
+      'Signed transaction returned to the app. The app may submit it later.',
     'wc.transactionSentBody': 'Sent the transaction response to {name}.',
     'wc.transactionResponseSentBody':
       'Sent the WalletConnect transaction response.',
@@ -484,6 +540,8 @@ export const remainingTranslations = {
     'contractView.loadContractsFailed': 'Failed to load available contracts.',
     'contractView.loadInstancesFailed': 'Failed to load contract instances.',
     'contractView.loadDetailsFailed': 'Failed to load contract details.',
+    'contractView.loadFailedFriendly':
+      'We could not load your contract data. Try again or check your network connection.',
     'contractView.createFailed': 'Failed to create contract: {message}',
     'contractView.deleteFailedFallback': 'Failed to delete contract.',
     'contractView.updateFailedFallback': 'Failed to update contract.',
@@ -772,9 +830,14 @@ export const remainingTranslations = {
       'Wallet first, then tokens, utils, and advanced platforms',
     'apps.all': 'All',
     'apps.wallet': 'Wallet',
+    'apps.walletBestFor': 'Daily wallet tools and payment setup',
     'apps.token': 'Token',
+    'apps.tokenBestFor': 'Manage tokens, minting, and stablecoin apps',
     'apps.utils': 'Utils',
+    'apps.utilsBestFor':
+      'Helpful tools for messaging, distribution, and sharing',
     'apps.advanced': 'Advanced',
+    'apps.advancedBestFor': 'Multi-step workflows and experimental platforms',
     'apps.contractsDescription':
       'Browse artifacts and manage deployed instances',
     'apps.quantumrootDescription':
@@ -786,6 +849,7 @@ export const remainingTranslations = {
     'apps.loadFailed': 'Failed to load addon apps',
     'apps.empty': 'No apps in this category.',
     'apps.addonLoadFailed': 'Addon failed to load',
+    'apps.retryAddon': 'Retry loading addon',
     'apps.loadingAddon': 'Loading addon…',
     'apps.unsupportedAppKind': 'Unsupported app kind:',
     'apps.unsupportedDeclarativeApp': 'Unsupported declarative app:',
@@ -852,11 +916,18 @@ export const remainingTranslations = {
     'txSummary.sats': 'sats',
     'network.chipnet': 'Chipnet',
     'network.mainnet': 'Mainnet',
+    'network.activeLabel': 'Active network: {network}',
+    'network.liveMarker': 'LIVE',
+    'network.testMarker': 'TEST',
     'network.switch': 'Switch network. Current: {network}',
     'camera.scan': 'Scan QR with camera',
     'camera.unavailable': 'Camera unavailable: {error}. Use Upload instead.',
     'camera.cancel': 'Cancel',
     'walkthrough.label': 'Walkthrough',
+    'walkthrough.progress': 'Step {current} of {total}',
+    'walkthrough.previous': 'Back',
+    'walkthrough.next': 'Next',
+    'walkthrough.finish': 'Done',
     'error.somethingWrong': 'Something went wrong.',
     'rpa.copySuccess': 'Cash Code copied!',
     'rpa.copyFailed': 'Copy failed.',
@@ -909,9 +980,17 @@ export const remainingTranslations = {
     'wizard.connectedOn': 'Connected On',
     'wizard.close': 'Close',
     'wizard.signRequest': 'WizardConnect Sign Request',
+    'wizard.working': 'Working…',
+    'wizard.technicalDetails':
+      'Technical transaction details ({inputs} inputs, {outputs} outputs)',
+    'wizard.nftCapability': 'NFT capability',
+    'wizard.nftCommitment': 'NFT commitment',
     'wizard.unknownDapp': 'Unknown dApp',
     'wizard.dapp': 'DApp',
     'wizard.status': 'Status',
+    'wizard.statusHelpLabel': 'Explain connection status',
+    'wizard.statusHelp':
+      'This is the connection state reported by the relay. A relay can be reachable before the dApp session is fully acknowledged.',
     'wizard.prompt': 'Prompt',
     'wizard.unsupportedTransaction':
       'This request uses an unsupported transaction representation in the current OPTN Wallet integration.',
@@ -929,9 +1008,39 @@ export const remainingTranslations = {
     'wizard.no': 'No',
     'wizard.sign': 'Sign',
     'wizard.approved': 'WizardConnect transaction approved and sent.',
+    'wizard.signedReturned':
+      'Signed transaction returned to the app. The app may broadcast it later.',
     'wizard.approveFailed': 'WizardConnect transaction failed: {message}',
     'wizard.rejected': 'WizardConnect transaction rejected.',
     'wizard.rejectFailed': 'WizardConnect rejection failed: {message}',
+    'cashconnect.actionApproved':
+      'Prepared transactions returned to the app. The app may submit them.',
+    'cashconnect.actionApprovalFailed':
+      'CashConnect approval failed: {message}',
+    'cashconnect.actionRejected': 'CashConnect request rejected.',
+    'cashconnect.actionRejectionFailed':
+      'CashConnect rejection failed: {message}',
+    'cashconnect.reject': 'Reject',
+    'cashconnect.approve': 'Approve',
+    'cashconnect.approveRequest': 'Approve request',
+    'cashconnect.working': 'Working…',
+    'cashconnect.whatRequestDoes': 'What this request does',
+    'cashconnect.action': 'Action',
+    'cashconnect.approvingReturns':
+      'Approving returns {count} prepared transaction(s) to {name}. The app may submit them to the network.',
+    'cashconnect.multipleTransactions':
+      'This action includes multiple transactions. Review the estimated balance changes below.',
+    'cashconnect.balanceChange': 'Balance change reported by this request',
+    'cashconnect.sourceOutputsUnavailable':
+      'CashConnect did not provide the source outputs needed for this wallet to verify ownership and change independently.',
+    'cashconnect.noBalanceChange':
+      'No balance change was supplied for this request.',
+    'cashconnect.connectingDoesNotSend':
+      'Connecting does not send coins. Each spend asks again.',
+    'cashconnect.what': 'What',
+    'cashconnect.actions': 'Actions',
+    'cashconnect.tokens': 'Tokens',
+    'cashconnect.none': 'none',
     'wizard.sessionDisconnectedOrExpired':
       'A WizardConnect session disconnected or expired on the dApp side.',
 
@@ -973,6 +1082,12 @@ export const remainingTranslations = {
     'watchOnly.type': 'Watch-only wallet type',
     'watchOnly.standard': 'Standard',
     'watchOnly.accountXpub': 'Account xPub',
+    'watchOnly.accountXpubHelp':
+      'An account xPub is public information used to derive receive and change addresses. It cannot spend funds by itself.',
+    'watchOnly.masterFingerprint': 'Master fingerprint',
+    'watchOnly.optional': 'optional',
+    'watchOnly.masterFingerprintHelp':
+      'Optional public metadata that helps match this account to the signing device that exported it. It is not a private key.',
     'watchOnly.comingNext': 'Coming next',
     'watchOnly.multisign': 'Multisign',
     'watchOnly.multipleCosigners': 'Multiple cosigners',
@@ -1810,12 +1925,19 @@ export const remainingTranslations = {
     'txSummary.sats': 'sats',
     'network.chipnet': 'Chipnet',
     'network.mainnet': 'Mainnet',
+    'network.activeLabel': 'Red activa: {network}',
+    'network.liveMarker': 'EN VIVO',
+    'network.testMarker': 'PRUEBAS',
     'network.switch': 'Cambiar de red. Actual: {network}',
     'camera.scan': 'Escanear QR con la cámara',
     'camera.unavailable':
       'Cámara no disponible: {error}. Usa Cargar en su lugar.',
     'camera.cancel': 'Cancelar',
     'walkthrough.label': 'Guía',
+    'walkthrough.progress': 'Paso {current} de {total}',
+    'walkthrough.previous': 'Atrás',
+    'walkthrough.next': 'Siguiente',
+    'walkthrough.finish': 'Listo',
     'error.somethingWrong': 'Algo salió mal.',
     'rpa.copySuccess': '¡Cash Code copiado!',
     'rpa.copyFailed': 'No se pudo copiar.',
@@ -2052,6 +2174,12 @@ export const remainingTranslations = {
     'watchOnly.type': 'Tipo de billetera de solo lectura',
     'watchOnly.standard': 'Estándar',
     'watchOnly.accountXpub': 'xPub de cuenta',
+    'watchOnly.accountXpubHelp':
+      'Un xPub de cuenta es información pública usada para derivar direcciones de recepción y cambio. Por sí solo no puede gastar fondos.',
+    'watchOnly.masterFingerprint': 'Huella maestra',
+    'watchOnly.optional': 'opcional',
+    'watchOnly.masterFingerprintHelp':
+      'Metadato público opcional que ayuda a relacionar esta cuenta con el dispositivo de firma que la exportó. No es una clave privada.',
     'watchOnly.comingNext': 'Próximamente',
     'watchOnly.multisign': 'Multifirma',
     'watchOnly.multipleCosigners': 'Múltiples firmantes',
@@ -2805,11 +2933,18 @@ export const remainingTranslations = {
     'txSummary.sats': 'sats',
     'network.chipnet': 'Chipnet',
     'network.mainnet': 'Mainnet',
+    'network.activeLabel': '当前网络：{network}',
+    'network.liveMarker': '实时',
+    'network.testMarker': '测试',
     'network.switch': '切换网络。当前：{network}',
     'camera.scan': '使用相机扫描二维码',
     'camera.unavailable': '相机不可用：{error}。请改用上传。',
     'camera.cancel': '取消',
     'walkthrough.label': '操作指南',
+    'walkthrough.progress': '第 {current} 步，共 {total} 步',
+    'walkthrough.previous': '返回',
+    'walkthrough.next': '下一步',
+    'walkthrough.finish': '完成',
     'error.somethingWrong': '出现问题。',
     'rpa.copySuccess': 'Cash Code 已复制！',
     'rpa.copyFailed': '复制失败。',
@@ -3023,6 +3158,12 @@ export const remainingTranslations = {
     'watchOnly.type': '观察钱包类型',
     'watchOnly.standard': '标准',
     'watchOnly.accountXpub': '账户 xPub',
+    'watchOnly.accountXpubHelp':
+      '账户 xPub 是用于派生收款和找零地址的公开信息。它本身不能花费资金。',
+    'watchOnly.masterFingerprint': '主指纹',
+    'watchOnly.optional': '可选',
+    'watchOnly.masterFingerprintHelp':
+      '可选的公开元数据，用于将账户与导出它的签名设备对应起来。它不是私钥。',
     'watchOnly.comingNext': '即将推出',
     'watchOnly.multisign': '多重签名',
     'watchOnly.multipleCosigners': '多个共同签名者',

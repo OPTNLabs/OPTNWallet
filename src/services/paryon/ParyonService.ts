@@ -224,7 +224,6 @@ function resolveParyonContractNode(
       parsedInputs as never,
       {
         provider: ctx.provider,
-        addressType: 'p2sh32',
       }
     );
     const node: ParyonDerivedContractNode = {

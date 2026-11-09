@@ -1,11 +1,11 @@
 // src/components/UTXOCard.tsx
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
 import { SATSINBITCOIN } from '../utils/constants';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 import TokenIdentityBadge from './ui/TokenIdentityBadge';
+import PersonalLabelEditor from './ui/PersonalLabelEditor';
 import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
@@ -28,6 +28,7 @@ import {
 } from '../platform/desktop/coinHoldsBridge';
 import { isDesktopPlatform } from '../utils/platform';
 import { useI18n } from '../i18n/useI18n';
+import MaskedValue from './ui/MaskedValue';
 
 interface UTXOCardProps {
   utxos: UTXO[];
@@ -63,6 +64,8 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
   const { t } = useI18n();
   const walletId = useSelector(selectWalletId);
   const [labels, setLabels] = useState<Record<string, string>>({});
+  const [editingLabelKey, setEditingLabelKey] = useState<string | null>(null);
+  const [labelSavedKey, setLabelSavedKey] = useState<string | null>(null);
   // Held coins, keyed by outpoint. The record is the runtime's, and it is the
   // same one a Flipstarter pledge or an in-flight Fusion round holds a coin
   // with -- which is why the reason is shown and only a user hold offers a
@@ -139,23 +142,20 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
     [walletId, applyHolds]
   );
 
-  const editLabel = useCallback(
-    async (txHash: string, txPos: number, current: string | undefined) => {
+  const saveLabel = useCallback(
+    async (txHash: string, txPos: number, value: string) => {
       if (walletId <= 0) return;
       const key = outpointKey(txHash, txPos);
-      const next = window.prompt(
-        'Label this coin (empty to clear). Personal note only — not used for balance.',
-        current ?? ''
-      );
-      if (next === null) return;
-      await setCoinLabel(walletId, 'outpoint', key, next);
+      await setCoinLabel(walletId, 'outpoint', key, value);
       setLabels((prev) => {
         const copy = { ...prev };
-        const cleaned = next.trim();
+        const cleaned = value.trim();
         if (cleaned) copy[key] = cleaned.slice(0, 200);
         else delete copy[key];
         return copy;
       });
+      setEditingLabelKey(null);
+      setLabelSavedKey(key);
     },
     [walletId]
   );
@@ -247,7 +247,13 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                   </p>
                   <p>
                     <strong>{t('utxo.txHash')}:</strong>{' '}
-                    {shortenTxHash(utxo.tx_hash)}
+                    <MaskedValue
+                      value={utxo.tx_hash}
+                      label={t('history.transactionId')}
+                      ariaLabel={t('utxo.txHash')}
+                      copySuccessMessageKey="history.transactionCopied"
+                      className="text-xs"
+                    />
                   </p>
                   <p>
                     <strong>{t('utxo.pos')}:</strong> {utxo.tx_pos}
@@ -285,25 +291,52 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                   </button>
                 </p>
               )}
-              {walletId > 0 && (
-                <p className="flex flex-wrap items-center gap-2">
-                  <strong>Label:</strong>{' '}
-                  <span className="wallet-text-strong">
-                    {coinLabel || (
-                      <span className="wallet-muted italic">none</span>
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    className="text-xs underline wallet-muted hover:wallet-text-strong"
-                    onClick={() =>
-                      void editLabel(utxo.tx_hash, utxo.tx_pos, coinLabel)
+              {walletId > 0 &&
+                (editingLabelKey === okey ? (
+                  <PersonalLabelEditor
+                    key={okey}
+                    initialValue={coinLabel ?? ''}
+                    fieldLabel={t('history.labelPersonalNote')}
+                    saveLabel={t('history.saveLabel')}
+                    savingLabel={t('history.savingLabel')}
+                    cancelLabel={t('history.cancelLabel')}
+                    errorLabel={t('history.saveLabelFailed')}
+                    onSave={(value) =>
+                      saveLabel(utxo.tx_hash, utxo.tx_pos, value)
                     }
-                  >
-                    Edit
-                  </button>
-                </p>
-              )}
+                    onCancel={() => setEditingLabelKey(null)}
+                  />
+                ) : (
+                  <p className="flex flex-wrap items-center gap-2">
+                    <strong>{t('history.label')}:</strong>{' '}
+                    <span className="wallet-text-strong">
+                      {coinLabel || (
+                        <span className="wallet-muted italic">
+                          {t('history.noLabel')}
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      className="min-h-[44px] px-2 text-xs underline wallet-muted hover:wallet-text-strong"
+                      onClick={() => {
+                        setLabelSavedKey(null);
+                        setEditingLabelKey(okey);
+                      }}
+                    >
+                      {t('history.editLabel')}
+                    </button>
+                    {labelSavedKey === okey && (
+                      <span
+                        className="sr-only"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        {t('history.labelSaved')}
+                      </span>
+                    )}
+                  </p>
+                ))}
             </div>
 
             <div className="flex flex-col items-center space-y-2">

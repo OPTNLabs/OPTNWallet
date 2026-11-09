@@ -18,6 +18,7 @@ export type SettingsPanelKey =
   | 'birthday'
   | 'derivation'
   | 'server'
+  | 'explorer'
   | 'console'
   | 'experimental'
   | 'cashfusion'
@@ -99,8 +100,8 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   },
   {
     key: 'pending-outbox',
-    title: 'Pending Tx Locks',
-    description: 'Review outgoing transaction locks',
+    title: 'Pending outgoing transactions',
+    description: 'Review outgoing transactions still being checked',
     action: 'navigate',
     target: ROUTE_PATHS.outbox,
   },
@@ -135,9 +136,16 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   {
     key: 'server',
     title: 'Servers',
-    description: 'Electrum · Block explorer · Transaction fees',
+    description: 'Electrum connections and transaction fees',
     action: 'panel',
     target: 'server',
+  },
+  {
+    key: 'explorer',
+    title: 'Explorer',
+    description: 'Choose where transaction links open',
+    action: 'panel',
+    target: 'explorer',
   },
   {
     key: 'console',
@@ -217,6 +225,7 @@ export function getSettingsGroupRows(
     ),
     features: [
       WALLET_ROWS.find((row) => row.key === 'server')!,
+      WALLET_ROWS.find((row) => row.key === 'explorer')!,
       WALLET_ROWS.find((row) => row.key === 'nostr')!,
       ...CONNECTION_ROWS,
       WALLET_ROWS.find((row) => row.key === 'experimental')!,

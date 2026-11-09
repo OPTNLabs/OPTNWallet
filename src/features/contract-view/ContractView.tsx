@@ -11,7 +11,6 @@ import { RootState } from '../../state/store';
 import AddressSelectionPopup from '../../components/AddressSelectionPopup';
 import KeyService from '../../services/KeyService';
 import { shortenTxHash } from '../../utils/shortenHash';
-import { PREFIX } from '../../utils/constants';
 import { Toast } from '@capacitor/toast';
 import Popup from '../../components/transaction/Popup';
 import WalletTooltip from '../../components/ui/WalletTooltip';
@@ -31,13 +30,15 @@ import { parseConstructorArgs, validateConstructorArgsComplete } from './utils';
 import PageHeader from '../../components/ui/PageHeader';
 import SectionCard from '../../components/ui/SectionCard';
 import EmptyState from '../../components/ui/EmptyState';
+import ContractLoadFailure from './ContractLoadFailure';
 import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
 } from '../../utils/barcodeScanner';
 import WalletScreen from '../../components/ui/WalletScreen';
 import { useI18n } from '../../i18n/useI18n';
-import { copyToClipboard } from '../../utils/clipboard';
+import MaskedValue from '../../components/ui/MaskedValue';
+import RouteExitFooter from '../../components/ui/RouteExitFooter';
 
 interface ContractArg {
   name: string;
@@ -103,6 +104,7 @@ const ContractView = () => {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [blockHeight, setBlockHeight] = useState<number | null>(null);
+  const [loadRetryKey, setLoadRetryKey] = useState(0);
 
   // datasig helpers
   const [selectedAddresses, setSelectedAddresses] = useState<{
@@ -197,7 +199,7 @@ const ContractView = () => {
 
     loadAvailableContracts();
     loadContractInstances();
-  }, [contractManager, t]);
+  }, [contractManager, t, loadRetryKey]);
 
   useEffect(() => {
     const loadContractDetails = async () => {
@@ -226,17 +228,6 @@ const ContractView = () => {
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = event.target;
     setInputValues({ ...inputValues, [name]: value });
-  };
-
-  const handleCopyAddress = async (address: string) => {
-    try {
-      if (!(await copyToClipboard(address)))
-        throw new Error('clipboard write failed');
-      await Toast.show({ text: t('contractView.addressCopied') });
-    } catch (error) {
-      logError('ContractView.copyAddress', error, { address });
-      await Toast.show({ text: t('contractView.copyFailed') });
-    }
   };
 
   const handleAddressSelect = async (address: string) => {
@@ -413,11 +404,28 @@ const ContractView = () => {
   };
 
   if (error) {
+    const returnTarget = getReturnPath(location, `/home/${wallet_id}`);
     return (
       <WalletScreen maxWidthClassName="max-w-xl">
-        <PageHeader title={t('contractView.title')} compact />
-        <EmptyState
-          message={t('contractView.errorPrefix', { message: error })}
+        <PageHeader
+          title={t('contractView.title')}
+          subtitle={
+            currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+          }
+          compact
+        />
+        <ContractLoadFailure
+          message={t('contractView.loadFailedFriendly')}
+          technicalMessage={error}
+          retryLabel={t('builder.tryAgain')}
+          onRetry={() => {
+            setError(null);
+            setLoadRetryKey((key) => key + 1);
+          }}
+        />
+        <RouteExitFooter
+          label={t('contractView.back')}
+          onBack={() => navigate(returnTarget)}
         />
       </WalletScreen>
     );
@@ -428,7 +436,13 @@ const ContractView = () => {
   return (
     <WalletScreen maxWidthClassName="max-w-xl">
       <div className="flex min-h-full flex-col gap-4">
-        <PageHeader title={t('contractView.title')} compact />
+        <PageHeader
+          title={t('contractView.title')}
+          subtitle={
+            currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+          }
+          compact
+        />
         <div className="space-y-4">
           <SectionCard title={t('contractView.create')} className="mb-4">
             <div className="space-y-3">
@@ -473,39 +487,31 @@ const ContractView = () => {
                           {instance.contract_name}
                         </div>
 
-                        <button
-                          type="button"
-                          className="flex w-full items-center justify-between gap-3 text-left text-sm"
-                          onClick={() => handleCopyAddress(instance.address)}
-                        >
+                        <div className="flex w-full items-center justify-between gap-3 text-left text-sm">
                           <span className="wallet-muted">
                             {t('contractView.address')}
                           </span>
-                          <span className="truncate font-mono wallet-text-strong">
-                            {shortenTxHash(
-                              instance.address,
-                              PREFIX[currentNetwork].length
-                            )}
-                          </span>
-                        </button>
+                          <MaskedValue
+                            value={instance.address}
+                            label={t('contractView.address')}
+                            copySuccessMessageKey="contractView.addressCopied"
+                            embedded
+                            className="max-w-[62%] truncate text-xs wallet-text-strong"
+                          />
+                        </div>
 
-                        <button
-                          type="button"
-                          className="flex w-full items-center justify-between gap-3 text-left text-sm"
-                          onClick={() =>
-                            handleCopyAddress(instance.token_address)
-                          }
-                        >
+                        <div className="flex w-full items-center justify-between gap-3 text-left text-sm">
                           <span className="wallet-muted">
                             {t('contractView.tokenAddress')}
                           </span>
-                          <span className="truncate font-mono wallet-text-strong">
-                            {shortenTxHash(
-                              instance.token_address,
-                              PREFIX[currentNetwork].length
-                            )}
-                          </span>
-                        </button>
+                          <MaskedValue
+                            value={instance.token_address}
+                            label={t('contractView.tokenAddress')}
+                            copySuccessMessageKey="contractView.addressCopied"
+                            embedded
+                            className="max-w-[62%] truncate text-xs wallet-text-strong"
+                          />
+                        </div>
 
                         <div className="text-sm">
                           <span className="wallet-muted">
@@ -542,14 +548,10 @@ const ContractView = () => {
           </SectionCard>
         </div>
 
-        <div className="mt-auto pb-2 pt-3">
-          <button
-            onClick={() => navigate(returnTarget)}
-            className="wallet-btn-danger w-full py-3 font-semibold"
-          >
-            {t('contractView.back')}
-          </button>
-        </div>
+        <RouteExitFooter
+          label={t('contractView.back')}
+          onBack={() => navigate(returnTarget)}
+        />
       </div>
 
       {showConstructorArgsPopup && (
@@ -685,10 +687,13 @@ const ContractView = () => {
                     {selectedAddresses[arg.name] && (
                       <div className="text-sm wallet-muted">
                         {t('contractView.signingAddress')}:{' '}
-                        {shortenTxHash(
-                          selectedAddresses[arg.name],
-                          PREFIX[currentNetwork].length
-                        )}
+                        <MaskedValue
+                          value={selectedAddresses[arg.name]}
+                          label={t('contractView.signingAddress')}
+                          copySuccessMessageKey="contractView.addressCopied"
+                          embedded
+                          className="text-xs"
+                        />
                       </div>
                     )}
                     {inputValues[arg.name] && (
@@ -771,7 +776,16 @@ const ContractView = () => {
                       {inputValues[arg.name] && (
                         <div className="text-sm mt-2 wallet-muted break-all">
                           {t('contractView.selected', { type: arg.type })}:{' '}
-                          {shortenTxHash(inputValues[arg.name])}
+                          <MaskedValue
+                            value={inputValues[arg.name]}
+                            label={t('contractView.selected', {
+                              type: arg.type,
+                            })}
+                            ariaLabel={t('receive.copyAddress')}
+                            copySuccessMessageKey="contractView.addressCopied"
+                            embedded
+                            className="text-xs"
+                          />
                         </div>
                       )}
                     </>
