@@ -2426,6 +2426,7 @@ export const WatchOnlySend: FC<WatchOnlySendProps> = ({
                         label={t('send.changeAddress')}
                         ariaLabel={t('send.changeAddress')}
                         copySuccessMessageKey="receive.addressCopied"
+                        preserveCashAddressPrefix
                         embedded
                         className="max-w-[10rem] truncate align-middle"
                       />
