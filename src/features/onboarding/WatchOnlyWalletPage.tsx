@@ -264,6 +264,7 @@ const WatchOnlyWalletPage = () => {
                   value={preview.receive.address}
                   label={t('send.address')}
                   copySuccessMessageKey="receive.addressCopied"
+                  preserveCashAddressPrefix
                   className="text-xs wallet-muted"
                 />
               </p>
@@ -273,6 +274,7 @@ const WatchOnlyWalletPage = () => {
                   value={preview.change.address}
                   label={t('send.address')}
                   copySuccessMessageKey="receive.addressCopied"
+                  preserveCashAddressPrefix
                   className="text-xs wallet-muted"
                 />
               </p>
