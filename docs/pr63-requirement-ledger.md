@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 51060)
-Total output lines: 3083
-
 # PR #63 requirement ledger — #71, #75 and #83
 
 Current source and execution evidence establish what exists. Current issue
@@ -1220,7 +1217,89 @@ Still open from the 2026-10-08 table: renderer HTTP and image loads, which
 still go direct from the webview, and Fusion input checks through
 `chain_service`. The first is closed in the next entry.
 
-### 2026-10-09: the webview cannot reach the…1060 tokens truncated…ues in BCHN's `chainparams.cpp`, and they were
+### 2026-10-09: the webview cannot reach the network
+
+Everything above governed Rust. The webview still made its own requests, so
+none of it applied there:
+
+- `fetch` went direct to every host the CSP listed, and only the price host
+  went through Rust. The Cauldron activity scan sends up to 300 of the
+  wallet's PKHs to `indexer.riften.net` on every wallet open.
+- Every relay socket went direct, because the CSP allowed any `wss:`/`ws:`:
+  WalletConnect, CashConnect, WizardConnect (whose pairing URI names the
+  relay, plaintext included) and Nostr chat.
+- The P2P Fusion relays went direct as well. `FusionP2pService` set the
+  Tor socket through `nostr-tools/pool`, but its `SimplePool` comes from
+  `nostr-tools`, a separate module with its own default, so the Tor socket was
+  never used. A relay could link a peer's inputs to its outputs.
+- Images from any `https:` host loaded straight from the webview.
+- The legacy Electrum client's native TCP socket, the price fetch and the
+  update check all ignored the switch.
+- Links opened in the system browser with no warning, through `cmd /C start`,
+  where a `&` in a query string is a second command.
+
+Now the CSP allows only the app, IPC and loopback, in release and in the Vite
+dev server. Remote `fetch`, sockets, images and the Electrum socket all go
+through Rust (`src-tauri/src/egress.rs`), and one rule decides each route. The
+rules are in `docs/network-transport-policy.md`:
+
+- the stricter of the runtime's and the window's network;
+- own nodes direct only when declared own on both;
+- with Tor off, public names resolve to public addresses only, and the
+  connection goes to the address that was checked;
+- sockets close with their page and on every change of the switch;
+- a link outside Tor asks first.
+
+HTTP is still limited to the hosts the old CSP allowed. Images take `https`
+names only.
+
+Fusion's relay pools are now given the Tor-only socket directly, and a test
+checks every pool, the per-output ones included.
+
+A review of the first version found 31 issues, all fixed here. Among them:
+
+- WalletConnect never connected: its relay URL has a query and no path, and
+  a hand-written parser read the query as part of the host. URLs are now
+  parsed by `reqwest::Url`.
+- Two windows on different networks followed the wrong switch.
+- A socket outlived its page, and ignored a later switch change.
+- Frames that arrived before the page listened were lost.
+- Failed images were cached for the session.
+
+Checking the release bundle found that the bridges themselves loaded too
+late. The desktop prelude was imported first in `main.tsx`, but the bundler
+runs every chunk an entry imports before the entry's own code. The chunk
+holding nostr-tools and the redux store ran first.
+
+- nostr-tools had already captured the webview's `WebSocket`. Under the new
+  CSP its relays would have failed closed.
+- The store had already opened the shared `optn-wallet` database before
+  `storagePartition` could rename it. Every release window shared one persist
+  database: the bug the partition exists to prevent. This one predates this
+  work, and development builds never showed it.
+
+The prelude is now a chunk of its own, imported before any other.
+`scripts/__tests__/desktopPrelude.test.mts` checks the chunking, the import
+order and the dev-server CSP.
+
+
+### 2026-10-09: headers before the ASERT anchor are bounded by the network's limit
+
+#75 §20 (item 75-62). `verify_header_extension` checked a header's link and
+its own declared proof-of-work everywhere, and the expected ASERT difficulty
+only from the anchor on. Below the anchor nothing bounded the declared
+target. A mainnet header below 661,647 that declared `0x207fffff` (regtest's
+limit) and met it passed. Nor was the anchor tied to a chain: a chain that
+crossed the anchor height on different blocks was judged by the anchor's
+bits and time all the same.
+
+Two checks now run wherever an `AsertCheck` is attached. The shipped
+verifiers, header recovery, the desktop SPV walk and the CLI all attach one:
+
+- **The proof-of-work limit, at every height.** The declared target may not
+  be easier than the network's `powLimit`. Mainnet, chipnet, testnet3 and
+  testnet4 use `0x1d00ffff`, and regtest `0x207fffff`. These are the compact
+  forms of the `powLimit` values in BCHN's `chainparams.cpp`, and they were
   already `AsertParams::max_bits`.
 - **The anchor's chain.** BCHN keeps the ASERT anchor by height, bits and
   previous time, and requires "the block after this height" to be
@@ -3002,6 +3081,624 @@ faster (40-52 s). Circuit setup is not what bounds a hop.
 The TypeScript side exists only in builds before `9212c1a7`; a round with
 them is bounded by their timing, which this repository no longer ships. A
 longer onion budget would be a protocol change both sides must share.
+
+## React app UX basics (2026-10-23)
+
+Working tree based on `ac2da1ceec73c8cd457e44fdfe02035cb034a173`, branch
+`codex/ux-basics-and-workflow`, existing Linux checkout. The change restores a
+separate transaction-history explorer action governed by selected explorer,
+network and privacy policy; adds result-aware copy feedback across wallet and
+built-in apps; clarifies send-review preparation; announces history loading;
+and tracks wallet sync freshness so offline cached balances are identified as
+unverified/stale. Empty Send now explains why Review is disabled. No transaction
+authorization, signing, or broadcast behavior was changed. The canonical UI/UX
+skill, repository instructions, and PR evidence prompts require reference
+inspection, affected-flow review, accessibility/usability checks, and rendered
+evidence proportional to the change.
+
+The route, 26 settings-panel, desktop-menu, connector-dialog, and built-in-app
+register and per-surface gaps are in `docs/UX_IMPROVEMENT_PLAN.md`. Android 34
+x86_64 isolated emulator with a disposable offline wallet rendered onboarding,
+Home, Assets, Actions, Apps, Send, and Settings → Server. Home's offline recovery
+link reached Server settings. Receive copy invoked the Capacitor Toast and
+Android logged “Address copied”; the unsafe clipboard-preview capture was
+discarded. Chrome headless rendered onboarding at a desktop-size viewport only;
+it is not interactive desktop acceptance. Screenshots are indexed in
+`docs/ui-overhaul/evidence/`.
+
+Focused regressions cover explorer/privacy/network and opening behavior, copy
+success/failure/fallback/repeated message, WASM startup, and wallet-sync
+outcomes. Rendered component tests now check distinct details/explorer actions,
+network-correct URL resolution, privacy refusal guidance and its Settings link;
+history pagination accessible names; and the Outbox Fusion verification lock's
+visible and announced recovery reason. The expanded React UI suite passes 52
+tests. Final full checks passed: core
+1,962 passed / 10 skipped (306 files passed, 7 skipped), apps 137, UI 52,
+security 6, `typecheck:core`,
+`lint:core`, `format:check`, `git diff --check`, standard and desktop Vite
+builds, Android web build/Capacitor sync, and Java 21 `assemblePlayDebug`.
+Prettier check also passed for the changed workflow and evidence documents.
+
+After the clean-profile emulator exposed a multi-second blank startup, the HTML
+shell now shows “Starting wallet…” before the JavaScript module graph executes.
+The startup status has a focused accessibility test, and the latest Android 34
+package rendered both startup progress and onboarding in the disposable profile
+(screenshots indexed in `docs/ui-overhaul/evidence/`). The latest Send hint
+still has automated/source evidence but was not rerendered in that package. iOS
+and packaged desktop are not rendered; native Toast
+stacking above dialogs and physical safe-area/touch behavior are unverified;
+every route/panel/dialog still needs fixture exercise for its relevant
+loading/empty/error/cancel/retry states. `docs/UX_IMPROVEMENT_PLAN.md` names these
+gaps per inventory group. No mainnet spending, publishing, commit, or push was
+performed.
+
+Continuation at the same source revision (`ac2da1ce`, 2026-10-23): full core
+tests were rerun after locale completion (1,962 passed, 10 skipped; 306 files
+passed, 7 skipped), and the UI suite remains green at 52 tests. The QR
+scanner controls in Simple Send and the advanced BCH/CashToken/NFT transaction
+editors now have localized accessible names, decorative camera icons and
+explicit 44px minimum hit areas. Source review found keyboard focus styles in
+the shared wallet button/link classes. Final Android 34 `assemblePlayDebug`
+package was installed in the dedicated CodexUX AVD and onboarding was rendered
+again; `docs/ui-overhaul/evidence/android-onboarding-final-android34.png` is the
+safe capture. During an attempted creation-flow inspection, a generated recovery
+phrase appeared in a temporary image. That image was deleted and the app data
+cleared before the wallet was saved. The fixture was discarded and no recovery
+phrase is retained in the evidence directory. This attempt is not creation,
+recovery, Receive, or touch-target package evidence. Scanner interaction and
+the latest Receive/Assets 44px target render therefore remain explicitly open.
+Chrome headless at 1440×1000 rendered current onboarding and the Help
+walkthrough; the overlay/content were visually inspected and Tab focus
+showed the Language selector’s green focus ring. Screenshots
+`browser-onboarding-final-chrome.png` and
+`browser-help-final-chrome.png` record that bounded desktop-browser evidence.
+It does not establish packaged Tauri desktop behavior.
+A separate Chrome headless 390×844 run exercised create-screen readiness
+(12 mnemonic rows counted without reading), Back/cancel before wallet
+creation, invalid mnemonic rejection, and watch-only missing-name/xPub
+recovery messages. No wallet was saved. The phrase-length selector is not
+present on this React browser surface; 12-field invalid import is the
+verified case. Screenshot `browser-onboarding-mobile-chrome.png` records
+the 390×844 onboarding layout; its primary actions measured 48–50px high.
+
+Receive and Assets touch-target continuation on 2026-10-23: rebuilt the Play
+Debug package and installed it in the isolated Android 34 CodexUX emulator.
+Using a disposable watch-only wallet derived from a deterministic public-only
+test fixture (no private key or funds), WebView measurements on Receive found
+the “Copy address” action named, icon-bearing and 44px high; the address-type
+switch and Address/PubKey/PKH tabs are also 44px. BCH/NFT Assets tabs measure
+44px. The copy button was not tapped during this measurement, avoiding a
+clipboard preview. `npm run test:ui` passes 52 tests, `npm run format:check`,
+`npm run typecheck:core`, and `npm run lint:core` pass. Native Toast stacking,
+physical safe areas and remaining route/dialog fixtures remain open.
+
+Rendered UX continuation on 2026-10-23, source worktree based on `ac2da1cee`
+(uncommitted branch `codex/ux-basics-and-workflow`): the Android 34 CodexUX
+emulator ran the rebuilt Play Debug package in the offline disposable watch-only
+profile. Direct route checks rendered Home, Assets, Receive, watch-only Send,
+transaction builder, Transaction History, Outbox, Actions, Apps, Settings,
+Multisig setup, Quantumroot, Mint PoC, Paper Wallet and Contract. CashFusion
+correctly fell back to Home because the public-only fixture has no CashFusion
+capability; this is an environment boundary, not evidence of the enabled flow.
+The three Settings categories and all seven available Connections panels
+(Servers, Nostr & Chat, Merchant Pay, WalletConnect, WizardConnect, CashConnect,
+Experimental Features) opened and returned without activating network,
+connection, publish, or experimental-feature actions. Recovery/Wallet Info
+secret gates and destructive controls were not opened. Terms of Use rendered as
+a long-content panel and its Back action returned to the Settings category.
+
+That visual review found the ordinary Settings Back button was styled as a
+danger action. It now uses the shared secondary button class. `Settings.ui.test`
+asserts secondary styling and that danger styling is absent. The updated Android
+package confirmed the class and rendered the corrected Terms of Use panel; safe
+captures are `android-settings-categories-android34.png` and
+`android-settings-back-secondary-android34.png`. Native Toast stacking over an
+open dialog, iOS, desktop menus, enabled CashFusion, and the remaining sensitive
+or transaction-backed states still need platform/fixture evidence. After this
+change, the complete UI suite passes 52 tests, standard `npm run build` passes,
+`VITE_APP_SURFACE=desktop npm run build:web` passes, `npm run android:prepare`
+passes, and Java 21 Gradle `assemblePlayDebug` succeeds and was installed in the
+CodexUX emulator. `git diff --check` passes; changes remain unstaged and
+uncommitted.
+
+The same offline Android profile was then used to inspect watch-only `/send`.
+The destination and amount controls have visible labels and measured 46px high;
+because the wallet is offline, the primary action is explicitly disabled with
+“Network refresh required.” The empty-coin helper incorrectly told this
+watch-only user to refresh a multisig inventory. `WatchOnlySend` now chooses
+the hint from its loaded multisig-policy context, and its focused feature test
+passes all five cases. The inspection used only an invalid destination string;
+no network refresh, approval, signing or send occurred. Full `npm run test:core`
+passes 1,963 tests (10 skipped; 306 files passed and 7 skipped), and
+`npm run test:ui` passes 52 tests. Standard `npm run build` and the separate
+`VITE_APP_SURFACE=desktop npm run build:web` pass; `npm run android:prepare` and
+Java 21 Gradle `assemblePlayDebug` also pass. The updated package was installed
+in the same emulator and rendered the corrected hint; screenshot
+`android-watch-only-send-no-coins-android34.png` hides the public fixture's
+change-address row and leaves the destination empty. Desktop and
+transaction-backed states remain open.
+
+Final watch-only `/send` correction on 2026-10-23: the Android screenshot showed
+the enabled Build unsigned transaction action even though no BCH inputs were
+available. `unsignedBuildAvailability` now disables the action for an empty or
+unselected input set and provides an accessible reason; the shared helper also
+keeps busy/network gating explicit. Six focused `WatchOnlySend.test.tsx` cases
+pass. The rebuilt Android 34 package was installed and verified: the button is
+disabled, `aria-describedby` resolves to “A spendable BCH coin is required to
+build an unsigned transaction,” and the wallet-specific empty-coin hint is
+visible. Before/after captures are `android-watch-only-send-unguarded-build-before.png`
+and `android-watch-only-send-no-coins-android34.png`; the after capture leaves
+the destination empty and masks the public change address. No
+transaction build or send was invoked. Final validation passes: core 1,964
+passed / 10 skipped (306 test files passed, 7 skipped), UI 52 passed, typecheck
+and standard React build, separate desktop React build, Android prepare/sync,
+Java 21 `assemblePlayDebug`, `lint:core`, formatting, and `git diff --check`.
+Packaged desktop/iOS and the remaining transaction-backed or sensitive flows
+remain unverified.
+
+Receive/BIP21 continuation (2026-10-23), same source revision `ac2da1cee`,
+branch `codex/ux-basics-and-workflow`: source review found the payment URI
+builder double-prefixed a mainnet CashAddr that already contained
+`bitcoincash:`. `buildBchPaymentUri` now strips only that duplicate mainnet
+prefix, preserves test-network address prefixes, and URL-encodes optional
+fields. Four focused tests pass for mainnet, testnet, encoding/order and an
+empty address. The Receive dialog labels now associate with all three fields;
+Amount, Label, Message, Copy BIP21 and Clear have 44px minimum heights.
+
+The latest web assets were synced into and built as Android Play Debug with
+Java 21, installed in the isolated Android 34 CodexUX AVD, and inspected in the
+offline disposable public-only watch-only wallet (no private key or funds).
+WebView reports one associated label per field and 44px for each field and
+Clear; Escape closes the dialog. The amount, label and message were left empty;
+no payment URI or address was copied, logged, screenshotted or broadcast. This
+is native-package evidence for dialog semantics and touch targets only; it does
+not establish QR decoding, native Toast stacking above a dialog, physical
+touch/safe-area behavior, iOS, packaged desktop or the remaining transaction-
+backed flows. The CashAddr URI rule is documented in the
+[CashAddr specification](https://github.com/bitcoincashorg/bitcoincash.org/blob/master/spec/cashaddr.md#double-prefix).
+
+Shared-dialog continuation (2026-10-23), same branch/source line: packaged
+Android interaction review found the shared Popup lacked `role=dialog`,
+`aria-modal`, and Escape dismissal. The common Popup now exposes modal
+semantics and Escape calls its existing close callback. Its focused component
+test passes and asserts the semantics. After `npm run android:prepare`, Java 21
+`assemblePlayDebug`, and installation into Android 34 CodexUX, the Receive
+BIP21 dialog reported `role=dialog`, `aria-modal=true`; all three inputs had one
+associated label and measured 44px; Escape closed the dialog. Focus containment
+and restoration were covered in the subsequent keyboard-focus continuation
+below; stacked/nested modal behavior and VoiceOver/TalkBack behavior remain
+unverified. No address or payment URI was copied or captured.
+
+Popup focus continuation (2026-10-23): the shared Popup now focuses its first
+available control (falling back to Close) on open, traps Tab/Shift+Tab at the
+dialog boundaries, restores focus to
+the previously focused element after unmount, and closes on Escape. The UI
+interaction regression passes. In the rebuilt Play Debug package on the
+Android 34 CodexUX AVD, Receive BIP21 opened with focus on Close; Shift+Tab from
+Amount wrapped to Close, Tab from Close wrapped to Amount, Escape dismissed the
+dialog, and focus returned to the BIP21 trigger. This verifies WebView DOM
+keyboard handling, not TalkBack announcements, physical keyboard/platform
+variations, or nested modal coordination.
+
+Shared Popup hierarchy continuation: generic Close now uses the secondary
+button style, not danger styling. Popup initially focuses its first interactive
+control and falls back to Close for content without controls. The static
+component regression verifies the style; the jsdom keyboard test verifies focus
+entry, wrap, cancel and restore. The rebuilt Android WebView confirms Amount
+receives initial focus and Close has `wallet-btn-secondary`. Desktop native
+render remains unverified.
+
+The Linux desktop WebDriver runtime is not installed on this host: `tauri-driver`
+is available, but `WebKitWebDriver` and the WebKitGTK runtime/development package
+are missing. The package index lists `webkitgtk-webdriver`, but installation
+requires sudo authentication unavailable to this session. Therefore the
+packaged Tauri desktop E2E flow was not run; the desktop React build and UI
+component suite are separate evidence and do not substitute for it.
+
+A controlled-rerender regression also confirms focus remains on the active
+popup control when callers pass a new inline close callback; the latest callback
+still receives Escape dismissal. The final Android package was rebuilt and
+reinstalled after this change, and its Receive BIP21 focus/label/target/close
+checks were repeated successfully.
+
+Connector sheet continuation: WalletPopupSheet now shares focus entry, Tab
+containment, Escape dismissal, focus restoration and callback-ref behavior with
+the general Popup. WalletConnect and CashConnect proposal/action dismiss
+controls now say Reject because dismissal invokes their rejection handlers;
+CashConnect error dismissal remains Close. Static/UI component tests cover
+semantics and keyboard behavior. No live dApp proposal was opened or rejected;
+connector resolution and native dialog stacking remain unverified.
+
+Contract address picker continuation: source review found that failed key
+retrieval was only logged and an empty result rendered a blank modal. It now
+uses the shared modal semantics and focus behavior, labels Back as a neutral
+secondary action, announces loading, explains an empty address list, presents a
+retry on retrieval failure, and gives each shortened address an accessible
+selection name and a 44px minimum target. UI tests cover loading and selection,
+empty state, and failure/retry recovery; selected values are checked without
+including the full address in the accessible label. The Android package build
+passed, but the offline watch-only fixture exposed no contract templates on
+`/contract`, so the picker could not be opened for packaged interaction. A
+disposable contract fixture with address arguments is still required. No key
+export, transaction construction or broadcast was performed.
+
+UX continuation validation after the contract-picker and Arabic resource updates
+(2026-10-23, branch `codex/ux-basics-and-workflow`, source base `ac2da1cee`):
+`npm run test:core` passes 1,968 tests with 10 skipped (307 files passed, 7
+skipped); `npm run test:ui` passes 57 tests across 17 files. Standard build,
+desktop-surface build, repo lint, changed-file Prettier, typecheck, i18n resource
+regression, and `git diff --check` pass. Android assets were synced and Play
+Debug `assemblePlayDebug` succeeds with Java 21. The emulator's `/contract`
+route has no available template and shows the existing empty contract-instance
+state, so the new picker’s loading/empty/error/retry states are component-tested
+but not claimed as packaged runtime evidence.
+
+Assets fallback-read continuation: code review found the screen stored but
+never rendered `useFetchWalletData` errors. A database read failure now appears
+as a localized alert with a secondary 44px Retry action; Retry reruns the same
+local read through an explicit request key and does not request network sync.
+When the initialized shared UTXO snapshot makes the fallback unnecessary, stale
+fallback errors clear. The focused hook regression verifies initial failure,
+error clearing, and successful retry. English, Spanish, Chinese, and Arabic
+messages are present; the Arabic resource-completeness gate passes. A packaged
+Assets database-failure state is not yet exercised because the emulator has no
+disposable DB-failure fixture.
+
+Assets error-state validation (2026-10-23; source base `ac2da1cee`): after the
+retry-key and localized alert changes, full core tests pass (1,968 passed, 10
+skipped; 307 files passed, 7 skipped), and the full UI suite passes 58 tests
+across 18 files. The 12-case focused group (address-picker and Assets-fetch
+states plus locale resource checks) passes. Standard and desktop builds,
+typecheck, repo lint, formatting, `git diff --check`, Android asset sync and
+Java 21 `assemblePlayDebug` pass. This proves the fallback’s failure/retry
+logic and compiled package; it does not prove a rendered packaged Assets
+failure because the emulator fixture has no disposable database-failure mode.
+
+Transaction-history continuation (2026-10-23; branch `codex/ux-basics-and-workflow`,
+source base `ac2da1cee`): a rejected history refresh previously only logged an
+error, leaving an empty wallet indistinguishable from an offline scan failure.
+The history hook now exposes a failure state, clears it when retry starts, and
+the page presents a localized alert with a 44px Retry control. Hook regression
+tests confirm failure and retry recovery; the history component tests continue
+to verify explorer/detail separation and policy guidance. Focused hook tests
+(2/2), focused history UI tests (2/2), and changed-file Prettier pass. Native
+history refresh failure rendering and populated pagination/detail-service
+states remain unverified; this entry makes no packaged-runtime claim.
+
+CashFusion touch-target continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): source review found
+the protocol-help disclosure and three mode switches measured below 44px.
+They now expose minimum 44px height and 56px switch width while retaining their
+existing actions and disabled behavior. CashFusion settings tests pass 5/5,
+including the touch-target regression, and changed-file formatting passes.
+The disposable public-only watch-only fixture cannot expose the CashFusion
+route, so there is no packaged interaction evidence for these controls.
+
+Home refresh feedback continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): manual Home refresh
+network/history failures previously only reached logs. Home now presents a
+localized alert, clears it when a retry starts, and keeps Sync at a 44px minimum
+target. Focused Home sync and resource tests pass (14/14), including the
+existing Arabic resource-completeness gate. Full UI suite passes 58 tests across
+18 files; core typecheck/lint, standard and desktop React builds, formatting,
+and `git diff --check` pass. Native failure-state rendering needs a disposable
+network-failure fixture and is not claimed here.
+
+Contract View load recovery continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): template or instance
+load failures previously left the route in an error empty state without an
+in-place recovery path. The error screen now announces the message and exposes
+a 44px Retry action, which clears the error and reruns both reads. The focused
+UI regression verifies the alert, button target class and callback. A packaged
+retry still needs a disposable contract fixture with available templates.
+The focused UI test passes; the full UI suite passes 59 tests across 19 files.
+Core typecheck/lint, standard and desktop React builds, changed-file formatting
+and `git diff --check` pass. No contract was created, signed or broadcast.
+
+Paper Wallet Sweep failure presentation continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): code review showed a
+broadcast failure left the confirmation sheet open while its error appeared
+only behind the sheet. The shared inline notice now uses `role=alert` on the
+page and inside the sheet; Scan/Sweep actions are minimum 44px, and Back uses a
+secondary style. The focused UI regression passes and verifies alert content
+in both presentation styles. No sweep was initiated; packaged broadcast-failure
+presentation remains unverified and no funds were broadcast. The full UI suite
+passes 60 tests across 20 files; core typecheck/lint, standard and desktop React
+builds, formatting, and `git diff --check` pass.
+
+Wallet Info touch and feedback continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): Wallet Info copy
+actions now rely on the shared result-aware presenter without a redundant local
+success label or swallowed wrapper failures. Copy controls have accessible
+names and 44px targets; rename/save/cancel, key-identity and recovery controls
+also have 44px minimum targets. Wallet errors announce with `role=alert` and
+name-save feedback with `role=status`; password/biometric checks are unchanged.
+Focused copy and locale tests pass (15/15), full UI suite passes 60 tests across
+20 files, and core typecheck/lint, both React builds, formatting and
+`git diff --check` pass. No wallet secret was revealed; packaged secret-gate
+verification remains open.
+
+Receive address preparation continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): address bootstrap
+failures were logged without feedback, the action stayed enabled while deriving,
+and empty results appeared successful. Receive now guards duplicate starts,
+announces loading/failure with localized copy, treats missing main addresses as
+failure and offers a 44px retry action in both empty-address layouts. Wallet
+changes clear prior address state and cancel stale lookup results; the explicit
+bootstrap checks the active wallet before publishing. Focused Receive UI and
+resource tests pass (13/13); full UI suite passes 62 tests across 21 files.
+Core typecheck/lint, standard and desktop React builds, formatting and
+`git diff --check` pass. Native failure and wallet-switch exercise remain open.
+
+Server Settings outcome feedback continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): connection failure and
+success copy was visible without alert/status semantics, and Auto/Manual/Connect
+did not guarantee 44px targets. The screen now announces failures as alerts and
+success as a polite status, with 44px minimum targets. The focused settings test
+forces a rejected reconnect and verifies the alert and target sizing. Packaged
+network refusal and custom-server recovery remain unverified.
+After the reconnect change, `npm run test:core` passes 1,972 tests with 10
+skipped across 307 passing files and 7 skipped files; the UI suite passes 62
+tests across 21 files. Typecheck, lint, standard/desktop builds, formatting and
+`git diff --check` pass.
+
+Transaction detail recovery continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): detail lookup errors
+were rendered as muted copy without announcement or retry. The error now uses
+an alert region with a 44px Retry action that repeats the same force-refreshed
+transaction lookup. The focused UI regression rejects the first lookup and
+verifies the second call's txid and refresh option. Populated details and native
+explorer behavior remain unverified pending a disposable transaction fixture.
+Focused history and settings UI tests pass (3/3); full UI suite passes 63 tests
+across 22 files. Core typecheck/lint, standard and desktop React builds,
+formatting, and `git diff --check` pass.
+
+Transaction label editing continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): transaction labels now
+edit inline instead of using `window.prompt`. The editor has explicit
+Save/Cancel, a 200-character limit, progress and a save-failure alert; saved
+labels announce through a polite status. Spanish, Chinese and Arabic labels
+are included alongside English. The UI test forces storage failure and verifies
+the alert and that the browser prompt is not called. This is a presentational
+recovery improvement; transaction authorization and detail lookup are unchanged.
+Focused detail/resource tests pass (13/13); the full UI suite passes 64 tests
+across 22 files. Core typecheck/lint, standard and desktop React builds,
+formatting and `git diff --check` pass.
+
+UTXO personal label continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): UTXO labels used a
+browser prompt, and the shared coin-label service swallowed database write
+errors. Transaction and UTXO labels now use `PersonalLabelEditor` with
+accessible failure feedback, explicit Save/Cancel, and retry after a failed
+save. `CoinLabelService.setCoinLabel` propagates unavailable-database and write
+failures so callers cannot announce a false save. Focused editor, transaction
+detail and service regressions pass (8 tests). Full `npm run test:core` passes
+1,973 tests with 10 skipped across 307 passing and 7 skipped files; `npm run
+test:ui` passes 65 tests across 23 files. Lint, formatting, typecheck, standard
+and desktop React builds, and `git diff --check` pass. A populated packaged UTXO
+screen and native touch/rendering evidence remain open.
+
+WizardConnect notification continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): URI validation,
+scanner outcomes, pairing, and transaction approve/reject messages called the
+native Toast API directly, so browser/desktop could lose transient feedback.
+They now share `showWalletNotification`, which uses native Toast when
+available and otherwise renders the accessible wallet status presenter. The
+pairing and transaction actions are unchanged. Focused helper and connection
+status tests pass (10 tests). Full `npm run test:core` passes 1,975 tests with
+10 skipped across 307 passing and 7 skipped files; `npm run test:ui` passes 65
+tests across 23 files. Core typecheck/lint and standard/desktop React builds
+pass. A packaged connector resolution flow and stacked mobile dialog evidence
+remain open.
+
+BIP21 amount validation continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): the Receive amount
+handler silently stripped unsupported characters, turning scientific notation
+such as `1e-3` into a different value. It now preserves entered text, accepts
+one locale comma separator, validates positive BCH amounts to eight decimal
+places, announces invalid values, and blocks copy/payment-QR output until
+corrected. Arabic validation copy is translated. Twenty-seven focused Receive
+and locale tests pass; full core passes 1,987 tests with 10 skipped across 307
+passing and 7 skipped files. Full UI passes 65 tests across 23 files; lint,
+typecheck, standard and desktop React builds pass. Packaged keyboard/paste
+behavior remains unverified because no Android device is attached.
+
+Scanned BIP21 amount validation continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): shared Send parsing
+used `parseFloat`, accepting numeric prefixes such as `1e-3` and `13abc`, and
+ignored duplicate amount parameters. Parsing now flags zero, malformed,
+over-precision and duplicate amounts; QR scanning announces the localized
+problem and leaves the recipient unchanged. Scanner transient notifications
+now use the shared native/browser presenter. Focused parser/Receive/locale tests
+pass (39 tests). Full core passes 1,992 tests with 10 skipped across 307
+passing and 7 skipped files; full UI passes 65 tests across 23 files. Lint,
+typecheck, formatting and standard/desktop React builds pass. Packaged scanning
+remains unverified without an attached device.
+
+Outbox touch target continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): Sync, Copy
+transaction ID and release controls on `/outbox` lacked an explicit 44px
+minimum. All now meet it. The Outbox UI regression verifies each target and
+confirms the Fusion verification lock remains disabled with its accessible
+reason; release authorization and lock behavior are unchanged. Focused Outbox
+test passes (1/1); full UI passes 65 tests across 23 files. Lint, typecheck,
+formatting, standard/desktop React builds and `git diff --check` pass.
+Pending/unknown/retry/cancel flows still need disposable transaction
+fixtures.
+
+Transaction review keyboard interaction continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): the custom Simple
+Send review modal lacked an accessible name and keyboard focus management. It
+now labels/describes the dialog, moves focus to Close, traps Tab/Shift+Tab,
+closes on Escape only when not sending, restores prior focus on close, and uses
+a 44px Close target. The focused UI test verifies focus entry, both trap
+boundaries, Escape cancellation, focus return and no accidental send
+confirmation. Focused test passes (1/1); full UI passes 66 tests across 24
+files. Lint, typecheck, formatting and standard/desktop React builds pass. A
+populated transaction review/approval and native keyboard flow remain
+unverified.
+
+Merchant Pay recovery continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): pool fetch failures
+showed a “try again” message with no retry control. Added a localized Retry
+button that reruns pool discovery only; payment request creation and wallet
+authorization remain separate. Pool discovery/retry is now isolated in a hook;
+its mounted UI regression verifies a failed fetch, announced recovery state,
+second fetch after Retry, and no-stablecoin state (2/2 pass). Full Merchant Pay
+screen rendering and native presentation remain platform/fixture gaps.
+
+Multisig QR dialog continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): the cosigner QR
+scanner used a custom modal without a name or shared keyboard focus handling.
+It now uses the accessible wallet `Popup`, and its scan action has a 44px
+minimum. Focused UI regressions verify accessible dialog naming and initial
+focus, visible scanner errors and retry, and that empty results/cancellation
+never feed a frame into the signing flow. Focused UI tests pass (2/2); full UI
+passes 68 tests across 25 files. Lint, typecheck, formatting, standard and
+desktop React builds, and `git diff --check` pass. Camera and desktop
+image-file scanning remain platform fixture gaps.
+
+Installed add-on host recovery continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): bundle-read and
+sandbox-initialization errors were displayed as unannounced red text without a
+retry. The host now exposes errors as an alert and offers a 44px Retry action
+that destroys any failed iframe and reloads the installed bundle. UI
+regressions cover both bundle-read and iframe-init failures followed by a
+successful retry. Add-on capability policy is unchanged. Focused tests pass
+(2/2); full UI passes 70 tests across 26 files. Lint, typecheck, formatting,
+standard and desktop React builds, and `git diff --check` pass. A packaged
+installed add-on fixture remains unverified.
+
+Derivation settings accessibility continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): invalid BIP44 coin
+type/account-index input was rendered as unannounced red text, disconnected
+from the disabled resync action. Validation now uses an alert associated with
+both path inputs and the action; settings completion/no-op feedback is a status
+message. Derivation inputs and primary actions have 44px minimum targets. The
+focused UI test passes (2/2), including alert semantics and input association;
+change confirmation, persisted reconfiguration failure, discovery and packaged
+native behavior remain unverified.
+
+App-wide UX continuation verification (2026-10-23): current checkout is
+`/home/lightswarm/projects/OPTNWallet`, branch `codex/ux-basics-and-workflow`,
+HEAD `ac2da1ceec73c8cd457e44fdfe02035cb034a173` with uncommitted task changes.
+Merchant Pay retry UI suite passes (31 files, 139 tests); full UI suite passes
+(26 files, 70 tests); core suite passes (307 files, 1,993 tests; 7 files and 10
+tests skipped). Full TypeScript check, core lint, targeted app ESLint, standard
+React build, desktop React build, formatting checks, and `git diff --check`
+pass. Safe screenshots already indexed in `docs/ui-overhaul/evidence/` document
+prior Android 34 and Chrome onboarding/settings states; they do not capture the
+latest dirty source fingerprint. No Android device/emulator is attached in this
+verification session. Native retry/toast stacking, packaged desktop UI, iOS,
+transactional fixture flows, and remaining per-route states listed in the UX
+coverage register remain explicit gaps. No spend, signing, broadcast, publish,
+commit or push was performed.
+
+Send action hierarchy correction (2026-10-23): review of the existing safe
+Android empty-Send capture found the ordinary Back navigation styled red as a
+destructive action. It now uses the secondary button hierarchy with a 44px
+minimum. The referenced capture remains explicitly pre-fix because no emulator
+is attached for a fresh package render. Source behavior is navigation-only; no
+transaction logic changed.
+
+Copy notification isolation regression (2026-10-23): the shared copy helper
+now catches failure from both the native-toast fallback path and browser
+presenter, preserving the clipboard operation's true boolean result. The added
+test forces the wallet presenter to fail after a successful clipboard write;
+all 7 copy-feedback tests pass. Copied contents remain absent from status and
+native notification text.
+
+CashToken/BCMR and Cauldron deployed-contract verification (2026-10-23;
+branch `codex/ux-basics-and-workflow`): mainnet and chipnet RiftenLabs health
+responses reported `status=healthy`, `indexed_height=chain_tip`, and deployed
+version `0.2.0`. The wallet now models the deployed health response and current
+optional token metrics, displays indexer status/version/lag in the Cauldron
+market picker, and refreshes that status with pool and wallet reconciliation.
+Missing BCMR registries remain an explicit unavailable state with a bounded
+retry window; cached metadata is preserved when refresh fails. Live
+mainnet/chipnet Cauldron discovery, liquidity planning and transaction-building
+smoke tests pass. Focused Cauldron suites pass (35 tests); BCMR/shared metadata
+suites pass (14 tests). The RiftenLabs checkout was not modified, and no
+signing, broadcast or spend was performed.
+
+Screenshot-led UX assessment (2026-10-23 local; branch
+`codex/ux-basics-and-workflow`, HEAD
+`ac2da1ceec73c8cd457e44fdfe02035cb034a173` plus uncommitted changes): reviewed
+the existing tmpfs pack against the canonical UI/UX skill and approved Home,
+Send, Receive and Cauldron references. The original capture-completion claim
+is insufficient: only 13 allowlisted frames show 11 partial surfaces among
+42 PNGs; 23 are startup frames, 3 named history/settings images are Home
+fallbacks, and 11 originals are 780×493 rather than proven mobile viewports.
+Only onboarding has loaded wide-browser evidence. The claimed Chipnet
+fixture is unsupported because captured Settings says Mainnet. Original
+capture revision/dirty fingerprint and CSS viewport/DPR were not recorded;
+current inspected-source hashes are stored separately in the temporary
+analysis context and cannot reconstruct capture-time state.
+
+Added prioritized recommendations UX-01–12 to the existing UX plan: compact
+content-space recovery; absent onboarding help (the helper returns null);
+light-theme navigation contrast (approximately 2:1 sampled against white);
+visible task/network context; Home/Send/onboarding hierarchy; ordinary Back
+styling; Apps categories; Settings exit emphasis; and truthful empty Outbox
+guidance. The user's approved private-key requirement remains ten taps plus
+masked display. Existing rapid-click screenshots do not prove the selected
+mode; an unapproved intermediate synthetic reveal image is excluded from the
+analysis gallery.
+
+All new gallery/contact-sheet images, the full report, image audit and
+per-surface gap register remain in
+`/run/user/1000/optn-ux-review-20261023/analysis/` on tmpfs. No images were added
+to the repository and no application source changed in this assessment.
+Native Android/Tauri/iOS, actual post-copy feedback, transaction
+history/explorer, all individual settings panels, Cauldron/BCMR workflows,
+populated transaction/UTXO/token states and connector/hardware flows remain
+current-pack gaps. This assessment does not supersede or re-run historical
+test/build results above and does not establish production/release readiness.
+
+Assessment verification: all 42 originals decode and their dimensions/hashes
+were recorded; 29 local gallery links resolve, all 13 linked frames are on the
+reviewed image allowlist, and all four generated PNGs decode. Three contact
+sheets and the Chromium-rendered gallery were visually inspected. The manifest
+parses; Prettier checks for the two updated documents and scoped
+`git diff --check` pass. No application tests/builds were re-run because this
+assessment changes documentation only.
+
+Screenshot-led UX corrections implemented (2026-10-23; branch
+`codex/ux-basics-and-workflow`): applied UX-01–UX-12 from the assessment to the
+existing React surfaces and canonical UI/UX skill. Changes include compact
+header sizing, restored onboarding/network help, light-theme navigation
+contrast, visible task/network context, Home action ordering, Send advanced
+disclosure, plain onboarding copy, derivation disclosure, secondary navigation,
+wrapped Apps filters, less prominent Settings exit controls, and truthful empty
+Outbox guidance. The approved Receive ten-tap private-key flow remains masked by
+default and was not broadened.
+
+Verification environment: local checkout, browser/desktop React source, current
+dirty branch; no Android/iOS device or emulator attached. `npx tsc -b`,
+`npm run format:check`, `npm run build`, `npx vite build --config
+vite.desktop.config.ts`, `git diff --check`, and the focused 43-test Vitest
+suite pass. The new contextual-help regression is included. Source and test
+evidence plus browser-rendered onboarding screenshots at 390x844 and 780x493
+are recorded temporarily under `/run/user/1000/optn-ux-review-20261023/`; they
+do not prove packaged native toast behavior or a production release. Those
+remain explicit platform gaps. No spend, signing, broadcast, publish, commit,
+push, or RiftenLabs indexer modification was performed.
+
+Startup loading surface correction (2026-10-24; branch
+`codex/ux-basics-and-workflow`): the pre-React web fallback now bootstraps the
+stored theme, shows the OPTN brand in a themed card, and announces phase changes
+while the core/security WASM gates and AppShell import complete. Capacitor's
+fixed-duration auto-hide and white splash background were removed; the native
+splash now remains until React is mounted, with the existing startup failure
+path still hiding it and offering retry. The iOS launch storyboard background
+was aligned to the wallet green surface.
+
+Focused startup-status/WASM tests pass (2 files, 3 tests); the full UI suite
+passes (26 files, 70 tests) and the core suite passes (308 files, 1,996 tests;
+7 files and 10 tests skipped). TypeScript, formatting, lint, web build and
+desktop build also pass. Packaged Android/iOS timing and visual verification
+remain an explicit gap without a device or emulator. No signing, broadcast,
+spend, publish, commit or push was performed.
 
 ### 2026-10-24: transaction preview assessment (not an implementation gate)
 
