@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { FaArrowDown, FaArrowUp, FaQrcode } from 'react-icons/fa';
 import { AppDispatch, RootState } from '../../state/store';
+import { Network } from '../../state/slices/networkSlice';
 import {
   setFetchingUTXOs,
   setSyncingProgress,
@@ -29,7 +30,6 @@ import {
 } from '../../services/WalletUtxoRefreshService';
 import { logError } from '../../utils/errorHandling';
 import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
-import { Network } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { selectRpaStealthSats } from '../../state/slices/walletSpecialActivitySlice';
@@ -54,6 +54,7 @@ import MaskedValue from '../../components/ui/MaskedValue';
 import { formatNumber } from '../../i18n/format';
 import InfoButton from '../../components/ui/InfoButton';
 import StatusChip from '../../components/ui/StatusChip';
+import { isTestNetwork, networkProfile } from '../../utils/networkProfile';
 
 type QuickActionButtonProps = {
   title: string;
@@ -364,8 +365,8 @@ const Home: React.FC = () => {
         <PageHeader
           title={t('home.title')}
           subtitle={
-            currentNetwork === Network.CHIPNET
-              ? t('network.chipnet')
+            isTestNetwork(currentNetwork)
+              ? t(networkProfile(currentNetwork).labelKey)
               : undefined
           }
           compact

@@ -57,14 +57,25 @@ import type {
   TransactionOutput,
 } from '../types/types';
 import type { TokenCapability } from './cashtokens';
+import { parseNetwork } from '../utils/networkProfile';
+import { Network } from '../state/slices/networkSlice';
+
+type ProviderNetwork = ConstructorParameters<typeof ElectrumNetworkProvider>[0];
+
+/** CashScript names each network the way the wallet does. */
+const PROVIDER_NETWORK: Record<Network, ProviderNetwork> = {
+  [Network.MAINNET]: 'mainnet',
+  [Network.TESTNET3]: 'testnet3',
+  [Network.TESTNET4]: 'testnet4',
+  [Network.CHIPNET]: 'chipnet',
+};
 
 const MAX_ADDON_IDEMPOTENCY_KEY_LENGTH = 256;
 
 const toProviderNetwork = (
   network: string | null | undefined
-): ConstructorParameters<typeof ElectrumNetworkProvider>[0] => {
-  return network === 'chipnet' ? 'chipnet' : 'mainnet';
-};
+): ProviderNetwork =>
+  PROVIDER_NETWORK[parseNetwork(network) ?? Network.MAINNET];
 
 const getConstructorInputType = (
   artifact: unknown,

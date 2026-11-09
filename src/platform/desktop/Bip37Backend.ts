@@ -68,8 +68,8 @@ const DEFAULT_SCAN_WINDOW = 500;
 const toHex = (bytes: Uint8Array | number[]): string =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 
-const netLabel = (network: Network): string =>
-  network === Network.CHIPNET ? 'chipnet' : 'mainnet';
+/** `Network` values are the names the Rust SPV parameters accept. */
+const netLabel = (network: Network): string => network;
 
 /** The wallet's watched pubkey-hashes (hash160) + a hash -> address map. */
 async function watchedHashes(

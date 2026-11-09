@@ -20,6 +20,7 @@ import { type BroadcastState } from '../../../services/TransactionService';
 import { useI18n } from '../../../i18n/useI18n';
 import MaskedValue from '../../../components/ui/MaskedValue';
 import FriendlyErrorPanel from '../../../components/ui/FriendlyErrorPanel';
+import { cashAddressPrefix, parseNetwork } from '../../../utils/networkProfile';
 
 interface ErrorAndStatusPopupsProps {
   showRawTxPopup: boolean;
@@ -65,6 +66,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
   closePopups,
 }) => {
   const { t } = useI18n();
+  const network = parseNetwork(currentNetwork) ?? Network.MAINNET;
   const toCashAddress = (
     bytecode: Uint8Array,
     prefix: 'bitcoincash' | 'bchtest' | 'bchreg'
@@ -194,9 +196,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                             <MaskedValue
                               value={toCashAddress(
                                 lockingBytecode,
-                                currentNetwork === Network.MAINNET
-                                  ? 'bitcoincash'
-                                  : 'bchtest'
+                                cashAddressPrefix(network)
                               )}
                               label={t('receive.copyAddress')}
                               ariaLabel={t('receive.copyAddress')}

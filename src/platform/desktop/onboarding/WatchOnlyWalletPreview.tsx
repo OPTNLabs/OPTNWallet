@@ -36,6 +36,11 @@ import { CameraQrScanner } from '../CameraQrScanner';
 import { useI18n } from '../../../i18n/useI18n';
 import InfoButton from '../../../components/ui/InfoButton';
 
+import {
+  SELECTABLE_NETWORKS,
+  cashAddressPrefix,
+  networkProfile,
+} from '../../../utils/networkProfile';
 const MULTISIG_PRESETS = [
   [2, 2],
   [2, 3],
@@ -186,8 +191,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
     let walletId: number | null = null;
     try {
       const policy = draftPolicy();
-      const prefix =
-        network === Network.MAINNET ? 'bitcoincash' : ('bchtest' as const);
+      const prefix = cashAddressPrefix(network);
       const derived = deriveMultisigAddress(policy, 0, 0);
       const encoded = lockingBytecodeToCashAddress({
         bytecode: derived.lockingBytecode,
@@ -335,12 +339,11 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                 }}
                 className="wallet-input w-full rounded-md px-3 py-2"
               >
-                <option value={Network.MAINNET}>
-                  {t('watchOnly.mainnet')}
-                </option>
-                <option value={Network.CHIPNET}>
-                  {t('watchOnly.chipnet')}
-                </option>
+                {SELECTABLE_NETWORKS.map((option) => (
+                  <option key={option} value={option}>
+                    {t(networkProfile(option).labelKey)}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -577,8 +580,11 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               }}
               className="wallet-input w-full rounded-md px-3 py-2"
             >
-              <option value={Network.MAINNET}>{t('watchOnly.mainnet')}</option>
-              <option value={Network.CHIPNET}>{t('watchOnly.chipnet')}</option>
+              {SELECTABLE_NETWORKS.map((option) => (
+                <option key={option} value={option}>
+                  {t(networkProfile(option).labelKey)}
+                </option>
+              ))}
             </select>
           </div>
 

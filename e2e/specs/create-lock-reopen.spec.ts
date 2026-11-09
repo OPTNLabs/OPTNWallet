@@ -61,9 +61,9 @@ runLifecycleTest(
     await $('h1=Wallet Setup').waitForDisplayed({ timeout: 10000 });
 
     // Wallet creation E2E must stay on Chipnet/test funds.
-    await $('[aria-label="Switch network. Current: Mainnet"]').click();
+    await $('[data-testid="network-option-chipnet"]').click();
     await expect(
-      $('[aria-label="Switch network. Current: Chipnet"]')
+      $('[data-testid="network-option-chipnet"][aria-checked="true"]')
     ).toBeDisplayed();
     await $('button=Continue').click();
     await $('h1=Name This Wallet').waitForDisplayed({ timeout: 10000 });

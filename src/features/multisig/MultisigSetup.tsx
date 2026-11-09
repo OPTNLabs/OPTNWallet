@@ -36,6 +36,7 @@ import BottomNavBar from '../../components/BottomNavBar';
 import { copyWithFeedback } from '../../utils/copyWithFeedback';
 import MultisigError from './MultisigError';
 
+import { networkProfile } from '../../utils/networkProfile';
 type CosignerDraft = {
   label: string;
   xpub: string;
@@ -985,9 +986,7 @@ export default function MultisigSetup() {
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="wallet-muted">Network</span>
                                   <span className="font-semibold wallet-text-strong">
-                                    {setupNetwork === Network.MAINNET
-                                      ? 'Mainnet'
-                                      : 'Chipnet'}
+                                    {networkProfile(setupNetwork).label}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-2">

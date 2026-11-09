@@ -13,9 +13,11 @@ import type {
   ParyonWorkspaceSnapshot,
 } from './types';
 import type { ParyonNativeSnapshot } from './native';
+import { cashAddressPrefix, parseNetwork } from '../../utils/networkProfile';
+import { Network as WalletNetwork } from '../../state/slices/networkSlice';
 
 function toNetwork(network: string | null | undefined): Network {
-  return network === 'chipnet' ? Network.CHIPNET : Network.MAINNET;
+  return parseNetwork(network) ?? Network.MAINNET;
 }
 
 function providerFor(network: string | null | undefined) {
@@ -86,7 +88,7 @@ function protocolFeeAddressFromBytecode(
 ): string {
   const result = lockingBytecodeToCashAddress({
     bytecode: Uint8Array.from(Buffer.from(normalizeHex(bytecode), 'hex')),
-    prefix: network === 'chipnet' ? 'bchtest' : 'bitcoincash',
+    prefix: cashAddressPrefix(parseNetwork(network) ?? WalletNetwork.MAINNET),
   });
   if (typeof result === 'string') {
     throw new Error(result);

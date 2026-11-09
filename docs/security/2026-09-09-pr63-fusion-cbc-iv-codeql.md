@@ -5,17 +5,17 @@ Reviewed CodeQL alerts **#129** and **#130**
 `b928242e`. Both report the same construction in
 `src-tauri/src/fusion/encrypt.rs`:
 
-| Alert | Location | Reported sink |
-| --- | --- | --- |
-| #129 | `encrypt()` | hard-coded value used as an initialization vector |
-| #130 | `decrypt_with_symmkey()` | hard-coded value used as an initialization vector |
+| Alert | Location                 | Reported sink                                     |
+| ----- | ------------------------ | ------------------------------------------------- |
+| #129  | `encrypt()`              | hard-coded value used as an initialization vector |
+| #130  | `decrypt_with_symmkey()` | hard-coded value used as an initialization vector |
 
 Both are `let iv = [0u8; 16];` feeding AES-256-CBC.
 
 These alerts became visible only after `d6a5ec8c` added `paths-ignore:
 vendor/**`. Excluding vendored GLib is what let CodeQL's Rust analysis surface
 first-party code instead of drowning in generic gtk-rs converter graphs. The
-alerts are new to the *report*, not new to the *code*.
+alerts are new to the _report_, not new to the _code_.
 
 No alert was dismissed, no scan configuration was changed, and no code was
 rewritten to hide a finding.
@@ -35,8 +35,8 @@ let key = ecdh_key(nonce_sec, &pubpoint);
 ```
 
 `ecdh_key` is `sha256(compressed(nonce_sec * recipient_pubkey))`. A fresh
-`nonce_sec` per message means a fresh `key` per message, so no `(key, IV)`
-pair ever repeats even though the IV is constant. `nonce_pub` is prepended to
+`nonce_sec` per message gives independently derived keys with negligible
+collision probability, provided the OS CSPRNG is functioning. `nonce_pub` is prepended to
 the blob (33 bytes) purely so the recipient can redo the ECDH.
 
 The symmetric-key-taking function in this file, `decrypt_with_symmkey()`, is
@@ -106,7 +106,7 @@ Two properties must not regress, and are the reason this file should not be
 
 1. `encrypt()` must keep deriving its key from a per-message ephemeral scalar.
    If a future change lets a caller supply a reused symmetric key to an
-   *encrypt* path, the constant IV becomes a genuine flaw and CodeQL #129 stops
+   _encrypt_ path, the constant IV becomes a genuine flaw and CodeQL #129 stops
    being a false positive.
 2. `decrypt_with_symmkey()` must keep verifying the MAC before decrypting.
 
@@ -125,3 +125,36 @@ References checked:
   whose stated concern is predictable key/IV material.
 - `src-tauri/src/fusion/encrypt.rs` and its call sites in
   `src-tauri/src/fusion/blame.rs`.
+
+## Revalidation, 2026-09-27
+
+Alerts #146 and #147 now identify the same protocol constants in
+`crates/optn-fusion/src/encrypt.rs`. Review of every encryption caller confirms
+that only `encrypt()` creates ciphertext and it draws a fresh nonzero scalar
+from `OsRng` on every call. It has no caller-supplied symmetric-key path.
+`decrypt_with_symmkey()` authenticates the tag before attempting decryption.
+
+The [independent audit, KS-SBCF-F-01, pages 13-14](https://electroncash.org/fusionaudit.pdf#page=14)
+explicitly distinguishes this construction from IV reuse with a reused key.
+It nevertheless records a low-severity design concern: AES and HMAC share a
+key, and separate derived keys and an authenticated random IV would be better
+for a future protocol revision. This review does not claim those improvements
+were implemented or that the whole protocol is free of vulnerabilities.
+
+The disposition is a false positive for each reported unsafe constant-IV use,
+limited to alerts #146 and #147. Scanner coverage and CI gates remain enabled.
+Reopen this decision if encryption key reuse, injectable production nonces,
+RNG fallback, authentication order or the wire protocol changes. A modernized
+format requires explicit protocol version negotiation with peers; silently
+changing the existing format would break blame-proof interoperability.
+
+`electron_cash_ciphertext_decrypts_with_the_protocol_iv` adds an independent
+compatibility vector from [Electron Cash encrypt.py at fdc0fff](https://github.com/Electron-Cash/Electron-Cash/blob/fdc0fff298854e1e24b3187104408b038f2d5ca8/electroncash_plugins/fusion/encrypt.py).
+The unmodified upstream encryption/decryption function bodies ran with pyaes
+and python-ecdsa SEC1 serialization adapters. The public fixture uses recipient
+scalar 7, ephemeral scalar 11, message `CashFusion public compatibility vector`
+and padding length 80. Fixed scalars are confined to vector generation and tests.
+The Rust test verifies the ECDH key and both decryption entry points; existing
+tests cover fresh encryption keys, wrong keys and tampering with every MAC byte.
+
+Reproduce the Rust evidence with `cargo test --locked -p optn-fusion --lib`.

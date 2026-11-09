@@ -4,6 +4,11 @@
 //! sign. Watch-only wallets produce an unsigned PSBT intent and never enter
 //! the seed-signing function. Frozen coins are not selectable.
 //!
+//! BCH sends keep token coins out entirely ([`assert_coin_is_spendable`]).
+//! Sends that may spend token coins -- to move tokens, or because the holder
+//! picked token coins by hand -- are planned by [`prepare_token_spend`], which
+//! returns every token those coins carry to an explicit output.
+//!
 //! SIGHASH_ALL|FORKID is `0x41`.
 
 use crate::cashaddr::Address;
@@ -11,6 +16,12 @@ use crate::coins::{Coin, CoinSet, Outpoint};
 use crate::fee::{FeeRate, RELAY_MINIMUM_FEE_RATE};
 use crate::network::Network;
 use std::fmt;
+
+mod tokens;
+pub use tokens::{
+    prepare_token_spend, CoinChoice, OutputRole, Payment, PlannedInput, PlannedOutput,
+    TokenSpendPlan, TokenSpendRequest, TOKEN_OUTPUT_SATS,
+};
 
 /// SIGHASH_ALL (0x01) | SIGHASH_FORKID (0x40).
 pub const SIGHASH_ALL_FORKID: u8 = 0x41;
@@ -100,6 +111,46 @@ pub enum SpendError {
         expected: Network,
     },
     Seed(String),
+    /// The recipient would receive tokens at an address that does not say it
+    /// accepts them.
+    NotTokenAware {
+        address: String,
+    },
+    /// Fewer fungible tokens of a category than the send needs.
+    InsufficientTokens {
+        category: String,
+        needed: u64,
+        available: u64,
+    },
+    /// Send-all of a category found none to send.
+    NoFungibleTokens {
+        category: String,
+    },
+    /// The coin named for an NFT send carries no NFT.
+    NotAnNft,
+    /// Coin control: the NFT's coin is not among the chosen coins.
+    NftCoinNotChosen,
+    /// Coin control with nothing chosen.
+    NoCoinsChosen,
+    /// An output below the value the network relays for it.
+    BelowDust {
+        sats: u64,
+        minimum: u64,
+    },
+    /// Coin control: the chosen coins do not pay for the outputs and fee.
+    /// Distinct from InsufficientSpendable, as CoinTooSmall is: the wallet may
+    /// hold plenty, just not in the coins the holder picked.
+    ChosenCoinsTooSmall {
+        needed: u64,
+        available: u64,
+    },
+    /// Token data that cannot be written into an output.
+    InvalidToken(String),
+    /// A plan whose outputs do not carry exactly the tokens its inputs do.
+    /// Never expected; refused rather than signed if it ever happens.
+    TokensNotConserved,
+    /// Amounts past the range the chain or this platform supports.
+    AmountOverflow,
 }
 
 impl fmt::Display for SpendError {
@@ -143,6 +194,45 @@ impl fmt::Display for SpendError {
                 write!(f, "account {account} is not derived for {expected}")
             }
             Self::Seed(message) => write!(f, "{message}"),
+            Self::NotTokenAware { address } => write!(
+                f,
+                "{address} does not accept CashTokens, and tokens sent to it would be lost; \
+                 ask the recipient for their token-aware address, which starts with z after \
+                 the prefix"
+            ),
+            Self::InsufficientTokens {
+                category,
+                needed,
+                available,
+            } => write!(
+                f,
+                "need {needed} of token category {category}, only {available} available to \
+                 this send"
+            ),
+            Self::NoFungibleTokens { category } => write!(
+                f,
+                "no fungible tokens of category {category} are available to send"
+            ),
+            Self::NotAnNft => write!(f, "that coin carries no NFT"),
+            Self::NftCoinNotChosen => write!(f, "the NFT's coin is not among the chosen coins"),
+            Self::NoCoinsChosen => {
+                write!(f, "choose at least one coin, or let the wallet choose")
+            }
+            Self::BelowDust { sats, minimum } => write!(
+                f,
+                "{sats} sats is below the {minimum} sats the network relays for that output"
+            ),
+            Self::ChosenCoinsTooSmall { needed, available } => write!(
+                f,
+                "the chosen coins hold {available} sats and {needed} are needed for the \
+                 outputs and the fee; choose a BCH coin as well, or let the wallet choose"
+            ),
+            Self::InvalidToken(message) => write!(f, "invalid token data: {message}"),
+            Self::TokensNotConserved => write!(
+                f,
+                "refusing a send whose outputs do not carry exactly the tokens its inputs do"
+            ),
+            Self::AmountOverflow => write!(f, "amounts exceed the supported range"),
         }
     }
 }

@@ -55,7 +55,11 @@ jobs:
     name: CLI (${{ matrix.label }})
     needs: probe
     runs-on: ${{ matrix.platform }}
-    timeout-minutes: 30
+    # 30 minutes unless a target says otherwise. The Intel macOS runner needs
+    # longer when the Rust cache misses, as it does after any Cargo.lock change:
+    # clippy alone goes from 34 s to 5.5 min, and the job passed 30 minutes
+    # mid-build. A cancelled job saves no cache, so a retry starts cold again.
+    timeout-minutes: ${{ matrix.timeout-minutes || 30 }}
     permissions:
       contents: read
     env:
@@ -92,6 +96,7 @@ jobs:
           - platform: macos-15-intel
             label: macos-x64
             target: x86_64-apple-darwin
+            timeout-minutes: 50
 
     steps:
       - name: Checkout
@@ -145,6 +150,14 @@ jobs:
         if: env.CLI_PRESENT == 'true' && matrix.cross-package == ''
         working-directory: crates/optn-cli
         run: cargo test --target ${{ matrix.target }}
+
+      - name: Validate BCH SDK adapter
+        if: env.CLI_PRESENT == 'true' && matrix.cross-package == ''
+        working-directory: crates/optn-x402
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
 
       - name: Test shared Rust core on the native target
         if: env.CLI_PRESENT == 'true' && matrix.cross-package == ''

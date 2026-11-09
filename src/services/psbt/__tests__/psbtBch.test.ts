@@ -191,11 +191,29 @@ describe('BCH PSBT encoding', () => {
 });
 
 describe('Paytaca v145 fields', () => {
-  it('writes the global version 145', () => {
+  it('writes the global version 145 as a 32-bit integer', () => {
     const psbt = encodeUnsignedPsbt([input()], [output()]);
-    // Global record: keylen 0x01, key 0xfb, valuelen 0x01, compact uint 145.
-    const field = Uint8Array.from([0x01, 0xfb, 0x01, 0x91]);
+    // Global record: keylen 0x01, key 0xfb, valuelen 0x04, uint32 LE 145.
+    // SeedCash refuses any other length, including the CompactSize 0x01 0x91.
+    const field = Uint8Array.from([0x01, 0xfb, 0x04, 0x91, 0x00, 0x00, 0x00]);
     expect(indexOfBytes(psbt, field)).toBeGreaterThan(-1);
+    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0xfb, 0x01, 0x91]))).toBe(
+      -1
+    );
+    expect(decodePsbt(psbt).version).toBe(145);
+  });
+
+  it('still reads the one-byte version earlier PSBTs carry', () => {
+    const psbt = encodeUnsignedPsbt([input()], [output()]);
+    const at = indexOfBytes(
+      psbt,
+      Uint8Array.from([0x01, 0xfb, 0x04, 0x91, 0x00, 0x00, 0x00])
+    );
+    const legacy = new Uint8Array(psbt.length - 3);
+    legacy.set(psbt.subarray(0, at));
+    legacy.set([0x01, 0xfb, 0x01, 0x91], at);
+    legacy.set(psbt.subarray(at + 7), at + 4);
+    expect(decodePsbt(legacy).version).toBe(145);
   });
 
   it('writes explicit section counts that match the maps', () => {

@@ -1,4 +1,5 @@
 import { Network } from '../../state/slices/networkSlice';
+import { networkProfile } from '../../utils/networkProfile';
 
 function env(name: string): string | undefined {
   const metaEnv: Record<string, unknown> =
@@ -22,9 +23,18 @@ function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
+/** Cauldron serves mainnet and chipnet; any other network has no deployment. */
+function isCauldronChipnet(network: Network): boolean {
+  if (network === Network.CHIPNET) return true;
+  if (network === Network.MAINNET) return false;
+  throw new Error(
+    `Cauldron is not available on ${networkProfile(network).label}.`
+  );
+}
+
 export function getCauldronAppBaseUrl(network: Network): string {
   const override =
-    network === Network.CHIPNET
+    isCauldronChipnet(network)
       ? env('VITE_CAULDRON_CHIPNET_BASE_URL') || env('CAULDRON_CHIPNET_BASE_URL')
       : env('VITE_CAULDRON_MAINNET_BASE_URL') || env('CAULDRON_MAINNET_BASE_URL');
 
@@ -35,7 +45,7 @@ export function getCauldronAppBaseUrl(network: Network): string {
 
 export function getCauldronApiBaseUrl(network: Network): string {
   const override =
-    network === Network.CHIPNET
+    isCauldronChipnet(network)
       ? env('VITE_CAULDRON_CHIPNET_API_BASE_URL') ||
         env('CAULDRON_CHIPNET_API_BASE_URL')
       : env('VITE_CAULDRON_MAINNET_API_BASE_URL') ||
@@ -44,7 +54,7 @@ export function getCauldronApiBaseUrl(network: Network): string {
   if (override) return normalizeBaseUrl(override);
 
   return normalizeBaseUrl(
-    network === Network.CHIPNET
+    isCauldronChipnet(network)
       ? 'https://indexer-chipnet.riften.net/cauldron'
       : 'https://indexer.riften.net/cauldron'
   );
@@ -59,7 +69,7 @@ function normalizeServerList(raw: string): string[] {
 
 export function getCauldronRostrumServers(network: Network): string[] {
   const networkSpecific =
-    network === Network.CHIPNET
+    isCauldronChipnet(network)
       ? env('VITE_CAULDRON_CHIPNET_ROSTRUM_SERVERS') ||
         env('CAULDRON_CHIPNET_ROSTRUM_SERVERS')
       : env('VITE_CAULDRON_MAINNET_ROSTRUM_SERVERS') ||

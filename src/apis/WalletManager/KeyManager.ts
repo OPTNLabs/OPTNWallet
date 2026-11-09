@@ -21,6 +21,7 @@ import SecretCryptoService, {
   isEncryptedPayload,
 } from '../../services/SecretCryptoService';
 import { zeroize } from '../../utils/secureMemory';
+import { parseNetwork } from '../../utils/networkProfile';
 
 function toString(value: unknown): string {
   return isString(value) ? value : String(value);
@@ -118,12 +119,7 @@ export default function KeyManager() {
       [toString(row[0]), toString(row[1])],
       wallet_id
     );
-    const networkType =
-      row[2] === Network.MAINNET
-        ? Network.MAINNET
-        : row[2] === Network.CHIPNET
-          ? Network.CHIPNET
-          : null;
+    const networkType = parseNetwork(row[2]) ?? null;
 
     if (!mnemonic || !networkType) {
       throw new Error('Mnemonic or network not found for the given wallet id');
@@ -552,8 +548,7 @@ export default function KeyManager() {
 
     try {
       const ensureAddressRecord = async (): Promise<void> => {
-        const prefix =
-          networkType === Network.MAINNET ? PREFIX.mainnet : PREFIX.chipnet;
+        const prefix = PREFIX[networkType];
         const address: Address = {
           wallet_id,
           address: keys.address,

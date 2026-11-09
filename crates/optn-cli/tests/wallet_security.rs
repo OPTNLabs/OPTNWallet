@@ -451,7 +451,7 @@ fn managed_watch_only_import_survives_stdio_restart_without_exposing_xpub() {
     assert_eq!(
         replies[0]["security"]["wallets"],
         json!([
-            {"handle": handle, "name": "Saved public account"}
+            {"handle": handle, "name": "Saved public account", "legacy_source_id": null}
         ])
     );
     assert_eq!(replies[1]["ok"], false);

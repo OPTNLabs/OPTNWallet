@@ -41,6 +41,7 @@ import {
 import { useAddonI18n } from '../../../../i18n/useAddonI18n';
 import { readFromClipboard } from '../../../../utils/clipboard';
 import { formatDistributionTotal } from '../airdropReview';
+import { parseNetwork } from '../../../../utils/networkProfile';
 
 type FlowStep = 'recipients' | 'asset' | 'send';
 
@@ -77,9 +78,7 @@ const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   const { t: addonT } = useAddonI18n();
   const { contentClassName, runSmoothReset } = useSmoothResetTransition();
   const currentNetwork =
-    sdk.wallet.getContext().network === 'chipnet'
-      ? Network.CHIPNET
-      : Network.MAINNET;
+    parseNetwork(sdk.wallet.getContext().network) ?? Network.MAINNET;
   const [recipients, setRecipients] = useState<DistributionRecipient[]>([]);
   const [jobs, setJobs] = useState<DistributionJobRecord[]>([]);
   const [recipientSelection, setRecipientSelection] = useState<

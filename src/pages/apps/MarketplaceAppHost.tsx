@@ -279,7 +279,15 @@ export default function MarketplaceAppHost() {
     const randomId =
       typeof globalThis.crypto?.randomUUID === 'function'
         ? globalThis.crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        : (() => {
+            if (typeof globalThis.crypto?.getRandomValues !== 'function') {
+              throw new Error('Secure randomness is unavailable');
+            }
+            const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+            return Array.from(bytes, (byte) =>
+              byte.toString(16).padStart(2, '0')
+            ).join('');
+          })();
     return `addon-session-v1:${randomId}`;
   }, [walletId, resolved?.manifest.id, resolved?.app.id]);
   const sdkSessionExpiresAt = useMemo(
@@ -655,20 +663,34 @@ export default function MarketplaceAppHost() {
       if (!allowedWalletAddresses || allowedWalletAddresses.size === 0) {
         throw new Error('Wallet input allowlist is unavailable');
       }
-      const addresses = Array.from(new Set(proposal.inputs.map((input) => input.address)));
-      const contractIndexes = new Set(proposal.contract?.contractInputIndexes ?? []);
+      const addresses = Array.from(
+        new Set(proposal.inputs.map((input) => input.address))
+      );
+      const contractIndexes = new Set(
+        proposal.contract?.contractInputIndexes ?? []
+      );
       if (proposal.contract?.contractAddress) {
         for (const index of contractIndexes) {
           const input = proposal.inputs[index];
-          if (input && input.address !== proposal.contract.contractAddress && input.tokenAddress !== proposal.contract.contractAddress) {
-            throw new Error('Contract input does not match the declared contract address');
+          if (
+            input &&
+            input.address !== proposal.contract.contractAddress &&
+            input.tokenAddress !== proposal.contract.contractAddress
+          ) {
+            throw new Error(
+              'Contract input does not match the declared contract address'
+            );
           }
         }
       }
       const nonContractAddresses = proposal.inputs
         .filter((_, index) => !contractIndexes.has(index))
         .map((input) => input.address);
-      if (nonContractAddresses.some((address) => !allowedWalletAddresses.has(address))) {
+      if (
+        nonContractAddresses.some(
+          (address) => !allowedWalletAddresses.has(address)
+        )
+      ) {
         throw new Error('Addon proposal input is outside the wallet allowlist');
       }
       const byAddress = await UTXOService.fetchAndStoreUTXOsMany(
@@ -756,24 +778,47 @@ export default function MarketplaceAppHost() {
         }
         const contract = createWalletCashScriptContract({
           artifact: metadata.artifact,
-          constructorArgs: (metadata.constructorArgs ?? []).map((arg: any) => arg?.value ?? arg),
+          constructorArgs: (metadata.constructorArgs ?? []).map(
+            (arg: any) => arg?.value ?? arg
+          ),
           provider: new ElectrumNetworkProvider(network),
           contractType: metadata.contractType ?? 'p2sh32',
         });
-        const derivedLockingBytecode = typeof contract.lockingBytecode === 'string'
-          ? contract.lockingBytecode
-          : Array.from(contract.lockingBytecode as Uint8Array, (byte: number) => byte.toString(16).padStart(2, '0')).join('');
-        if (metadata.contractLockingBytecode && derivedLockingBytecode !== metadata.contractLockingBytecode) {
-          throw new Error('Contract constructor arguments or type do not match the declared locking bytecode');
+        const derivedLockingBytecode =
+          typeof contract.lockingBytecode === 'string'
+            ? contract.lockingBytecode
+            : Array.from(
+                contract.lockingBytecode as Uint8Array,
+                (byte: number) => byte.toString(16).padStart(2, '0')
+              ).join('');
+        if (
+          metadata.contractLockingBytecode &&
+          derivedLockingBytecode !== metadata.contractLockingBytecode
+        ) {
+          throw new Error(
+            'Contract constructor arguments or type do not match the declared locking bytecode'
+          );
         }
         if (metadata.contractAddress && metadata.contractType !== 'p2s') {
-          const derivedAddress = metadata.contractType === 'p2sh20' ? contract.address : contract.tokenAddress ?? contract.address;
-          if (derivedAddress !== metadata.contractAddress) throw new Error('Contract identity does not match the declared address');
+          const derivedAddress =
+            metadata.contractType === 'p2sh20'
+              ? contract.address
+              : contract.tokenAddress ?? contract.address;
+          if (derivedAddress !== metadata.contractAddress)
+            throw new Error(
+              'Contract identity does not match the declared address'
+            );
         }
         const signerTemplates = new Map<string, any>();
         for (const binding of metadata.signerBindings ?? []) {
-          const key = await KeyService.fetchAddressPrivateKey(binding.address, 'spend');
-          if (!key) throw new Error(`Wallet signing key unavailable for ${binding.address}`);
+          const key = await KeyService.fetchAddressPrivateKey(
+            binding.address,
+            'spend'
+          );
+          if (!key)
+            throw new Error(
+              `Wallet signing key unavailable for ${binding.address}`
+            );
           signerTemplates.set(
             `${binding.purpose}:${binding.address}`,
             new SignatureTemplate(key, HashType.SIGHASH_ALL)
@@ -781,8 +826,13 @@ export default function MarketplaceAppHost() {
         }
         const functionArgs = (metadata.functionArgs ?? []).map((arg: any) => {
           if (arg?.type === 'sig' && arg.signer) {
-            const template = signerTemplates.get(`${arg.signer.purpose}:${arg.signer.address}`);
-            if (!template) throw new Error('Contract signer binding was not resolved by the wallet');
+            const template = signerTemplates.get(
+              `${arg.signer.purpose}:${arg.signer.address}`
+            );
+            if (!template)
+              throw new Error(
+                'Contract signer binding was not resolved by the wallet'
+              );
             return template;
           }
           return arg?.value ?? arg;
@@ -798,19 +848,35 @@ export default function MarketplaceAppHost() {
             vout: input.vout,
             satoshis: BigInt(input.valueSats),
             ...(input.tokenCategory
-              ? { token: { category: input.tokenCategory, amount: BigInt(input.tokenAmount ?? '0'), ...(input.tokenNft ? { nft: input.tokenNft } : {}) } }
+              ? {
+                  token: {
+                    category: input.tokenCategory,
+                    amount: BigInt(input.tokenAmount ?? '0'),
+                    ...(input.tokenNft ? { nft: input.tokenNft } : {}),
+                  },
+                }
               : {}),
           };
           const unlocker = contractIndexSet.has(index)
             ? contract.unlock[metadata.functionName](...functionArgs)
             : (() => {
-                if (!input.address) throw new Error('Wallet input address is required');
-                return KeyService.fetchAddressPrivateKey(input.address, 'spend');
+                if (!input.address)
+                  throw new Error('Wallet input address is required');
+                return KeyService.fetchAddressPrivateKey(
+                  input.address,
+                  'spend'
+                );
               })();
           if (unlocker instanceof Promise) {
             const key = await unlocker;
-            if (!key) throw new Error(`Wallet signing key unavailable for ${input.address}`);
-            builder.addInput(utxo, new SignatureTemplate(key, HashType.SIGHASH_ALL).unlockP2PKH());
+            if (!key)
+              throw new Error(
+                `Wallet signing key unavailable for ${input.address}`
+              );
+            builder.addInput(
+              utxo,
+              new SignatureTemplate(key, HashType.SIGHASH_ALL).unlockP2PKH()
+            );
             continue;
           }
           builder.addInput(utxo, unlocker);
@@ -823,29 +889,50 @@ export default function MarketplaceAppHost() {
               to: output.recipientAddress,
               amount: BigInt(output.amount),
               ...(output.token
-                ? { token: { category: output.token.category, amount: BigInt(output.token.amount), ...(output.token.nft ? { nft: output.token.nft } : {}) } }
+                ? {
+                    token: {
+                      category: output.token.category,
+                      amount: BigInt(output.token.amount),
+                      ...(output.token.nft ? { nft: output.token.nft } : {}),
+                    },
+                  }
                 : {}),
             });
           }
         }
-        const changeAddress = Array.from(allowedWalletAddresses ?? []).find(isP2pkhCashAddress);
-        if (!changeAddress) throw new Error('No P2PKH wallet change address is available');
+        const changeAddress = Array.from(allowedWalletAddresses ?? []).find(
+          isP2pkhCashAddress
+        );
+        if (!changeAddress)
+          throw new Error('No P2PKH wallet change address is available');
         const categories = new Set(
           proposal.inputs.map((input) => input.tokenCategory).filter(Boolean)
         );
         for (const category of categories) {
           const inputAmount = proposal.inputs
             .filter((input) => input.tokenCategory === category)
-            .reduce((total, input) => total + BigInt(input.tokenAmount ?? '0'), 0n);
+            .reduce(
+              (total, input) => total + BigInt(input.tokenAmount ?? '0'),
+              0n
+            );
           const outputAmount = proposal.outputs
-            .filter((output) => !('opReturn' in output) && output.token?.category === category)
-            .reduce((total, output) => total + BigInt(output.token?.amount ?? 0), 0n);
+            .filter(
+              (output) =>
+                !('opReturn' in output) && output.token?.category === category
+            )
+            .reduce(
+              (total, output) => total + BigInt(output.token?.amount ?? 0),
+              0n
+            );
           if (inputAmount > outputAmount) {
             const nftInput = proposal.inputs.find(
               (input) => input.tokenCategory === category && input.tokenNft
             );
             const nftOutput = proposal.outputs.some(
-              (output) => !('opReturn' in output) && output.token?.category === category && output.token?.nft
+              (output) =>
+                !('opReturn' in output) &&
+                output.token?.category === category &&
+                output.token?.nft
             );
             builder.addOutput({
               to: changeAddress,
@@ -853,7 +940,9 @@ export default function MarketplaceAppHost() {
               token: {
                 category,
                 amount: inputAmount - outputAmount,
-                ...(nftInput?.tokenNft && !nftOutput ? { nft: nftInput.tokenNft } : {}),
+                ...(nftInput?.tokenNft && !nftOutput
+                  ? { nft: nftInput.tokenNft }
+                  : {}),
               },
             });
           }
@@ -864,19 +953,43 @@ export default function MarketplaceAppHost() {
         builder.addOutput({ to: changeAddress, amount: 546n });
         const preliminaryHex = builder.build();
         builder.outputs.pop();
-        const inputSats = proposal.inputs.reduce((total, input) => total + BigInt(input.valueSats), 0n);
-        const outputSats = proposal.outputs.reduce(
-          (total, output) => total + ('opReturn' in output ? 0n : BigInt(output.amount)),
+        const inputSats = proposal.inputs.reduce(
+          (total, input) => total + BigInt(input.valueSats),
           0n
-        ) + BigInt([...categories].reduce((count, category) => {
-          const inputAmount = proposal.inputs.filter((input) => input.tokenCategory === category).reduce((total, input) => total + BigInt(input.tokenAmount ?? '0'), 0n);
-          const outputAmount = proposal.outputs.filter((output) => !('opReturn' in output) && output.token?.category === category).reduce((total, output) => total + BigInt(output.token?.amount ?? 0), 0n);
-          return count + (inputAmount > outputAmount ? 546 : 0);
-        }, 0));
+        );
+        const outputSats =
+          proposal.outputs.reduce(
+            (total, output) =>
+              total + ('opReturn' in output ? 0n : BigInt(output.amount)),
+            0n
+          ) +
+          BigInt(
+            [...categories].reduce((count, category) => {
+              const inputAmount = proposal.inputs
+                .filter((input) => input.tokenCategory === category)
+                .reduce(
+                  (total, input) => total + BigInt(input.tokenAmount ?? '0'),
+                  0n
+                );
+              const outputAmount = proposal.outputs
+                .filter(
+                  (output) =>
+                    !('opReturn' in output) &&
+                    output.token?.category === category
+                )
+                .reduce(
+                  (total, output) => total + BigInt(output.token?.amount ?? 0),
+                  0n
+                );
+              return count + (inputAmount > outputAmount ? 546 : 0);
+            }, 0)
+          );
         const fee = BigInt(Math.ceil((preliminaryHex.length / 2) * 1));
         const bchChange = inputSats - outputSats - fee;
         if (bchChange < 0n) {
-          throw new Error('Contract transaction does not have enough BCH for outputs and fees');
+          throw new Error(
+            'Contract transaction does not have enough BCH for outputs and fees'
+          );
         }
         if (bchChange >= 546n) {
           builder.addOutput({ to: changeAddress, amount: bchChange });
@@ -888,7 +1001,11 @@ export default function MarketplaceAppHost() {
           tx_pos: input.vout,
           value: Number(input.valueSats),
         }));
-        const sent = await transactionService.sendTransaction(rawTransaction, spentInputs, { walletId });
+        const sent = await transactionService.sendTransaction(
+          rawTransaction,
+          spentInputs,
+          { walletId }
+        );
         return {
           txid: sent.txid ?? null,
           errorMessage: sent.errorMessage ?? null,

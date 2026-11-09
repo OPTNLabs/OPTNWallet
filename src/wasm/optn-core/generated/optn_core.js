@@ -16,6 +16,39 @@ export function addonLegacyGuestCallAllowed(module, method) {
 }
 
 /**
+ * A public key's P2PKH and token-aware P2PKH CashAddrs, as JSON
+ * `{publicKeyHash, address, tokenAddress}` with the hash in hex.
+ *
+ * Either SEC1 length is accepted, compressed or not, since both hash to a
+ * valid script; any other length is refused rather than hashed.
+ * @param {string} network
+ * @param {Uint8Array} public_key
+ * @returns {string}
+ */
+export function bchP2pkhAddresses(network, public_key) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(public_key, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.bchP2pkhAddresses(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * @param {string} request_json
  * @returns {string}
  */
@@ -178,6 +211,103 @@ export function bcmrSymbolError(symbol) {
         wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     }
     return v2;
+}
+
+/**
+ * A new recovery phrase, drawn by the core from the browser's own
+ * `crypto.getRandomValues` (see `hd::generate_mnemonic`). JavaScript never
+ * supplies or sees the entropy, only the finished phrase.
+ * @param {number} word_count
+ * @returns {string}
+ */
+export function bip39GenerateMnemonic(word_count) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.bip39GenerateMnemonic(word_count);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Whether a phrase is valid English BIP39, written exactly as BIP39 writes it.
+ * @param {string} phrase
+ * @returns {boolean}
+ */
+export function bip39IsCanonicalMnemonic(phrase) {
+    const ptr0 = passStringToWasm0(phrase, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.bip39IsCanonicalMnemonic(ptr0, len0);
+    return ret !== 0;
+}
+
+/**
+ * The 64-byte BIP39 seed, for keys that are not BIP32 (MLS's HPKE inputs).
+ * @param {string} mnemonic
+ * @param {string} passphrase
+ * @returns {Uint8Array}
+ */
+export function bip39Seed(mnemonic, passphrase) {
+    const ptr0 = passStringToWasm0(mnemonic, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(passphrase, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.bip39Seed(ptr0, len0, ptr1, len1);
+    return ret;
+}
+
+/**
+ * The coin-control label of one reported coin, as JSON; see
+ * `coin_control::ReportedCoin`. Flat arguments keep a JSON parser out of
+ * this binary.
+ * @param {string | null} [category]
+ * @param {string | null} [amount]
+ * @param {string | null} [nft_capability]
+ * @param {string | null} [identity_name]
+ * @param {string | null} [identity_ticker]
+ * @param {number | null} [identity_decimals]
+ * @param {string | null} [identity_status]
+ * @returns {string}
+ */
+export function coinControlLabel(category, amount, nft_capability, identity_name, identity_ticker, identity_decimals, identity_status) {
+    let deferred8_0;
+    let deferred8_1;
+    try {
+        var ptr0 = isLikeNone(category) ? 0 : passStringToWasm0(category, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(amount) ? 0 : passStringToWasm0(amount, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        var ptr2 = isLikeNone(nft_capability) ? 0 : passStringToWasm0(nft_capability, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len2 = WASM_VECTOR_LEN;
+        var ptr3 = isLikeNone(identity_name) ? 0 : passStringToWasm0(identity_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len3 = WASM_VECTOR_LEN;
+        var ptr4 = isLikeNone(identity_ticker) ? 0 : passStringToWasm0(identity_ticker, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len4 = WASM_VECTOR_LEN;
+        var ptr5 = isLikeNone(identity_status) ? 0 : passStringToWasm0(identity_status, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len5 = WASM_VECTOR_LEN;
+        const ret = wasm.coinControlLabel(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, isLikeNone(identity_decimals) ? Number.MAX_SAFE_INTEGER : (identity_decimals) >>> 0, ptr5, len5);
+        var ptr7 = ret[0];
+        var len7 = ret[1];
+        if (ret[3]) {
+            ptr7 = 0; len7 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred8_0 = ptr7;
+        deferred8_1 = len7;
+        return getStringFromWasm0(ptr7, len7);
+    } finally {
+        wasm.__wbindgen_free(deferred8_0, deferred8_1, 1);
+    }
 }
 
 /**
@@ -868,6 +998,185 @@ export function grindString(scan_pubkey, prefix_bits) {
 }
 
 /**
+ * An xpub/tpub re-serialized with `network`'s version bytes.
+ * @param {string} network
+ * @param {string} hd_public_key
+ * @returns {string}
+ */
+export function hdAlignPublicKeyNetwork(network, hd_public_key) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(hd_public_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.hdAlignPublicKeyNetwork(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * The extended private key at a path: `xprv` on mainnet, `tprv` otherwise.
+ * @param {string} mnemonic
+ * @param {string} passphrase
+ * @param {string} network
+ * @param {string} path
+ * @returns {string}
+ */
+export function hdExtendedPrivateKeyAtPath(mnemonic, passphrase, network, path) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const ptr0 = passStringToWasm0(mnemonic, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(passphrase, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ret = wasm.hdExtendedPrivateKeyAtPath(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        var ptr5 = ret[0];
+        var len5 = ret[1];
+        if (ret[3]) {
+            ptr5 = 0; len5 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred6_0 = ptr5;
+        deferred6_1 = len5;
+        return getStringFromWasm0(ptr5, len5);
+    } finally {
+        wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
+ * `private(32) || compressed public(33)` at a path, from one derivation.
+ * @param {string} mnemonic
+ * @param {string} passphrase
+ * @param {string} path
+ * @returns {Uint8Array}
+ */
+export function hdKeyPairAtPath(mnemonic, passphrase, path) {
+    const ptr0 = passStringToWasm0(mnemonic, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(passphrase, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.hdKeyPairAtPath(ptr0, len0, ptr1, len1, ptr2, len2);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * The 4-byte BIP32 master fingerprint.
+ * @param {string} mnemonic
+ * @param {string} passphrase
+ * @returns {Uint8Array}
+ */
+export function hdMasterFingerprint(mnemonic, passphrase) {
+    const ptr0 = passStringToWasm0(mnemonic, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(passphrase, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.hdMasterFingerprint(ptr0, len0, ptr1, len1);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
+ * The 32-byte private key at a path.
+ * @param {string} mnemonic
+ * @param {string} passphrase
+ * @param {string} path
+ * @returns {Uint8Array}
+ */
+export function hdPrivateKeyAtPath(mnemonic, passphrase, path) {
+    const ptr0 = passStringToWasm0(mnemonic, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(passphrase, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.hdPrivateKeyAtPath(ptr0, len0, ptr1, len1, ptr2, len2);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * The extended public key at a path: `xpub` on mainnet, `tpub` otherwise.
+ * @param {string} mnemonic
+ * @param {string} passphrase
+ * @param {string} network
+ * @param {string} path
+ * @returns {string}
+ */
+export function hdPublicKeyAtPath(mnemonic, passphrase, network, path) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const ptr0 = passStringToWasm0(mnemonic, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(passphrase, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ret = wasm.hdPublicKeyAtPath(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        var ptr5 = ret[0];
+        var len5 = ret[1];
+        if (ret[3]) {
+            ptr5 = 0; len5 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred6_0 = ptr5;
+        deferred6_1 = len5;
+        return getStringFromWasm0(ptr5, len5);
+    } finally {
+        wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
+ * The compressed public key at non-hardened child `index` of an xpub/tpub.
+ * @param {string} hd_public_key
+ * @param {number} index
+ * @returns {Uint8Array}
+ */
+export function hdPublicKeyChild(hd_public_key, index) {
+    const ptr0 = passStringToWasm0(hd_public_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.hdPublicKeyChild(ptr0, len0, index);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
  * @param {string} candidate
  * @returns {boolean}
  */
@@ -1057,6 +1366,173 @@ export function paymentAddress(spend_pubkey, secret, network, index) {
 }
 
 /**
+ * Plan a send that may spend token coins, as JSON; see
+ * `spend::TokenSpendPlan`. Any wallet kind can call this: it decides inputs
+ * and outputs, token and BCH change, and checks that nothing is burned.
+ * @param {string} network
+ * @param {string[]} outpoints
+ * @param {BigUint64Array} sats
+ * @param {string[]} addresses
+ * @param {string[]} categories
+ * @param {string[]} amounts
+ * @param {string[]} capabilities
+ * @param {string[]} commitments
+ * @param {string} payment_kind
+ * @param {string | null | undefined} payment_target
+ * @param {string | null | undefined} payment_amount
+ * @param {number} amount_decimals
+ * @param {string[] | null | undefined} chosen
+ * @param {string} destination
+ * @param {string} change
+ * @param {bigint} fee_sats_per_kb
+ * @returns {string}
+ */
+export function planTokenSpend(network, outpoints, sats, addresses, categories, amounts, capabilities, commitments, payment_kind, payment_target, payment_amount, amount_decimals, chosen, destination, change, fee_sats_per_kb) {
+    let deferred16_0;
+    let deferred16_1;
+    try {
+        const ptr0 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayJsValueToWasm0(outpoints, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray64ToWasm0(sats, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArrayJsValueToWasm0(addresses, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passArrayJsValueToWasm0(categories, wasm.__wbindgen_malloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ptr5 = passArrayJsValueToWasm0(amounts, wasm.__wbindgen_malloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ptr6 = passArrayJsValueToWasm0(capabilities, wasm.__wbindgen_malloc);
+        const len6 = WASM_VECTOR_LEN;
+        const ptr7 = passArrayJsValueToWasm0(commitments, wasm.__wbindgen_malloc);
+        const len7 = WASM_VECTOR_LEN;
+        const ptr8 = passStringToWasm0(payment_kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len8 = WASM_VECTOR_LEN;
+        var ptr9 = isLikeNone(payment_target) ? 0 : passStringToWasm0(payment_target, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len9 = WASM_VECTOR_LEN;
+        var ptr10 = isLikeNone(payment_amount) ? 0 : passStringToWasm0(payment_amount, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len10 = WASM_VECTOR_LEN;
+        var ptr11 = isLikeNone(chosen) ? 0 : passArrayJsValueToWasm0(chosen, wasm.__wbindgen_malloc);
+        var len11 = WASM_VECTOR_LEN;
+        const ptr12 = passStringToWasm0(destination, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len12 = WASM_VECTOR_LEN;
+        const ptr13 = passStringToWasm0(change, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len13 = WASM_VECTOR_LEN;
+        const ret = wasm.planTokenSpend(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9, ptr10, len10, amount_decimals, ptr11, len11, ptr12, len12, ptr13, len13, fee_sats_per_kb);
+        var ptr15 = ret[0];
+        var len15 = ret[1];
+        if (ret[3]) {
+            ptr15 = 0; len15 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred16_0 = ptr15;
+        deferred16_1 = len15;
+        return getStringFromWasm0(ptr15, len15);
+    } finally {
+        wasm.__wbindgen_free(deferred16_0, deferred16_1, 1);
+    }
+}
+
+/**
+ * Verify the signed return against the exact reviewed bytes. Never broadcasts.
+ * @param {Uint8Array} original
+ * @param {Uint8Array} signed
+ * @param {string} network
+ * @returns {Uint8Array}
+ */
+export function psbtFinalizeCashTokensP2pkh(original, signed, network) {
+    const ptr0 = passArray8ToWasm0(original, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(signed, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.psbtFinalizeCashTokensP2pkh(ptr0, len0, ptr1, len1, ptr2, len2);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v4;
+}
+
+/**
+ * Pure offline review. Does not authorize a spend or establish unspentness.
+ * @param {Uint8Array} raw
+ * @param {string} network
+ * @returns {string}
+ */
+export function psbtReviewP2pkh(raw, network) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passArray8ToWasm0(raw, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.psbtReviewP2pkh(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * Frame `seq_num` (from 1, without end) of a PSBT's animated
+ * `ur:crypto-psbt` QR. Stateless, so the screen owns only a counter and
+ * mobile and desktop draw the same frames.
+ * @param {Uint8Array} psbt
+ * @param {number} max_fragment_len
+ * @param {number} seq_num
+ * @returns {string}
+ */
+export function psbtUrFrame(psbt, max_fragment_len, seq_num) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passArray8ToWasm0(psbt, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.psbtUrFrame(ptr0, len0, max_fragment_len, seq_num);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Frames in one pass of a PSBT's animated `ur:crypto-psbt` QR.
+ * @param {Uint8Array} psbt
+ * @param {number} max_fragment_len
+ * @returns {number}
+ */
+export function psbtUrFrameCount(psbt, max_fragment_len) {
+    const ptr0 = passArray8ToWasm0(psbt, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.psbtUrFrameCount(ptr0, len0, max_fragment_len);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] >>> 0;
+}
+
+/**
  * `m/44'/<coin>'/<account>'/3/0` and `/3/1`, as a JSON object.
  * @param {number} coin_type
  * @param {number} account
@@ -1181,6 +1657,130 @@ export function spendingKey(spend_privkey, secret, index) {
 }
 
 /**
+ * The label of output `vout` of the complete parent transaction `txid`
+ * (display order), as JSON. Refuses a parent that is not that transaction.
+ * @param {Uint8Array} parent
+ * @param {string} txid
+ * @param {number} vout
+ * @returns {string}
+ */
+export function spentOutputLabel(parent, txid, vout) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passArray8ToWasm0(parent, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(txid, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.spentOutputLabel(ptr0, len0, ptr1, len1, vout);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * The same plan as an unsigned PSBT for an air-gapped signer, as JSON
+ * `{psbt, plan, review}`: the PSBT as hex, and Rust's review of exactly
+ * those bytes for the holder to approve.
+ *
+ * Takes the same arguments as `planTokenSpend` -- the plan is made again
+ * here, so the PSBT cannot be built from a different one -- then each coin's
+ * key (`pubkeys` as hex, empty when unknown, with its HD `branches` and
+ * `indexes`), the account path, the signer's fingerprint if the wallet has
+ * one, and the complete parent transaction of every input, as hex.
+ * @param {string} network
+ * @param {string[]} outpoints
+ * @param {BigUint64Array} sats
+ * @param {string[]} addresses
+ * @param {string[]} categories
+ * @param {string[]} amounts
+ * @param {string[]} capabilities
+ * @param {string[]} commitments
+ * @param {string} payment_kind
+ * @param {string | null | undefined} payment_target
+ * @param {string | null | undefined} payment_amount
+ * @param {number} amount_decimals
+ * @param {string[] | null | undefined} chosen
+ * @param {string} destination
+ * @param {string} change
+ * @param {bigint} fee_sats_per_kb
+ * @param {string[]} pubkeys
+ * @param {Uint32Array} branches
+ * @param {Uint32Array} indexes
+ * @param {string} account_path
+ * @param {string | null | undefined} fingerprint
+ * @param {string[]} parents
+ * @returns {string}
+ */
+export function tokenSpendPsbt(network, outpoints, sats, addresses, categories, amounts, capabilities, commitments, payment_kind, payment_target, payment_amount, amount_decimals, chosen, destination, change, fee_sats_per_kb, pubkeys, branches, indexes, account_path, fingerprint, parents) {
+    let deferred22_0;
+    let deferred22_1;
+    try {
+        const ptr0 = passStringToWasm0(network, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayJsValueToWasm0(outpoints, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray64ToWasm0(sats, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArrayJsValueToWasm0(addresses, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passArrayJsValueToWasm0(categories, wasm.__wbindgen_malloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ptr5 = passArrayJsValueToWasm0(amounts, wasm.__wbindgen_malloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ptr6 = passArrayJsValueToWasm0(capabilities, wasm.__wbindgen_malloc);
+        const len6 = WASM_VECTOR_LEN;
+        const ptr7 = passArrayJsValueToWasm0(commitments, wasm.__wbindgen_malloc);
+        const len7 = WASM_VECTOR_LEN;
+        const ptr8 = passStringToWasm0(payment_kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len8 = WASM_VECTOR_LEN;
+        var ptr9 = isLikeNone(payment_target) ? 0 : passStringToWasm0(payment_target, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len9 = WASM_VECTOR_LEN;
+        var ptr10 = isLikeNone(payment_amount) ? 0 : passStringToWasm0(payment_amount, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len10 = WASM_VECTOR_LEN;
+        var ptr11 = isLikeNone(chosen) ? 0 : passArrayJsValueToWasm0(chosen, wasm.__wbindgen_malloc);
+        var len11 = WASM_VECTOR_LEN;
+        const ptr12 = passStringToWasm0(destination, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len12 = WASM_VECTOR_LEN;
+        const ptr13 = passStringToWasm0(change, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len13 = WASM_VECTOR_LEN;
+        const ptr14 = passArrayJsValueToWasm0(pubkeys, wasm.__wbindgen_malloc);
+        const len14 = WASM_VECTOR_LEN;
+        const ptr15 = passArray32ToWasm0(branches, wasm.__wbindgen_malloc);
+        const len15 = WASM_VECTOR_LEN;
+        const ptr16 = passArray32ToWasm0(indexes, wasm.__wbindgen_malloc);
+        const len16 = WASM_VECTOR_LEN;
+        const ptr17 = passStringToWasm0(account_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len17 = WASM_VECTOR_LEN;
+        var ptr18 = isLikeNone(fingerprint) ? 0 : passStringToWasm0(fingerprint, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len18 = WASM_VECTOR_LEN;
+        const ptr19 = passArrayJsValueToWasm0(parents, wasm.__wbindgen_malloc);
+        const len19 = WASM_VECTOR_LEN;
+        const ret = wasm.tokenSpendPsbt(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9, ptr10, len10, amount_decimals, ptr11, len11, ptr12, len12, ptr13, len13, fee_sats_per_kb, ptr14, len14, ptr15, len15, ptr16, len16, ptr17, len17, ptr18, len18, ptr19, len19);
+        var ptr21 = ret[0];
+        var len21 = ret[1];
+        if (ret[3]) {
+            ptr21 = 0; len21 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred22_0 = ptr21;
+        deferred22_1 = len21;
+        return getStringFromWasm0(ptr21, len21);
+    } finally {
+        wasm.__wbindgen_free(deferred22_0, deferred22_1, 1);
+    }
+}
+
+/**
  * Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
  * display order, matching the shared coin-hold record. This does not sign.
  * @param {string} raw_tx_hex
@@ -1209,21 +1809,108 @@ export function transactionOutpoints(raw_tx_hex) {
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg___wbindgen_is_function_5e4570eb24ffa122: function(arg0) {
+            const ret = typeof(arg0) === 'function';
+            return ret;
+        },
+        __wbg___wbindgen_is_object_a2790eb24c211ea0: function(arg0) {
+            const val = arg0;
+            const ret = typeof(val) === 'object' && val !== null;
+            return ret;
+        },
+        __wbg___wbindgen_is_string_e6f02f0ea5f20a32: function(arg0) {
+            const ret = typeof(arg0) === 'string';
+            return ret;
+        },
+        __wbg___wbindgen_is_undefined_6cff064c44e0d823: function(arg0) {
+            const ret = arg0 === undefined;
+            return ret;
+        },
+        __wbg___wbindgen_string_get_d154f1e671052120: function(arg0, arg1) {
+            const obj = arg1;
+            const ret = typeof(obj) === 'string' ? obj : undefined;
+            var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            var len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
         __wbg___wbindgen_throw_bb96b2010945f0bc: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
+        __wbg_call_35dba3c747ad7521: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = arg0.call(arg1, arg2);
+            return ret;
+        }, arguments); },
+        __wbg_crypto_38df2bab126b63dc: function(arg0) {
+            const ret = arg0.crypto;
+            return ret;
+        },
+        __wbg_getRandomValues_c44a50d8cfdaebeb: function() { return handleError(function (arg0, arg1) {
+            arg0.getRandomValues(arg1);
+        }, arguments); },
         __wbg_length_36bd29c6848c2144: function(arg0) {
             const ret = arg0.length;
+            return ret;
+        },
+        __wbg_msCrypto_bd5a034af96bcba6: function(arg0) {
+            const ret = arg0.msCrypto;
             return ret;
         },
         __wbg_new_with_length_3ffc1c56427c525c: function(arg0) {
             const ret = new Uint8Array(arg0 >>> 0);
             return ret;
         },
+        __wbg_node_84ea875411254db1: function(arg0) {
+            const ret = arg0.node;
+            return ret;
+        },
+        __wbg_process_44c7a14e11e9f69e: function(arg0) {
+            const ret = arg0.process;
+            return ret;
+        },
+        __wbg_prototypesetcall_de8e0d9553586985: function(arg0, arg1, arg2) {
+            Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
+        },
+        __wbg_randomFillSync_6c25eac9869eb53c: function() { return handleError(function (arg0, arg1) {
+            arg0.randomFillSync(arg1);
+        }, arguments); },
+        __wbg_require_b4edbdcf3e2a1ef0: function() { return handleError(function () {
+            const ret = module.require;
+            return ret;
+        }, arguments); },
         __wbg_set_b9b5b5cb7b495037: function(arg0, arg1, arg2) {
             arg0.set(getArrayU8FromWasm0(arg1, arg2));
         },
+        __wbg_static_accessor_GLOBAL_THIS_466428f93b4eaa76: function() {
+            const ret = typeof globalThis === 'undefined' ? null : globalThis;
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
+        __wbg_static_accessor_GLOBAL_c7aea38d4de089bc: function() {
+            const ret = typeof global === 'undefined' ? null : global;
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
+        __wbg_static_accessor_SELF_42d4fae05e59267a: function() {
+            const ret = typeof self === 'undefined' ? null : self;
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
+        __wbg_static_accessor_WINDOW_e0db14a0eba6a812: function() {
+            const ret = typeof window === 'undefined' ? null : window;
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
+        __wbg_subarray_a4cc58201c7359fd: function(arg0, arg1, arg2) {
+            const ret = arg0.subarray(arg1 >>> 0, arg2 >>> 0);
+            return ret;
+        },
+        __wbg_versions_276b2795b1c6a219: function(arg0) {
+            const ret = arg0.versions;
+            return ret;
+        },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
+            // Cast intrinsic for `Ref(Slice(U8)) -> NamedExternref("Uint8Array")`.
+            const ret = getArrayU8FromWasm0(arg0, arg1);
+            return ret;
+        },
+        __wbindgen_cast_0000000000000002: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
             return ret;
@@ -1244,6 +1931,12 @@ function __wbg_get_imports() {
     };
 }
 
+function addToExternrefTable0(obj) {
+    const idx = wasm.__externref_table_alloc();
+    wasm.__wbindgen_externrefs.set(idx, obj);
+    return idx;
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
@@ -1255,6 +1948,14 @@ function getBigUint64ArrayMemory0() {
         cachedBigUint64ArrayMemory0 = new BigUint64Array(wasm.memory.buffer);
     }
     return cachedBigUint64ArrayMemory0;
+}
+
+let cachedDataViewMemory0 = null;
+function getDataViewMemory0() {
+    if (cachedDataViewMemory0 === null || cachedDataViewMemory0.buffer.detached === true || (cachedDataViewMemory0.buffer.detached === undefined && cachedDataViewMemory0.buffer !== wasm.memory.buffer)) {
+        cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
+    }
+    return cachedDataViewMemory0;
 }
 
 function getStringFromWasm0(ptr, len) {
@@ -1277,6 +1978,19 @@ function getUint8ArrayMemory0() {
     return cachedUint8ArrayMemory0;
 }
 
+function handleError(f, args) {
+    try {
+        return f.apply(this, args);
+    } catch (e) {
+        const idx = addToExternrefTable0(e);
+        wasm.__wbindgen_exn_store(idx);
+    }
+}
+
+function isLikeNone(x) {
+    return x === undefined || x === null;
+}
+
 function passArray32ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 4, 4) >>> 0;
     getUint32ArrayMemory0().set(arg, ptr / 4);
@@ -1295,6 +2009,16 @@ function passArray8ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 1, 1) >>> 0;
     getUint8ArrayMemory0().set(arg, ptr / 1);
     WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passArrayJsValueToWasm0(array, malloc) {
+    const ptr = malloc(array.length * 4, 4) >>> 0;
+    for (let i = 0; i < array.length; i++) {
+        const add = addToExternrefTable0(array[i]);
+        getDataViewMemory0().setUint32(ptr + 4 * i, add, true);
+    }
+    WASM_VECTOR_LEN = array.length;
     return ptr;
 }
 
@@ -1376,6 +2100,7 @@ function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     wasmModule = module;
     cachedBigUint64ArrayMemory0 = null;
+    cachedDataViewMemory0 = null;
     cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();

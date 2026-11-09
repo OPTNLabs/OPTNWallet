@@ -18,6 +18,7 @@ import {
 
 import { isRetiredRoundKey, retireRoundKey } from '../fusionRoundState';
 import { FUSION_KNOB_DEFAULTS } from '../fusionKnobs';
+import { secureRandomInt } from './secureRandom';
 
 // Public ready announcement. A NIP-01 REPLACEABLE kind (10000-19999): the relay
 // keeps only the latest event per throwaway pubkey and REPLAYS it to any new
@@ -785,8 +786,7 @@ export function joinPool(
   };
 
   // Head-start Tor WSS before first shout (0–800ms was often too early).
-  const firstAnnounceDelay =
-    1_200 + Math.floor(Math.random() * MAX_ANNOUNCE_DELAY_MS);
+  const firstAnnounceDelay = 1_200 + secureRandomInt(MAX_ANNOUNCE_DELAY_MS);
   announceTimer = setTimeout(() => {
     void announce().catch((error: unknown) =>
       options.onError?.(

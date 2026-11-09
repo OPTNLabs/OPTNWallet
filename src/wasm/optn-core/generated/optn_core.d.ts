@@ -6,6 +6,15 @@
  */
 export function addonLegacyGuestCallAllowed(module: string, method: string): boolean;
 
+/**
+ * A public key's P2PKH and token-aware P2PKH CashAddrs, as JSON
+ * `{publicKeyHash, address, tokenAddress}` with the hash in hex.
+ *
+ * Either SEC1 length is accepted, compressed or not, since both hash to a
+ * valid script; any other length is refused rather than hashed.
+ */
+export function bchP2pkhAddresses(network: string, public_key: Uint8Array): string;
+
 export function bcmrAuthorRegistry(request_json: string): string;
 
 export function bcmrDefaultParseBytecode(): string;
@@ -21,6 +30,30 @@ export function bcmrSequentialCommitment(number: number): string;
 export function bcmrSuggestIdentity(category: string, has_nfts: boolean): string;
 
 export function bcmrSymbolError(symbol: string): string | undefined;
+
+/**
+ * A new recovery phrase, drawn by the core from the browser's own
+ * `crypto.getRandomValues` (see `hd::generate_mnemonic`). JavaScript never
+ * supplies or sees the entropy, only the finished phrase.
+ */
+export function bip39GenerateMnemonic(word_count: number): string;
+
+/**
+ * Whether a phrase is valid English BIP39, written exactly as BIP39 writes it.
+ */
+export function bip39IsCanonicalMnemonic(phrase: string): boolean;
+
+/**
+ * The 64-byte BIP39 seed, for keys that are not BIP32 (MLS's HPKE inputs).
+ */
+export function bip39Seed(mnemonic: string, passphrase: string): Uint8Array;
+
+/**
+ * The coin-control label of one reported coin, as JSON; see
+ * `coin_control::ReportedCoin`. Flat arguments keep a JSON parser out of
+ * this binary.
+ */
+export function coinControlLabel(category?: string | null, amount?: string | null, nft_capability?: string | null, identity_name?: string | null, identity_ticker?: string | null, identity_decimals?: number | null, identity_status?: string | null): string;
 
 export function connectP2pkhLock(public_key: Uint8Array): Uint8Array;
 
@@ -199,6 +232,41 @@ export function grindSequence(offset: number): number;
  */
 export function grindString(scan_pubkey: Uint8Array, prefix_bits: number): string;
 
+/**
+ * An xpub/tpub re-serialized with `network`'s version bytes.
+ */
+export function hdAlignPublicKeyNetwork(network: string, hd_public_key: string): string;
+
+/**
+ * The extended private key at a path: `xprv` on mainnet, `tprv` otherwise.
+ */
+export function hdExtendedPrivateKeyAtPath(mnemonic: string, passphrase: string, network: string, path: string): string;
+
+/**
+ * `private(32) || compressed public(33)` at a path, from one derivation.
+ */
+export function hdKeyPairAtPath(mnemonic: string, passphrase: string, path: string): Uint8Array;
+
+/**
+ * The 4-byte BIP32 master fingerprint.
+ */
+export function hdMasterFingerprint(mnemonic: string, passphrase: string): Uint8Array;
+
+/**
+ * The 32-byte private key at a path.
+ */
+export function hdPrivateKeyAtPath(mnemonic: string, passphrase: string, path: string): Uint8Array;
+
+/**
+ * The extended public key at a path: `xpub` on mainnet, `tpub` otherwise.
+ */
+export function hdPublicKeyAtPath(mnemonic: string, passphrase: string, network: string, path: string): string;
+
+/**
+ * The compressed public key at non-hardened child `index` of an xpub/tpub.
+ */
+export function hdPublicKeyChild(hd_public_key: string, index: number): Uint8Array;
+
 export function isLegacyPaycode(candidate: string): boolean;
 
 /**
@@ -252,6 +320,35 @@ export function looksLikeRpa(candidate: string): boolean;
 export function paymentAddress(spend_pubkey: Uint8Array, secret: Uint8Array, network: string, index: number): string;
 
 /**
+ * Plan a send that may spend token coins, as JSON; see
+ * `spend::TokenSpendPlan`. Any wallet kind can call this: it decides inputs
+ * and outputs, token and BCH change, and checks that nothing is burned.
+ */
+export function planTokenSpend(network: string, outpoints: string[], sats: BigUint64Array, addresses: string[], categories: string[], amounts: string[], capabilities: string[], commitments: string[], payment_kind: string, payment_target: string | null | undefined, payment_amount: string | null | undefined, amount_decimals: number, chosen: string[] | null | undefined, destination: string, change: string, fee_sats_per_kb: bigint): string;
+
+/**
+ * Verify the signed return against the exact reviewed bytes. Never broadcasts.
+ */
+export function psbtFinalizeCashTokensP2pkh(original: Uint8Array, signed: Uint8Array, network: string): Uint8Array;
+
+/**
+ * Pure offline review. Does not authorize a spend or establish unspentness.
+ */
+export function psbtReviewP2pkh(raw: Uint8Array, network: string): string;
+
+/**
+ * Frame `seq_num` (from 1, without end) of a PSBT's animated
+ * `ur:crypto-psbt` QR. Stateless, so the screen owns only a counter and
+ * mobile and desktop draw the same frames.
+ */
+export function psbtUrFrame(psbt: Uint8Array, max_fragment_len: number, seq_num: number): string;
+
+/**
+ * Frames in one pass of a PSBT's animated `ur:crypto-psbt` QR.
+ */
+export function psbtUrFrameCount(psbt: Uint8Array, max_fragment_len: number): number;
+
+/**
  * `m/44'/<coin>'/<account>'/3/0` and `/3/1`, as a JSON object.
  */
 export function rpaKeyPaths(coin_type: number, account: number): string;
@@ -282,6 +379,25 @@ export function sharedSecret(privkey: Uint8Array, counterpart_pubkey: Uint8Array
 export function spendingKey(spend_privkey: Uint8Array, secret: Uint8Array, index: number): Uint8Array;
 
 /**
+ * The label of output `vout` of the complete parent transaction `txid`
+ * (display order), as JSON. Refuses a parent that is not that transaction.
+ */
+export function spentOutputLabel(parent: Uint8Array, txid: string, vout: number): string;
+
+/**
+ * The same plan as an unsigned PSBT for an air-gapped signer, as JSON
+ * `{psbt, plan, review}`: the PSBT as hex, and Rust's review of exactly
+ * those bytes for the holder to approve.
+ *
+ * Takes the same arguments as `planTokenSpend` -- the plan is made again
+ * here, so the PSBT cannot be built from a different one -- then each coin's
+ * key (`pubkeys` as hex, empty when unknown, with its HD `branches` and
+ * `indexes`), the account path, the signer's fingerprint if the wallet has
+ * one, and the complete parent transaction of every input, as hex.
+ */
+export function tokenSpendPsbt(network: string, outpoints: string[], sats: BigUint64Array, addresses: string[], categories: string[], amounts: string[], capabilities: string[], commitments: string[], payment_kind: string, payment_target: string | null | undefined, payment_amount: string | null | undefined, amount_decimals: number, chosen: string[] | null | undefined, destination: string, change: string, fee_sats_per_kb: bigint, pubkeys: string[], branches: Uint32Array, indexes: Uint32Array, account_path: string, fingerprint: string | null | undefined, parents: string[]): string;
+
+/**
  * Inputs of a raw transaction as JSON `{txid, vout}` records. Txids use
  * display order, matching the shared coin-hold record. This does not sign.
  */
@@ -292,6 +408,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly addonLegacyGuestCallAllowed: (a: number, b: number, c: number, d: number) => number;
+    readonly bchP2pkhAddresses: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly bcmrAuthorRegistry: (a: number, b: number) => [number, number, number, number];
     readonly bcmrDefaultParseBytecode: () => [number, number];
     readonly bcmrIpfsCid: (a: number, b: number) => [number, number];
@@ -300,6 +417,10 @@ export interface InitOutput {
     readonly bcmrSequentialCommitment: (a: number) => [number, number, number, number];
     readonly bcmrSuggestIdentity: (a: number, b: number, c: number) => [number, number, number, number];
     readonly bcmrSymbolError: (a: number, b: number) => [number, number];
+    readonly bip39GenerateMnemonic: (a: number) => [number, number, number, number];
+    readonly bip39IsCanonicalMnemonic: (a: number, b: number) => number;
+    readonly bip39Seed: (a: number, b: number, c: number, d: number) => any;
+    readonly coinControlLabel: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly connectP2pkhLock: (a: number, b: number) => [number, number, number, number];
     readonly connectPublicKey: (a: number, b: number) => [number, number, number, number];
     readonly connectSignInput: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
@@ -329,6 +450,13 @@ export interface InitOutput {
     readonly grindRpaTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly grindSequence: (a: number) => [number, number, number];
     readonly grindString: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly hdAlignPublicKeyNetwork: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly hdExtendedPrivateKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly hdKeyPairAtPath: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly hdMasterFingerprint: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly hdPrivateKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly hdPublicKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly hdPublicKeyChild: (a: number, b: number, c: number) => [number, number, number, number];
     readonly isLegacyPaycode: (a: number, b: number) => number;
     readonly ledgerAddressFormat: (a: number, b: number) => [number, number, number];
     readonly ledgerEncodeBip32Path: (a: number, b: number) => [number, number, number, number];
@@ -338,15 +466,24 @@ export interface InitOutput {
     readonly legacyPaycodeRejection: () => [number, number];
     readonly looksLikeRpa: (a: number, b: number) => number;
     readonly paymentAddress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly planTokenSpend: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: bigint) => [number, number, number, number];
+    readonly psbtFinalizeCashTokensP2pkh: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly psbtReviewP2pkh: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly psbtUrFrame: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly psbtUrFrameCount: (a: number, b: number, c: number) => [number, number, number];
     readonly rpaKeyPaths: (a: number, b: number) => [number, number];
     readonly scanTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly sendBlockReason: (a: number, b: number) => [number, number, number, number];
     readonly sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly spentOutputLabel: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly tokenSpendPsbt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: bigint, e1: number, f1: number, g1: number, h1: number, i1: number, j1: number, k1: number, l1: number, m1: number, n1: number, o1: number, p1: number) => [number, number, number, number];
     readonly transactionOutpoints: (a: number, b: number) => [number, number, number, number];
-    readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
+    readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;

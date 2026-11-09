@@ -50,7 +50,11 @@ const ACTION_CODE_SET = new Set<string>(Object.values(MEMO_ACTION_CODES));
 
 function toCashaddrPrefix(network: string | null | undefined) {
   const v = String(network ?? '').toLowerCase();
-  return v === 'chipnet' || v === 'testnet' || v === 'regtest'
+  return v === 'chipnet' ||
+    v === 'testnet' ||
+    v === 'testnet3' ||
+    v === 'testnet4' ||
+    v === 'regtest'
     ? 'bchtest'
     : 'bitcoincash';
 }

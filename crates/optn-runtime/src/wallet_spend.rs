@@ -320,6 +320,60 @@ fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Derive ordinary spendable coins from reconciled raw history. Token outputs are excluded.
+pub fn snapshot_spendable_coins(
+    snapshot: &crate::sync_worker::WalletNetworkSnapshot,
+    network: Network,
+) -> std::result::Result<Vec<SpendableCoin>, String> {
+    let book = snapshot
+        .hd
+        .as_ref()
+        .ok_or("this wallet has no synchronized HD account yet")?;
+    let mut by_script: Vec<(Vec<u8>, String)> = Vec::new();
+    for (address, path) in spendable_paths(book) {
+        let parsed = Address::decode(&address).map_err(|error| error.to_string())?;
+        if parsed.prefix != network.prefix() {
+            return Err("the synchronized account is on another network".into());
+        }
+        by_script.push((parsed.script_pubkey(), path));
+    }
+
+    let scripts: Vec<Vec<u8>> = by_script.iter().map(|(script, _)| script.clone()).collect();
+    let unspent = tx::unspent_outputs(
+        snapshot
+            .transactions
+            .iter()
+            .map(|transaction| transaction.raw.as_slice()),
+        &scripts,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let mut coins = Vec::new();
+    for output in unspent {
+        // A token-carrying output is not ordinary BCH: spending one here would
+        // destroy the tokens it holds.
+        if output.output.token.is_some() {
+            continue;
+        }
+        let Some((_, path)) = by_script
+            .iter()
+            .find(|(script, _)| script == &output.output.script_pubkey)
+        else {
+            continue;
+        };
+        coins.push(SpendableCoin {
+            utxo: tx::Utxo {
+                txid: output.txid,
+                vout: output.vout,
+                value: output.output.value,
+                script_pubkey: output.output.script_pubkey.clone(),
+            },
+            path: path.clone(),
+        });
+    }
+    Ok(coins)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

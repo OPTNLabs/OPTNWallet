@@ -132,6 +132,14 @@ pub struct Skill {
 /// manifest and that the gate therefore never classifies.
 pub const SKILLS: &[Skill] = &[
     Skill {
+        name: "psbt",
+        capability: Capability::Read,
+        summary: "Review a local Chipnet PSBT and verify signatures against its approved bytes. No keys or broadcast.",
+        needs_wallet: false,
+        needs_network: false,
+        requires_confirmation: false,
+    },
+    Skill {
         name: "wallet",
         capability: Capability::Secret,
         summary: "Manage encrypted native wallets, passwords and lock policy through the shared Rust runtime.",
@@ -385,7 +393,7 @@ pub const SKILLS: &[Skill] = &[
         // admit `x402 pay` with it.
         name: "x402",
         capability: Capability::Spend,
-        summary: "Pay for an HTTP resource. `check` only reads; `pay` authorises a debit.",
+        summary: "Pay for an HTTP resource. `check` reads; `pay` prepares a bounded exact payment.",
         needs_wallet: true,
         needs_network: true,
         requires_confirmation: true,

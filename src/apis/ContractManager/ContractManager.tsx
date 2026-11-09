@@ -36,6 +36,7 @@ import type {
   StoredContractRow,
   StoredContractUtxo,
 } from './types';
+import { cashAddressPrefix } from '../../utils/networkProfile';
 type ContractCtorArtifact = ConstructorParameters<typeof Contract>[0];
 
 function requireDatabase(database: Database | null): Database {
@@ -118,8 +119,7 @@ export default function ContractManager(): ContractManagerApi {
       }
 
       const provider = new ElectrumNetworkProvider(currentNetwork);
-      const prefix =
-        currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+      const prefix = cashAddressPrefix(currentNetwork);
 
       if (
         Array.isArray(artifact.constructorInputs) &&
@@ -489,8 +489,7 @@ export default function ContractManager(): ContractManagerApi {
 
     try {
       const currentNetwork = state.network.currentNetwork;
-      const prefix =
-        currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+      const prefix = cashAddressPrefix(currentNetwork);
 
       const utxos: UTXO[] = await ElectrumService.getUTXOs(address);
       const formattedUTXOs = utxos.map((utxo) =>

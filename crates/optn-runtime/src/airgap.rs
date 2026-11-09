@@ -599,6 +599,7 @@ mod tests {
         let secret = |value: &str| optn_app::SecretText::new(value.into());
         let opened = transport
             .wallet_security(WalletSecurityRequest::ImportWatchOnly {
+                legacy_source_id: None,
                 name: "Public airgap actor fixture".into(),
                 account_xpub: secret(&public),
                 master_fingerprint: String::new(),

@@ -24,6 +24,7 @@ import {
   setWalletSyncStatus,
 } from '../state/slices/utxoSlice';
 
+import { cashAddressPrefix } from '../utils/networkProfile';
 const bcmrCache = new Map<
   string,
   { ts: number; data: Awaited<ReturnType<BcmrService['getSnapshot']>> | null }
@@ -39,7 +40,7 @@ function setAddressDiscoveryState(inProgress: boolean): void {
 function getPrefix(networkOverride?: Network): string {
   try {
     const network = networkOverride ?? selectCurrentNetwork(store.getState());
-    return network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+    return cashAddressPrefix(network);
   } catch {
     return 'bitcoincash';
   }

@@ -19,25 +19,14 @@ import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
 import FriendlyErrorPanel from '../../components/ui/FriendlyErrorPanel';
 import WalletPopupSheet from '../../components/ui/WalletPopupSheet';
 import { logError } from '../../utils/errorHandling';
+import {
+  networkProfile,
+  SELECTABLE_NETWORKS,
+} from '../../utils/networkProfile';
 
-// To add a new network in future:
-//  1. Add its value to the Network enum in networkSlice.ts
-//  2. Add its Electrum + infra servers in src/utils/servers/InfraUrls.ts
-//  3. Update the network-parsing switch in WalletManager.ts (several spots)
-//  4. Add an entry to SUPPORTED_NETWORKS below — UI handles the rest
-const SUPPORTED_NETWORKS: {
-  id: Network;
-  color: string;
-}[] = [
-  {
-    id: Network.MAINNET,
-    color: '#22c55e',
-  },
-  {
-    id: Network.CHIPNET,
-    color: '#6366f1',
-  },
-];
+// The list, names, descriptions and colours come from `utils/networkProfile.ts`.
+// A new network is a `Network` value plus its profile row and infra pool; the
+// compiler then points at every other place that has to decide about it.
 
 export const NetworkSettings: React.FC = () => {
   const navigate = useNavigate();
@@ -55,14 +44,10 @@ export const NetworkSettings: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const networkLabel = (network: Network) =>
-    network === Network.MAINNET
-      ? t('settingsNetwork.mainnet')
-      : t('settingsNetwork.chipnet');
+    t(networkProfile(network).labelKey);
 
   const networkDescription = (network: Network) =>
-    network === Network.MAINNET
-      ? t('settingsNetwork.mainnetDescription')
-      : t('settingsNetwork.chipnetDescription');
+    t(networkProfile(network).descriptionKey);
 
   const requestSwitch = (target: Network) => {
     if (target === currentNetwork || switching) return;
@@ -177,13 +162,14 @@ export const NetworkSettings: React.FC = () => {
       </button>
 
       <div className="flex flex-col gap-2">
-        {SUPPORTED_NETWORKS.map((net) => {
-          const isActive = net.id === currentNetwork;
+        {SELECTABLE_NETWORKS.map((network) => {
+          const profile = networkProfile(network);
+          const isActive = network === currentNetwork;
           return (
             <button
-              key={net.id}
+              key={network}
               type="button"
-              onClick={() => requestSwitch(net.id)}
+              onClick={() => requestSwitch(network)}
               disabled={isActive || switching}
               aria-pressed={isActive}
               className={`w-full rounded-xl border p-4 text-left transition-colors disabled:cursor-default ${
@@ -195,19 +181,15 @@ export const NetworkSettings: React.FC = () => {
               <div className="flex items-center justify-between">
                 <div className="flex flex-col gap-0.5">
                   <div className="flex items-center gap-2">
-                    <span style={{ color: net.color }} aria-hidden>
+                    <span style={{ color: profile.color }} aria-hidden>
                       ●
                     </span>
                     <span className="font-semibold wallet-text-strong">
-                      {net.id === Network.MAINNET
-                        ? t('settingsNetwork.mainnet')
-                        : t('settingsNetwork.chipnet')}
+                      {t(profile.labelKey)}
                     </span>
                   </div>
                   <p className="text-xs wallet-muted pl-5">
-                    {net.id === Network.MAINNET
-                      ? t('settingsNetwork.mainnetDescription')
-                      : t('settingsNetwork.chipnetDescription')}
+                    {t(profile.descriptionKey)}
                   </p>
                 </div>
                 {isActive && (
@@ -225,11 +207,7 @@ export const NetworkSettings: React.FC = () => {
           );
         })}
 
-        {[
-          t('settingsNetwork.testnet3'),
-          t('settingsNetwork.testnet4'),
-          t('settingsNetwork.regtest'),
-        ].map((label) => (
+        {[t('settingsNetwork.regtest')].map((label) => (
           <div
             key={label}
             className="w-full rounded-xl border border-[var(--wallet-border)] wallet-surface p-4 text-left opacity-50 cursor-not-allowed"
@@ -272,11 +250,7 @@ export const NetworkSettings: React.FC = () => {
                 onClick={() => void handleSwitch(pendingNetwork)}
                 disabled={switching}
               >
-                {t(
-                  pendingNetwork === Network.MAINNET
-                    ? 'settingsNetwork.switchToMainnet'
-                    : 'settingsNetwork.switchToChipnet'
-                )}
+                Switch to {networkProfile(pendingNetwork).label}
               </button>
             </div>
           }
@@ -287,11 +261,7 @@ export const NetworkSettings: React.FC = () => {
                 id="network-switch-title"
                 className="text-lg font-semibold wallet-text-strong"
               >
-                {t(
-                  pendingNetwork === Network.MAINNET
-                    ? 'settingsNetwork.switchToMainnet'
-                    : 'settingsNetwork.switchToChipnet'
-                )}
+                Switch to {networkProfile(pendingNetwork).label}
               </h2>
               <p className="mt-1 text-sm wallet-muted">
                 {t('settingsNetwork.switchPrompt', {
@@ -306,11 +276,11 @@ export const NetworkSettings: React.FC = () => {
             />
 
             <div className="rounded-xl border border-amber-400/60 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
-              <p className="font-semibold">
-                {pendingNetwork === Network.MAINNET
-                  ? t('settingsNetwork.mainnetWarning')
-                  : t('settingsNetwork.chipnetWarning')}
-              </p>
+              {pendingNetwork === Network.MAINNET && (
+                <p className="font-semibold">
+                  {t('settingsNetwork.mainnetWarning')}
+                </p>
+              )}
               <p className="mt-2">{t('settingsNetwork.switchDetails')}</p>
             </div>
           </div>
