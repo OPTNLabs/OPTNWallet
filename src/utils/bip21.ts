@@ -24,6 +24,7 @@ export type ParsedBip21Uri = {
   networkMismatch?: boolean;
   amount?: number;
   amountRaw?: string;
+  invalidAmount?: boolean;
   label?: string;
   message?: string;
 };
@@ -40,12 +41,20 @@ function oppositePrefix(network: Network): string {
 function parseAmount(params: URLSearchParams): {
   amount?: number;
   amountRaw?: string;
+  invalidAmount?: boolean;
 } {
-  const amountRaw = params.get('amount')?.trim() || '';
+  const values = params.getAll('amount');
+  if (values.length > 1) return { invalidAmount: true };
+  const amountRaw = values[0]?.trim() || '';
   if (!amountRaw) return {};
 
-  const parsed = Number.parseFloat(amountRaw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return {};
+  if (!/^\d+(?:\.\d{1,8})?$/.test(amountRaw)) {
+    return { invalidAmount: true };
+  }
+  const parsed = Number(amountRaw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return { invalidAmount: true };
+  }
 
   return { amount: parsed, amountRaw };
 }
@@ -71,8 +80,7 @@ export function parseBip21Uri(input: string, network: Network): ParsedBip21Uri {
   }
 
   const [addressPartRaw, queryString = ''] = raw.split('?');
-  const isBip21Uri =
-    queryString.length > 0 || addressPartRaw.includes(':');
+  const isBip21Uri = queryString.length > 0 || addressPartRaw.includes(':');
 
   const addressChunks = addressPartRaw.split(':');
   const noPrefixAddress =
@@ -81,7 +89,7 @@ export function parseBip21Uri(input: string, network: Network): ParsedBip21Uri {
       : addressPartRaw;
 
   const searchParams = new URLSearchParams(queryString);
-  const { amount, amountRaw } = parseAmount(searchParams);
+  const { amount, amountRaw, invalidAmount } = parseAmount(searchParams);
   const label = searchParams.get('label') || undefined;
   const message = searchParams.get('message') || undefined;
 
@@ -95,6 +103,7 @@ export function parseBip21Uri(input: string, network: Network): ParsedBip21Uri {
       isTokenAddress: false,
       amount,
       amountRaw,
+      invalidAmount,
       label,
       message,
     };
@@ -120,6 +129,7 @@ export function parseBip21Uri(input: string, network: Network): ParsedBip21Uri {
       networkMismatch: true,
       amount,
       amountRaw,
+      invalidAmount,
       label,
       message,
     };
@@ -142,6 +152,7 @@ export function parseBip21Uri(input: string, network: Network): ParsedBip21Uri {
         networkMismatch: true,
         amount,
         amountRaw,
+        invalidAmount,
         label,
         message,
       };
@@ -155,6 +166,7 @@ export function parseBip21Uri(input: string, network: Network): ParsedBip21Uri {
       isTokenAddress: false,
       amount,
       amountRaw,
+      invalidAmount,
       label,
       message,
     };
@@ -195,6 +207,7 @@ export function parseBip21Uri(input: string, network: Network): ParsedBip21Uri {
       isTokenAddress,
       amount,
       amountRaw,
+      invalidAmount,
       label,
       message,
     };
@@ -209,6 +222,7 @@ export function parseBip21Uri(input: string, network: Network): ParsedBip21Uri {
     isTokenAddress: false,
     amount,
     amountRaw,
+    invalidAmount,
     label,
     message,
   };

@@ -13,6 +13,22 @@ export function isComingSoonApp(appId: string, appName: string): boolean {
 
 export type AppsViewCategory = 'Wallet' | 'Token' | 'Utils' | 'Advanced';
 
+export const APP_BROWSE_CATEGORIES: AppsViewCategory[] = [
+  'Wallet',
+  'Token',
+  'Utils',
+  'Advanced',
+];
+
+export function groupAppsByCategory<T extends { category: AppsViewCategory }>(
+  apps: T[]
+): Array<{ category: AppsViewCategory; apps: T[] }> {
+  return APP_BROWSE_CATEGORIES.map((category) => ({
+    category,
+    apps: apps.filter((app) => app.category === category),
+  })).filter((group) => group.apps.length > 0);
+}
+
 const APP_CATEGORY_ORDER: Record<AppsViewCategory, number> = {
   Wallet: 0,
   Token: 1,

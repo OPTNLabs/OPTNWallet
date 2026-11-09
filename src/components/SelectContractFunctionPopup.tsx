@@ -22,6 +22,7 @@ import {
   scanBarcodeSafely,
 } from '../utils/barcodeScanner';
 import { useI18n } from '../i18n/useI18n';
+import MaskedValue from './ui/MaskedValue';
 
 interface AbiInput {
   name: string;
@@ -443,7 +444,16 @@ const SelectContractFunctionPopup: React.FC<
                       {inputValuesState[input.name] && (
                         <div className="mt-2 text-sm wallet-muted">
                           {t('contractPopup.selected', { type: input.type })}:{' '}
-                          {shortenTxHash(inputValuesState[input.name])}
+                          <MaskedValue
+                            value={inputValuesState[input.name]}
+                            label={t('contractPopup.selected', {
+                              type: input.type,
+                            })}
+                            ariaLabel={t('receive.copyAddress')}
+                            copySuccessMessageKey="receive.addressCopied"
+                            embedded
+                            className="text-xs"
+                          />
                         </div>
                       )}
                     </>

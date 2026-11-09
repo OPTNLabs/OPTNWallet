@@ -1,6 +1,6 @@
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { shortenAddress } from '../../utils/shortenHash';
+import MaskedValue from '../../components/ui/MaskedValue';
 
 type SelectableValueCardProps = {
   label: string;
@@ -19,8 +19,6 @@ const SelectableValueCard: React.FC<SelectableValueCardProps> = ({
   helperText,
   copyLabel = 'Copy',
 }) => {
-  const displayValue = shortenAddress(value);
-
   return (
     <div className="wallet-surface-strong rounded-[14px] p-3">
       <div className="text-[11px] font-semibold wallet-muted mb-1">{label}</div>
@@ -44,14 +42,22 @@ const SelectableValueCard: React.FC<SelectableValueCardProps> = ({
           </div>
         </div>
       ) : null}
-      <div className="text-sm font-mono break-all select-text">{displayValue}</div>
+      <MaskedValue
+        value={value}
+        label={label}
+        copySuccessMessageKey="receive.addressCopied"
+        embedded
+        className="w-full break-all text-sm"
+      />
       <button
         className="wallet-btn-secondary w-full mt-3"
         onClick={() => onCopy(value)}
       >
         {copyLabel}
       </button>
-      {helperText ? <div className="text-[11px] wallet-muted mt-2">{helperText}</div> : null}
+      {helperText ? (
+        <div className="text-[11px] wallet-muted mt-2">{helperText}</div>
+      ) : null}
     </div>
   );
 };

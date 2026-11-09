@@ -10,8 +10,10 @@ import {
   listCashConnectActionNames,
 } from '../../services/cashconnect/cashconnectProposal';
 import WalletPopupSheet from '../ui/WalletPopupSheet';
+import NetworkContextBanner from '../ui/NetworkContextBanner';
 import { shortenHash } from '../../utils/shortenHash';
 import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
+import { useI18n } from '../../i18n/useI18n';
 
 const KNOWN_TOKEN_LABELS: Record<string, string> = {
   d9ab24ed15a7846cc3d9e004aa5cb976860f13dac1ead05784ee4f4622af96ea: 'FURU',
@@ -36,6 +38,7 @@ function humanizeTemplateName(name: string): string {
 
 export default function CashConnectSessionProposalModal() {
   const dispatch = useDispatch<AppDispatch>();
+  const { t } = useI18n();
   const proposal = useSelector(
     (state: RootState) => state.cashconnect.pendingProposal
   );
@@ -48,6 +51,7 @@ export default function CashConnectSessionProposalModal() {
 
   return (
     <WalletPopupSheet
+      dismissLabel={t('cashconnect.reject')}
       onDismiss={() => dispatch(rejectCashConnectProposalAction())}
       footer={
         <div className="space-y-2">
@@ -57,20 +61,22 @@ export default function CashConnectSessionProposalModal() {
               className="wallet-btn-primary px-3 py-2"
               onClick={() => dispatch(approveCashConnectProposalAction())}
             >
-              Approve
+              {t('cashconnect.approve')}
             </button>
             <button
               type="button"
               className="wallet-btn-danger px-3 py-2"
               onClick={() => dispatch(rejectCashConnectProposalAction())}
             >
-              Reject
+              {t('cashconnect.reject')}
             </button>
           </div>
         </div>
       }
     >
-      <h2 className="text-xl font-bold text-center mb-3">Approve CashConnect</h2>
+      <h2 className="text-xl font-bold text-center mb-3">
+        {t('cashconnect.approve')} CashConnect
+      </h2>
       {proposal.dapp.icon ? (
         <div className="flex justify-center mb-3">
           <img
@@ -98,21 +104,19 @@ export default function CashConnectSessionProposalModal() {
           <p className="text-sm wallet-muted">{proposal.dapp.description}</p>
         ) : null}
       </div>
+      <NetworkContextBanner network={proposal.chain} className="mt-4" />
       <div className="mt-4 text-sm space-y-2">
         <p>
-          <span className="font-semibold">What:</span>{' '}
+          <span className="font-semibold">{t('cashconnect.what')}:</span>{' '}
           {humanizeTemplateName(proposal.template.name)}
         </p>
-        <p>
-          <span className="font-semibold">Network:</span> {proposal.chain}
-        </p>
         <p className="break-words">
-          <span className="font-semibold">Actions:</span>{' '}
-          {actionNames.join(', ') || 'none'}
+          <span className="font-semibold">{t('cashconnect.actions')}:</span>{' '}
+          {actionNames.join(', ') || t('cashconnect.none')}
         </p>
         {proposal.allowedTokens.length > 0 ? (
           <p>
-            <span className="font-semibold">Tokens:</span>{' '}
+            <span className="font-semibold">{t('cashconnect.tokens')}:</span>{' '}
             {proposal.allowedTokens
               .map((token) => tokenLabel(token, tokenMetadata[token]))
               .join(', ')}
@@ -120,7 +124,7 @@ export default function CashConnectSessionProposalModal() {
         ) : null}
         {hasTransactionActions ? (
           <p className="text-sm wallet-muted">
-            Connecting does not send coins. Each spend asks again.
+            {t('cashconnect.connectingDoesNotSend')}
           </p>
         ) : null}
       </div>

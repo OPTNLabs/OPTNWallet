@@ -6,7 +6,9 @@ import {
 } from '../../services/multisig/MultisigStorageService';
 import type { MultisigPolicy } from '../../services/psbt/multisigWallet';
 import MultisigPage from './MultisigPage';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyWithFeedback } from '../../utils/copyWithFeedback';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import MultisigError from './MultisigError';
 import { networkProfile } from '../../utils/networkProfile';
 import { Network } from '../../state/slices/networkSlice';
 
@@ -14,7 +16,7 @@ function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
-    if (!(await copyToClipboard(value))) return;
+    if (!(await copyWithFeedback(value))) return;
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1800);
   };
@@ -76,6 +78,7 @@ export default function MultisigPolicy() {
 
   return (
     <MultisigPage>
+      {policy?.network && <NetworkContextBanner network={policy.network} />}
       <section className="rounded-2xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
         <h2 className="text-xl font-bold wallet-text-strong">
           Multisig policy
@@ -191,11 +194,7 @@ export default function MultisigPolicy() {
         </section>
       )}
 
-      {error && (
-        <p role="alert" className="text-xs text-red-400">
-          {error}
-        </p>
-      )}
+      {error && <MultisigError message={error} />}
     </MultisigPage>
   );
 }

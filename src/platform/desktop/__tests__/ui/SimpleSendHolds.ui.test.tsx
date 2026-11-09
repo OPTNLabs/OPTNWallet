@@ -264,4 +264,18 @@ describe('retained Simple Send hold adapter', () => {
     expect(mocks.invoke).not.toHaveBeenCalled();
     expect(mocks.sign).not.toHaveBeenCalled();
   });
+
+  it('surfaces a useful fallback when broadcast rejects without a message', async () => {
+    const { result } = await setup([FREE]);
+    await act(async () => {
+      await result.current.doReview();
+    });
+    mocks.send.mockRejectedValueOnce(new Error(''));
+    await act(async () => {
+      await result.current.doSend();
+    });
+
+    expect(result.current.mode).toBe('error');
+    expect(result.current.error).toBe('Failed to send transaction.');
+  });
 });

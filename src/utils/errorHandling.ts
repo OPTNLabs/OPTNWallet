@@ -41,8 +41,15 @@ export function toErrorMessage(
   error: unknown,
   fallback = 'Unknown error'
 ): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string' && error.trim()) return error;
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    return message || fallback;
+  }
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+  }
   return fallback;
 }
 

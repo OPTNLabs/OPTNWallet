@@ -96,6 +96,7 @@ export type FetchActiveWalletUtxosOptions = {
    */
   force?: boolean;
   onProgress?: (completedCount: number, totalCount: number) => void;
+  trackWalletSync?: boolean;
 };
 
 /**
@@ -159,6 +160,7 @@ export async function fetchActiveWalletUtxos(
       discover,
       force: options.force === true,
       onProgress: options.onProgress,
+      trackWalletSync: options.trackWalletSync,
     }
   );
   if (import.meta.env.DEV) {

@@ -10,7 +10,7 @@
 
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../app/theme/useTheme', () => ({
@@ -34,7 +34,7 @@ vi.mock('react-router-dom', () => ({
 
 vi.mock('../../../i18n/useI18n', () => ({
   useI18n: () => ({
-    t: (key: string) => {
+    t: (key: string, values?: Record<string, string | number>) => {
       const translations: Record<string, string> = {
         'onboarding.toggleTheme': 'Toggle theme',
         'app.help': 'Help',
@@ -52,10 +52,19 @@ vi.mock('../../../i18n/useI18n', () => ({
         'onboarding.helpImportDescription': 'Import a wallet',
         'onboarding.helpNetworkTitle': 'Network',
         'onboarding.helpNetworkDescription': 'Choose a network',
+        'walkthrough.label': 'Walkthrough',
+        'walkthrough.progress': 'Step {current} of {total}',
+        'walkthrough.previous': 'Back',
+        'walkthrough.next': 'Next',
+        'walkthrough.finish': 'Done',
         'watchOnly.description':
           'Inspect public BCH addresses without importing any private keys.',
       };
-      return translations[key] ?? key;
+      let message = translations[key] ?? key;
+      for (const [name, value] of Object.entries(values ?? {})) {
+        message = message.replace(`{${name}}`, String(value));
+      }
+      return message;
     },
   }),
 }));
@@ -135,5 +144,29 @@ describe('onboarding watch-only capability', () => {
     expect(
       screen.queryByRole('button', { name: 'Create Watch-Only Wallet' })
     ).not.toBeInTheDocument();
+  });
+
+  it('provides a guided onboarding walkthrough with reversible steps', () => {
+    render(<LandingPage surface="desktop" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }));
+    expect(screen.getByText('Step 1 of 4')).toBeInTheDocument();
+    expect(screen.getByText('Create a wallet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByText('Step 2 of 4')).toBeInTheDocument();
+    expect(screen.getByText('Import a wallet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.getByText('Step 1 of 4')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByText('Step 4 of 4')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.queryByText('Step 4 of 4')).not.toBeInTheDocument();
   });
 });

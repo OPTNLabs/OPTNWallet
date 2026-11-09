@@ -56,8 +56,17 @@ pub const PRESETS: &[ExplorerPreset] = &[
         tx: "https://explorer.bch.ninja/tx/{txid}",
         address: "https://explorer.bch.ninja/address/{address}",
         block: None,
-        chipnet_tx: Some("https://chipnet.bch.ninja/tx/{txid}"),
-        chipnet_address: Some("https://chipnet.bch.ninja/address/{address}"),
+        chipnet_tx: Some("https://explorer.selene.cash/tx/{txid}"),
+        chipnet_address: Some("https://explorer.selene.cash/address/{address}"),
+    },
+    ExplorerPreset {
+        id: "selene",
+        label: "Selene Explorer (explorer.selene.cash)",
+        tx: "https://explorer.selene.cash/tx/{txid}",
+        address: "https://explorer.selene.cash/address/{address}",
+        block: None,
+        chipnet_tx: None,
+        chipnet_address: None,
     },
     ExplorerPreset {
         id: "imaginary",
@@ -97,10 +106,10 @@ pub const PRESETS: &[ExplorerPreset] = &[
     },
 ];
 
-/// Chipnet has no BCH Explorer site, so test-network links fall back here
-/// regardless of the chosen mainnet explorer unless it defines its own.
-const CHIPNET_FALLBACK_TX: &str = "https://chipnet.bch.ninja/tx/{txid}";
-const CHIPNET_FALLBACK_ADDRESS: &str = "https://chipnet.bch.ninja/address/{address}";
+/// Chipnet links fall back to Selene Explorer unless the chosen preset defines
+/// its own test-network route.
+const CHIPNET_FALLBACK_TX: &str = "https://explorer.selene.cash/tx/{txid}";
+const CHIPNET_FALLBACK_ADDRESS: &str = "https://explorer.selene.cash/address/{address}";
 
 pub fn preset(id: &str) -> &'static ExplorerPreset {
     PRESETS
@@ -356,7 +365,8 @@ mod tests {
     #[test]
     fn chipnet_never_resolves_to_a_mainnet_explorer() {
         // A chipnet txid on a mainnet explorer renders a confident "not found"
-        // that reads like the transaction failed.
+        // that reads like the transaction failed. Presets without an explicit
+        // chipnet route use the Selene Explorer fallback.
         for entry in PRESETS {
             let url = explorer_url(
                 &ExplorerChoice::Preset(entry.id.into()),
@@ -365,11 +375,20 @@ mod tests {
                 ExplorerPolicy::PublicAllowed,
             )
             .unwrap();
-            assert!(
-                url.contains("chipnet"),
-                "preset {} sent a chipnet txid to {url}",
-                entry.id
-            );
+            if let Some(template) = entry.chipnet_tx {
+                assert_eq!(
+                    url,
+                    template.replace("{txid}", "abc123"),
+                    "preset {} used the wrong chipnet route",
+                    entry.id
+                );
+            } else {
+                assert_eq!(
+                    url, "https://explorer.selene.cash/tx/abc123",
+                    "preset {} used a non-chipnet explorer",
+                    entry.id
+                );
+            }
         }
     }
 

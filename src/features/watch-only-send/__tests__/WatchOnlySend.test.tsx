@@ -1,12 +1,34 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { describe, expect, it } from 'vitest';
 
 import WatchOnlySend from '../WatchOnlySend';
+import {
+  noSpendableBchCoinsHint,
+  unsignedBuildAvailability,
+} from '../sendEmptyState';
 import { store } from '../../../state/store';
 import { I18nProvider } from '../../../i18n/I18nProvider';
+
+const source = readFileSync(
+  join(process.cwd(), 'src/features/watch-only-send/WatchOnlySend.tsx'),
+  'utf8'
+);
+
 describe('WatchOnlySend workspace', () => {
+  it('gives context-correct recovery guidance when no BCH coins are available', () => {
+    expect(noSpendableBchCoinsHint(false)).toContain(
+      'Refresh this wallet’s coin list'
+    );
+    expect(noSpendableBchCoinsHint(false)).not.toContain('multisig');
+    expect(noSpendableBchCoinsHint(true)).toContain(
+      'Refresh the multisig address inventory'
+    );
+  });
+
   it('renders the workspace shell (loading state on first paint)', () => {
     const html = renderToStaticMarkup(
       <Provider store={store}>
@@ -21,6 +43,49 @@ describe('WatchOnlySend workspace', () => {
     expect(html).toContain('Watch-only Send');
     expect(html).toContain('Back');
     expect(html).toContain('Loading coins');
+  });
+
+  it('blocks building without a selected coin and describes the missing state', () => {
+    expect(
+      unsignedBuildAvailability({
+        busy: false,
+        networkRefreshing: false,
+        networkRefreshFailed: false,
+        selectedInputCount: 0,
+        availableInputCount: 0,
+      })
+    ).toEqual({
+      disabled: true,
+      reason:
+        'A spendable BCH coin is required to build an unsigned transaction.',
+    });
+    expect(
+      unsignedBuildAvailability({
+        busy: false,
+        networkRefreshing: false,
+        networkRefreshFailed: false,
+        selectedInputCount: 0,
+        availableInputCount: 2,
+      }).reason
+    ).toBe('Select at least one coin to build an unsigned transaction.');
+    expect(
+      unsignedBuildAvailability({
+        busy: true,
+        networkRefreshing: false,
+        networkRefreshFailed: false,
+        selectedInputCount: 1,
+        availableInputCount: 1,
+      })
+    ).toEqual({ disabled: true, reason: null });
+    expect(
+      unsignedBuildAvailability({
+        busy: false,
+        networkRefreshing: false,
+        networkRefreshFailed: false,
+        selectedInputCount: 1,
+        availableInputCount: 1,
+      })
+    ).toEqual({ disabled: false, reason: null });
   });
 
   it('shows where the user is in the air-gapped round trip', () => {
@@ -78,4 +143,10 @@ describe('WatchOnlySend workspace', () => {
     expect(html).not.toContain('Decrease QR density');
   });
 
+  it('keeps technical watch-only diagnostics behind friendly recovery copy', () => {
+    expect(source).toContain('friendlyWatchOnlyError(error, t)');
+    expect(source).toContain("t('send.technicalDetails')");
+    expect(source).toContain('whitespace-pre-wrap break-words');
+    expect(source).not.toContain('{error}</p>');
+  });
 });

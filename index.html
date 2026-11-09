@@ -12,19 +12,149 @@
     />
     <title>optn-wallet</title>
 
+    <script>
+      (function () {
+        try {
+          var stored = window.localStorage.getItem('wallet_theme_mode_v2');
+          var legacy = window.localStorage.getItem('wallet_theme_mode');
+          var valid = ['light', 'gray', 'green', 'dark'];
+          var mode = valid.indexOf(stored) >= 0 ? stored : null;
+          if (!mode && legacy === 'dark') mode = 'green';
+          if (!mode && legacy === 'light') mode = 'light';
+          if (!mode) {
+            mode =
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'green'
+                : 'light';
+          }
+          document.documentElement.dataset.theme = mode;
+          if (mode !== 'light') document.documentElement.classList.add('dark');
+        } catch (_) {
+          // The themed startup surface has a light fallback if storage is unavailable.
+        }
+      })();
+    </script>
+
     <style>
-      /* html { background:#101828; } */
-      /* Prevent body scroll flash before React mounts */
-      html, body, #root { height: 100%; margin:0; }
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        background: #eef4f1;
+        color: #132f24;
+        font-family:
+          'Segoe UI',
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+      }
+      html[data-theme='green'] body,
+      html[data-theme='green'] #root {
+        background: #081710;
+        color: #ddf5e8;
+      }
+      html[data-theme='gray'] body,
+      html[data-theme='gray'] #root {
+        background: #1c2128;
+        color: #d6dde4;
+      }
+      html[data-theme='dark'] body,
+      html[data-theme='dark'] #root {
+        background: #000000;
+        color: #d5d5d5;
+      }
+      #root > .startup-status {
+        box-sizing: border-box;
+        min-height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: max(16px, env(safe-area-inset-top))
+          max(16px, env(safe-area-inset-right))
+          max(16px, env(safe-area-inset-bottom))
+          max(16px, env(safe-area-inset-left));
+      }
+      .startup-status-panel {
+        box-sizing: border-box;
+        width: min(100%, 360px);
+        padding: 28px 24px;
+        border: 1px solid #c8ddd0;
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: 0 14px 30px rgba(17, 46, 33, 0.12);
+        text-align: center;
+      }
+      .startup-status-brand {
+        display: block;
+        width: min(72%, 220px);
+        height: auto;
+        margin: 0 auto 24px;
+      }
+      .startup-status-progress {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      html[data-theme='green'] .startup-status-panel,
+      html[data-theme='dark'] .startup-status-panel,
+      html[data-theme='gray'] .startup-status-panel {
+        border-color: #254539;
+        background: rgba(12, 33, 25, 0.92);
+        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.34);
+      }
+      html[data-theme='gray'] .startup-status-panel {
+        background: rgba(37, 43, 52, 0.94);
+        border-color: #39414b;
+      }
+      html[data-theme='dark'] .startup-status-panel {
+        background: rgba(10, 10, 10, 0.94);
+        border-color: #262626;
+      }
+      .startup-status-indicator {
+        width: 20px;
+        height: 20px;
+        border: 3px solid #c8ddd0;
+        border-top-color: #0a9a62;
+        border-radius: 50%;
+        animation: optn-startup-spin 800ms linear infinite;
+      }
+      @keyframes optn-startup-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="startup-status" role="status" aria-live="polite">
+        <div class="startup-status-panel">
+          <img
+            class="startup-status-brand"
+            src="/assets/images/OPTNWelcome1.png"
+            alt=""
+            aria-hidden="true"
+          />
+          <div class="startup-status-progress">
+            <span class="startup-status-indicator" aria-hidden="true"></span>
+            <span>Starting wallet…</span>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Minimal runtime shim to satisfy libs touching `process`/`global` -->
     <script>
       (function () {
-        window.global  = window.global || window;
+        window.global = window.global || window;
         window.process = window.process || { env: {} };
       })();
     </script>

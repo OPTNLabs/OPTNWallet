@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import { Toast } from '@capacitor/toast';
 
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
@@ -11,7 +10,6 @@ import Popup from '../components/transaction/Popup';
 import { RootState } from '../state/store';
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../utils/constants';
-import { shortenTxHash } from '../utils/shortenHash';
 import { getReturnPath } from '../utils/navigation';
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
 import QuantumrootVaultPopup from './quantumroot/QuantumrootVaultPopup';
@@ -20,7 +18,9 @@ import WalletScreen from '../components/ui/WalletScreen';
 import { useI18n } from '../i18n/useI18n';
 import { formatDate } from '../i18n/format';
 import type { SupportedLocale } from '../i18n/types';
-import { copyToClipboard } from '../utils/clipboard';
+import { copyWithFeedback } from '../utils/copyWithFeedback';
+import MaskedValue from '../components/ui/MaskedValue';
+import RouteExitFooter from '../components/ui/RouteExitFooter';
 
 function formatBch(sats: number) {
   return `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
@@ -57,19 +57,9 @@ const Quantumroot: React.FC = () => {
     [currentNetwork]
   );
 
-  const handleCopy = useCallback(
-    async (text: string) => {
-      try {
-        if (!(await copyToClipboard(text)))
-          throw new Error('clipboard write failed');
-        await Toast.show({ text: t('receive.copied') });
-      } catch (error) {
-        console.error('Failed to copy Quantumroot value:', error);
-        await Toast.show({ text: t('receive.copyFailed') });
-      }
-    },
-    [t]
-  );
+  const handleCopy = useCallback(async (text: string) => {
+    await copyWithFeedback(text);
+  }, []);
 
   const {
     vaults,
@@ -98,6 +88,12 @@ const Quantumroot: React.FC = () => {
     handleAuthorizedSpendUtxo,
     handleSweepAllReceiveUtxos,
     handleRecoverQuantumLockUtxo,
+    pendingRecoveryReview,
+    recoveryBroadcastNotice,
+    recoveryReviewLoading,
+    recoveryReviewError,
+    handleCancelRecoveryReview,
+    handleConfirmRecoveryReview,
     setSelectedVault,
     setPendingSpendAddress,
     setPendingTokenCategory,
@@ -113,7 +109,9 @@ const Quantumroot: React.FC = () => {
         <div className="flex-1 min-h-0">
           <PageHeader
             title={t('assets.quantumroot')}
-            subtitle={t('quantumroot.subtitle')}
+            subtitle={
+              currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+            }
             compact
             titleAction={
               <StatusChip tone="neutral">
@@ -190,14 +188,10 @@ const Quantumroot: React.FC = () => {
           </SectionCard>
         </div>
 
-        <div className="mt-auto pb-2 pt-3">
-          <button
-            className="wallet-btn-danger w-full"
-            onClick={() => navigate(returnTarget)}
-          >
-            {t('quantumroot.back')}
-          </button>
-        </div>
+        <RouteExitFooter
+          label={t('quantumroot.back')}
+          onBack={() => navigate(returnTarget)}
+        />
       </div>
 
       {showVaultsPopup && (
@@ -253,7 +247,13 @@ const Quantumroot: React.FC = () => {
                               })}
                             </div>
                             <div className="text-[11px] wallet-muted mt-1">
-                              {shortenTxHash(vault.receive_address)}
+                              <MaskedValue
+                                value={vault.receive_address}
+                                label={t('send.address')}
+                                copySuccessMessageKey="receive.addressCopied"
+                                className="text-[11px] wallet-muted"
+                                embedded
+                              />
                             </div>
                           </div>
                           <div className="text-right">
@@ -329,6 +329,12 @@ const Quantumroot: React.FC = () => {
         onRecoverQuantumLockUtxo={(utxo, destinationAddress) =>
           void handleRecoverQuantumLockUtxo(utxo, destinationAddress)
         }
+        pendingRecoveryReview={pendingRecoveryReview}
+        recoveryBroadcastNotice={recoveryBroadcastNotice}
+        recoveryReviewLoading={recoveryReviewLoading}
+        recoveryReviewError={recoveryReviewError}
+        onCancelRecoveryReview={handleCancelRecoveryReview}
+        onConfirmRecoveryReview={() => void handleConfirmRecoveryReview()}
       />
     </WalletScreen>
   );

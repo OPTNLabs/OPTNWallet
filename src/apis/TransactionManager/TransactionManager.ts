@@ -323,7 +323,8 @@ export default function TransactionManager() {
         }
         if (!accepted) {
           throw new Error(
-            result.message ?? 'The shared engine refused this transaction.'
+            result.message?.trim() ||
+              'The shared engine refused this transaction.'
           );
         }
         txid = result.txid;
@@ -340,7 +341,10 @@ export default function TransactionManager() {
       }
     } catch (error: unknown) {
       logError('TransactionManager.sendTransaction', error);
-      const message = toErrorMessage(error);
+      const message = toErrorMessage(
+        error,
+        'Broadcast failed without a reason.'
+      );
       const classified = classifyBroadcastFailure(message);
       if (
         derivedTxid &&

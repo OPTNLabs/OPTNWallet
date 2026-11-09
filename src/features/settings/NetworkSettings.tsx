@@ -15,6 +15,10 @@ import {
   reconfigureActiveWallet,
 } from '../../services/WalletReconfigurationService';
 import { useI18n } from '../../i18n/useI18n';
+import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
+import FriendlyErrorPanel from '../../components/ui/FriendlyErrorPanel';
+import WalletPopupSheet from '../../components/ui/WalletPopupSheet';
+import { logError } from '../../utils/errorHandling';
 import {
   networkProfile,
   SELECTABLE_NETWORKS,
@@ -32,10 +36,34 @@ export const NetworkSettings: React.FC = () => {
   const pathSource = useSelector(selectWalletDerivationPathSource);
   const { t } = useI18n();
   const [switching, setSwitching] = useState(false);
+  const [pendingNetwork, setPendingNetwork] = useState<Network | null>(null);
+  const [failedSwitchTarget, setFailedSwitchTarget] = useState<Network | null>(
+    null
+  );
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  const networkLabel = (network: Network) =>
+    t(networkProfile(network).labelKey);
+
+  const networkDescription = (network: Network) =>
+    t(networkProfile(network).descriptionKey);
+
+  const requestSwitch = (target: Network) => {
+    if (target === currentNetwork || switching) return;
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setFailedSwitchTarget(null);
+    setPendingNetwork(target);
+  };
 
   const handleSwitch = async (target: Network) => {
-    if (target === currentNetwork || switching) return;
+    if (target === currentNetwork || switching || !pendingNetwork) return;
+    setPendingNetwork(null);
     setSwitching(true);
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setFailedSwitchTarget(null);
 
     try {
       const derivationPath =
@@ -51,7 +79,12 @@ export const NetworkSettings: React.FC = () => {
       });
       navigate(homeRoute(walletId));
     } catch (err) {
-      console.error('[NetworkSettings] network switch failed:', err);
+      logError('[NetworkSettings] network switch failed', err, {
+        walletId,
+        network: target,
+      });
+      setErrorMessage(t('settingsNetwork.switchFailed'));
+      setFailedSwitchTarget(target);
     } finally {
       setSwitching(false);
     }
@@ -60,10 +93,15 @@ export const NetworkSettings: React.FC = () => {
   const handleReload = async () => {
     if (switching || walletId <= 0) return;
     setSwitching(true);
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setFailedSwitchTarget(null);
     try {
       await reloadActiveWallet(walletId);
+      setStatusMessage(t('settingsNetwork.reloadCompleted'));
     } catch (err) {
-      console.error('[NetworkSettings] wallet reload failed:', err);
+      logError('[NetworkSettings] wallet reload failed', err, { walletId });
+      setErrorMessage(t('settingsNetwork.reloadFailed'));
     } finally {
       setSwitching(false);
     }
@@ -71,9 +109,46 @@ export const NetworkSettings: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-4">
+      <NetworkContextBanner
+        network={currentNetwork}
+        description={networkDescription(currentNetwork)}
+      />
+
       <p className="text-xs wallet-muted leading-relaxed">
         {t('settingsNetwork.description')}
       </p>
+
+      {errorMessage && (
+        <FriendlyErrorPanel
+          title={t('settingsNetwork.errorTitle')}
+          message={errorMessage}
+          action={
+            <button
+              type="button"
+              className="wallet-btn-secondary"
+              onClick={() => {
+                if (failedSwitchTarget) {
+                  setErrorMessage(null);
+                  setPendingNetwork(failedSwitchTarget);
+                  return;
+                }
+                void handleReload();
+              }}
+              disabled={switching || walletId <= 0}
+            >
+              {t('settingsNetwork.retry')}
+            </button>
+          }
+        />
+      )}
+      {statusMessage && (
+        <p
+          role="status"
+          className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-muted"
+        >
+          {statusMessage}
+        </p>
+      )}
 
       <button
         type="button"
@@ -94,8 +169,9 @@ export const NetworkSettings: React.FC = () => {
             <button
               key={network}
               type="button"
-              onClick={() => void handleSwitch(network)}
+              onClick={() => requestSwitch(network)}
               disabled={isActive || switching}
+              aria-pressed={isActive}
               className={`w-full rounded-xl border p-4 text-left transition-colors disabled:cursor-default ${
                 isActive
                   ? 'border-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
@@ -151,6 +227,65 @@ export const NetworkSettings: React.FC = () => {
           </div>
         ))}
       </div>
+
+      {pendingNetwork && (
+        <WalletPopupSheet
+          ariaLabelledBy="network-switch-title"
+          onDismiss={() => setPendingNetwork(null)}
+          dismissLabel={t('confirm.cancel')}
+          showDismissButton={false}
+          footer={
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                className="wallet-btn-secondary"
+                onClick={() => setPendingNetwork(null)}
+                disabled={switching}
+              >
+                {t('confirm.cancel')}
+              </button>
+              <button
+                type="button"
+                className="wallet-btn-primary"
+                onClick={() => void handleSwitch(pendingNetwork)}
+                disabled={switching}
+              >
+                Switch to {networkProfile(pendingNetwork).label}
+              </button>
+            </div>
+          }
+        >
+          <div className="flex flex-col gap-4">
+            <div>
+              <h2
+                id="network-switch-title"
+                className="text-lg font-semibold wallet-text-strong"
+              >
+                Switch to {networkProfile(pendingNetwork).label}
+              </h2>
+              <p className="mt-1 text-sm wallet-muted">
+                {t('settingsNetwork.switchPrompt', {
+                  network: networkLabel(pendingNetwork),
+                })}
+              </p>
+            </div>
+
+            <NetworkContextBanner
+              network={pendingNetwork}
+              description={networkDescription(pendingNetwork)}
+            />
+
+            <div className="rounded-xl border border-amber-400/60 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
+              {pendingNetwork === Network.MAINNET && (
+                <p className="font-semibold">
+                  {t('settingsNetwork.mainnetWarning')}
+                </p>
+              )}
+              <p className="mt-2">{t('settingsNetwork.switchDetails')}</p>
+            </div>
+          </div>
+        </WalletPopupSheet>
+      )}
     </div>
   );
 };

@@ -1,6 +1,6 @@
 // src/pages/SimpleSend.tsx
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import useSimpleSend from '../../hooks/useSimpleSend';
@@ -8,7 +8,7 @@ import { FaCamera, FaQrcode, FaShieldAlt } from 'react-icons/fa';
 import { ReviewCard } from './ReviewCard';
 import { ChangeAddressSection } from './ChangeAddressSection';
 import { CategorySummary } from './types';
-import { copyTextToClipboard, formatFtAmount } from './utils';
+import { formatFtAmount } from './utils';
 import { useTokenMetadata } from './useTokenMetadata';
 import { useRecipientScanner } from './useRecipientScanner';
 import { useSimpleSendViewModel } from './useSimpleSendViewModel';
@@ -17,10 +17,18 @@ import PageHeader from '../../components/ui/PageHeader';
 import useOutboundTransactions from '../../hooks/useOutboundTransactions';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import WalletScreen from '../../components/ui/WalletScreen';
+import RouteExitFooter from '../../components/ui/RouteExitFooter';
 import { CoinControlSection } from '../../components/CoinControlSection';
 import { getReturnPath } from '../../utils/navigation';
 import { SATSINBITCOIN, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import { useI18n } from '../../i18n/useI18n';
+import { shouldShowSendReview } from './reviewVisibility';
+import BchUsdControl from '../../components/ui/BchUsdControl';
+import FriendlyErrorPanel from '../../components/ui/FriendlyErrorPanel';
+import InfoButton from '../../components/ui/InfoButton';
+import MaskedValue from '../../components/ui/MaskedValue';
+import { useWalletConfirm } from '../../components/WalletConfirmDialog';
+import { OUTBOUND_RELEASE_DELAY_MS } from '../../services/OutboundTransactionTracker';
 
 type SimpleSendLocationState = {
   amountBch?: string;
@@ -42,10 +50,22 @@ function Label({ children }: { children: React.ReactNode }) {
   );
 }
 
+function isInsufficientFundsError(error: string): boolean {
+  const normalized = error.toLowerCase();
+  return [
+    'insufficient funds',
+    'not enough funds',
+    'unable to build bch send',
+    'unable to build with non-token bch fee utxos',
+    'network fee',
+  ].some((marker) => normalized.includes(marker));
+}
+
 export default function SimpleSend() {
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useI18n();
+  const confirm = useWalletConfirm();
   const locationState =
     (location.state as SimpleSendLocationState | null) ?? null;
   const backTarget = getReturnPath(location, '/actions');
@@ -130,19 +150,57 @@ export default function SimpleSend() {
       const raw = utxo.amount ?? utxo.value ?? 0;
       return sum + (typeof raw === 'bigint' ? Number(raw) : Number(raw) || 0);
     }, 0);
-    const spendableBch = (spendableSats / SATSINBITCOIN)
-      .toFixed(8)
-      .replace(/\.?0+$/, '');
+    const spendableBchValue = spendableSats / SATSINBITCOIN;
+    const spendableBch = spendableBchValue.toFixed(8).replace(/\.?0+$/, '');
     const coinLabel = t(dbUtxos.length === 1 ? 'send.coin' : 'send.coins');
+    if (amountDisplayMode === 'usd') {
+      if (bchUsdPrice <= 0) return t('send.usdUnavailable');
+      return t('send.spendableUsdSummary', {
+        amount: `$${(spendableBchValue * bchUsdPrice).toFixed(2)}`,
+        count: dbUtxos.length,
+        coins: coinLabel,
+      });
+    }
     return t('send.spendableSummary', {
       amount: spendableBch,
       count: dbUtxos.length,
       coins: coinLabel,
     });
-  }, [dbUtxos, t]);
+  }, [amountDisplayMode, bchUsdPrice, dbUtxos, t]);
+  const spendableSats = useMemo(
+    () =>
+      dbUtxos.reduce((sum, utxo) => {
+        const raw = utxo.amount ?? utxo.value ?? 0;
+        return sum + (typeof raw === 'bigint' ? Number(raw) : Number(raw) || 0);
+      }, 0),
+    [dbUtxos]
+  );
+  const enteredAmountExceedsSpendable =
+    assetType === 'bch' &&
+    Number.isFinite(Number(amountBch)) &&
+    Number(amountBch) > spendableSats / SATSINBITCOIN;
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const recipientInputRef = useRef<HTMLInputElement>(null);
+  const amountInputRef = useRef<HTMLInputElement>(null);
+  const tokenAmountInputRef = useRef<HTMLInputElement>(null);
+  const tokenOutputBchInputRef = useRef<HTMLInputElement>(null);
+  const advancedOptionsRef = useRef<HTMLDivElement>(null);
+  const pendingReleaseConfirmationInFlight = useRef(false);
+  const [pendingReleaseBusy, setPendingReleaseBusy] = useState(false);
   const [pendingReviewFlow, setPendingReviewFlow] = useState(false);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const isReviewBusy = reviewBusy || pendingReviewFlow;
+
+  useEffect(() => {
+    if (!showAdvancedOptions) return;
+    const frame = window.requestAnimationFrame(() => {
+      advancedOptionsRef.current?.scrollIntoView({
+        behavior: 'auto',
+        block: 'start',
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [showAdvancedOptions]);
 
   const categorySummaries = categories as CategorySummary[];
   const tokenMeta = useTokenMetadata(categorySummaries);
@@ -224,7 +282,7 @@ export default function SimpleSend() {
     if (err.toLowerCase().includes('invalid address')) {
       return t('send.invalidAddress');
     }
-    if (err.toLowerCase().includes('insufficient funds')) {
+    if (isInsufficientFundsError(err) || enteredAmountExceedsSpendable) {
       return t('send.insufficientFunds');
     }
     if (
@@ -233,12 +291,48 @@ export default function SimpleSend() {
     ) {
       return t('send.networkError');
     }
-    // Default to original
-    return err;
+    return t('send.genericError');
   };
 
   const pageError = mode === 'error' ? error : null;
   const enhancedError = pageError ? enhanceErrorMessage(pageError) : null;
+  const focusErrorField = () => {
+    if (
+      pageError &&
+      (isInsufficientFundsError(pageError) || enteredAmountExceedsSpendable)
+    ) {
+      if (assetType === 'bch') amountInputRef.current?.focus();
+      else if (assetType === 'ft') tokenAmountInputRef.current?.focus();
+      else tokenOutputBchInputRef.current?.focus();
+      return;
+    }
+    recipientInputRef.current?.focus();
+  };
+
+  const handleReleasePending = async () => {
+    if (pendingReleaseConfirmationInFlight.current) return;
+    const clearable = outboundTransactions.filter((record) =>
+      canClearOutbound(record.txid)
+    );
+    if (clearable.length === 0) return;
+
+    pendingReleaseConfirmationInFlight.current = true;
+    setPendingReleaseBusy(true);
+    const message = clearable.every((record) => record.state === 'submitted')
+      ? t('outbox.clearPendingTitle')
+      : t('outbox.releaseStaleTitle', {
+          minutes: Math.round(OUTBOUND_RELEASE_DELAY_MS / 60000),
+        });
+    try {
+      if (!(await confirm(message))) return;
+      for (const record of clearable) {
+        await releaseOutbound(record.txid);
+      }
+    } finally {
+      pendingReleaseConfirmationInFlight.current = false;
+      setPendingReleaseBusy(false);
+    }
+  };
   useEffect(() => {
     if (!locationState) return;
 
@@ -293,7 +387,7 @@ export default function SimpleSend() {
     <div className="mt-2 grid grid-cols-2 gap-2">
       <button
         type="button"
-        className={`min-h-[42px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
+        className={`min-h-[44px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
           assetType === 'ft'
             ? 'wallet-segment-active border-[var(--wallet-accent)]'
             : 'wallet-segment-inactive border-[var(--wallet-border)]'
@@ -304,7 +398,7 @@ export default function SimpleSend() {
       </button>
       <button
         type="button"
-        className={`min-h-[42px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
+        className={`min-h-[44px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
           assetType === 'nft'
             ? 'wallet-segment-active border-[var(--wallet-accent)]'
             : 'wallet-segment-inactive border-[var(--wallet-border)]'
@@ -322,6 +416,7 @@ export default function SimpleSend() {
       <input
         value={tokenOutputBch}
         onChange={(e) => setTokenOutputBch(e.target.value)}
+        ref={tokenOutputBchInputRef}
         inputMode="decimal"
         placeholder={`${(TOKEN_OUTPUT_SATS / SATSINBITCOIN).toFixed(8)} BCH`}
         className={inputClass}
@@ -335,7 +430,16 @@ export default function SimpleSend() {
   return (
     <WalletScreen maxWidthClassName="max-w-xl" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
-        <PageHeader title={t('send.title')} compact />
+        <PageHeader
+          title={t('send.send')}
+          subtitle={
+            currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+          }
+          compact
+        />
+        <p className="-mt-2 text-sm wallet-muted">
+          {t('send.guidedDescription')}
+        </p>
         {quantumrootPrefillLabel ? (
           <div className="wallet-surface-strong rounded-[18px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_26%,transparent)] p-3">
             <div className="flex items-start gap-3">
@@ -366,10 +470,10 @@ export default function SimpleSend() {
           <div className="flex h-full flex-col">
             <div className="mb-3 wallet-section shrink-0">
               <div className="mb-1 wallet-kicker">{t('send.transferMode')}</div>
-              <div className="mt-2 grid grid-cols-3 gap-2">
+              <div className="mt-2 grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  className={`min-h-[42px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
+                  className={`min-h-[44px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
                     assetType === 'bch'
                       ? 'wallet-segment-active border-[var(--wallet-accent)]'
                       : 'wallet-segment-inactive border-[var(--wallet-border)]'
@@ -380,7 +484,7 @@ export default function SimpleSend() {
                 </button>
                 <button
                   type="button"
-                  className={`min-h-[42px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
+                  className={`min-h-[44px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
                     assetType === 'bch'
                       ? 'wallet-segment-inactive border-[var(--wallet-border)]'
                       : 'wallet-segment-active border-[var(--wallet-accent)]'
@@ -392,7 +496,7 @@ export default function SimpleSend() {
                 <Link
                   to="/apps/optn.builtin.events:airdropsApp"
                   state={{ returnTo: '/send' }}
-                  className="wallet-btn-secondary flex min-h-[42px] items-center justify-center rounded-[16px] px-3 py-2 text-sm font-semibold"
+                  className="wallet-btn-secondary col-span-2 flex min-h-[44px] items-center justify-center rounded-[16px] px-3 py-2 text-sm font-semibold"
                   title={t('send.openAirdrops')}
                 >
                   {t('send.airdrops')}
@@ -402,9 +506,17 @@ export default function SimpleSend() {
 
             <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
               <div className="wallet-section">
-                <Label>{t('send.recipient')}</Label>
+                <div className="flex items-center gap-1">
+                  <Label>{t('send.recipient')}</Label>
+                  <InfoButton
+                    id="send-recipient-help"
+                    ariaLabel={t('send.recipientHelpLabel')}
+                    content={t('send.recipientHelp')}
+                  />
+                </div>
                 <div className="mt-2 flex items-center gap-2">
                   <input
+                    ref={recipientInputRef}
                     value={recipient}
                     onChange={(e) => setRecipient(e.target.value.trim())}
                     onBlur={normalizeRecipientInput}
@@ -419,28 +531,29 @@ export default function SimpleSend() {
                     type="button"
                     onClick={handleScanRecipient}
                     disabled={scanBusy}
+                    aria-label={t('send.scanQr')}
                     title={t('send.scanQr')}
-                    className="wallet-btn-primary shrink-0 min-w-[42px] px-3"
+                    className="wallet-btn-primary flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center px-3"
                   >
-                    <FaCamera />
+                    <FaCamera aria-hidden="true" />
                   </button>
                 </div>
                 {!!recipient && (
                   <div className="mt-2 flex items-center justify-between gap-2 text-[11px] wallet-muted">
-                    <span className="truncate">{mask(recipient)}</span>
-                    <button
-                      className="wallet-link underline shrink-0"
-                      onClick={() => copyTextToClipboard(recipient)}
-                    >
-                      {t('send.copy')}
-                    </button>
+                    <MaskedValue
+                      value={recipient}
+                      label={t('send.recipient')}
+                      ariaLabel={t('receive.copyAddress')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      className="max-w-[75%] truncate text-[11px]"
+                    />
                   </div>
                 )}
               </div>
 
               {assetType === 'bch' && (
                 <div className="wallet-section">
-                  <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-2">
+                  <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(112px,auto)] items-end gap-2">
                     <div className="min-w-0">
                       <Label>
                         {amountDisplayMode === 'bch'
@@ -456,6 +569,7 @@ export default function SimpleSend() {
                             ? setAmountBch(e.target.value)
                             : setAmountUsd(e.target.value)
                         }
+                        ref={amountInputRef}
                         inputMode="decimal"
                         placeholder={
                           amountDisplayMode === 'bch'
@@ -465,35 +579,12 @@ export default function SimpleSend() {
                         className={`${inputClass} mt-2`}
                       />
                     </div>
-                    <button
-                      type="button"
-                      className="wallet-segment-inactive min-h-[42px] self-end rounded-[16px] border border-[var(--wallet-border)] px-3 py-2 text-sm font-semibold transition"
-                      onClick={() => void doMax()}
-                      disabled={isSending || maxBusy}
-                      aria-label={t('send.fillMax')}
-                    >
-                      {maxBusy ? '…' : t('send.max')}
-                    </button>
-                    <button
-                      type="button"
-                      className={`min-h-[42px] self-end rounded-[16px] border px-3 py-2 text-sm font-semibold transition ${
-                        amountDisplayMode === 'bch'
-                          ? 'wallet-segment-active border-[var(--wallet-accent)]'
-                          : 'wallet-segment-inactive border-[var(--wallet-border)]'
-                      }`}
-                      onClick={() =>
-                        setAmountDisplayMode(
-                          amountDisplayMode === 'bch' ? 'usd' : 'bch'
-                        )
-                      }
-                      aria-label={
-                        amountDisplayMode === 'bch'
-                          ? t('send.switchToUsd')
-                          : t('send.switchToBch')
-                      }
-                    >
-                      {amountDisplayMode === 'bch' ? 'USD' : 'BCH'}
-                    </button>
+                    <BchUsdControl
+                      value={amountDisplayMode}
+                      onChange={setAmountDisplayMode}
+                      disabled={isSending}
+                      className="self-end"
+                    />
                   </div>
                   <div className="mt-2 text-xs wallet-muted">
                     {spendableSummary}
@@ -550,6 +641,7 @@ export default function SimpleSend() {
                     <input
                       value={amountToken}
                       onChange={(e) => setAmountToken(e.target.value)}
+                      ref={tokenAmountInputRef}
                       inputMode="decimal"
                       placeholder={
                         selectedTokenDecimals > 0
@@ -613,52 +705,138 @@ export default function SimpleSend() {
                 </div>
               )}
 
-              <CoinControlSection
-                walletId={walletId}
-                utxos={dbUtxos}
-                enabled={coinControlEnabled}
-                onEnabledChange={setCoinControlEnabled}
-                selectedKeys={selectedCoinKeys}
-                onSelectedKeysChange={setSelectedCoinKeys}
-                disabled={isSending || maxBusy}
-              />
+              <div
+                ref={advancedOptionsRef}
+                className="wallet-section flex min-h-[44px] w-full items-center gap-2 rounded-2xl px-3 py-2"
+              >
+                <button
+                  type="button"
+                  aria-expanded={showAdvancedOptions}
+                  className="flex min-h-[44px] min-w-0 flex-1 items-center justify-between gap-3 text-left"
+                  onClick={() => setShowAdvancedOptions((open) => !open)}
+                >
+                  <span>
+                    <span className="block font-semibold wallet-text-strong">
+                      {t('send.advanced')}
+                    </span>
+                    <span className="block text-xs wallet-muted">
+                      {t('send.changeAddress')}
+                    </span>
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className="text-lg font-semibold wallet-accent-icon"
+                  >
+                    {showAdvancedOptions ? '⌃' : '⌄'}
+                  </span>
+                </button>
+                <InfoButton
+                  id="send-advanced-help"
+                  ariaLabel={t('send.advancedHelpLabel')}
+                  content={t('send.advancedHelp')}
+                />
+              </div>
 
-              <ChangeAddressSection
-                selectedChangeAddress={selectedChangeAddress}
-                setSelectedChangeAddress={setSelectedChangeAddress}
-                selectClass={selectClass}
-                addresses={addresses}
-                mask={mask}
-              />
+              {showAdvancedOptions ? (
+                <div className="space-y-3">
+                  {assetType === 'bch' ? (
+                    <div className="wallet-section flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-semibold wallet-text-strong">
+                          {t('send.max')}
+                        </div>
+                        <div className="text-xs wallet-muted">
+                          {t('send.fillMax')}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="wallet-btn-secondary min-h-[44px] shrink-0 px-4"
+                        onClick={() => void doMax()}
+                        disabled={isSending || maxBusy}
+                        aria-label={t('send.fillMax')}
+                      >
+                        {maxBusy ? '…' : t('send.max')}
+                      </button>
+                    </div>
+                  ) : null}
+
+                  <CoinControlSection
+                    walletId={walletId}
+                    utxos={dbUtxos}
+                    enabled={coinControlEnabled}
+                    onEnabledChange={setCoinControlEnabled}
+                    selectedKeys={selectedCoinKeys}
+                    onSelectedKeysChange={setSelectedCoinKeys}
+                    disabled={isSending || maxBusy}
+                  />
+
+                  <ChangeAddressSection
+                    selectedChangeAddress={selectedChangeAddress}
+                    setSelectedChangeAddress={setSelectedChangeAddress}
+                    selectClass={selectClass}
+                    addresses={addresses}
+                    mask={mask}
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
 
         {/* Error */}
         {enhancedError && (
-          <div className="mt-3 p-3 rounded-2xl border wallet-danger-panel text-sm shadow-sm shrink-0">
-            {enhancedError}
-          </div>
+          <FriendlyErrorPanel
+            className="mt-3 shrink-0 shadow-sm"
+            title={t('send.errorTitle')}
+            message={enhancedError}
+            action={
+              <button
+                type="button"
+                className="wallet-btn-secondary"
+                onClick={focusErrorField}
+              >
+                {t('send.editPayment')}
+              </button>
+            }
+          />
         )}
 
         {mode === 'sent' && txid && (
           <div className="mt-3 p-4 rounded-2xl border wallet-success-panel text-sm shadow-sm shrink-0">
-            <div className="font-semibold mb-1 wallet-text-strong">
-              {broadcastState === 'submitted'
-                ? t('send.submitted')
-                : t('send.sent')}
+            <div className="mb-1 flex items-center gap-1 font-semibold wallet-text-strong">
+              <span>
+                {broadcastState === 'submitted'
+                  ? t('send.submitted')
+                  : t('send.sent')}
+              </span>
+              <InfoButton
+                id="send-success-help"
+                ariaLabel={t('send.sentHelpLabel')}
+                content={t('send.sentHelp')}
+              />
             </div>
             {broadcastState === 'submitted' && (
               <div className="mb-2 wallet-muted">{t('send.keepTxid')}</div>
             )}
-            <div className="break-all font-mono wallet-text-strong">{txid}</div>
+            <MaskedValue
+              value={txid}
+              label={t('history.transactionId')}
+              copySuccessMessageKey="history.transactionCopied"
+              className="block w-full wallet-text-strong"
+            />
           </div>
         )}
 
         {hasUnresolved && (
           <div className="wallet-card mt-3 shrink-0 p-3 border border-[var(--wallet-warning-border,rgba(217,119,6,0.4))]">
-            <div className="text-sm font-semibold wallet-text-strong">
-              {t('outbox.pendingOutgoing')}
+            <div className="flex items-center gap-1 text-sm font-semibold wallet-text-strong">
+              <span>{t('outbox.pendingOutgoing')}</span>
+              <InfoButton
+                id="send-pending-help"
+                ariaLabel={t('outbox.pendingHelpLabel')}
+                content={t('outbox.pendingHelp')}
+              />
             </div>
             <div className="text-xs wallet-muted mt-1">
               {t('outbox.description')}
@@ -678,17 +856,14 @@ export default function SimpleSend() {
                 <button
                   type="button"
                   className="wallet-btn-secondary px-3 py-1.5 text-sm"
+                  disabled={pendingReleaseBusy}
                   onClick={() => {
-                    void (async () => {
-                      for (const r of outboundTransactions) {
-                        if (canClearOutbound(r.txid)) {
-                          await releaseOutbound(r.txid);
-                        }
-                      }
-                    })();
+                    void handleReleasePending();
                   }}
                 >
-                  {t('outbox.clearPending')}
+                  {pendingReleaseBusy
+                    ? t('outbox.releaseSendLock')
+                    : t('outbox.clearPending')}
                 </button>
               )}
               <button
@@ -715,7 +890,7 @@ export default function SimpleSend() {
                 hasUnresolved
                   ? t('send.waitPrevious')
                   : isReviewBusy
-                    ? t('send.sending')
+                    ? t('send.preparingReview')
                     : !canReview
                       ? t('send.fillRequired')
                       : t('send.review')
@@ -724,7 +899,7 @@ export default function SimpleSend() {
               {hasUnresolved
                 ? t('send.pending')
                 : isReviewBusy
-                  ? t('send.sending')
+                  ? t('send.preparingReview')
                   : t('send.review')}
             </button>
             <button
@@ -737,26 +912,32 @@ export default function SimpleSend() {
               {t('send.reset')}
             </button>
           </div>
+          {!canReview && !hasUnresolved && !isSending && !isReviewBusy && (
+            <p className="mt-2 px-1 text-center text-xs wallet-muted">
+              {t('send.fillRequired')}
+            </p>
+          )}
         </div>
 
-        <button
-          type="button"
-          onClick={() => navigate(backTarget)}
-          className="wallet-btn-danger w-full py-3 font-semibold"
-        >
-          {t('send.back')}
-        </button>
+        <RouteExitFooter
+          label={t('send.back')}
+          onBack={() => navigate(backTarget)}
+        />
 
-        {mode === 'review' && review && (
+        {shouldShowSendReview(mode, review !== null) && review && (
           <ReviewCard
             open={reviewModalOpen}
             review={review}
             recipient={recipient}
+            networkLabel={t(
+              currentNetwork === 'chipnet'
+                ? 'network.chipnet'
+                : 'network.mainnet'
+            )}
             assetType={assetType}
             amountBch={amountBch}
             fiatSummary={fiatSummary}
             selectedCategory={selectedCategory}
-            amountToken={amountToken}
             tokenMeta={tokenMeta}
             displayNameFor={displayTokenName}
             selectedForTx={selectedForTx}

@@ -67,6 +67,8 @@ import { armAutoFusionSession } from '../../platform/desktop/fusionAutoSession';
 import type { RootState } from '../../state/store';
 import { useI18n } from '../../i18n/useI18n';
 import type { TranslationKey } from '../../i18n/resources';
+import MaskedValue from '../../components/ui/MaskedValue';
+import { maskSensitiveValue } from '../../utils/maskSensitiveValue';
 
 // Ports per Electron Cash's own conf.py default (fusion.servo.cash:8789, SSL).
 
@@ -83,6 +85,19 @@ function formatFusionResultMessage(last: {
   if (last.trigger !== 'auto') return msg;
   if (/^auto\b/i.test(msg)) return msg;
   return `Auto: ${msg}`;
+}
+
+function sanitizeFusionMessage(message: string | null): {
+  message: string | null;
+  txid: string | null;
+} {
+  if (!message) return { message: null, txid: null };
+  const match = message.match(/\b[0-9a-f]{64}\b/i);
+  if (!match) return { message, txid: null };
+  return {
+    message: message.replace(match[0], maskSensitiveValue(match[0])),
+    txid: match[0],
+  };
 }
 
 /** Typed outcome -> user text, so no caller parses strings to learn what happened. */
@@ -155,10 +170,12 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     'idle' | 'fusing' | 'done' | 'fail'
   >('idle');
   const [fuseMsg, setFuseMsg] = useState<string | null>(null);
+  const [fuseTxid, setFuseTxid] = useState<string | null>(null);
   const [p2pState, setP2pState] = useState<'idle' | 'fusing' | 'done' | 'fail'>(
     'idle'
   );
   const [p2pMsg, setP2pMsg] = useState<string | null>(null);
+  const [p2pTxid, setP2pTxid] = useState<string | null>(null);
   const [p2pPhase, setP2pPhase] = useState(0);
   const [fusionActivity, setFusionActivity] = useState<FusionActivity | null>(
     () => getFusionActivity(walletId)
@@ -289,10 +306,18 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
           if (activity.mode === 'p2p') {
             setP2pState('fusing');
             if (typeof activity.phase === 'number') setP2pPhase(activity.phase);
-            if (activity.status) setP2pMsg(activity.status);
+            if (activity.status) {
+              const safe = sanitizeFusionMessage(activity.status);
+              setP2pMsg(safe.message);
+              setP2pTxid(safe.txid);
+            }
           } else if (activity.mode === 'server') {
             setFuseState('fusing');
-            if (activity.status) setFuseMsg(activity.status);
+            if (activity.status) {
+              const safe = sanitizeFusionMessage(activity.status);
+              setFuseMsg(safe.message);
+              setFuseTxid(safe.txid);
+            }
           }
           return;
         }
@@ -301,11 +326,15 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
         if (!last || last.walletId !== walletId) return;
         if (last.mode === 'p2p') {
           setP2pState(last.ok ? 'done' : 'fail');
-          setP2pMsg(formatFusionResultMessage(last));
+          const safe = sanitizeFusionMessage(formatFusionResultMessage(last));
+          setP2pMsg(safe.message);
+          setP2pTxid(safe.txid);
           if (!last.ok) setP2pPhase(0);
         } else {
           setFuseState(last.ok ? 'done' : 'fail');
-          setFuseMsg(formatFusionResultMessage(last));
+          const safe = sanitizeFusionMessage(formatFusionResultMessage(last));
+          setFuseMsg(safe.message);
+          setFuseTxid(safe.txid);
         }
       }),
     [walletId]
@@ -326,7 +355,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
       const last = getFusionLastResult(walletId);
       if (last && !isFusionRunning(walletId)) {
         if (last.mode === 'p2p' && p2pState === 'idle' && !p2pMsg) {
-          setP2pMsg(formatFusionResultMessage(last));
+          const safe = sanitizeFusionMessage(formatFusionResultMessage(last));
+          setP2pMsg(safe.message);
+          setP2pTxid(safe.txid);
           setP2pState(last.ok ? 'done' : 'fail');
         }
       }
@@ -371,6 +402,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   // requirements. A round completes only when enough players meet in a tier.
   const handleFuseNow = async () => {
     setFuseMsg(null);
+    setFuseTxid(null);
     let explicitStartAttempted = false;
     try {
       assertServerFusionSelected(p2pFusionEnabled);
@@ -413,7 +445,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                 }),
             })(coins, signal, {
               onStatus: (m) => {
-                setFuseMsg(m);
+                const safe = sanitizeFusionMessage(m);
+                setFuseMsg(safe.message);
+                setFuseTxid(safe.txid);
                 reportFusionProgress(walletId, { status: m });
                 progress?.onStatus?.(m);
               },
@@ -427,13 +461,19 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
       });
 
       setFuseState(outcome.status === 'fused' ? 'done' : 'fail');
-      setFuseMsg(describeFusionOutcome(outcome, t));
+      const safe = sanitizeFusionMessage(describeFusionOutcome(outcome, t));
+      setFuseMsg(safe.message);
+      setFuseTxid(safe.txid);
       if (autoFuse && outcome.status !== 'busy') {
         armAutoFusionSession(walletId);
       }
     } catch (e) {
       setFuseState('fail');
-      setFuseMsg(e instanceof Error ? e.message : String(e));
+      const safe = sanitizeFusionMessage(
+        e instanceof Error ? e.message : String(e)
+      );
+      setFuseMsg(safe.message);
+      setFuseTxid(safe.txid);
       if (autoFuse && explicitStartAttempted) {
         armAutoFusionSession(walletId);
       }
@@ -447,6 +487,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     // mint two throwaway identities (user: 7 live keys / same wallet two rounds).
     if (startInFlightRef.current || isFusionRunning(walletId)) {
       setP2pMsg('A fusion round is already in progress in this window.');
+      setP2pTxid(null);
       return;
     }
     if (hasLiveRoundLease(walletId) && !isFusionRunning(walletId)) {
@@ -454,12 +495,14 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
         'A fusion round is already active for this wallet (another window or Auto). ' +
           'Wait for it to finish, or close that window. Stuck locks clear in ~45s.'
       );
+      setP2pTxid(null);
       setP2pState('fail');
       return;
     }
     startInFlightRef.current = true;
     setP2pState('fusing');
     setP2pMsg(null);
+    setP2pTxid(null);
     setP2pPhase(0);
     const explicitStartAttempted = true;
     try {
@@ -485,7 +528,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
               tor: tor ?? null,
               trigger: 'manual',
               onStatus: (m) => {
-                setP2pMsg(m);
+                const safe = sanitizeFusionMessage(m);
+                setP2pMsg(safe.message);
+                setP2pTxid(safe.txid);
                 reportFusionProgress(walletId, { status: m });
                 progress?.onStatus?.(m);
                 // Always log (even before lease entry) so live tail sees Start.
@@ -505,7 +550,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
       });
       const summary = describeFusionOutcome(outcome, t);
       setP2pState(outcome.status === 'fused' ? 'done' : 'fail');
-      setP2pMsg(summary);
+      const safe = sanitizeFusionMessage(summary);
+      setP2pMsg(safe.message);
+      setP2pTxid(safe.txid);
       if (autoFuse && outcome.status !== 'busy') {
         armAutoFusionSession(walletId);
       }
@@ -520,7 +567,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e);
       setP2pState('fail');
-      setP2pMsg(err);
+      const safe = sanitizeFusionMessage(err);
+      setP2pMsg(safe.message);
+      setP2pTxid(safe.txid);
       if (autoFuse && explicitStartAttempted) {
         armAutoFusionSession(walletId);
       }
@@ -622,7 +671,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
             <button
               type="button"
               onClick={() => setShowProtocolInfo((v) => !v)}
-              className="text-[10px] text-blue-400 underline-offset-2 hover:underline"
+              className="min-h-[44px] px-2 text-left text-[10px] text-blue-400 underline-offset-2 hover:underline"
             >
               {showProtocolInfo ? t('fusion.hide') : t('fusion.howWorks')}
             </button>
@@ -674,7 +723,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
               <button
                 onClick={() => dispatch(setCashFusionEnabled(!enabled))}
                 disabled={anyFusing}
-                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+                className={`relative inline-flex min-h-[44px] min-w-[56px] shrink-0 items-center rounded-full border transition-colors ${
                   enabled
                     ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                     : 'wallet-surface-strong border-[var(--wallet-border)]'
@@ -716,7 +765,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                       type="button"
                       onClick={() => dispatch(setP2pFusionEnabled(false))}
                       disabled={anyFusing}
-                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
+                      className={`relative inline-flex min-h-[44px] min-w-[56px] shrink-0 items-center rounded-full border transition-colors ${
                         !p2pFusionEnabled
                           ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                           : 'wallet-surface-strong border-[var(--wallet-border)]'
@@ -743,7 +792,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                       type="button"
                       onClick={() => dispatch(setP2pFusionEnabled(true))}
                       disabled={anyFusing}
-                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
+                      className={`relative inline-flex min-h-[44px] min-w-[56px] shrink-0 items-center rounded-full border transition-colors ${
                         p2pFusionEnabled
                           ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                           : 'wallet-surface-strong border-[var(--wallet-border)]'
@@ -794,8 +843,8 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                     </button>
                   </div>
                   {fuseMsg && (
-                    <p
-                      className={`text-[10px] leading-relaxed break-all ${
+                    <div
+                      className={`text-[10px] leading-relaxed ${
                         fuseState === 'done'
                           ? 'text-green-400'
                           : fuseState === 'fail'
@@ -803,20 +852,44 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                             : 'wallet-muted'
                       }`}
                     >
-                      {fuseMsg}
-                    </p>
+                      <p>{fuseMsg}</p>
+                      {fuseTxid ? (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <span>{t('history.transactionId')}:</span>
+                          <MaskedValue
+                            value={fuseTxid}
+                            label={t('history.transactionId')}
+                            copySuccessMessageKey="history.transactionCopied"
+                            className="text-[10px]"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
                   )}
 
                   {/* P2P path — its own Start button + live status (server-free). */}
                   {p2pFusionEnabled && (
-                    <P2pFusionTransportPreview
-                      onStart={() => void handleP2pFuse()}
-                      status={p2pMsg}
-                      phase={p2pPhase}
-                      busy={p2pFusing || leaseElsewhere}
-                      disabled={startDisabled}
-                      disabledReason={startBlockedReason}
-                    />
+                    <>
+                      <P2pFusionTransportPreview
+                        onStart={() => void handleP2pFuse()}
+                        status={p2pMsg}
+                        phase={p2pPhase}
+                        busy={p2pFusing || leaseElsewhere}
+                        disabled={startDisabled}
+                        disabledReason={startBlockedReason}
+                      />
+                      {p2pTxid ? (
+                        <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] wallet-muted">
+                          <span>{t('history.transactionId')}:</span>
+                          <MaskedValue
+                            value={p2pTxid}
+                            label={t('history.transactionId')}
+                            copySuccessMessageKey="history.transactionCopied"
+                            className="text-[10px]"
+                          />
+                        </div>
+                      ) : null}
+                    </>
                   )}
                 </div>
               </div>

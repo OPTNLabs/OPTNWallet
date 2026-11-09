@@ -42,21 +42,14 @@ async function consolidateUtxos({ electrumServer, usersAddress, transactionBuild
 
     //##  Build transaction       
     const p2pkhUnlocker: Unlocker = {
-        generateLockingBytecode: () => {
-            const result = cashAddressToLockingBytecode(usersAddress);
-            if (typeof result === 'string') {
-                throw new Error(`Failed to convert CashAddress to locking bytecode: ${result}`);
-            }
-            return result.bytecode;
-        },
         generateUnlockingBytecode: () => {
-            return Uint8Array.from([]); // Placeholder for the unlocking bytecode
-        }
+            return Uint8Array.from([]);
+        },
     };
 
     const provider = new ElectrumNetworkProvider(Network.MAINNET);
     const txDetails = await new TransactionBuilder({ provider })
-        .addInputs(untokenizedUtxos, p2pkhUnlocker)
+        .addInputs(untokenizedUtxos as any, p2pkhUnlocker)
         .addOutput({
         to: usersAddress, 
         amount: sumSatoshis - txFee,

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Network } from '../../state/slices/networkSlice';
+import { setWalletSyncStatus } from '../../state/slices/utxoSlice';
 
 const ensureInitialAddressBatchesMock = vi.fn();
 const getUTXOsManyMock = vi.fn();
@@ -412,6 +413,47 @@ describe('UTXOService', () => {
     });
   });
 
+  it('marks a tracked wallet refresh current only after its network result is stored', async () => {
+    getUTXOsManyMock.mockResolvedValue({ 'bitcoincash:q1': [] });
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1'], {
+      trackWalletSync: true,
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      setWalletSyncStatus({ status: 'checking' })
+    );
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: setWalletSyncStatus.type,
+        payload: {
+          status: 'current',
+          checkedAt: expect.any(Number),
+        },
+      })
+    );
+  });
+
+  it('keeps the wallet unverified when an address result is missing', async () => {
+    getUTXOsManyMock.mockResolvedValue({});
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1'], {
+      trackWalletSync: true,
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      setWalletSyncStatus({ status: 'unavailable' })
+    );
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: setWalletSyncStatus.type,
+        payload: expect.objectContaining({ status: 'current' }),
+      })
+    );
+  });
+
   it('uses the network UTXO set for chain-authoritative multisig refreshes', async () => {
     getUTXOsManyMock.mockResolvedValue({
       'bitcoincash:q1': [
@@ -782,7 +824,6 @@ describe('UTXOService', () => {
 
     expect(result.allUtxos.map((utxo) => utxo.tx_hash)).toContain('ordinary');
   });
-
 });
 
 it('soft-fails transport loss — returns last SQL snapshot, does not wipe', async () => {
@@ -806,9 +847,11 @@ it('soft-fails transport loss — returns last SQL snapshot, does not wipe', asy
   });
   const { default: UTXOService } = await import('../UTXOService');
 
-  const result = await UTXOService.fetchAndStoreUTXOsMany(11, [
-    'bitcoincash:q1',
-  ]);
+  const result = await UTXOService.fetchAndStoreUTXOsMany(
+    11,
+    ['bitcoincash:q1'],
+    { trackWalletSync: true }
+  );
 
   expect(result['bitcoincash:q1']).toEqual(
     expect.arrayContaining([
@@ -817,4 +860,25 @@ it('soft-fails transport loss — returns last SQL snapshot, does not wipe', asy
   );
   // Soft-fail path must not replace the wallet with an empty network result.
   expect(replaceWalletAddressUTXOsMock).not.toHaveBeenCalled();
+  expect(dispatchMock).toHaveBeenCalledWith(
+    setWalletSyncStatus({ status: 'unavailable' })
+  );
+});
+
+it('marks a soft-failed refresh stale when this wallet synced successfully earlier', async () => {
+  getStateMock.mockReturnValue({
+    network: { currentNetwork: 'mainnet' },
+    wallet_id: { currentWalletId: 11, networkType: 'mainnet' },
+    utxos: { lastSuccessfulWalletSyncAt: 1234 },
+  });
+  getUTXOsManyMock.mockRejectedValue(new Error('Connection lost'));
+  const { default: UTXOService } = await import('../UTXOService');
+
+  await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1'], {
+    trackWalletSync: true,
+  });
+
+  expect(dispatchMock).toHaveBeenCalledWith(
+    setWalletSyncStatus({ status: 'stale' })
+  );
 });

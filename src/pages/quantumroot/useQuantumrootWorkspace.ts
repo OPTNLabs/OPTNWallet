@@ -16,7 +16,7 @@ import {
   type QuantumrootTokenAwareness,
 } from '../../services/QuantumrootTokenAwarenessService';
 import { validateQuantumrootAuthorizedSpendAgainstFulcrum } from '../../services/QuantumrootFulcrumValidationService';
-import { shortenTxHash } from '../../utils/shortenHash';
+import { TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import TransactionService from '../../services/TransactionService';
 import {
   buildQuantumrootAuthorizedSpendTransaction,
@@ -32,8 +32,17 @@ import type {
   WalletKey,
 } from './quantumrootTypes';
 import { deriveQuantumrootUiState } from './quantumrootUiState';
+import {
+  createQuantumrootRecoveryReview,
+  type QuantumrootRecoveryReview,
+} from './recoveryReview';
 import { useI18n } from '../../i18n/useI18n';
 import type { TranslationKey } from '../../i18n/resources';
+
+export type QuantumrootBroadcastNotice = {
+  txid: string;
+  messageKey: TranslationKey;
+};
 
 type QuantumrootTranslator = (
   key: TranslationKey,
@@ -75,6 +84,13 @@ function describeQuantumrootError(error: unknown, t: QuantumrootTranslator) {
   return message;
 }
 
+function quantumrootSats(value: number | bigint | string | undefined): bigint {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') return BigInt(Math.trunc(value));
+  if (typeof value === 'string') return BigInt(value || '0');
+  return 0n;
+}
+
 type UseQuantumrootWorkspaceArgs = {
   currentWalletId: number | null;
   workspaceEnabled?: boolean;
@@ -105,6 +121,12 @@ type UseQuantumrootWorkspaceResult = QuantumrootWorkspaceState & {
     utxo: UTXO,
     destinationAddress: string
   ) => Promise<void>;
+  pendingRecoveryReview: QuantumrootRecoveryReview | null;
+  recoveryBroadcastNotice: QuantumrootBroadcastNotice | null;
+  recoveryReviewLoading: boolean;
+  recoveryReviewError: string | null;
+  handleCancelRecoveryReview: () => void;
+  handleConfirmRecoveryReview: () => Promise<void>;
   setSelectedVault: (vault: QuantumrootVaultRecord | null) => void;
   setPendingSpendAddress: (value: string) => void;
   setPendingTokenCategory: (value: string) => void;
@@ -140,6 +162,22 @@ export function useQuantumrootWorkspace({
   const [pendingSpendAddress, setPendingSpendAddress] = useState('');
   const [pendingTokenCategory, setPendingTokenCategory] = useState('');
   const [savingConfiguration, setSavingConfiguration] = useState(false);
+  const [pendingRecoveryReview, setPendingRecoveryReview] =
+    useState<QuantumrootRecoveryReview | null>(null);
+  const [recoveryBroadcastNotice, setRecoveryBroadcastNotice] =
+    useState<QuantumrootBroadcastNotice | null>(null);
+  const [recoveryReviewLoading, setRecoveryReviewLoading] = useState(false);
+  const [recoveryReviewError, setRecoveryReviewError] = useState<string | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (!selectedVault) {
+      setPendingRecoveryReview(null);
+      setRecoveryBroadcastNotice(null);
+      setRecoveryReviewError(null);
+    }
+  }, [selectedVault]);
 
   const loadQuantumrootWorkspace = useCallback(async () => {
     if (!currentWalletId || !workspaceEnabled) {
@@ -416,6 +454,7 @@ export function useQuantumrootWorkspace({
 
       const outpointKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
       setRecoveringOutpoint(outpointKey);
+      setRecoveryReviewError(null);
 
       try {
         const vault = await KeyService.deriveQuantumrootVault(
@@ -433,31 +472,17 @@ export function useQuantumrootWorkspace({
             vault,
             vaultTokenCategory: selectedVault.vault_token_category,
           });
-
-          const sent = await TransactionService.sendTransaction(
-            built.rawTransaction,
-            [utxo],
-            {
-              source: 'quantumroot-spend',
-              sourceLabel: 'Quantumroot Spend',
-              recipientSummary: normalizedDestination,
-              amountSummary: built.recoveryAmountSats.toString(),
-              userPrompt: 'Spend BCH from a Quantumroot receive address',
-            }
+          setPendingRecoveryReview(
+            createQuantumrootRecoveryReview({
+              kind: 'spend',
+              destinationAddress: normalizedDestination,
+              sweptUtxos: [utxo],
+              feeSats: built.feeSats,
+              recoveryAmountSats: built.recoveryAmountSats,
+              rawTransaction: built.rawTransaction,
+              transactionByteLength: built.transactionByteLength,
+            })
           );
-
-          if (!sent.txid) {
-            throw new Error(
-              sent.errorMessage || t('quantumroot.toast.broadcastSpendFailed')
-            );
-          }
-
-          await Toast.show({
-            text: t('quantumroot.toast.spendBroadcast', {
-              txid: shortenTxHash(sent.txid),
-            }),
-          });
-          await loadQuantumrootWorkspace();
         } finally {
           zeroizeQuantumrootArtifacts(vault);
         }
@@ -472,7 +497,7 @@ export function useQuantumrootWorkspace({
         setRecoveringOutpoint(null);
       }
     },
-    [currentWalletId, loadQuantumrootWorkspace, selectedVault, t]
+    [currentWalletId, selectedVault, t]
   );
 
   const handleSweepAllReceiveUtxos = useCallback(async () => {
@@ -493,6 +518,7 @@ export function useQuantumrootWorkspace({
     }
 
     setSweepingAll(true);
+    setRecoveryReviewError(null);
     try {
       const vault = await KeyService.deriveQuantumrootVault(
         currentWalletId,
@@ -510,30 +536,17 @@ export function useQuantumrootWorkspace({
             vault,
             vaultTokenCategory: selectedVault.vault_token_category,
           });
-
-        const sent = await TransactionService.sendTransaction(
-          aggregateSweep.rawTransaction,
-          aggregateSweep.sweptUtxos,
-          {
-            source: 'quantumroot-sweep',
-            sourceLabel: 'Quantumroot Sweep',
-            recipientSummary: normalizedDestination,
-            amountSummary: aggregateSweep.recoveryAmountSats.toString(),
-            userPrompt: 'Sweep BCH from Quantumroot receive UTXOs',
-          }
+        setPendingRecoveryReview(
+          createQuantumrootRecoveryReview({
+            kind: 'sweep',
+            destinationAddress: normalizedDestination,
+            sweptUtxos: aggregateSweep.sweptUtxos,
+            feeSats: aggregateSweep.feeSats,
+            recoveryAmountSats: aggregateSweep.recoveryAmountSats,
+            rawTransaction: aggregateSweep.rawTransaction,
+            transactionByteLength: aggregateSweep.transactionByteLength,
+          })
         );
-        if (!sent.txid) {
-          throw new Error(
-            sent.errorMessage || t('quantumroot.toast.broadcastSweepFailed')
-          );
-        }
-
-        await Toast.show({
-          text: t('quantumroot.toast.sweepBroadcast', {
-            txid: shortenTxHash(sent.txid),
-          }),
-        });
-        await loadQuantumrootWorkspace();
       } finally {
         zeroizeQuantumrootArtifacts(vault);
       }
@@ -549,7 +562,6 @@ export function useQuantumrootWorkspace({
     }
   }, [
     currentWalletId,
-    loadQuantumrootWorkspace,
     pendingSpendAddress,
     selectedVault,
     selectedVaultStatus,
@@ -640,31 +652,23 @@ export function useQuantumrootWorkspace({
           vaultTokenCategory: selectedVault.vault_token_category,
         });
 
-        const sent = await TransactionService.sendTransaction(
-          built.rawTransaction,
-          [controlTokenUtxo, receiveTokenUtxo],
-          {
-            source: 'quantumroot-authorized-spend',
-            sourceLabel: 'Quantumroot Authorized Spend',
-            recipientSummary: normalizedDestination,
-            amountSummary: built.recoveryAmountSats.toString(),
-            userPrompt: 'Spend token-authorized funds from a Quantumroot vault',
-          }
+        const controlInputSats = quantumrootSats(
+          controlTokenUtxo.value ?? controlTokenUtxo.amount
         );
-
-        if (!sent.txid) {
-          throw new Error(
-            sent.errorMessage ||
-              t('quantumroot.toast.broadcastAuthorizedFailed')
-          );
-        }
-
-        await Toast.show({
-          text: t('quantumroot.toast.authorizedBroadcast', {
-            txid: shortenTxHash(sent.txid),
-          }),
-        });
-        await loadQuantumrootWorkspace();
+        setPendingRecoveryReview(
+          createQuantumrootRecoveryReview({
+            kind: 'authorized',
+            destinationAddress: normalizedDestination,
+            sweptUtxos: [controlTokenUtxo, ...built.sweptUtxos],
+            feeSats: built.feeSats,
+            recoveryAmountSats: built.recoveryAmountSats,
+            reservedOutputSats: BigInt(
+              Math.max(Number(TOKEN_OUTPUT_SATS), Number(controlInputSats))
+            ),
+            rawTransaction: built.rawTransaction,
+            transactionByteLength: built.transactionByteLength,
+          })
+        );
       } catch (error) {
         console.error(
           'Quantumroot authorized spend failed from workspace:',
@@ -685,13 +689,7 @@ export function useQuantumrootWorkspace({
         setRecoveringOutpoint(null);
       }
     },
-    [
-      currentWalletId,
-      loadQuantumrootWorkspace,
-      selectedVault,
-      selectedVaultTokenAwareness,
-      t,
-    ]
+    [currentWalletId, selectedVault, selectedVaultTokenAwareness, t]
   );
 
   const handleRecoverQuantumLockUtxo = useCallback(
@@ -709,6 +707,7 @@ export function useQuantumrootWorkspace({
 
       const outpointKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
       setRecoveringOutpoint(outpointKey);
+      setRecoveryReviewError(null);
 
       try {
         const vault = await KeyService.deriveQuantumrootVault(
@@ -726,32 +725,17 @@ export function useQuantumrootWorkspace({
             vault,
             vaultTokenCategory: selectedVault.vault_token_category,
           });
-
-          const sent = await TransactionService.sendTransaction(
-            built.rawTransaction,
-            [utxo],
-            {
-              source: 'quantumroot-quantum-lock-recovery',
-              sourceLabel: 'Quantum Lock Recovery',
-              recipientSummary: normalizedDestination,
-              amountSummary: built.recoveryAmountSats.toString(),
-              userPrompt: 'Recover BCH from a Quantumroot Quantum Lock UTXO',
-            }
+          setPendingRecoveryReview(
+            createQuantumrootRecoveryReview({
+              kind: 'quantum-lock',
+              destinationAddress: normalizedDestination,
+              sweptUtxos: [utxo],
+              feeSats: built.feeSats,
+              recoveryAmountSats: built.recoveryAmountSats,
+              rawTransaction: built.rawTransaction,
+              transactionByteLength: built.transactionByteLength,
+            })
           );
-
-          if (!sent.txid) {
-            throw new Error(
-              sent.errorMessage ||
-                t('quantumroot.toast.broadcastLockRecoveryFailed')
-            );
-          }
-
-          await Toast.show({
-            text: t('quantumroot.toast.lockRecoveryBroadcast', {
-              txid: shortenTxHash(sent.txid),
-            }),
-          });
-          await loadQuantumrootWorkspace();
         } finally {
           zeroizeQuantumrootArtifacts(vault);
         }
@@ -766,8 +750,105 @@ export function useQuantumrootWorkspace({
         setRecoveringOutpoint(null);
       }
     },
-    [currentWalletId, loadQuantumrootWorkspace, selectedVault, t]
+    [currentWalletId, selectedVault, t]
   );
+
+  const handleCancelRecoveryReview = useCallback(() => {
+    if (recoveryReviewLoading) return;
+    setPendingRecoveryReview(null);
+    setRecoveryReviewError(null);
+  }, [recoveryReviewLoading]);
+
+  const handleConfirmRecoveryReview = useCallback(async () => {
+    if (!pendingRecoveryReview || recoveryReviewLoading) return;
+
+    setRecoveryReviewLoading(true);
+    setRecoveryReviewError(null);
+    setRecoveryBroadcastNotice(null);
+    try {
+      const source =
+        pendingRecoveryReview.kind === 'sweep'
+          ? {
+              source: 'quantumroot-sweep',
+              sourceLabel: 'Quantumroot Sweep',
+              userPrompt: 'Sweep BCH from Quantumroot receive UTXOs',
+              successKey: 'quantumroot.toast.sweepBroadcast' as const,
+            }
+          : pendingRecoveryReview.kind === 'quantum-lock'
+            ? {
+                source: 'quantumroot-quantum-lock-recovery',
+                sourceLabel: 'Quantum Lock Recovery',
+                userPrompt: 'Recover BCH from a Quantumroot Quantum Lock UTXO',
+                successKey: 'quantumroot.toast.lockRecoveryBroadcast' as const,
+              }
+            : pendingRecoveryReview.kind === 'authorized'
+              ? {
+                  source: 'quantumroot-authorized-spend',
+                  sourceLabel: 'Quantumroot Authorized Spend',
+                  userPrompt:
+                    'Spend token-authorized funds from a Quantumroot vault',
+                  successKey: 'quantumroot.toast.authorizedBroadcast' as const,
+                }
+              : {
+                  source: 'quantumroot-spend',
+                  sourceLabel: 'Quantumroot Spend',
+                  userPrompt: 'Spend BCH from a Quantumroot receive address',
+                  successKey: 'quantumroot.toast.spendBroadcast' as const,
+                };
+
+      const sent = await TransactionService.sendTransaction(
+        pendingRecoveryReview.rawTransaction,
+        pendingRecoveryReview.sweptUtxos,
+        {
+          source: source.source,
+          sourceLabel: source.sourceLabel,
+          recipientSummary: pendingRecoveryReview.destinationAddress,
+          amountSummary: pendingRecoveryReview.recoveryAmountSats.toString(),
+          userPrompt: source.userPrompt,
+        }
+      );
+      if (!sent.txid) {
+        throw new Error(
+          sent.errorMessage ||
+            t(
+              source.successKey === 'quantumroot.toast.sweepBroadcast'
+                ? 'quantumroot.toast.broadcastSweepFailed'
+                : source.successKey ===
+                    'quantumroot.toast.lockRecoveryBroadcast'
+                  ? 'quantumroot.toast.broadcastLockRecoveryFailed'
+                  : source.successKey ===
+                      'quantumroot.toast.authorizedBroadcast'
+                    ? 'quantumroot.toast.broadcastAuthorizedFailed'
+                    : 'quantumroot.toast.broadcastSpendFailed'
+            )
+        );
+      }
+
+      setPendingRecoveryReview(null);
+      setRecoveryBroadcastNotice({
+        txid: sent.txid,
+        messageKey: source.successKey,
+      });
+      await Toast.show({
+        text: t('history.awaitingConfirmation'),
+      });
+      await loadQuantumrootWorkspace();
+    } catch (error) {
+      const message = describeQuantumrootError(error, t);
+      console.error('Quantumroot recovery broadcast failed:', error);
+      setRecoveryReviewError(message);
+      await Toast.show({
+        text: message,
+      });
+    } finally {
+      setRecoveryReviewLoading(false);
+    }
+  }, [
+    loadQuantumrootWorkspace,
+    pendingRecoveryReview,
+    recoveryReviewLoading,
+    t,
+  ]);
 
   return {
     vaults,
@@ -798,6 +879,12 @@ export function useQuantumrootWorkspace({
     handleAuthorizedSpendUtxo,
     handleSweepAllReceiveUtxos,
     handleRecoverQuantumLockUtxo,
+    pendingRecoveryReview,
+    recoveryBroadcastNotice,
+    recoveryReviewLoading,
+    recoveryReviewError,
+    handleCancelRecoveryReview,
+    handleConfirmRecoveryReview,
     setSelectedVault,
     setPendingSpendAddress,
     setPendingTokenCategory,

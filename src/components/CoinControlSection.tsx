@@ -7,7 +7,6 @@ import { useSelector } from 'react-redux';
 import type { UTXO } from '../types/types';
 import type { RootState } from '../state/store';
 import { SATSINBITCOIN } from '../utils/constants';
-import { shortenTxHash } from '../utils/shortenHash';
 import { coinDepth } from '../platform/desktop/fusionCoinDepth';
 import { useFusionDepthRevision } from '../platform/desktop/useFusionDepthRevision';
 import { outpointKey } from '../platform/desktop/CoinLabelService';
@@ -15,6 +14,8 @@ import { FusionBadge } from './FusionBadge';
 import { StealthBadge } from './StealthBadge';
 import { loadStoredWalletSpecialActivities } from '../services/WalletSpecialActivityService';
 import type { RpaUnspentOutput } from '../services/WalletSpecialActivityService';
+import MaskedValue from './ui/MaskedValue';
+import { useI18n } from '../i18n/useI18n';
 
 function utxoOutpointKey(utxo: Pick<UTXO, 'tx_hash' | 'tx_pos'>): string {
   return outpointKey(utxo.tx_hash, utxo.tx_pos);
@@ -67,6 +68,7 @@ export function CoinControlSection({
   disabled = false,
   title = 'Coin control',
 }: CoinControlSectionProps): React.ReactElement {
+  const { t } = useI18n();
   // Re-render when server/P2P fusion stamps depth so "Fused" badges appear live.
   const fusionDepthRev = useFusionDepthRevision(walletId);
   const rpaRecord = useSelector((state: RootState) =>
@@ -228,8 +230,15 @@ export function CoinControlSection({
                           <span className="wallet-muted">unconfirmed</span>
                         )}
                       </span>
-                      <span className="block font-mono wallet-muted truncate">
-                        {shortenTxHash(u.tx_hash)}:{u.tx_pos}
+                      <span className="flex flex-wrap items-center gap-1 font-mono wallet-muted">
+                        <MaskedValue
+                          value={u.tx_hash}
+                          label={t('history.transactionId')}
+                          copySuccessMessageKey="history.transactionCopied"
+                          className="text-xs wallet-muted"
+                          embedded
+                        />
+                        <span>:{u.tx_pos}</span>
                       </span>
                     </span>
                   </label>

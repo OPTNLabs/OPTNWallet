@@ -124,7 +124,7 @@ export function normalizeHexId(value: string): string {
 }
 
 export function isTokenIndexNativeRegistryUri(uri: string): boolean {
-  return /\/v1\/token\/[0-9a-f]{64}\/bcmr\/?$/i.test(String(uri ?? '').trim());
+  return /\/v1\/token\/[0-9a-f]{64}(?:\/bcmr)?\/?$/i.test(String(uri ?? '').trim());
 }
 
 export function buildTokenLookupUrl(registryUrl: string, category: string): string | null {

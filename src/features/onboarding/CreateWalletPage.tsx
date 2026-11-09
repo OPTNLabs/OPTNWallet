@@ -210,7 +210,7 @@ const CreateWalletPage = () => {
             <InfoTooltipIcon
               id="mnemonic-tooltip"
               content={t('onboarding.mnemonicWarning')}
-              ariaLabel="Mnemonic information"
+              ariaLabel={t('onboarding.generatedMnemonic')}
             />
           </div>
 
@@ -249,6 +249,16 @@ const CreateWalletPage = () => {
               {t('onboarding.generatingSeed')}
             </div>
           )}
+
+          {mnemonicPhrase ? (
+            <p
+              role="note"
+              data-testid="recovery-safety-note"
+              className="mb-4 w-full rounded-xl border border-amber-500/50 bg-amber-500/10 p-3 text-sm leading-relaxed wallet-text-strong"
+            >
+              {t('onboarding.seedInstruction')}
+            </p>
+          ) : null}
         </div>
 
         <button

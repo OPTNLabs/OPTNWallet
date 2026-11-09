@@ -70,7 +70,8 @@ describe('executeApprovedDistributionSend', () => {
     tx_pos: 1,
     value: 1000,
     token: {
-      category: '8d76840bf20eb57f002e67f0ddec0698639db6c99c4a9c736f711b7c86fcbf22',
+      category:
+        '8d76840bf20eb57f002e67f0ddec0698639db6c99c4a9c736f711b7c86fcbf22',
       amount: 100n,
     },
   };
@@ -106,14 +107,16 @@ describe('executeApprovedDistributionSend', () => {
         amount: 25n,
       },
     });
-    plannerMock.makeTokenChangeOutputFT.mockImplementation((amount: bigint) => ({
-      recipientAddress: 'bchtest:zqchange0000000000000000000000000000000',
-      amount: 1000,
-      token: {
-        category: tokenUtxo.token!.category,
-        amount,
-      },
-    }));
+    plannerMock.makeTokenChangeOutputFT.mockImplementation(
+      (amount: bigint) => ({
+        recipientAddress: 'bchtest:zqchange0000000000000000000000000000000',
+        amount: 1000,
+        token: {
+          category: tokenUtxo.token!.category,
+          amount,
+        },
+      })
+    );
     plannerMock.addBchInputsUntilBuild.mockResolvedValue({
       ok: true,
       rawTx: 'deadbeef',
@@ -162,7 +165,7 @@ describe('executeApprovedDistributionSend', () => {
   });
 
   it('prepares, broadcasts, and completes an approved token request using mocked UTXOs', async () => {
-    const result = await executeApprovedDistributionSend(sdk, api, [
+    const jobs = [
       {
         id: 'dst_1',
         workspace_id: 'wrk_1',
@@ -183,7 +186,17 @@ describe('executeApprovedDistributionSend', () => {
         token_category: tokenUtxo.token!.category,
         amount: '25',
       } as DistributionJobRecord,
-    ]);
+    ];
+    const approvedPreview = await buildApprovedDistributionTransaction(
+      sdk,
+      jobs
+    );
+    const result = await executeApprovedDistributionSend(
+      sdk,
+      api,
+      jobs,
+      approvedPreview
+    );
 
     expect(selectTokenFtInputsMock).toHaveBeenCalledWith(
       tokenUtxo.token!.category,
@@ -249,6 +262,39 @@ describe('executeApprovedDistributionSend', () => {
     });
   });
 
+  it('refuses to broadcast when the rebuilt transaction differs from the approved preview', async () => {
+    const jobs = [
+      {
+        id: 'dst_1',
+        workspace_id: 'wrk_1',
+        recipient_id: 'rcp_1',
+        destination_address: 'bchtest:qqdest000000000000000000000000000000000',
+        asset_type: 'token',
+        status: 'prepared',
+        token_category: tokenUtxo.token!.category,
+        amount: '25',
+      } as DistributionJobRecord,
+    ];
+    const approvedPreview = await buildApprovedDistributionTransaction(
+      sdk,
+      jobs
+    );
+    plannerMock.addBchInputsUntilBuild.mockResolvedValueOnce({
+      ok: true,
+      rawTx: 'changed-transaction',
+      inputs: approvedPreview.inputs,
+      finalOutputs: approvedPreview.finalOutputs,
+      feeSats: approvedPreview.feeSats,
+      totalSats: approvedPreview.totalSats,
+    });
+
+    await expect(
+      executeApprovedDistributionSend(sdk, api, jobs, approvedPreview)
+    ).rejects.toThrow('Review the updated transaction');
+    expect(sendTransactionMock).not.toHaveBeenCalled();
+    expect(api.completeDistributionJob).not.toHaveBeenCalled();
+  });
+
   it('converts token recipients to CashTokens address format during build', async () => {
     await buildApprovedDistributionTransaction(sdk, [
       {
@@ -267,7 +313,8 @@ describe('executeApprovedDistributionSend', () => {
       [tokenUtxo],
       [
         {
-          recipientAddress: 'bchtest:zqconverted0000000000000000000000000000000',
+          recipientAddress:
+            'bchtest:zqconverted0000000000000000000000000000000',
           amount: 1000,
           token: {
             category: tokenUtxo.token!.category,

@@ -40,9 +40,11 @@ pub const FORBIDDEN_SANDBOX_TOKEN: &str = "allow-same-origin";
 /// manifest claims and user grants. The SDK's narrower read grants still apply.
 ///
 /// Raw transaction operations, signing, storage writes and arbitrary HTTP are
-/// not guest capabilities. They need the runtime's proposal/session broker
-/// before this legacy transport can expose them. Internal reviewed UI clients
-/// are not iframe guests and do not pass through this boundary.
+/// not guest capabilities. The versioned proposal/session methods are the
+/// brokered exception: they carry unsigned intent or inspect wallet-owned
+/// state, while execution still remains behind the runtime authority flow.
+/// Internal reviewed UI clients are not iframe guests and do not pass through
+/// this boundary.
 pub fn legacy_guest_call_allowed(module: &str, method: &str) -> bool {
     matches!(
         (module, method),
@@ -50,6 +52,10 @@ pub fn legacy_guest_call_allowed(module: &str, method: &str) -> bool {
             "wallet",
             "getContext" | "listAddresses" | "getPrimaryAddress" | "toTokenAddress"
         ) | ("utxos", "listForWallet")
+            | (
+                "tx",
+                "propose" | "getProposal" | "requestExecution" | "getOperation"
+            )
     )
 }
 
@@ -463,6 +469,9 @@ mod tests {
     fn legacy_guest_cannot_reach_privileged_or_inherited_sdk_methods() {
         assert!(legacy_guest_call_allowed("wallet", "getContext"));
         assert!(legacy_guest_call_allowed("utxos", "listForWallet"));
+        assert!(legacy_guest_call_allowed("tx", "propose"));
+        assert!(legacy_guest_call_allowed("tx", "requestExecution"));
+        assert!(legacy_guest_call_allowed("tx", "getOperation"));
         for (module, method) in [
             ("tx", "addOutput"),
             ("tx", "build"),

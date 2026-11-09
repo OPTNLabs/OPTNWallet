@@ -6,6 +6,7 @@ import type {
   CauldronPoolHistoryEntry,
   CauldronPoolHistoryResponse,
   CauldronTokenListItemCached,
+  CauldronIndexerHealth,
 } from './types';
 
 export type CauldronActivePoolRow =
@@ -97,6 +98,25 @@ export class CauldronApiClient {
     readonly network: Network,
     readonly baseUrl = getCauldronApiBaseUrl(network)
   ) {}
+
+  async getIndexerHealth(): Promise<CauldronIndexerHealth> {
+    const rootUrl = this.baseUrl.replace(/\/cauldron\/?$/, '');
+    const url = `${rootUrl}/health`;
+    const health = await fetchJsonCached<unknown>(url, url);
+    if (!health || typeof health !== 'object') {
+      throw new Error('Unexpected Cauldron indexer health response shape');
+    }
+    const value = health as Record<string, unknown>;
+    if (
+      typeof value.chain_tip !== 'number' ||
+      typeof value.indexed_height !== 'number' ||
+      typeof value.status !== 'string' ||
+      typeof value.version !== 'string'
+    ) {
+      throw new Error('Unexpected Cauldron indexer health response shape');
+    }
+    return value as unknown as CauldronIndexerHealth;
+  }
 
   async listActivePools(
     params: {
@@ -194,12 +214,18 @@ export class CauldronApiClient {
           if (!entry || typeof entry !== 'object') return [];
           const typedEntry = entry as Record<string, unknown>;
           const tokens =
-            typedEntry.tokens ?? typedEntry.token_amount ?? typedEntry.amount_token;
+            typedEntry.tokens ??
+            typedEntry.token_amount ??
+            typedEntry.amount_token;
           if (tokens == null) return [];
           return [
             {
               ...typedEntry,
-              sats: typedEntry.sats ?? typedEntry.value ?? typedEntry.value_satoshis ?? 0,
+              sats:
+                typedEntry.sats ??
+                typedEntry.value ??
+                typedEntry.value_satoshis ??
+                0,
               tokens,
             } as CauldronPoolHistoryEntry,
           ];

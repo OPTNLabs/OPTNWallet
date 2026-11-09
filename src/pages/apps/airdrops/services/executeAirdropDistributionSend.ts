@@ -50,7 +50,9 @@ export async function buildApprovedDistributionTransaction(
     (job) => (job.asset_type === 'bch' ? 'bch' : 'token') !== assetType
   );
   if (inconsistentAsset) {
-    throw new Error('Prepared jobs must use the same asset type for batch sending.');
+    throw new Error(
+      'Prepared jobs must use the same asset type for batch sending.'
+    );
   }
 
   const tokenCategory =
@@ -59,7 +61,9 @@ export async function buildApprovedDistributionTransaction(
     assetType === 'token' &&
     preparedJobs.some((job) => (job.token_category || '') !== tokenCategory)
   ) {
-    throw new Error('Prepared token jobs must use the same token category for batch sending.');
+    throw new Error(
+      'Prepared token jobs must use the same token category for batch sending.'
+    );
   }
   if (preparedJobs.some((job) => !job.amount || !job.destination_address)) {
     throw new Error('One or more prepared jobs are missing required details.');
@@ -70,7 +74,8 @@ export async function buildApprovedDistributionTransaction(
     sdk.utxos.listForWallet(),
   ]);
   const selectedChangeAddress = addresses[0]?.address || '';
-  const tokenChangeAddress = addresses[0]?.tokenAddress || selectedChangeAddress;
+  const tokenChangeAddress =
+    addresses[0]?.tokenAddress || selectedChangeAddress;
   if (!selectedChangeAddress) {
     throw new Error('No wallet change address is available.');
   }
@@ -119,7 +124,9 @@ export async function buildApprovedDistributionTransaction(
     const totalFromInputs = tokenInputs.reduce((sum, utxo) => {
       const amountRaw = utxo.token?.amount ?? 0;
       const amount =
-        typeof amountRaw === 'bigint' ? amountRaw : BigInt(Math.trunc(amountRaw));
+        typeof amountRaw === 'bigint'
+          ? amountRaw
+          : BigInt(Math.trunc(amountRaw));
       return sum + amount;
     }, 0n);
     const totalTokenInputSats = tokenInputs.reduce(
@@ -140,8 +147,12 @@ export async function buildApprovedDistributionTransaction(
     }));
     const changeTokenAmount = totalFromInputs - tokenAmount;
     if (changeTokenAmount > 0n) {
-      const tokenChangeOutput = planner.makeTokenChangeOutputFT(changeTokenAmount);
-      tokenChangeOutput.amount = Math.max(totalTokenInputSats, TOKEN_OUTPUT_SATS);
+      const tokenChangeOutput =
+        planner.makeTokenChangeOutputFT(changeTokenAmount);
+      tokenChangeOutput.amount = Math.max(
+        totalTokenInputSats,
+        TOKEN_OUTPUT_SATS
+      );
       outputs.push(tokenChangeOutput);
     }
 
@@ -149,7 +160,9 @@ export async function buildApprovedDistributionTransaction(
   }
 
   if (!('ok' in built) || !built.ok) {
-    throw new Error('err' in built ? built.err : 'Failed to prepare send transaction.');
+    throw new Error(
+      'err' in built ? built.err : 'Failed to prepare send transaction.'
+    );
   }
 
   return {
@@ -167,15 +180,34 @@ export async function buildApprovedDistributionTransaction(
 export async function executeApprovedDistributionSend(
   sdk: AddonSDK,
   api: DistributionCompletionApi,
-  jobs: DistributionJobRecord[]
+  jobs: DistributionJobRecord[],
+  approvedPreview: DistributionTxPreview
 ) {
   const preview = await buildApprovedDistributionTransaction(sdk, jobs);
 
-  const sent = await TransactionService.sendTransaction(preview.rawTx, preview.inputs, {
-    source: 'airdrops',
-    sourceLabel: 'Airdrops',
-    amountSummary: `${preview.jobIds.length} recipient${preview.jobIds.length === 1 ? '' : 's'}`,
-  });
+  const inputKey = (input: UTXO) =>
+    `${input.tx_hash}:${input.tx_pos}:${input.amount ?? input.value ?? 0}:${input.token?.category ?? ''}:${input.token?.amount ?? ''}`;
+  if (
+    preview.rawTx !== approvedPreview.rawTx ||
+    preview.feeSats !== approvedPreview.feeSats ||
+    preview.jobIds.join('|') !== approvedPreview.jobIds.join('|') ||
+    preview.inputs.map(inputKey).join('|') !==
+      approvedPreview.inputs.map(inputKey).join('|')
+  ) {
+    throw new Error(
+      'The airdrop transaction changed. Review the updated transaction before sending.'
+    );
+  }
+
+  const sent = await TransactionService.sendTransaction(
+    preview.rawTx,
+    preview.inputs,
+    {
+      source: 'airdrops',
+      sourceLabel: 'Airdrops',
+      amountSummary: `${preview.jobIds.length} recipient${preview.jobIds.length === 1 ? '' : 's'}`,
+    }
+  );
   if (sent.errorMessage) {
     throw new Error(sent.errorMessage);
   }

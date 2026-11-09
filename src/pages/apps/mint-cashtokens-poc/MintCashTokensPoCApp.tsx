@@ -30,7 +30,7 @@ import {
 } from '../../../services/IpfsService';
 import TransactionService from '../../../services/TransactionService';
 import UTXOService from '../../../services/UTXOService';
-import { copyToClipboard } from '../../../utils/clipboard';
+import { copyWithFeedback } from '../../../utils/copyWithFeedback';
 import { sha256 } from '../../../utils/hash';
 import BcmrService, {
   isBcmrRegistryNotFoundError,
@@ -38,6 +38,10 @@ import BcmrService, {
 import { getReturnPath } from '../../../utils/navigation';
 
 import TxSummary from '../../../components/confirm/TxSummary';
+import PageHeader from '../../../components/ui/PageHeader';
+import RouteExitFooter from '../../../components/ui/RouteExitFooter';
+import MaskedValue from '../../../components/ui/MaskedValue';
+import FriendlyErrorPanel from '../../../components/ui/FriendlyErrorPanel';
 import {
   AmountsStepCard,
   Badge,
@@ -75,6 +79,7 @@ import {
   selectWalletId,
 } from '../../../state/slices/walletSlice';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
+import { useI18n } from '../../../i18n/useI18n';
 
 type BcmrFieldKey =
   | 'tokenCategory'
@@ -197,6 +202,7 @@ function describeMintSourceKind(
 
 const MintCashTokensPoCApp: React.FC = () => {
   const { t: addonT } = useAddonI18n();
+  const { t: walletT } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
@@ -554,7 +560,7 @@ const MintCashTokensPoCApp: React.FC = () => {
 
   const copyText = useCallback(
     async (txt: string, label = 'Copied') => {
-      const ok = await copyToClipboard(txt);
+      const ok = await copyWithFeedback(txt);
       showToast(ok ? label : 'Copy failed');
     },
     [showToast]
@@ -1455,13 +1461,7 @@ const MintCashTokensPoCApp: React.FC = () => {
   return (
     <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] min-h-0 px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
       <div className="flex-none space-y-4">
-        <div className="flex justify-center">
-          <img
-            src="/assets/images/OPTNWelcome1.png"
-            alt="OPTN"
-            className="h-auto w-full max-w-[260px] object-contain"
-          />
-        </div>
+        <PageHeader title="Mint" />
 
         {toast ? (
           <div className="px-3 py-2 rounded-xl wallet-popup-panel text-xs font-semibold">
@@ -1618,9 +1618,20 @@ const MintCashTokensPoCApp: React.FC = () => {
           {(errorMessage || status || txid) && (
             <div className="rounded-2xl border border-[var(--wallet-border)] wallet-card shadow-sm p-4 space-y-2">
               {errorMessage && (
-                <div className="rounded-xl bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-300 text-sm p-3">
-                  {errorMessage}
-                </div>
+                <>
+                  <FriendlyErrorPanel
+                    title={walletT('send.errorTitle')}
+                    message={walletT('send.genericError')}
+                  />
+                  <details className="rounded-xl border border-[var(--wallet-border)] px-3 py-2 text-sm">
+                    <summary className="cursor-pointer font-semibold wallet-text-strong">
+                      {walletT('send.technicalDetails')}
+                    </summary>
+                    <p className="mt-2 break-words text-xs wallet-muted">
+                      {errorMessage}
+                    </p>
+                  </details>
+                </>
               )}
               {status && (
                 <div className="rounded-xl wallet-surface-strong text-sm p-3">
@@ -1630,16 +1641,24 @@ const MintCashTokensPoCApp: React.FC = () => {
               {txid && (
                 <div className="rounded-xl wallet-surface-strong text-sm p-3 break-all">
                   <div className="font-semibold flex items-center justify-between">
-                    Broadcast txid
+                    {walletT('history.transactionId')}
                     <button
                       type="button"
                       className="text-sm font-semibold text-blue-500"
-                      onClick={() => copyText(txid, 'Txid copied')}
+                      onClick={() =>
+                        copyText(txid, walletT('history.transactionCopied'))
+                      }
                     >
                       Copy
                     </button>
                   </div>
-                  <div className="font-mono text-xs mt-1">{txid}</div>
+                  <MaskedValue
+                    value={txid}
+                    label={walletT('history.transactionId')}
+                    ariaLabel={walletT('history.transactionId')}
+                    copySuccessMessageKey="history.transactionCopied"
+                    className="mt-1 text-xs"
+                  />
                 </div>
               )}
             </div>
@@ -1719,13 +1738,7 @@ const MintCashTokensPoCApp: React.FC = () => {
             </button>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => navigate(backTarget)}
-          className="wallet-btn-danger w-full py-3 font-semibold"
-        >
-          Back
-        </button>
+        <RouteExitFooter label="Back" onBack={() => navigate(backTarget)} />
       </div>
 
       {showOutputPopup ? (

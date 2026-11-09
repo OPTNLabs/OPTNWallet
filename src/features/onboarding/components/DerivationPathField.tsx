@@ -2,6 +2,7 @@ import React from 'react';
 import { Network } from '../../../state/slices/networkSlice';
 import { getBchAccountPath } from '../../../services/HdWalletService';
 import Bip44AccountPathFields from '../../../components/Bip44AccountPathFields';
+import NetworkContextBanner from '../../../components/ui/NetworkContextBanner';
 import NetworkSelector from './NetworkSelector';
 import { useI18n } from '../../../i18n/useI18n';
 
@@ -38,40 +39,45 @@ export const DerivationPathField: React.FC<DerivationPathFieldProps> = ({
         <p className="text-xs wallet-muted mb-2">
           {t('derivation.walletNetworkDescription')}
         </p>
+        <NetworkContextBanner network={network} className="mb-3" />
         <NetworkSelector networkType={network} centered />
       </div>
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold wallet-text-strong">
+      <details className="rounded-xl border border-[var(--wallet-border)]">
+        <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-3 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--wallet-focus-ring)]">
+          <span className="text-sm font-semibold wallet-text-strong">
             {t('derivation.addressDerivation')}
-          </p>
-          <p className="text-xs wallet-muted">
-            {t('derivation.addressDerivationDescription')}
-          </p>
+          </span>
+          <code className="truncate text-xs wallet-muted font-mono">
+            {custom ? value : defaultPath}
+          </code>
+        </summary>
+        <div className="space-y-2 border-t border-[var(--wallet-border)] p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs wallet-muted">
+              {t('derivation.addressDerivationDescription')}
+            </p>
+            <label className="wallet-customize-toggle" data-active={custom}>
+              <input
+                type="checkbox"
+                checked={custom}
+                onChange={(event) => handleCustomToggle(event.target.checked)}
+              />
+              <span>{t('derivation.customize')}</span>
+            </label>
+          </div>
+          {custom ? (
+            <Bip44AccountPathFields
+              network={network}
+              value={value}
+              onChange={(path) => onChange(path, true)}
+            />
+          ) : (
+            <code className="block text-center text-sm wallet-text-strong font-mono">
+              {defaultPath}
+            </code>
+          )}
         </div>
-        <label
-          className="wallet-customize-toggle"
-          data-active={custom}
-        >
-          <input
-            type="checkbox"
-            checked={custom}
-            onChange={(event) => handleCustomToggle(event.target.checked)}
-          />
-          <span>{t('derivation.customize')}</span>
-        </label>
-      </div>
-      {custom ? (
-        <Bip44AccountPathFields
-          network={network}
-          value={value}
-          onChange={(path) => onChange(path, true)}
-        />
-      ) : (
-        <code className="block text-center text-sm wallet-text-strong font-mono">
-          {defaultPath}
-        </code>
-      )}
+      </details>
     </div>
   );
 };

@@ -141,6 +141,23 @@ describe('TransactionService.sendTransaction', () => {
     expect(requestRefreshMock).not.toHaveBeenCalled();
   });
 
+  it('normalizes an empty broadcast error before returning it to the UI', async () => {
+    sendTransactionMock.mockResolvedValue({
+      txid: null,
+      errorMessage: '',
+    });
+
+    const { default: TransactionService } = await import(
+      '../TransactionService'
+    );
+    const result = await TransactionService.sendTransaction(RAW_TX);
+
+    expect(result.errorMessage).toBe(
+      'Broadcast failed without a reason. Refresh wallet history before retrying.'
+    );
+    expect(removeMock).toHaveBeenCalledWith(`tracked:${RAW_TX}`, 11);
+  });
+
   it('keeps rejected multisig spends route-scoped and refreshes their coins', async () => {
     sendTransactionMock.mockResolvedValue({
       txid: null,

@@ -8,6 +8,7 @@ import WizardConnectionSettingsModal from './WizardConnectionSettingsModal';
 import WizardDappAvatar from './WizardDappAvatar';
 import { useI18n } from '../../i18n/useI18n';
 import { wizardConnectionStatus } from '../../utils/connectionStatus';
+import InfoButton from '../ui/InfoButton';
 
 type WizardConnectView = RelayConnectionState & {
   dappDescription?: string | null;
@@ -72,8 +73,17 @@ export default function WizardConnectPanel() {
                             connection.label ??
                             'WizardConnect'}
                         </div>
-                        <div className="wallet-muted text-xs sm:text-sm">
-                          {t(wizardConnectionStatus(connection.status.status))}
+                        <div className="flex items-center justify-center gap-1 md:justify-start">
+                          <div className="wallet-muted text-xs sm:text-sm">
+                            {t(
+                              wizardConnectionStatus(connection.status.status)
+                            )}
+                          </div>
+                          <InfoButton
+                            id={`wizard-connection-status-${connection.id}`}
+                            ariaLabel={t('connection.statusHelpLabel')}
+                            content={t('connection.statusHelp')}
+                          />
                         </div>
                         <div className="mt-1 text-xs sm:text-sm leading-relaxed break-words">
                           {description ? (

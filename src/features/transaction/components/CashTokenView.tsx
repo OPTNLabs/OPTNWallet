@@ -7,6 +7,7 @@ import { resolveTokenPresentation } from '../../../utils/tokenPresentation';
 import type { TokenPresentationFallback } from '../../../utils/tokenPresentation';
 import TokenIdentityBadge from '../../../components/ui/TokenIdentityBadge';
 import { useI18n } from '../../../i18n/useI18n';
+import { maskSensitiveValue } from '../../../utils/maskSensitiveValue';
 
 interface CashTokenViewProps {
   recipientAddress: string;
@@ -65,11 +66,13 @@ const CashTokenView: React.FC<CashTokenViewProps> = ({
           className="wallet-input p-2 w-full break-words whitespace-normal"
         />
         <button
+          type="button"
           onClick={scanBarcode}
-          className="ml-2 wallet-btn-primary p-2"
+          className="ml-2 flex min-h-[44px] min-w-[44px] items-center justify-center wallet-btn-primary p-2"
+          aria-label={t('builder.scanQrCode')}
           title={t('builder.scanQrCode')}
         >
-          <FaCamera />
+          <FaCamera aria-hidden="true" />
         </button>
       </div>
       <div className="mb-2">
@@ -113,7 +116,7 @@ const CashTokenView: React.FC<CashTokenViewProps> = ({
             .filter((utxo) => !utxo.token && utxo.tx_pos === 0)
             .map((utxo, index) => (
               <option key={utxo.tx_hash + index} value={utxo.tx_hash}>
-                {utxo.tx_hash}
+                {maskSensitiveValue(utxo.tx_hash)}
               </option>
             ))}
         </select>

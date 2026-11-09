@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   compareAppsForBrowse,
+  groupAppsByCategory,
   getAppCategory,
   getAppDescription,
   getAppIconFrame,
@@ -53,6 +54,23 @@ describe('appsViewHelpers', () => {
         name: 'Cauldron',
       })
     ).toBe('Advanced');
+  });
+
+  it('groups the browse surface in task-first category order', () => {
+    const groups = groupAppsByCategory([
+      { id: 'utils', category: 'Utils' as const },
+      { id: 'advanced', category: 'Advanced' as const },
+      { id: 'wallet', category: 'Wallet' as const },
+      { id: 'token', category: 'Token' as const },
+    ]);
+
+    expect(groups.map((group) => group.category)).toEqual([
+      'Wallet',
+      'Token',
+      'Utils',
+      'Advanced',
+    ]);
+    expect(groups.every((group) => group.apps)).toBe(true);
   });
 
   it('keeps the existing sort priorities and add-on descriptions', () => {

@@ -29,12 +29,43 @@ const RootHandler = () => {
     let cancelled = false;
 
     const restoreDefaultWallet = async () => {
+      const manager = WalletManager();
       if (!hasWallet) {
-        navigate(ROUTE_PATHS.landing, { replace: true });
+        // Redux persistence can be unavailable or incomplete after an Android
+        // process death even though the wallet database is durable. Recover a
+        // wallet from that source of truth before sending the user through
+        // onboarding again.
+        const wallets = await manager.getAllWallets();
+        const persisted = wallets
+          .slice()
+          .sort((a, b) => b.id - a.id)[0];
+        if (!persisted) {
+          navigate(ROUTE_PATHS.landing, { replace: true });
+          return;
+        }
+        const metadata = await manager.getWalletMetadata(persisted.id);
+        if (cancelled) return;
+        const resolvedNetwork =
+          metadata?.networkType ?? persisted.networkType ?? Network.MAINNET;
+        dispatch(setWalletId(persisted.id));
+        dispatch(setWalletNetwork(resolvedNetwork));
+        dispatch(setWalletType(metadata?.walletType ?? persisted.walletType));
+        if (metadata?.derivation_path) {
+          dispatch(
+            setWalletDerivationPath({
+              path: metadata.derivation_path,
+              source:
+                metadata.derivation_path_source === 'custom'
+                  ? 'custom'
+                  : 'default',
+            })
+          );
+        }
+        dispatch(setNetwork(resolvedNetwork));
+        navigate(homeRoute(persisted.id), { replace: true });
         return;
       }
 
-      const manager = WalletManager();
       const active = await manager.getWalletMetadata(walletId);
       if (cancelled) return;
 

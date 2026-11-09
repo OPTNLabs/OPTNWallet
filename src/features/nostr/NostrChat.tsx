@@ -10,7 +10,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import {
   MdAdd,
@@ -27,6 +27,9 @@ import {
 } from 'react-icons/md';
 
 import WalletScreen from '../../components/ui/WalletScreen';
+import PageHeader from '../../components/ui/PageHeader';
+import RouteExitFooter from '../../components/ui/RouteExitFooter';
+import { getReturnPath } from '../../utils/navigation';
 import type { RootState } from '../../state/store';
 import { selectNostrRelays } from '../../state/slices/experimentalSlice';
 import { useI18n } from '../../i18n/useI18n';
@@ -197,6 +200,8 @@ function downloadInlineFile(dataUrl: string, name: string) {
 
 const NostrChat: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
   const confirm = useWalletConfirm();
   const { t } = useI18n();
   const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
@@ -304,7 +309,10 @@ const NostrChat: React.FC = () => {
         activePeer,
         query,
         names: Object.fromEntries(
-          Object.entries(profiles).map(([peer, profile]) => [peer, profile.name])
+          Object.entries(profiles).map(([peer, profile]) => [
+            peer,
+            profile.name,
+          ])
         ),
       }),
     [messages, mlsGroups, me, activePeer, query, profiles]
@@ -682,13 +690,9 @@ const NostrChat: React.FC = () => {
   return (
     <WalletScreen maxWidthClassName="max-w-5xl" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight wallet-text-strong">
-              {t('chat.title')}
-            </h1>
-            <p className="text-xs wallet-muted">{t('chat.privateMessaging')}</p>
-          </div>
+        <PageHeader title={t('chat.title')} compact />
+        <div className="-mt-2 flex items-center justify-between gap-3 px-1">
+          <p className="text-xs wallet-muted">{t('chat.privateMessaging')}</p>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -827,7 +831,9 @@ const NostrChat: React.FC = () => {
                     {title}
                   </h2>
                   {inbox[kind].length === 0 ? (
-                    <p className="px-1 py-2 text-[11px] wallet-muted">{empty}</p>
+                    <p className="px-1 py-2 text-[11px] wallet-muted">
+                      {empty}
+                    </p>
                   ) : (
                     inbox[kind].map((c) => (
                       <button
@@ -910,7 +916,7 @@ const NostrChat: React.FC = () => {
                         ? t('chat.encryptedPrivateGroup')
                         : kindOf(activePeer) === 'open-group'
                           ? t('chat.encryptedOpenGroup')
-                          : (profiles[activePeer]?.nip05 ?? t('chat.encrypted'))}
+                          : profiles[activePeer]?.nip05 ?? t('chat.encrypted')}
                     </p>
                   </div>
                   {mlsGroupId && (
@@ -918,7 +924,10 @@ const NostrChat: React.FC = () => {
                       type="button"
                       className="shrink-0 rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
                       onClick={() => {
-                        const record = groupRecordForPeer(activePeer, mlsGroups);
+                        const record = groupRecordForPeer(
+                          activePeer,
+                          mlsGroups
+                        );
                         setRenameDraft(record?.name ?? '');
                         setShowGroupPanel((open) => !open);
                       }}
@@ -958,8 +967,11 @@ const NostrChat: React.FC = () => {
                   <div className="space-y-2 border-b border-[var(--wallet-border)] px-4 py-3 text-xs">
                     {(() => {
                       const record = groupRecordForPeer(activePeer, mlsGroups);
-                      const admin = record ? isMlsAdmin(record, me.pubkey) : false;
-                      const members = record?.memberPubKeys ?? activeMembers ?? [];
+                      const admin = record
+                        ? isMlsAdmin(record, me.pubkey)
+                        : false;
+                      const members =
+                        record?.memberPubKeys ?? activeMembers ?? [];
                       return (
                         <>
                           {admin && (
@@ -985,7 +997,9 @@ const NostrChat: React.FC = () => {
                                       setMlsGroups(listMlsGroups(me.pubkey));
                                     } catch (e) {
                                       setErr(
-                                        e instanceof Error ? e.message : String(e)
+                                        e instanceof Error
+                                          ? e.message
+                                          : String(e)
                                       );
                                     }
                                   })();
@@ -1027,7 +1041,9 @@ const NostrChat: React.FC = () => {
                                             member,
                                             relays
                                           );
-                                          setMlsGroups(listMlsGroups(me.pubkey));
+                                          setMlsGroups(
+                                            listMlsGroups(me.pubkey)
+                                          );
                                           setActiveMembers(
                                             listMlsGroups(me.pubkey).find(
                                               (group) =>
@@ -1099,7 +1115,9 @@ const NostrChat: React.FC = () => {
                               className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 font-semibold"
                               onClick={() => {
                                 void (async () => {
-                                  const ok = await confirm(t('chat.leaveGroup'));
+                                  const ok = await confirm(
+                                    t('chat.leaveGroup')
+                                  );
                                   if (!ok || !me) return;
                                   try {
                                     await leaveMlsGroup(
@@ -1523,6 +1541,10 @@ const NostrChat: React.FC = () => {
             )}
           </main>
         </div>
+        <RouteExitFooter
+          label={t('chat.back')}
+          onBack={() => navigate(backTarget)}
+        />
       </div>
     </WalletScreen>
   );

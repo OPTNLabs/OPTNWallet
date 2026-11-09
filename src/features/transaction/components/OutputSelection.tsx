@@ -14,9 +14,8 @@ import { AppDispatch, RootState } from '../../../state/store';
 import { clearTransaction } from '../../../state/slices/transactionBuilderSlice';
 import { TransactionOutput, UTXO } from '../../../types/types';
 import type { TokenCapability } from '../../../services/cashtokens';
-import { shortenTxHash } from '../../../utils/shortenHash';
 import { Network } from '../../../state/slices/networkSlice';
-import { PREFIX, DUST, SATSINBITCOIN } from '../../../utils/constants';
+import { DUST, SATSINBITCOIN } from '../../../utils/constants';
 import Popup from './Popup';
 import TransactionTypeSelector from './TransactionTypeSelector';
 import RegularTxView from './RegularTxView';
@@ -26,6 +25,7 @@ import NFTConfigPopup from './NFTConfigPopup';
 import OpReturnView from './OpReturnView';
 import useTokenMetadata from '../../../hooks/useTokenMetadata';
 import { useI18n } from '../../../i18n/useI18n';
+import MaskedValue from '../../../components/ui/MaskedValue';
 
 interface OutputSelectionProps {
   recipientAddress: string;
@@ -53,7 +53,6 @@ interface OutputSelectionProps {
 const OutputSelection: React.FC<OutputSelectionProps> = ({
   recipientAddress,
   setRecipientAddress,
-  currentNetwork,
   transferAmount,
   setTransferAmount,
   tokenAmount,
@@ -86,8 +85,6 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   const prices = useSelector((s: RootState) => s.priceFeed);
   const bchUsd = prices['BCH-USD']?.price ?? 0;
-  const prefixLength = PREFIX[currentNetwork].length;
-
   const hasGenesisUtxoSelected = selectedUtxos.some(
     (utxo) => !utxo.token && utxo.tx_pos === 0
   );
@@ -247,12 +244,13 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   >
                     <div className="flex justify-between w-full">
                       {/* <span className="font-medium">Recipient:</span> */}
-                      <span>
-                        {shortenTxHash(
-                          output.recipientAddress ?? '',
-                          prefixLength
-                        )}
-                      </span>
+                      <MaskedValue
+                        value={output.recipientAddress ?? ''}
+                        label={t('send.recipient')}
+                        ariaLabel={t('receive.copyAddress')}
+                        copySuccessMessageKey="receive.addressCopied"
+                        className="max-w-[70%] text-right text-xs"
+                      />
                     </div>
                     <div className="flex justify-between w-full">
                       <span className="font-medium">

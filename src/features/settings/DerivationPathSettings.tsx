@@ -170,13 +170,18 @@ export const DerivationPathSettings: React.FC = () => {
               : t('settingsDerivation.networkDefault'),
         })}
       </p>
-      {message && <p className="text-xs wallet-muted">{message}</p>}
+      {message && (
+        <p role="status" className="text-xs wallet-muted">
+          {message}
+        </p>
+      )}
       <div className="flex flex-col gap-2 sm:flex-row">
         <button
           type="button"
           onClick={() => void applyPath(pathInput, 'custom')}
           disabled={saving || walletId <= 0 || !pathValid}
-          className="wallet-btn-primary flex-1"
+          aria-describedby={!pathValid ? 'bip44-path-error' : undefined}
+          className="wallet-btn-primary min-h-11 flex-1"
         >
           {saving
             ? t('settingsDerivation.reconfiguring')
@@ -186,7 +191,7 @@ export const DerivationPathSettings: React.FC = () => {
           type="button"
           onClick={resetToNetworkDefault}
           disabled={saving}
-          className="wallet-btn-secondary flex-1"
+          className="wallet-btn-secondary min-h-11 flex-1"
         >
           {t('settingsDerivation.useDefault')}
         </button>
@@ -206,7 +211,7 @@ export const DerivationPathSettings: React.FC = () => {
           disabled={
             saving || walletId <= 0 || discoveryState.status === 'scanning'
           }
-          className="wallet-btn-secondary self-start"
+          className="wallet-btn-secondary min-h-11 self-start"
         >
           Find where my coins are
         </button>

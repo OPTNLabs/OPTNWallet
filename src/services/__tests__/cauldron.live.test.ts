@@ -98,6 +98,10 @@ liveDescribe('cauldron live indexer smoke', () => {
     ]);
 
     for (const market of markets) {
+      const health = await market.client.getIndexerHealth();
+      expect(health.status).toBe('healthy');
+      expect(health.indexed_height).toBe(health.chain_tip);
+      expect(health.version).toBe('0.2.0');
       expect(market.rows.length).toBeGreaterThan(0);
       expect(market.pools.length).toBeGreaterThan(0);
 

@@ -137,8 +137,10 @@ const Bip44AccountPathFields: React.FC<Bip44AccountPathFieldsProps> = ({
             pattern="[0-9]*"
             value={coinType}
             onChange={(event) => updateField('coinType', event.target.value)}
-            className="wallet-input w-full rounded-lg px-3 py-2.5 text-base wallet-text-strong"
+            className="wallet-input min-h-11 w-full rounded-lg px-3 py-2.5 text-base wallet-text-strong"
             aria-label={t('derivation.bip44CoinType')}
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? 'bip44-path-error' : undefined}
             disabled={disabled}
           />
           <span className="text-[11px] wallet-muted">
@@ -157,8 +159,10 @@ const Bip44AccountPathFields: React.FC<Bip44AccountPathFieldsProps> = ({
             onChange={(event) =>
               updateField('accountIndex', event.target.value)
             }
-            className="wallet-input w-full rounded-lg px-3 py-2.5 text-base wallet-text-strong"
+            className="wallet-input min-h-11 w-full rounded-lg px-3 py-2.5 text-base wallet-text-strong"
             aria-label={t('derivation.bip44AccountIndex')}
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? 'bip44-path-error' : undefined}
             disabled={disabled}
           />
           <span className="text-[11px] wallet-muted">
@@ -171,7 +175,7 @@ const Bip44AccountPathFields: React.FC<Bip44AccountPathFieldsProps> = ({
         {t('derivation.branchDescription')}
       </p>
       {error && (
-        <p className="text-xs text-red-400">
+        <p id="bip44-path-error" role="alert" className="text-xs text-red-400">
           {error === 'derivation.invalidActive'
             ? t('derivation.invalidActive')
             : error}

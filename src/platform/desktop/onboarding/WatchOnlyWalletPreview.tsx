@@ -34,6 +34,7 @@ import {
 import { CapacitorBarcodeScanner } from '../barcode-scanner';
 import { CameraQrScanner } from '../CameraQrScanner';
 import { useI18n } from '../../../i18n/useI18n';
+import InfoButton from '../../../components/ui/InfoButton';
 
 import {
   SELECTABLE_NETWORKS,
@@ -316,9 +317,19 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                 className="wallet-input w-full rounded-md px-3 py-2"
               />
             </label>
-            <label className="block space-y-1 text-sm wallet-text-strong">
-              {t('watchOnly.network')}
+            <div className="space-y-1 text-sm wallet-text-strong">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="keystone-watch-only-network">
+                  {t('watchOnly.network')}
+                </label>
+                <InfoButton
+                  id="keystone-watch-only-network-help"
+                  ariaLabel={t('watchOnly.network')}
+                  content={t('onboarding.helpNetworkDescription')}
+                />
+              </div>
               <select
+                id="keystone-watch-only-network"
                 value={network}
                 onChange={(e) => {
                   setNetwork(e.target.value as Network);
@@ -334,7 +345,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                   </option>
                 ))}
               </select>
-            </label>
+            </div>
 
             {!keystoneAccount ? (
               <button
@@ -549,9 +560,19 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             />
           </label>
 
-          <label className="block space-y-1 text-sm wallet-text-strong">
-            {t('watchOnly.network')}
+          <div className="space-y-1 text-sm wallet-text-strong">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="watch-only-network">
+                {t('watchOnly.network')}
+              </label>
+              <InfoButton
+                id="watch-only-network-help"
+                ariaLabel={t('watchOnly.network')}
+                content={t('onboarding.helpNetworkDescription')}
+              />
+            </div>
             <select
+              id="watch-only-network"
               value={network}
               onChange={(e) => {
                 setNetwork(e.target.value as Network);
@@ -565,13 +586,23 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                 </option>
               ))}
             </select>
-          </label>
+          </div>
 
           {mode === 'standard' && (
             <>
-              <label className="block space-y-1 text-sm wallet-text-strong">
-                {t('watchOnly.accountXpub')}
+              <div className="space-y-1 text-sm wallet-text-strong">
+                <div className="flex items-center justify-between gap-2">
+                  <label htmlFor="watch-only-account-xpub">
+                    {t('watchOnly.accountXpub')}
+                  </label>
+                  <InfoButton
+                    id="watch-only-xpub-help"
+                    ariaLabel={t('watchOnly.accountXpub')}
+                    content={t('watchOnly.accountXpubHelp')}
+                  />
+                </div>
                 <textarea
+                  id="watch-only-account-xpub"
                   value={accountXpub}
                   onChange={(e) => {
                     setAccountXpub(e.target.value);
@@ -583,10 +614,23 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                   placeholder={t('watchOnly.xpubPlaceholder')}
                   className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-xs"
                 />
-              </label>
-              <label className="block space-y-1 text-sm wallet-text-strong">
-                Master fingerprint (optional)
+              </div>
+              <div className="space-y-1 text-sm wallet-text-strong">
+                <div className="flex items-center justify-between gap-2">
+                  <label htmlFor="watch-only-fingerprint">
+                    {t('watchOnly.masterFingerprint')}{' '}
+                    <span className="wallet-muted">
+                      ({t('watchOnly.optional')})
+                    </span>
+                  </label>
+                  <InfoButton
+                    id="watch-only-fingerprint-help"
+                    ariaLabel={t('watchOnly.masterFingerprint')}
+                    content={t('watchOnly.masterFingerprintHelp')}
+                  />
+                </div>
                 <input
+                  id="watch-only-fingerprint"
                   value={masterFingerprint}
                   onChange={(event) => {
                     setMasterFingerprint(event.target.value);
@@ -602,7 +646,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
                   Shown by the signing device. Saved with this watch-only wallet
                   and used automatically in future signing requests.
                 </span>
-              </label>
+              </div>
               <div className="flex gap-2">
                 <button
                   type="button"

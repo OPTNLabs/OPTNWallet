@@ -6,14 +6,14 @@ code does not override an unmet requirement.
 
 Read the status column strictly:
 
-| Status | Means |
-| --- | --- |
-| **PROVEN** | The named claim has evidence; its scope is limited to the cited test, live workflow or packaged target, never implicitly end to end |
-| **INTEGRATION** | Implemented and tested, but not yet reached by the running application |
-| **DEVICE EVIDENCE** | Implemented and tested; needs a packaged artifact or hardware to finish |
-| **PARTIAL** | Some of it exists; the gap is named |
-| **MISSING** | Not implemented |
-| **BLOCKED** | Needs something this environment does not have |
+| Status              | Means                                                                                                                               |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **PROVEN**          | The named claim has evidence; its scope is limited to the cited test, live workflow or packaged target, never implicitly end to end |
+| **INTEGRATION**     | Implemented and tested, but not yet reached by the running application                                                              |
+| **DEVICE EVIDENCE** | Implemented and tested; needs a packaged artifact or hardware to finish                                                             |
+| **PARTIAL**         | Some of it exists; the gap is named                                                                                                 |
+| **MISSING**         | Not implemented                                                                                                                     |
+| **BLOCKED**         | Needs something this environment does not have                                                                                      |
 
 "Implemented" never means a type exists. Every row names an entry point a
 reader can open and, where there is one, the test that holds it up.
@@ -80,73 +80,73 @@ still integration work; model/transport tests do not prove paid rounds run.
 
 ### Definition of done
 
-| # | Requirement | Status | Entry point / evidence | Gap |
-| --- | --- | --- | --- | --- |
-| 1 | Auto is the default and operation-aware | **PARTIAL** | `optn-runtime/src/bootstrap.rs::shipped_bootstrap_catalog`, wired in `src-tauri/src/chain_runtime.rs::catalog_and_policy_from_app_state`; `a_fresh_install_starts_from_the_shipped_catalog` | Both halves that are implementation are done: the catalog is non-empty on a fresh install, and operation-aware selection is in `build_selection_plan`. What is left is breadth -- one reviewed endpoint per network rather than §21.3's upstream feeds -- and that is listed below as a deliberate non-blocker. It is a product decision about whose servers every fresh install should contact, not a coding task; inventing hostnames to close the row would point installs at hosts nobody reviewed |
-| 2 | Users can pin policies/providers | **PROVEN** (Rust adapters; bounded GUI live selection) | Shared source catalog and `WireConnectionPolicy`; Leptos advanced selection/failover/add/remove controls, CLI `network configure`, and portable configuration import/export. Windows GUI Electrum selection and custom Tor persistence exercised on 2026-09-19 | Full selection matrix on every packaged platform and legacy React migration remain separate |
-| 3 | Privacy / own-infrastructure fail closed | **PROVEN** | `ConnectionPolicy`, `optn-chain-native::build_native_chain_stack`; `remote_full_node_adapters_remain_fail_closed_even_with_tor`, and live against real hosts in `optn-chain-native`'s `live_route_eligibility_follows_ownership_not_address_shape`: a declared own-infrastructure node on a private mesh routes with no Tor running, while a public endpoint under the same policy is refused | — |
-| 4 | Tor modelled as transport policy, not a provider | **PROVEN** | `TorProxyTrust` in `optn-chain-native`, `UserNetworkOverlay::trusted_socks_ports`, `optn_chain_trust_socks_proxy`, `optn_tor_readiness`, the CLI's `Client::trusting_socks_ports`, and `AppTransport::{tor_status, start_tor, trust_socks_port}` consumed by `optn-ui`'s `TorSection`; `a_socks_greeting_alone_does_not_make_a_proxy_trusted`, `provenance_is_what_makes_a_proxy_usable`, `a_trusted_port_that_stops_answering_is_not_still_trusted`, `an_unconfirmed_socks_proxy_is_reported_but_not_used` | A SOCKS5 greeting no longer grants trust -- it proves SOCKS5, which every no-auth proxy answers identically. Trust is provenance: a proxy this application started and owns, or one the holder confirmed once, persisted in the overlay the desktop and CLI share. Anything merely found on a conventional port is `Unverified` and refused. Both renderers now ask the runtime the same question instead of deciding for themselves -- the Leptos surface had no Tor awareness at all, so a holder there saw every public source refused with nothing saying why |
-| 5 | Tor-required routes ineligible, no direct/DNS fallback | **PROVEN** | `needs_default_tor_proxy`, `endpoint_can_use_native_tor`; driven against a live route change in `live_route_eligibility_follows_ownership_not_address_shape` — with a verified SOCKS proxy the public route is eligible and serves verified headers, and with the proxy stopped the same policy and source is refused rather than dialled directly | The test asserts both directions, so it says something whichever way the host's Tor happens to be |
-| 6 | Electrum and BIP37 preserved behind provider interfaces | **PROVEN** | `optn-chain-electrum`, `optn-chain-bip37`; live BCHD run in `docs/chain-interop-evidence.md` | — |
-| 7 | Neutrino capability-gated, does not block Auto startup | **PROVEN** | `optn-chain-neutrino::connect` records `CompactFilters` only after the genesis-filter probe commits; `a_regtest_node_does_not_answer_for_mainnet` | — |
-| 8 | BCHN RPC and ZMQ modelled separately from SPV | **PROVEN** | `crates/optn-chain-bchn`, `crates/optn-chain-zmq` | — |
-| 9 | ZMQ is event/wake-up, never proof | **PROVEN** | `optn-chain-zmq`, `optn-runtime/src/event_recovery.rs`; driven against BCHN 29.1.0 regtest publishing all four topics on one socket by `optn-chain-zmq/tests/bchn_live.rs` -- `rawblock` and `hashblock` agree on a block the node then confirms it holds, `rawtx` and `hashtx` agree on one txid, and per-topic sequence numbers advance by one so a dropped notification is detectable | The live run found a real bug: BCHN publishes the `hash*` topics with the uint256 reversed, and the crate stored the frame as-is, so the same transaction arrived under two byte-reversed txids and a `hashtx` wake-up matched nothing the wallet held. Invisible to the unit test, whose fixture was 32 equal bytes -- its own reversal. Fixed in `parse_hash`; the never-proof half is held by `ChainEventKind`, which has no variant carrying verified state |
-| 10 | Observations reconcile into one authoritative Rust state | **PROVEN** | `optn-runtime/src/reconciliation.rs`, `sync_worker.rs` | — |
-| 11 | No 2-of-3 provider voting | **PROVEN** | `reconciliation.rs` ranks evidence; no vote count exists | — |
-| 12 | SHV/MMR passes reference vectors | **PROVEN** | `optn-core/src/header_mmr.rs::reference_vectors` against bitcoincashautist's published vectors, byte-identical to BCHN's | — |
-| 13 | Pruning preserves historical verification and reorg recovery | **PROVEN** | `header_store.rs::prune_below`/`rewind_to`; driven against a node that actually reorganised by `optn-chain-neutrino/tests/regtest_live.rs::a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment` — pruning leaves the commitment unmoved, a forked branch is refused rather than extended onto, and the rebuild reaches the node's longer branch with a different commitment | Recovery is a rebuild from the anchor, not an in-place rewind: the accumulator is append-only and the test pins that rewinding the index alone does not let it extend. A pruned range still needs an SHV peer to re-prove, which BCHD does not serve |
-| 14 | CashFusion uses the shared chain observation layer | **PARTIAL** | Protocol in `crates/optn-fusion` (8,782 lines) with `optn-core/src/fusion/` for the primitives; 138 Rust tests. Driven from `src/platform/desktop/Fusion*.ts` (3,454 lines) | The protocol is Rust -- an earlier revision of this row said otherwise and was wrong. What remains is one module: `crates/optn-fusion/src/electrum_input.rs` (666 lines) speaks Electrum JSON-RPC over its own stream to check a peer's inputs, instead of routing through `chain_service`. Moving it is not mechanical: it decides blame during a live round, it takes a `Transport` whose Tor route the caller already chose, and the feature is released and reported working on chipnet and mainnet. It needs a live fusion round to verify, which this branch has no way to drive, so it is deferred rather than attempted blind |
-| 15 | Explorer routing independent of consensus | **PROVEN** | `optn-core/src/explorer.rs` owns the presets, the templates and the refusal; `optn-runtime/src/explorer.rs::route_for_overlay` turns a saved `UserNetworkOverlay` into a link or a refusal; the renderer calls through via `explorerPresetUrl`/`explorerCustomUrl` and `src/utils/servers/useExplorerLink.ts`. `a_saved_own_infrastructure_policy_refuses_a_public_explorer`, `the_same_policy_opens_the_holders_own_explorer`, `own_infrastructure_refuses_every_public_preset`, and the renderer-side `explorers.test.ts`; `cargo run -p xtask -- architecture` fails any surface that names a public explorer host | Explorer links were the one path around the policy: the renderer held its own preset table and built URLs itself, so a wallet set to own-infrastructure-only still handed txids to a public site. The decision now has one home, and the refusal is rendered with its reason rather than as a missing button |
-| 16 | No renderer/shell owns networking or chain truth | **PARTIAL** | `cargo run -p xtask -- architecture` proves declared dependency boundaries | Legacy desktop Home/subscriptions still call TypeScript `ElectrumService` through `UTXOService`. Dependency checks do not prove every packaged interface uses the shared Rust runtime. |
+| #   | Requirement                                                  | Status                                                 | Entry point / evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Gap                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --- | ------------------------------------------------------------ | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Auto is the default and operation-aware                      | **PARTIAL**                                            | `optn-runtime/src/bootstrap.rs::shipped_bootstrap_catalog`, wired in `src-tauri/src/chain_runtime.rs::catalog_and_policy_from_app_state`; `a_fresh_install_starts_from_the_shipped_catalog`                                                                                                                                                                                                                                                                                                                                                                                                                           | Both halves that are implementation are done: the catalog is non-empty on a fresh install, and operation-aware selection is in `build_selection_plan`. What is left is breadth -- one reviewed endpoint per network rather than §21.3's upstream feeds -- and that is listed below as a deliberate non-blocker. It is a product decision about whose servers every fresh install should contact, not a coding task; inventing hostnames to close the row would point installs at hosts nobody reviewed                                                                                                                                |
+| 2   | Users can pin policies/providers                             | **PROVEN** (Rust adapters; bounded GUI live selection) | Shared source catalog and `WireConnectionPolicy`; Leptos advanced selection/failover/add/remove controls, CLI `network configure`, and portable configuration import/export. Windows GUI Electrum selection and custom Tor persistence exercised on 2026-09-19                                                                                                                                                                                                                                                                                                                                                        | Full selection matrix on every packaged platform and legacy React migration remain separate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 3   | Privacy / own-infrastructure fail closed                     | **PROVEN**                                             | `ConnectionPolicy`, `optn-chain-native::build_native_chain_stack`; `remote_full_node_adapters_remain_fail_closed_even_with_tor`, and live against real hosts in `optn-chain-native`'s `live_route_eligibility_follows_ownership_not_address_shape`: a declared own-infrastructure node on a private mesh routes with no Tor running, while a public endpoint under the same policy is refused                                                                                                                                                                                                                         | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 4   | Tor modelled as transport policy, not a provider             | **PROVEN**                                             | `TorProxyTrust` in `optn-chain-native`, `UserNetworkOverlay::trusted_socks_ports`, `optn_chain_trust_socks_proxy`, `optn_tor_readiness`, the CLI's `Client::trusting_socks_ports`, and `AppTransport::{tor_status, start_tor, trust_socks_port}` consumed by `optn-ui`'s `TorSection`; `a_socks_greeting_alone_does_not_make_a_proxy_trusted`, `provenance_is_what_makes_a_proxy_usable`, `a_trusted_port_that_stops_answering_is_not_still_trusted`, `an_unconfirmed_socks_proxy_is_reported_but_not_used`                                                                                                           | A SOCKS5 greeting no longer grants trust -- it proves SOCKS5, which every no-auth proxy answers identically. Trust is provenance: a proxy this application started and owns, or one the holder confirmed once, persisted in the overlay the desktop and CLI share. Anything merely found on a conventional port is `Unverified` and refused. Both renderers now ask the runtime the same question instead of deciding for themselves -- the Leptos surface had no Tor awareness at all, so a holder there saw every public source refused with nothing saying why                                                                     |
+| 5   | Tor-required routes ineligible, no direct/DNS fallback       | **PROVEN**                                             | `needs_default_tor_proxy`, `endpoint_can_use_native_tor`; driven against a live route change in `live_route_eligibility_follows_ownership_not_address_shape` — with a verified SOCKS proxy the public route is eligible and serves verified headers, and with the proxy stopped the same policy and source is refused rather than dialled directly                                                                                                                                                                                                                                                                    | The test asserts both directions, so it says something whichever way the host's Tor happens to be                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 6   | Electrum and BIP37 preserved behind provider interfaces      | **PROVEN**                                             | `optn-chain-electrum`, `optn-chain-bip37`; live BCHD run in `docs/chain-interop-evidence.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 7   | Neutrino capability-gated, does not block Auto startup       | **PROVEN**                                             | `optn-chain-neutrino::connect` records `CompactFilters` only after the genesis-filter probe commits; `a_regtest_node_does_not_answer_for_mainnet`                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 8   | BCHN RPC and ZMQ modelled separately from SPV                | **PROVEN**                                             | `crates/optn-chain-bchn`, `crates/optn-chain-zmq`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 9   | ZMQ is event/wake-up, never proof                            | **PROVEN**                                             | `optn-chain-zmq`, `optn-runtime/src/event_recovery.rs`; driven against BCHN 29.1.0 regtest publishing all four topics on one socket by `optn-chain-zmq/tests/bchn_live.rs` -- `rawblock` and `hashblock` agree on a block the node then confirms it holds, `rawtx` and `hashtx` agree on one txid, and per-topic sequence numbers advance by one so a dropped notification is detectable                                                                                                                                                                                                                              | The live run found a real bug: BCHN publishes the `hash*` topics with the uint256 reversed, and the crate stored the frame as-is, so the same transaction arrived under two byte-reversed txids and a `hashtx` wake-up matched nothing the wallet held. Invisible to the unit test, whose fixture was 32 equal bytes -- its own reversal. Fixed in `parse_hash`; the never-proof half is held by `ChainEventKind`, which has no variant carrying verified state                                                                                                                                                                       |
+| 10  | Observations reconcile into one authoritative Rust state     | **PROVEN**                                             | `optn-runtime/src/reconciliation.rs`, `sync_worker.rs`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 11  | No 2-of-3 provider voting                                    | **PROVEN**                                             | `reconciliation.rs` ranks evidence; no vote count exists                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 12  | SHV/MMR passes reference vectors                             | **PROVEN**                                             | `optn-core/src/header_mmr.rs::reference_vectors` against bitcoincashautist's published vectors, byte-identical to BCHN's                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 13  | Pruning preserves historical verification and reorg recovery | **PROVEN**                                             | `header_store.rs::prune_below`/`rewind_to`; driven against a node that actually reorganised by `optn-chain-neutrino/tests/regtest_live.rs::a_reorg_is_refused_then_rewound_and_pruning_keeps_the_commitment` — pruning leaves the commitment unmoved, a forked branch is refused rather than extended onto, and the rebuild reaches the node's longer branch with a different commitment                                                                                                                                                                                                                              | Recovery is a rebuild from the anchor, not an in-place rewind: the accumulator is append-only and the test pins that rewinding the index alone does not let it extend. A pruned range still needs an SHV peer to re-prove, which BCHD does not serve                                                                                                                                                                                                                                                                                                                                                                                  |
+| 14  | CashFusion uses the shared chain observation layer           | **PARTIAL**                                            | Protocol in `crates/optn-fusion` (8,782 lines) with `optn-core/src/fusion/` for the primitives; 138 Rust tests. Driven from `src/platform/desktop/Fusion*.ts` (3,454 lines)                                                                                                                                                                                                                                                                                                                                                                                                                                           | The protocol is Rust -- an earlier revision of this row said otherwise and was wrong. What remains is one module: `crates/optn-fusion/src/electrum_input.rs` (666 lines) speaks Electrum JSON-RPC over its own stream to check a peer's inputs, instead of routing through `chain_service`. Moving it is not mechanical: it decides blame during a live round, it takes a `Transport` whose Tor route the caller already chose, and the feature is released and reported working on chipnet and mainnet. It needs a live fusion round to verify, which this branch has no way to drive, so it is deferred rather than attempted blind |
+| 15  | Explorer routing independent of consensus                    | **PROVEN**                                             | `optn-core/src/explorer.rs` owns the presets, the templates and the refusal; `optn-runtime/src/explorer.rs::route_for_overlay` turns a saved `UserNetworkOverlay` into a link or a refusal; the renderer calls through via `explorerPresetUrl`/`explorerCustomUrl` and `src/utils/servers/useExplorerLink.ts`. `a_saved_own_infrastructure_policy_refuses_a_public_explorer`, `the_same_policy_opens_the_holders_own_explorer`, `own_infrastructure_refuses_every_public_preset`, and the renderer-side `explorers.test.ts`; `cargo run -p xtask -- architecture` fails any surface that names a public explorer host | Explorer links were the one path around the policy: the renderer held its own preset table and built URLs itself, so a wallet set to own-infrastructure-only still handed txids to a public site. The decision now has one home, and the refusal is rendered with its reason rather than as a missing button                                                                                                                                                                                                                                                                                                                          |
+| 16  | No renderer/shell owns networking or chain truth             | **PARTIAL**                                            | `cargo run -p xtask -- architecture` proves declared dependency boundaries                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Legacy desktop Home/subscriptions still call TypeScript `ElectrumService` through `UTXOService`. Dependency checks do not prove every packaged interface uses the shared Rust runtime.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 ### Architecture and verification
 
-| Requirement | Status | Entry point / evidence | Gap |
-| --- | --- | --- | --- |
-| One accepted block-header authority | **PROVEN** | `header_store::SharedHeaders` + `header_view::VerifiedHeaderView`; BIP37 and Neutrino both read `BlockHeaderSource`; the host owns it across stack rebuilds (`chain_runtime::AcceptedChain`) | — |
-| Shipped network anchors | **PROVEN** (component) | `shipped_header_verifier` anchors each supported network at its own genesis; `every_shipped_genesis_anchor_is_the_chain_it_claims` | The former missing-mainnet-anchor blocker is obsolete. This is not evidence of a complete live mainnet wallet sync. |
-| Worker publishes accepted headers | **PROVEN** | `sync_worker::publish_headers`; `a_header_pass_advances_the_view_and_the_store_together`, `a_rejected_header_pass_publishes_nothing` | — |
-| Neutrino off private block-header state | **PROVEN** | `optn-chain-neutrino` holds `Arc<dyn BlockHeaderSource>`; filter hashes/headers remain its own | — |
-| Duplicate network maps audited | **PROVEN** | Three copies now cross-check: `bip37_and_neutrino_agree_about_every_network`, `this_copy_agrees_with_the_accepted_header_store` | — |
-| BIP37 merkle proofs bound to the accepted chain | **PROVEN** | `optn-chain-bip37/src/lib.rs` merkle-binding tests; a forged block is refused | — |
-| Header checkpoint persistence | **PROVEN** (runtime/GUI/CLI integration tests; live local P2P runtime/CLI restart) | Guarded wallet/header checkpoint publication; shared `with_stored_header_progress`; native `accepted_chain` restores a sealed view after wallet open. `optn-cli/tests/shv_regtest.rs` reopens an encrypted HD wallet against two peered real nodes, preserving balance/history and the accepted MMR commitment | Packaged GUI P2P restart and public-network scale remain separate from the local runtime/CLI result |
-| Authenticated historical replay | **PROVEN** (connected runtime and live local P2P) | `sync_worker::historical` authenticates a starting header against the runtime's saved MMR root, then recovers linked hashes through the accepted tip on the same selected route. Ordinary peers retain authenticated genesis replay. Real-node encrypted reopen, prune/recover and CLI source switching are covered by `shv_regtest` | Normal HD refresh still rechecks its configured floor. Ordinary peers retain the hash index and may need genesis replay after process restart; this is not constant-memory full-chain synchronization |
-| SHV P2P root/peak proofs | **PROVEN** | `optn-chain-bip37/src/shv.rs`; live against BCHN `e6d380373` with `-mmrindex=1`, proof accepted only against OPTN's own root | — |
-| BCHD-correct compact filters | **PROVEN** | `optn-chain-neutrino/src/filter.rs`; live BCHD scan agrees with the Bloom path on the same coins | Independent BCHD-produced filter fixtures not yet vendored |
-| Sequential receive → spend lifecycle | **PROVEN** | `a_spend_is_found_through_an_outpoint_the_receive_scan_discovered`; spend invisible to a script-only scan | CashTokens/NFT/OP_RETURN/reorg/restart cases not covered |
-| Manual rescan, encrypted restart, GUI/CLI routing | **PROVEN** (runtime/CLI; bounded Windows GUI refresh/reopen) | `request_wallet_rescan`, encrypted checkpoints, Settings `rescan_wallet_from`, CLI `rescan --from-height`; CLI live floor checks and Windows GUI offline restart/online resume on 2026-09-19 | GUI custom-height interaction and current Android/macOS packages still need separate verification; normal HD refresh rechecks the configured floor, not only a suffix |
-| Wallet birthday | **PARTIAL** (durable imported hints connected) | Shared `SetBirthday`/`ClearRescan`, sealed checkpoint, atomic `BeginHd` floor resolution; CLI process restart and Windows GUI height/date reopen and manual-override clearing verified on 2026-09-19. Unknown imports explicitly scan from genesis; missing authenticated date evidence fails closed; legacy manual floors migrate | Automatic same-route header acquisition is connected and tested; requests retain their runtime generation across header I/O. Host-generated creation-anchor capture, restored historical-date evidence and live date acquisition remain to verify. Imported mnemonic input is never treated as proof of fresh wallet creation |
-| Local BCMR / authchain | **PARTIAL** | HD sync now invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Connected synthetic sync checks accepted identity, unknown spentness, output mismatch, wrong registry hash, absent fetch transport and stale-state downgrade | Needs real-node/token workflow; desktop RPC credential controls and CLI private-input controls are connected (see evidence below). Unknown successors outside wallet history need a selected spender-discovery capability; legacy TypeScript migration remains. Authenticated token-identity caching and stale restart semantics are connected and tested (see 2026-09-19 evidence below) |
-| Token capability execution | **INTEGRATION** | `optn-runtime/src/token_capability.rs`; refuses global totals from partial data | Planner and executor exist; no provider adapter routes through them |
-| Broadcast lifecycle | **PARTIAL** | `optn-runtime/src/tx_broadcast.rs`; retained desktop `TransactionManager` now submits signed bytes through the authenticated native command | Desktop single-account Send/CashTokens has guarded submission and preserves ambiguous outbox records. Durable shared outbox, uncovered contract/RPA/multisig inputs, and the other submission paths still need integration; see 2026-09-27 evidence below |
+| Requirement                                       | Status                                                       | Entry point / evidence                                                                                                                                                                                                                                                                                                             | Gap                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One accepted block-header authority               | **PROVEN**                                                   | `header_store::SharedHeaders` + `header_view::VerifiedHeaderView`; BIP37 and Neutrino both read `BlockHeaderSource`; the host owns it across stack rebuilds (`chain_runtime::AcceptedChain`)                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                         |
+| Shipped network anchors                           | **PROVEN** (component)                                       | `shipped_header_verifier` anchors each supported network at its own genesis; `every_shipped_genesis_anchor_is_the_chain_it_claims`                                                                                                                                                                                                 | The former missing-mainnet-anchor blocker is obsolete. This is not evidence of a complete live mainnet wallet sync.                                                                                                                                                                                                                                                                       |
+| Worker publishes accepted headers                 | **PROVEN**                                                   | `sync_worker::publish_headers`; `a_header_pass_advances_the_view_and_the_store_together`, `a_rejected_header_pass_publishes_nothing`                                                                                                                                                                                               | —                                                                                                                                                                                                                                                                                                                                                                                         |
+| Neutrino off private block-header state           | **PROVEN**                                                   | `optn-chain-neutrino` holds `Arc<dyn BlockHeaderSource>`; filter hashes/headers remain its own                                                                                                                                                                                                                                     | —                                                                                                                                                                                                                                                                                                                                                                                         |
+| Duplicate network maps audited                    | **PROVEN**                                                   | Three copies now cross-check: `bip37_and_neutrino_agree_about_every_network`, `this_copy_agrees_with_the_accepted_header_store`                                                                                                                                                                                                    | —                                                                                                                                                                                                                                                                                                                                                                                         |
+| BIP37 merkle proofs bound to the accepted chain   | **PROVEN**                                                   | `optn-chain-bip37/src/lib.rs` merkle-binding tests; a forged block is refused                                                                                                                                                                                                                                                      | —                                                                                                                                                                                                                                                                                                                                                                                         |
+| Header checkpoint persistence                     | **PROVEN** (runtime/GUI/CLI integration tests)               | Guarded wallet/header checkpoint publication; shared `with_stored_header_progress`; native `accepted_chain` restores a sealed view after wallet open                                                                                                                                                                               | Live GUI checkpoint reopen is proven for Electrum wallet state; a live P2P/MMR checkpoint restart still needs evidence                                                                                                                                                                                                                                                                    |
+| Authenticated historical replay                   | **PROVEN** (connected runtime regression)                    | `sync_worker::restore_historical_store_on_same_route` calls `header_recovery`; typed private locators acquire on the same route, then an atomic authenticated commit publishes the dense store                                                                                                                                     | Live P2P restart and interruption/resume performance remain to verify; missing dense history may require replay from genesis                                                                                                                                                                                                                                                              |
+| SHV P2P root/peak proofs                          | **PROVEN**                                                   | `optn-chain-bip37/src/shv.rs`; live against BCHN `e6d380373` with `-mmrindex=1`, proof accepted only against OPTN's own root                                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                         |
+| BCHD-correct compact filters                      | **PROVEN**                                                   | `optn-chain-neutrino/src/filter.rs`; live BCHD scan agrees with the Bloom path on the same coins                                                                                                                                                                                                                                   | Independent BCHD-produced filter fixtures not yet vendored                                                                                                                                                                                                                                                                                                                                |
+| Sequential receive → spend lifecycle              | **PROVEN**                                                   | `a_spend_is_found_through_an_outpoint_the_receive_scan_discovered`; spend invisible to a script-only scan                                                                                                                                                                                                                          | CashTokens/NFT/OP_RETURN/reorg/restart cases not covered                                                                                                                                                                                                                                                                                                                                  |
+| Manual rescan, encrypted restart, GUI/CLI routing | **PROVEN** (runtime/CLI; bounded Windows GUI refresh/reopen) | `request_wallet_rescan`, encrypted checkpoints, Settings `rescan_wallet_from`, CLI `rescan --from-height`; CLI live floor checks and Windows GUI offline restart/online resume on 2026-09-19                                                                                                                                       | GUI custom-height interaction and current Android/macOS packages still need separate verification; normal HD refresh rechecks the configured floor, not only a suffix                                                                                                                                                                                                                     |
+| Wallet birthday                                   | **PARTIAL** (durable imported hints connected)               | Shared `SetBirthday`/`ClearRescan`, sealed checkpoint, atomic `BeginHd` floor resolution; CLI process restart and Windows GUI height/date reopen and manual-override clearing verified on 2026-09-19. Unknown imports explicitly scan from genesis; missing authenticated date evidence fails closed; legacy manual floors migrate | Automatic same-route header acquisition is connected and tested; requests retain their runtime generation across header I/O. Host-generated creation-anchor capture, restored historical-date evidence and live date acquisition remain to verify. Imported mnemonic input is never treated as proof of fresh wallet creation                                                             |
+| Local BCMR / authchain                            | **PARTIAL**                                                  | HD sync now invokes selected transaction/spentness routes, bounded registry retrieval and guarded identity publication. Connected synthetic sync checks accepted identity, unknown spentness, output mismatch, wrong registry hash, absent fetch transport and stale-state downgrade                                               | Needs real-node/token workflow; desktop RPC credential controls and CLI private-input controls are connected (see evidence below). Unknown successors outside wallet history need a selected spender-discovery capability; legacy TypeScript migration remains. Authenticated token-identity caching and stale restart semantics are connected and tested (see 2026-09-19 evidence below) |
+| Token capability execution                        | **INTEGRATION**                                              | `optn-runtime/src/token_capability.rs`; refuses global totals from partial data                                                                                                                                                                                                                                                    | Planner and executor exist; no provider adapter routes through them                                                                                                                                                                                                                                                                                                                       |
+| Broadcast lifecycle                               | **PARTIAL**                                                  | `optn-runtime/src/tx_broadcast.rs`; retained desktop `TransactionManager` now submits signed bytes through the authenticated native command                                                                                                                                                                                        | Desktop single-account Send/CashTokens has guarded submission and preserves ambiguous outbox records. Durable shared outbox, uncovered contract/RPA/multisig inputs, and the other submission paths still need integration; see 2026-09-27 evidence below                                                                                                                                 |
 
 ---
 
 ## #71 — product UI
 
-| Requirement | Status | Entry point / evidence | Gap |
-| --- | --- | --- | --- |
-| Web build produces a shipping bundle | **PROVEN** | `npm run build` → `dist/` (50 MB, typecheck clean) on Vitest 5 / Vite 8 | — |
-| Four theme modes | **PROVEN** | `optn_app::ThemeMode` — Light, Gray, Green, Dark | — |
-| Default / Cyberpunk skins | **PROVEN** | `optn_app::UiSkin` | — |
-| Theme/skin persist without touching keys | **PROVEN** | `AppAction::SetTheme` / `SetSkin`; `appearance_dispatch_acknowledges_durable_changes_and_reports_failed_saves` drives all three actions through the real dispatch path and restores them from disk, `restart_restores_all_eight_combinations_before_initial_snapshot` covers every theme/skin pair, and `changing_appearance_writes_nothing_but_appearance` asserts the other half -- a presentation change leaves wallet material byte-identical and creates no file but its own | The gap this row named -- "persistence across restart not asserted" -- was already closed and the row had not caught up. What was genuinely unasserted was "without touching keys", which is now explicit |
-| Landing: Create / Import / Watch Only | **PROVEN** (desktop/Android landing) | `optn-ui/src/onboarding.rs`; Android APK `a7af43d9` displayed all three paths and completed typed watch-only onboarding | iOS and F-Droid have no packaged assertion; Android seed create/import and scanned-account flows need separate verification |
-| Watch Only never gains signing authority | **PROVEN** (component/runtime) | `WalletKind::WatchOnly`; `WalletSecurity::wallet_for_operation`; `watch_only_password_and_biometrics_never_grant_signing_authority` | Password/biometric storage authentication cannot return a private wallet for Spend, Reveal, Background or Chat |
-| Watch-only persistence and reopen | **PROVEN** (runtime/CLI, Android typed import) | `WalletSecurityRequest::ImportWatchOnly`, encrypted `WatchOnlyFile`, shared checkpoint lifecycle, GUI `SaveWatchOnly`, CLI `wallet` → `watch` / `import_watch_only`; `a7af43d9` APK reopened encrypted Chipnet account/history offline after force-stop and rejected a wrong password; `0e7da058` restored the same persisted data with corrected source isolation | The earlier `4f3face1` loss is corrected. Scanned import and macOS need packaged verification. Public browser previews remain explicitly temporary |
-| Master fingerprint asked once, persisted | **INTEGRATION** | `OpenedWallet::master_fingerprint` | Matrix evidence is `unit` on every surface except Android `e2e-declared` |
-| Home / portfolio | **PARTIAL** | `AppRoute::WalletHome` | Exists; not audited against `docs/ui-overhaul` |
-| Assets | **INTEGRATION** | `optn_app::assets_view_model`; held categories and connected HD metadata projection test | Raw category remains visible when resolution is unavailable; live token metadata and packaged UI evidence remain |
-| **My NFTs** | **INTEGRATION** | `AppRoute::Nfts` → `#/nfts`, `optn_app::nfts_view_model`, `optn-ui/src/tools.rs::NftsPage`; `my_nfts_is_a_wallet_destination` | Screen exists in both renderers and opens from Assets. Identity still unresolved hex |
-| Send / Receive | **PARTIAL** | `AppRoute::Send` / `Receive` | Screens exist; end-to-end spend from the Leptos UI not demonstrated |
-| History / tx details | **PARTIAL** | `AppRoute::History` | Details view not separately routed |
-| Owned CashToken/NFT state without a global indexer | **PROVEN** | `optn_app::assets_view_model` / `nfts_view_model`, derived from `state.coins` alone; consumed by both renderers | — |
-| BCMR identity in Assets / My NFTs | **INTEGRATION** | Shared identity projections retain current / stale / unpublished / unresolved states; Leptos consumes Assets/NFT view models | Connected synthetic HD sync reaches Assets; live token workflow and packaged token rendering remain; authenticated metadata restart caching is connected (see 2026-09-19 evidence below) |
-| PSBT / SeedCash / UR | **INTEGRATION** | `optn-core/src/airgap_spend.rs`, `psbt.rs`; `optn-runtime/src/airgap.rs` reserve HD change durably before export and bind signed imports to the current request. Captured SeedCash Schnorr return and ECDSA finalization pass; runtime actor tests cover reservation, storage failure, cancellation and restart | Fresh GUI/CLI signing and packaged-platform verification are still pending. Single-input Chipnet P2PKH `0x41` path; multisig, advanced sighash and broadcast integration remain separate |
-| RPA / Cash Code | **INTEGRATION** | `optn-core/src/rpa.rs` | Matrix `unit` |
-| Hardware | **PARTIAL** | `optn-ui/src/hardware.rs`, `HardwareVendor` | Vendor-by-surface audit not done; no device evidence |
-| CashFusion | **PARTIAL** | Rust protocol in `src-tauri/src/fusion/` + `optn-core/src/fusion/`; driven from `src/platform/desktop/Fusion*.ts` | Implemented and released; reported working on chipnet and mainnet. The remaining gap is the renderer/driver layer, not the protocol |
-| 44px targets, safe areas, contrast | **PARTIAL** | `optn-ui/style.css`, measured by `optn-ui/src/stylesheet.rs`: `interactive_controls_declare_a_44px_minimum_tap_target` requires an explicit `min-height: 44px` on `.primary`, `.secondary`, `.chip`, `.tab-item` and `.settings-row`, and `the_shell_respects_the_devices_safe_areas` requires both safe-area insets | Targets and safe areas are now measured rather than assumed -- declared as `min-height` because padding plus a line box lands near 42px and "nearly" never gets revisited. Contrast is still unmeasured. The same module found 17 classes the renderer uses that the stylesheet never defines -- `.error` and `.warn` among them, so a failure message renders as ordinary body text. They are baselined in `UNSTYLED_TODAY` rather than invented, and `no_new_class_is_left_unstyled` stops the list growing |
-| Capacitor/React retained until Leptos is proven | **PROVEN** | Both trees present | — |
+| Requirement                                        | Status                                         | Entry point / evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Gap                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web build produces a shipping bundle               | **PROVEN**                                     | `npm run build` → `dist/` (50 MB, typecheck clean) on Vitest 5 / Vite 8                                                                                                                                                                                                                                                                                                                                                                                                           | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Four theme modes                                   | **PROVEN**                                     | `optn_app::ThemeMode` — Light, Gray, Green, Dark                                                                                                                                                                                                                                                                                                                                                                                                                                  | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Default / Cyberpunk skins                          | **PROVEN**                                     | `optn_app::UiSkin`                                                                                                                                                                                                                                                                                                                                                                                                                                                                | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Theme/skin persist without touching keys           | **PROVEN**                                     | `AppAction::SetTheme` / `SetSkin`; `appearance_dispatch_acknowledges_durable_changes_and_reports_failed_saves` drives all three actions through the real dispatch path and restores them from disk, `restart_restores_all_eight_combinations_before_initial_snapshot` covers every theme/skin pair, and `changing_appearance_writes_nothing_but_appearance` asserts the other half -- a presentation change leaves wallet material byte-identical and creates no file but its own | The gap this row named -- "persistence across restart not asserted" -- was already closed and the row had not caught up. What was genuinely unasserted was "without touching keys", which is now explicit                                                                                                                                                                                                                                                                                                     |
+| Landing: Create / Import / Watch Only              | **PROVEN** (desktop/Android landing)           | `optn-ui/src/onboarding.rs`; Android APK `a7af43d9` displayed all three paths and completed typed watch-only onboarding                                                                                                                                                                                                                                                                                                                                                           | iOS and F-Droid have no packaged assertion; Android seed create/import and scanned-account flows need separate verification                                                                                                                                                                                                                                                                                                                                                                                   |
+| Watch Only never gains signing authority           | **PROVEN** (component/runtime)                 | `WalletKind::WatchOnly`; `WalletSecurity::wallet_for_operation`; `watch_only_password_and_biometrics_never_grant_signing_authority`                                                                                                                                                                                                                                                                                                                                               | Password/biometric storage authentication cannot return a private wallet for Spend, Reveal, Background or Chat                                                                                                                                                                                                                                                                                                                                                                                                |
+| Watch-only persistence and reopen                  | **PROVEN** (runtime/CLI, Android typed import) | `WalletSecurityRequest::ImportWatchOnly`, encrypted `WatchOnlyFile`, shared checkpoint lifecycle, GUI `SaveWatchOnly`, CLI `wallet` → `watch` / `import_watch_only`; `a7af43d9` APK reopened encrypted Chipnet account/history offline after force-stop and rejected a wrong password; `0e7da058` restored the same persisted data with corrected source isolation                                                                                                                | The earlier `4f3face1` loss is corrected. Scanned import and macOS need packaged verification. Public browser previews remain explicitly temporary                                                                                                                                                                                                                                                                                                                                                            |
+| Master fingerprint asked once, persisted           | **INTEGRATION**                                | `OpenedWallet::master_fingerprint`                                                                                                                                                                                                                                                                                                                                                                                                                                                | Matrix evidence is `unit` on every surface except Android `e2e-declared`                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Home / portfolio                                   | **PARTIAL**                                    | `AppRoute::WalletHome`                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Exists; not audited against `docs/ui-overhaul`                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Assets                                             | **INTEGRATION**                                | `optn_app::assets_view_model`; held categories and connected HD metadata projection test                                                                                                                                                                                                                                                                                                                                                                                          | Raw category remains visible when resolution is unavailable; live token metadata and packaged UI evidence remain                                                                                                                                                                                                                                                                                                                                                                                              |
+| **My NFTs**                                        | **INTEGRATION**                                | `AppRoute::Nfts` → `#/nfts`, `optn_app::nfts_view_model`, `optn-ui/src/tools.rs::NftsPage`; `my_nfts_is_a_wallet_destination`                                                                                                                                                                                                                                                                                                                                                     | Screen exists in both renderers and opens from Assets. Identity still unresolved hex                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Send / Receive                                     | **PARTIAL**                                    | `AppRoute::Send` / `Receive`                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Screens exist; end-to-end spend from the Leptos UI not demonstrated                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| History / tx details                               | **PARTIAL**                                    | `AppRoute::History`                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Details view not separately routed                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Owned CashToken/NFT state without a global indexer | **PROVEN**                                     | `optn_app::assets_view_model` / `nfts_view_model`, derived from `state.coins` alone; consumed by both renderers                                                                                                                                                                                                                                                                                                                                                                   | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| BCMR identity in Assets / My NFTs                  | **INTEGRATION**                                | Shared identity projections retain current / stale / unpublished / unresolved states; Leptos consumes Assets/NFT view models                                                                                                                                                                                                                                                                                                                                                      | Connected synthetic HD sync reaches Assets; live token workflow and packaged token rendering remain; authenticated metadata restart caching is connected (see 2026-09-19 evidence below)                                                                                                                                                                                                                                                                                                                      |
+| PSBT / SeedCash / UR                               | **INTEGRATION**                                | `optn-core/src/airgap_spend.rs`, `psbt.rs`; `optn-runtime/src/airgap.rs` reserve HD change durably before export and bind signed imports to the current request. Captured SeedCash Schnorr return and ECDSA finalization pass; runtime actor tests cover reservation, storage failure, cancellation and restart                                                                                                                                                                   | Fresh GUI/CLI signing and packaged-platform verification are still pending. Single-input Chipnet P2PKH `0x41` path; multisig, advanced sighash and broadcast integration remain separate                                                                                                                                                                                                                                                                                                                      |
+| RPA / Cash Code                                    | **INTEGRATION**                                | `optn-core/src/rpa.rs`                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Matrix `unit`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Hardware                                           | **PARTIAL**                                    | `optn-ui/src/hardware.rs`, `HardwareVendor`                                                                                                                                                                                                                                                                                                                                                                                                                                       | Vendor-by-surface audit not done; no device evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| CashFusion                                         | **PARTIAL**                                    | Rust protocol in `src-tauri/src/fusion/` + `optn-core/src/fusion/`; driven from `src/platform/desktop/Fusion*.ts`                                                                                                                                                                                                                                                                                                                                                                 | Implemented and released; reported working on chipnet and mainnet. The remaining gap is the renderer/driver layer, not the protocol                                                                                                                                                                                                                                                                                                                                                                           |
+| 44px targets, safe areas, contrast                 | **PARTIAL**                                    | `optn-ui/style.css`, measured by `optn-ui/src/stylesheet.rs`: `interactive_controls_declare_a_44px_minimum_tap_target` requires an explicit `min-height: 44px` on `.primary`, `.secondary`, `.chip`, `.tab-item` and `.settings-row`, and `the_shell_respects_the_devices_safe_areas` requires both safe-area insets                                                                                                                                                              | Targets and safe areas are now measured rather than assumed -- declared as `min-height` because padding plus a line box lands near 42px and "nearly" never gets revisited. Contrast is still unmeasured. The same module found 17 classes the renderer uses that the stylesheet never defines -- `.error` and `.warn` among them, so a failure message renders as ordinary body text. They are baselined in `UNSTYLED_TODAY` rather than invented, and `no_new_class_is_left_unstyled` stops the list growing |
+| Capacitor/React retained until Leptos is proven    | **PROVEN**                                     | Both trees present                                                                                                                                                                                                                                                                                                                                                                                                                                                                | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ---
 
@@ -156,26 +156,26 @@ still integration work; model/transport tests do not prove paid rounds run.
 acceptance is not implied by #75's provider tests or a renderer build. The
 following is a current-code reconciliation, not an approval or security sign-off.
 
-| Requirement | Status | Entry point / evidence | Gap |
-| --- | --- | --- | --- |
-| Layer/dependency and authority map | **PARTIAL** | `RUSTIFICATION.md` separates runtime calls from actual Cargo dependencies; runtime owns wallet sessions, providers return observations, platform ports supply capabilities | Current transport contracts are a runtime dependency; do not claim the issue's target graph is the literal manifest graph. Maintainer approval remains separate |
-| Durable state ownership | **PARTIAL** | `optn-runtime/src/wallet_security.rs`, `wallet_checkpoint.rs`, `wallet_sync.rs`; encrypted restart evidence above | Legacy Redux/SQL services remain a second authority until migrated; reservations/outbox lifecycle must converge |
-| Versioned trusted transport and separate guest protocol | **PARTIAL** | `optn-transport::WIRE_PROTOCOL_VERSION` and unknown-version rejection; Rust `addon::legacy_guest_call_allowed` gates the real iframe bridge via generated WASM | The legacy guest message format is not the required versioned runtime guest/session protocol |
-| Intent → proposal → approval → sign/export → broadcast → reconcile | **PARTIAL** | `spend`, `airgap` and `tx_broadcast` runtime modules | One connected durable lifecycle across Send/PSBT/hardware/Fusion/add-ons remains #79/#8 work |
-| Providers cannot directly publish wallet state | **PROVEN** (contract/component) | `ChainBackend` returns typed observations; runtime reconciliation and guarded sync finish own publication | Legacy paths listed under #75 still need migration |
-| Host-owned package identity, grants, sessions, updates/rollback | **PARTIAL** | Existing core add-on policy primitives and legacy installer/SDK | No complete Rust host package/session authority. A manifest trust claim is not verified identity; #82 owns implementation |
-| Migration map and child scopes | **PROVEN** (documentation) | Map below; linked #71/#75/#79/#82/#8 scopes | This records remaining ownership work, not completed migration |
-| Spend-capable guest boundary review | **PARTIAL** | Rust guest ceiling rejects raw tx/signature templates/message signing, writes, and direct network methods before SDK dispatch, regardless of manifest/grant; native and actual WASM bridge regressions | Full host/proposal/session security review is outstanding. Third-party spending stays unavailable until that boundary exists |
+| Requirement                                                        | Status                          | Entry point / evidence                                                                                                                                                                                 | Gap                                                                                                                                                             |
+| ------------------------------------------------------------------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Layer/dependency and authority map                                 | **PARTIAL**                     | `RUSTIFICATION.md` separates runtime calls from actual Cargo dependencies; runtime owns wallet sessions, providers return observations, platform ports supply capabilities                             | Current transport contracts are a runtime dependency; do not claim the issue's target graph is the literal manifest graph. Maintainer approval remains separate |
+| Durable state ownership                                            | **PARTIAL**                     | `optn-runtime/src/wallet_security.rs`, `wallet_checkpoint.rs`, `wallet_sync.rs`; encrypted restart evidence above                                                                                      | Legacy Redux/SQL services remain a second authority until migrated; reservations/outbox lifecycle must converge                                                 |
+| Versioned trusted transport and separate guest protocol            | **PARTIAL**                     | `optn-transport::WIRE_PROTOCOL_VERSION` and unknown-version rejection; Rust `addon::legacy_guest_call_allowed` gates the real iframe bridge via generated WASM                                         | The legacy guest message format is not the required versioned runtime guest/session protocol                                                                    |
+| Intent → proposal → approval → sign/export → broadcast → reconcile | **PARTIAL**                     | `spend`, `airgap` and `tx_broadcast` runtime modules                                                                                                                                                   | One connected durable lifecycle across Send/PSBT/hardware/Fusion/add-ons remains #79/#8 work                                                                    |
+| Providers cannot directly publish wallet state                     | **PROVEN** (contract/component) | `ChainBackend` returns typed observations; runtime reconciliation and guarded sync finish own publication                                                                                              | Legacy paths listed under #75 still need migration                                                                                                              |
+| Host-owned package identity, grants, sessions, updates/rollback    | **PARTIAL**                     | Existing core add-on policy primitives and legacy installer/SDK                                                                                                                                        | No complete Rust host package/session authority. A manifest trust claim is not verified identity; #82 owns implementation                                       |
+| Migration map and child scopes                                     | **PROVEN** (documentation)      | Map below; linked #71/#75/#79/#82/#8 scopes                                                                                                                                                            | This records remaining ownership work, not completed migration                                                                                                  |
+| Spend-capable guest boundary review                                | **PARTIAL**                     | Rust guest ceiling rejects raw tx/signature templates/message signing, writes, and direct network methods before SDK dispatch, regardless of manifest/grant; native and actual WASM bridge regressions | Full host/proposal/session security review is outstanding. Third-party spending stays unavailable until that boundary exists                                    |
 
 ### Migration map
 
-| Existing path | Required destination / compatibility rule | Canonical scope |
-| --- | --- | --- |
-| `src/state/slices/{wallet,utxo,transaction,network}Slice.ts` and React lifecycle | Projections of runtime snapshots/events; preserve React, remove authoritative state decisions only as callers migrate | [#71](https://github.com/OPTNLabs/OPTNWallet/issues/71), [#75](https://github.com/OPTNLabs/OPTNWallet/issues/75) |
-| `ElectrumService`, `UTXOService`, metadata/indexer clients and Fusion peer queries | Typed provider operations under the same source/privacy policy; runtime verifies observations and persists accepted state | [#75](https://github.com/OPTNLabs/OPTNWallet/issues/75) |
-| `TransactionManager`, `TransactionService`, signing/PSBT/hardware adapters | Shared intent/proposal, exact-effect approval, reservations, outbox and uncertain-broadcast reconciliation | [#79](https://github.com/OPTNLabs/OPTNWallet/issues/79), [#8](https://github.com/OPTNLabs/OPTNWallet/issues/8) |
-| `AddonsSDK`, `AddonPolicyEngine`, iframe bridge and desktop installer | Narrow versioned guest requests; host-authenticated identity/digest, grants, context-bound sessions, quotas and package lifecycle. Never export the trusted UI transport | [#82](https://github.com/OPTNLabs/OPTNWallet/issues/82), [#83](https://github.com/OPTNLabs/OPTNWallet/issues/83) |
-| Tauri/CLI/browser platform glue | Execute storage/network/hardware ports; policy and wallet authority stay in Rust runtime. Browser restrictions cannot be lifted by renderer choice | [#71](https://github.com/OPTNLabs/OPTNWallet/issues/71), [#75](https://github.com/OPTNLabs/OPTNWallet/issues/75) |
+| Existing path                                                                      | Required destination / compatibility rule                                                                                                                                | Canonical scope                                                                                                  |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `src/state/slices/{wallet,utxo,transaction,network}Slice.ts` and React lifecycle   | Projections of runtime snapshots/events; preserve React, remove authoritative state decisions only as callers migrate                                                    | [#71](https://github.com/OPTNLabs/OPTNWallet/issues/71), [#75](https://github.com/OPTNLabs/OPTNWallet/issues/75) |
+| `ElectrumService`, `UTXOService`, metadata/indexer clients and Fusion peer queries | Typed provider operations under the same source/privacy policy; runtime verifies observations and persists accepted state                                                | [#75](https://github.com/OPTNLabs/OPTNWallet/issues/75)                                                          |
+| `TransactionManager`, `TransactionService`, signing/PSBT/hardware adapters         | Shared intent/proposal, exact-effect approval, reservations, outbox and uncertain-broadcast reconciliation                                                               | [#79](https://github.com/OPTNLabs/OPTNWallet/issues/79), [#8](https://github.com/OPTNLabs/OPTNWallet/issues/8)   |
+| `AddonsSDK`, `AddonPolicyEngine`, iframe bridge and desktop installer              | Narrow versioned guest requests; host-authenticated identity/digest, grants, context-bound sessions, quotas and package lifecycle. Never export the trusted UI transport | [#82](https://github.com/OPTNLabs/OPTNWallet/issues/82), [#83](https://github.com/OPTNLabs/OPTNWallet/issues/83) |
+| Tauri/CLI/browser platform glue                                                    | Execute storage/network/hardware ports; policy and wallet authority stay in Rust runtime. Browser restrictions cannot be lifted by renderer choice                       | [#71](https://github.com/OPTNLabs/OPTNWallet/issues/71), [#75](https://github.com/OPTNLabs/OPTNWallet/issues/75) |
 
 The current iframe compatibility ceiling exposes only SDK-authorized public
 wallet context/address reads and cached wallet UTXO reads. It denies even a guest
@@ -188,11 +188,11 @@ a containment fix, not a completed add-on runtime or source-policy migration.
 
 ## What is genuinely blocked here
 
-| Blocker | Needs |
-| --- | --- |
+| Blocker                                                     | Needs                                                                                                                                                                                                        |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Signed Android Play / F-Droid and packaged iOS verification | This host now has an Android SDK and isolated Android 36 emulator; a Rust debug APK rendered landing and watch-only import. Store signing and iOS device/simulator verification remain separate requirements |
-| Hardware wallet signing evidence | Physical Ledger / Trezor / Keystone devices |
-| Fulcrum/Electrum real-node evidence | A reachable Fulcrum instance; regtest has no Electrum server |
+| Hardware wallet signing evidence                            | Physical Ledger / Trezor / Keystone devices                                                                                                                                                                  |
+| Fulcrum/Electrum real-node evidence                         | A reachable Fulcrum instance; regtest has no Electrum server                                                                                                                                                 |
 
 ---
 
@@ -242,7 +242,6 @@ The shared identity collector no longer treats a missing spender in wallet-scope
 
 CLI restores the sealed header view through the shared worker helper. The native GUI picks up restored header progress when a wallet opens after route-stack initialization. BIP37/Neutrino can acquire missing historical hashes using typed private locators; replay remains in a private store until it matches the accepted MMR commitment, then swaps atomically after a concurrent-store check. Recovery is bounded at 2,000,000 headers and stays on the selected route. Runtime suite: 267 passed, strict Clippy passed; native/CLI/provider checks passed. The connected regression observes the shared store during every replay request. This is integration-test evidence, not a live P2P restart or all-platform claim. Dense historical recovery may still need network replay after process restart; the saved wallet balance remains independently available as stale.
 
-
 ## RPC credentials interaction evidence (2026-09-19)
 
 The Rust runtime owns endpoint/network/source-bound credential records through
@@ -269,7 +268,6 @@ and credential afterward.
 This does not prove a live funded node wallet roundtrip, macOS/Linux keychain
 behavior, or mobile credential storage. Mobile/browser controls remain disabled
 or unsupported. Linux native keyring entries last for the login session.
-
 
 ## Fusion cryptographic alert review (2026-09-19)
 
@@ -854,184 +852,2011 @@ credentials are explicitly refused with regression coverage. Remote scans and
 platform builds must still succeed for the pushed revision; no security alerts
 were dismissed in this continuation.
 
-### 2026-10-07: x402 BCH Rust SDK integration draft on dev
+## React app UX basics (2026-10-23)
 
-The `feat/cli-x402-bch-sdk` branch starts at merged `dev` revision
-`c45be9b70a87198a08fea2c0ad1dc79b8c812d39`. It depends on
-[OPTNLabs/x402-bch#2](https://github.com/OPTNLabs/x402-bch/pull/2), currently pinned
-to its immutable source revision `a6e50946f95ce6e65bb3d08071eb49584786fba9`.
-Merge the SDK PR first, move the dependency and locks to the upstream merged
-revision, then complete review/checks before merging this wallet PR into `dev`.
+Working tree based on `ac2da1ceec73c8cd457e44fdfe02035cb034a173`, branch
+`codex/ux-basics-and-workflow`, existing Linux checkout. The change restores a
+separate transaction-history explorer action governed by selected explorer,
+network and privacy policy; adds result-aware copy feedback across wallet and
+built-in apps; clarifies send-review preparation; announces history loading;
+and tracks wallet sync freshness so offline cached balances are identified as
+unverified/stale. Empty Send now explains why Review is disabled. No transaction
+authorization, signing, or broadcast behavior was changed. The canonical UI/UX
+skill, repository instructions, and PR evidence prompts require reference
+inspection, affected-flow review, accessibility/usability checks, and rendered
+evidence proportional to the change.
 
-For #71/#83, protocol encoding sits in `optn-x402`; native HTTP sits in the CLI;
-shared runtime owns authorization, HD change, signing, bounded durable outbox and
-input reservations. The same reconciled spendable-coin extractor now serves the
-native GUI and this runtime flow. Signed transaction import receives independent
-core signature/value validation and SDK verification. Raw signed bytes never enter
-the renderer/add-on `WireState`. For #75, chain data comes from shared selected
-sources; SDK source access is an immutable snapshot, and merchant HTTP uses the
-existing outbound/Tor policy without redirects or implicit proxy/public fallback.
+The route, 26 settings-panel, desktop-menu, connector-dialog, and built-in-app
+register and per-surface gaps are in `docs/UX_IMPROVEMENT_PLAN.md`. Android 34
+x86_64 isolated emulator with a disposable offline wallet rendered onboarding,
+Home, Assets, Actions, Apps, Send, and Settings → Server. Home's offline recovery
+link reached Server settings. Receive copy invoked the Capacitor Toast and
+Android logged “Address copied”; the unsafe clipboard-preview capture was
+discarded. Chrome headless rendered onboarding at a desktop-size viewport only;
+it is not interactive desktop acceptance. Screenshots are indexed in
+`docs/ui-overhaul/evidence/`.
 
-Windows local evidence: 979 shared core/application/runtime/transport tests,
-149 CLI tests (two opt-in live/credential-store tests ignored), three SDK tests,
-and two native storage tests pass. The CLI test covers a lost HTTP response,
-identical-byte retry, held-input refusal, changed quote refusal and signed import.
-Four runtime tests cover encrypted restart, CAS/storage failure, signature/fee
-validation, watch-only import and legacy-wallet refusal. Windows CLI binaries
-reserve a 4 MiB stack to prevent the debug HTTP/signing flow overflowing the
-default 1 MiB stack; the complete CLI suite passes in a fresh build directory.
+Focused regressions cover explorer/privacy/network and opening behavior, copy
+success/failure/fallback/repeated message, WASM startup, and wallet-sync
+outcomes. Rendered component tests now check distinct details/explorer actions,
+network-correct URL resolution, privacy refusal guidance and its Settings link;
+history pagination accessible names; and the Outbox Fusion verification lock's
+visible and announced recovery reason. The expanded React UI suite passes 52
+tests. Final full checks passed: core
+1,962 passed / 10 skipped (306 files passed, 7 skipped), apps 137, UI 52,
+security 6, `typecheck:core`,
+`lint:core`, `format:check`, `git diff --check`, standard and desktop Vite
+builds, Android web build/Capacitor sync, and Java 21 `assemblePlayDebug`.
+Prettier check also passed for the changed workflow and evidence documents.
 
-Strict Clippy passes for affected shared crates, CLI, SDK adapter and desktop
-library. Rust formatting, architecture, TypeScript core typecheck/lint,
-dependency policy, six security tests, addon validation, 21 connector tests and
-the generated WASM rebuild/freshness checks pass. Repository formatting passes
-after normalizing this Windows checkout to the committed LF line endings.
-The broader core suite has 1,928 passing tests; its one Windows Bash process
-timeout in the unchanged release-assembly fixture passes on a focused rerun.
-All 49 UI tests pass. The lockfile fixture now covers the new SDK adapter.
-Remote scans and packaged/cross-target CI remain pending. This draft is not
-merge-ready and includes no live-network or mainnet spend proof.
+After the clean-profile emulator exposed a multi-second blank startup, the HTML
+shell now shows “Starting wallet…” before the JavaScript module graph executes.
+The startup status has a focused accessibility test, and the latest Android 34
+package rendered both startup progress and onboarding in the disposable profile
+(screenshots indexed in `docs/ui-overhaul/evidence/`). The latest Send hint
+still has automated/source evidence but was not rerendered in that package. iOS
+and packaged desktop are not rendered; native Toast
+stacking above dialogs and physical safe-area/touch behavior are unverified;
+every route/panel/dialog still needs fixture exercise for its relevant
+loading/empty/error/cancel/retry states. `docs/UX_IMPROVEMENT_PLAN.md` names these
+gaps per inventory group. No mainnet spending, publishing, commit, or push was
+performed.
 
-The scope is native BCH from runtime-managed HD saved wallets, plus finalized
-P2PKH import (including watch-only). Migrated desktop wallets, token/RPA/contract/
-multisig spending and the common lifecycle for other signing commands remain
-unfinished. Legacy CLI signing is refused after this outbox exists, and a CLI
-session lease serializes access to that wallet directory. Reservations never expire
-on HTTP success or timeout; there is no automatic cancellation/pruning, and the
-outbox is capped at 256 records / 8 MiB. Server receipts are reported as claims,
-not chain confirmation. The earlier shared outbox/reconciliation gap remains open
-for those other surfaces and retirement behavior.
+Continuation at the same source revision (`ac2da1ce`, 2026-10-23): full core
+tests were rerun after locale completion (1,962 passed, 10 skipped; 306 files
+passed, 7 skipped), and the UI suite remains green at 52 tests. The QR
+scanner controls in Simple Send and the advanced BCH/CashToken/NFT transaction
+editors now have localized accessible names, decorative camera icons and
+explicit 44px minimum hit areas. Source review found keyboard focus styles in
+the shared wallet button/link classes. Final Android 34 `assemblePlayDebug`
+package was installed in the dedicated CodexUX AVD and onboarding was rendered
+again; `docs/ui-overhaul/evidence/android-onboarding-final-android34.png` is the
+safe capture. During an attempted creation-flow inspection, a generated recovery
+phrase appeared in a temporary image. That image was deleted and the app data
+cleared before the wallet was saved. The fixture was discarded and no recovery
+phrase is retained in the evidence directory. This attempt is not creation,
+recovery, Receive, or touch-target package evidence. Scanner interaction and
+the latest Receive/Assets 44px target render therefore remain explicitly open.
+Chrome headless at 1440×1000 rendered current onboarding and the Help
+walkthrough; the overlay/content were visually inspected and Tab focus
+showed the Language selector’s green focus ring. Screenshots
+`browser-onboarding-final-chrome.png` and
+`browser-help-final-chrome.png` record that bounded desktop-browser evidence.
+It does not establish packaged Tauri desktop behavior.
+A separate Chrome headless 390×844 run exercised create-screen readiness
+(12 mnemonic rows counted without reading), Back/cancel before wallet
+creation, invalid mnemonic rejection, and watch-only missing-name/xPub
+recovery messages. No wallet was saved. The phrase-length selector is not
+present on this React browser surface; 12-field invalid import is the
+verified case. Screenshot `browser-onboarding-mobile-chrome.png` records
+the 390×844 onboarding layout; its primary actions measured 48–50px high.
 
-PR #105 continuation: the initial Linux desktop jobs failed while fetching
-deleted AppImage plugin assets, before compiling wallet code. Both architectures
-now pin the versioned upstream `1-alpha-20250213-1` release rather than assets
-from its replaceable continuous release. Both downloaded binaries match the
-committed SHA256 values, and all 52 release-workflow regression tests pass.
-The checksum enforcement and full package matrix remain intact. This is the
-same packaging repair already proposed independently in
-PR #103; it does not import that PR's wallet-sync changes. Full remote builds and
-security gates must pass for the new head before readiness is reported.
+Receive and Assets touch-target continuation on 2026-10-23: rebuilt the Play
+Debug package and installed it in the isolated Android 34 CodexUX emulator.
+Using a disposable watch-only wallet derived from a deterministic public-only
+test fixture (no private key or funds), WebView measurements on Receive found
+the “Copy address” action named, icon-bearing and 44px high; the address-type
+switch and Address/PubKey/PKH tabs are also 44px. BCH/NFT Assets tabs measure
+44px. The copy button was not tapped during this measurement, avoiding a
+clipboard preview. `npm run test:ui` passes 52 tests, `npm run format:check`,
+`npm run typecheck:core`, and `npm run lint:core` pass. Native Toast stacking,
+physical safe areas and remaining route/dialog fixtures remain open.
 
-The next PR #105 CI run exposed a standalone-core Clippy error and missing
-`ExternalPayment` handling in the Leptos coin row. Hex decoding now uses typed
-two-byte chunks after its existing even-length guard. The coin row labels
-payment reservations and consults the shared `is_user_reversible` policy before
-offering unfreeze. The policy regression includes external-payment holds.
-All 438 core tests, strict standalone-core Clippy, both browser and Tauri WASM
-frontend checks, and the architecture boundary check pass locally. The core
-WASM was rebuilt and freshness-checked; all 21 connector/BCH VM tests pass.
-This resolves the source errors seen in desktop, iOS, Android and architecture
-jobs; complete packaged-platform validation remains a remote CI requirement.
+Rendered UX continuation on 2026-10-23, source worktree based on `ac2da1cee`
+(uncommitted branch `codex/ux-basics-and-workflow`): the Android 34 CodexUX
+emulator ran the rebuilt Play Debug package in the offline disposable watch-only
+profile. Direct route checks rendered Home, Assets, Receive, watch-only Send,
+transaction builder, Transaction History, Outbox, Actions, Apps, Settings,
+Multisig setup, Quantumroot, Mint PoC, Paper Wallet and Contract. CashFusion
+correctly fell back to Home because the public-only fixture has no CashFusion
+capability; this is an environment boundary, not evidence of the enabled flow.
+The three Settings categories and all seven available Connections panels
+(Servers, Nostr & Chat, Merchant Pay, WalletConnect, WizardConnect, CashConnect,
+Experimental Features) opened and returned without activating network,
+connection, publish, or experimental-feature actions. Recovery/Wallet Info
+secret gates and destructive controls were not opened. Terms of Use rendered as
+a long-content panel and its Back action returned to the Settings category.
 
-The dependency-audit and supply-chain gates also found
-[GHSA-rvm3-566m-v7fv](https://github.com/advisories/GHSA-rvm3-566m-v7fv) in the
-inherited Capacitor Android/iOS 7.4.2 dependencies. Android, iOS, core and CLI now
-resolve to the patched 7.6.9 release. The Android Gradle compatibility patch was
-regenerated for that release, retaining the existing settings and omitting old
-generated build-cache entries. A clean locked install applies all patches;
-the production dependency audit reports zero vulnerabilities. Dependency and
-direct-license policy, core TypeScript typecheck, production web build and all
-six security tests pass locally. Existing development-only audit and transitive
-license-metadata warnings remain visible; no audit threshold or gate changed.
-Android/iOS package and device evidence still depends on their respective CI
-jobs, and the SDK PR #2 remains unmerged at this validation point.
+That visual review found the ordinary Settings Back button was styled as a
+danger action. It now uses the shared secondary button class. `Settings.ui.test`
+asserts secondary styling and that danger styling is absent. The updated Android
+package confirmed the class and rendered the corrected Terms of Use panel; safe
+captures are `android-settings-categories-android34.png` and
+`android-settings-back-secondary-android34.png`. Native Toast stacking over an
+open dialog, iOS, desktop menus, enabled CashFusion, and the remaining sensitive
+or transaction-backed states still need platform/fixture evidence. After this
+change, the complete UI suite passes 52 tests, standard `npm run build` passes,
+`VITE_APP_SURFACE=desktop npm run build:web` passes, `npm run android:prepare`
+passes, and Java 21 Gradle `assemblePlayDebug` succeeds and was installed in the
+CodexUX emulator. `git diff --check` passes; changes remain unstaged and
+uncommitted.
 
-The full-graph audit subsequently reached the development dependencies. Its
-`source-map-js` finding (GHSA-68fv-2mgg-jv7q) is fixed by updating the single
-locked package from 1.2.1 to the upstream 1.2.2 release. Dependency policy,
-TypeScript core typecheck, production web build and all 49 UI tests pass; the
-production audit still reports zero vulnerabilities.
+The same offline Android profile was then used to inspect watch-only `/send`.
+The destination and amount controls have visible labels and measured 46px high;
+because the wallet is offline, the primary action is explicitly disabled with
+“Network refresh required.” The empty-coin helper incorrectly told this
+watch-only user to refresh a multisig inventory. `WatchOnlySend` now chooses
+the hint from its loaded multisig-policy context, and its focused feature test
+passes all five cases. The inspection used only an invalid destination string;
+no network refresh, approval, signing or send occurred. Full `npm run test:core`
+passes 1,963 tests (10 skipped; 306 files passed and 7 skipped), and
+`npm run test:ui` passes 52 tests. Standard `npm run build` and the separate
+`VITE_APP_SURFACE=desktop npm run build:web` pass; `npm run android:prepare` and
+Java 21 Gradle `assemblePlayDebug` also pass. The updated package was installed
+in the same emulator and rendered the corrected hint; screenshot
+`android-watch-only-send-no-coins-android34.png` hides the public fixture's
+change-address row and leaves the destination empty. Desktop and
+transaction-backed states remain open.
 
-The full audit remains red: all 13 high-severity entries trace to
-`braces@3.0.3` (GHSA-vfj7-8cjw-p6xm) through existing development tools.
-As checked on 2026-10-07, npm has no patched braces release and upstream
-micromatch/braces PRs #78 and #79 remain open. The audit exit code is still 1;
-no finding is suppressed and no threshold changed. This is an additional
-merge blocker alongside the unmerged SDK dependency and required review.
-The source-map update does not constitute full-audit or merge-readiness proof.
+Final watch-only `/send` correction on 2026-10-23: the Android screenshot showed
+the enabled Build unsigned transaction action even though no BCH inputs were
+available. `unsignedBuildAvailability` now disables the action for an empty or
+unselected input set and provides an accessible reason; the shared helper also
+keeps busy/network gating explicit. Six focused `WatchOnlySend.test.tsx` cases
+pass. The rebuilt Android 34 package was installed and verified: the button is
+disabled, `aria-describedby` resolves to “A spendable BCH coin is required to
+build an unsigned transaction,” and the wallet-specific empty-coin hint is
+visible. Before/after captures are `android-watch-only-send-unguarded-build-before.png`
+and `android-watch-only-send-no-coins-android34.png`; the after capture leaves
+the destination empty and masks the public change address. No
+transaction build or send was invoked. Final validation passes: core 1,964
+passed / 10 skipped (306 test files passed, 7 skipped), UI 52 passed, typecheck
+and standard React build, separate desktop React build, Android prepare/sync,
+Java 21 `assemblePlayDebug`, `lint:core`, formatting, and `git diff --check`.
+Packaged desktop/iOS and the remaining transaction-backed or sensitive flows
+remain unverified.
 
-Further PR #105 dependency repair on 2026-10-07: the development `braces`
-consumers now use the exact published MIT backport
-`@dieub/braces-depth-guard@3.0.3-pn.3`. It is a third-party release while the
-upstream fix remains unpublished. All ten published files match provenance
-commit `305a2e4bfe324bb53c336c1b03387ee1251c926f`; npm verified its registry
-signature and attestation. The reviewed runtime diff adds bounded parsing and
-AST traversal, option validation and expansion-parent cycle detection, without
-new runtime dependencies or install hooks. The unchanged upstream 3.0.3 test
-suite passes all 764 cases against the patched runtime; the fork's extended
-suite passes all 799. The dependency policy records the temporary pin and its
-limits, including that expansion cardinality is not bounded by this fix.
+Receive/BIP21 continuation (2026-10-23), same source revision `ac2da1cee`,
+branch `codex/ux-basics-and-workflow`: source review found the payment URI
+builder double-prefixed a mainnet CashAddr that already contained
+`bitcoincash:`. `buildBchPaymentUri` now strips only that duplicate mainnet
+prefix, preserves test-network address prefixes, and URL-encodes optional
+fields. Four focused tests pass for mainnet, testnet, encoding/order and an
+empty address. The Receive dialog labels now associate with all three fields;
+Amount, Label, Message, Copy BIP21 and Clear have 44px minimum heights.
 
-Three new repository regressions fail against the original package and pass
-against the installed replacement, covering deep brace/parenthesis strings,
-direct and cyclic ASTs, normal glob behavior, actual Micromatch/Chokidar
-consumers and every locked copy. Both lockfiles retain published integrity
-hashes. Yarn was regenerated with Yarn 1.22.22 and also brought forward the
-existing Capacitor 7.6.9 and source-map-js 1.2.2 fixes. Its installed-consumer
-checks pass. Both managers report zero high/critical findings: npm retains
-6 low / 4 moderate findings and Yarn retains 1 low / 4 moderate findings.
-The production npm audit reports zero vulnerabilities. No advisory, audit
-threshold, workflow or required check was suppressed or weakened.
+The latest web assets were synced into and built as Android Play Debug with
+Java 21, installed in the isolated Android 34 CodexUX AVD, and inspected in the
+offline disposable public-only watch-only wallet (no private key or funds).
+WebView reports one associated label per field and 44px for each field and
+Clear; Escape closes the dialog. The amount, label and message were left empty;
+no payment URI or address was copied, logged, screenshotted or broadcast. This
+is native-package evidence for dialog semantics and touch targets only; it does
+not establish QR decoding, native Toast stacking above a dialog, physical
+touch/safe-area behavior, iOS, packaged desktop or the remaining transaction-
+backed flows. The CashAddr URI rule is documented in the
+[CashAddr specification](https://github.com/bitcoincashorg/bitcoincash.org/blob/master/spec/cashaddr.md#double-prefix).
 
-A clean install with the declared npm 10.9.2 applies all repository patches.
-Dependency/license policy, formatting, core TypeScript typecheck, strict core
-lint, five focused dependency regressions, the production web build and all
-49 UI tests pass. The broad core run passed 1,927 tests with 10 skipped and
-five Git Bash subprocess timeouts on Windows. Both affected workflow-test
-files then passed all 54 tests with one worker, without changing their
-timeouts or assertions. Fresh current-head remote CI is still required;
-SDK PR #2 remains open and the wallet PR still requires human approval.
+Shared-dialog continuation (2026-10-23), same branch/source line: packaged
+Android interaction review found the shared Popup lacked `role=dialog`,
+`aria-modal`, and Escape dismissal. The common Popup now exposes modal
+semantics and Escape calls its existing close callback. Its focused component
+test passes and asserts the semantics. After `npm run android:prepare`, Java 21
+`assemblePlayDebug`, and installation into Android 34 CodexUX, the Receive
+BIP21 dialog reported `role=dialog`, `aria-modal=true`; all three inputs had one
+associated label and measured 44px; Escape closed the dialog. Focus containment
+and restoration were covered in the subsequent keyboard-focus continuation
+below; stacked/nested modal behavior and VoiceOver/TalkBack behavior remain
+unverified. No address or payment URI was copied or captured.
 
-PR #105 merged #103 (`fix/shv-runtime-recovery-20261007`) on 2026-10-08 so it
-could be reviewed on a base without the hand-submitted dependency-graph snapshot
-on `c45be9b7`. #103 carries the same dependency repairs in its own form
-(Capacitor 7.6.9, source-map-js 1.2.2 and the vendored `@optn/build-braces`
-3.0.4-optn.1), and this branch now uses them unchanged: the
-`@dieub/braces-depth-guard` alias above and its dependency-review advisory
-exception are gone, and package.json, both lockfiles, the Capacitor patch,
-`docs/dependency-policy.md` and the desktop AppImage pins are identical to #103.
+Popup focus continuation (2026-10-23): the shared Popup now focuses its first
+available control (falling back to Close) on open, traps Tab/Shift+Tab at the
+dialog boundaries, restores focus to
+the previously focused element after unmount, and closes on Escape. The UI
+interaction regression passes. In the rebuilt Play Debug package on the
+Android 34 CodexUX AVD, Receive BIP21 opened with focus on Close; Shift+Tab from
+Amount wrapped to Close, Tab from Close wrapped to Amount, Escape dismissed the
+dialog, and focus returned to the BIP21 trigger. This verifies WebView DOM
+keyboard handling, not TalkBack announcements, physical keyboard/platform
+variations, or nested modal coordination.
 
-### 2026-10-07: production SHV recovery, bounded retention and date restart
+Shared Popup hierarchy continuation: generic Close now uses the secondary
+button style, not danger styling. Popup initially focuses its first interactive
+control and falls back to Close for content without controls. The static
+component regression verifies the style; the jsdom keyboard test verifies focus
+entry, wrap, cancel and restore. The rebuilt Android WebView confirms Amount
+receives initial focus and Close has `wallet-btn-secondary`. Desktop native
+render remains unverified.
 
-The follow-up based on merged `dev` at `c45be9b7` connects historical proof
-requests to normal shared wallet refresh. Proofs bind to the runtime's existing
-MMR commitment and selected route; recovered linked ranges remain private until
-the complete range reaches the accepted tip and the source/store guards pass.
-An optional SHV timeout/refusal preserves ordinary same-peer replay. A
-structurally valid proof that fails cryptographic verification is discarded and
-also falls back to authenticated replay against the existing MMR commitment.
-Wrong heights/checkpoints, malformed structure and invalid tails still fail.
-Invalid proofs cannot promote wallet evidence, grant pruning authority or expand
-source policy.
+The Linux desktop WebDriver runtime is not installed on this host: `tauri-driver`
+is available, but `WebKitWebDriver` and the WebKitGTK runtime/development package
+are missing. The package index lists `webkitgtk-webdriver`, but installation
+requires sudo authentication unavailable to this session. Therefore the
+packaged Tauri desktop E2E flow was not run; the desktop React build and UI
+component suite are separate evidence and do not substitute for it.
 
-Accepted wallet checkpoint publication now triggers retention: a recent 2,016
-raw-header window by default, with older compatibility hashes retained unless
-the same BIP37 route has actually proved SHV service. Neutrino keeps the hashes
-needed for filter-header reconstruction. Ordinary header updates also refuse
-concurrent store changes and conflicting previously accepted heights. Restored
-date anchors are reauthenticated from their raw header windows before resolving
-a birthday; hash-only history cannot substitute for timestamp evidence.
+A controlled-rerender regression also confirms focus remains on the active
+popup control when callers pass a new inline close callback; the latest callback
+still receives Escape dismissal. The final Android package was rebuilt and
+reinstalled after this change, and its Receive BIP21 focus/label/target/close
+checks were repeated successfully.
 
-Review fixes remove full accepted-store clones from normal refresh and recovery.
-A write-locked revision check guards publication; only incoming headers are
-staged, with whole-batch conflict/link checks and a final revocation check before
-insertion. Pruning, rewinds, empty publications and whole-store replacement all
-invalidate the prior revision. Existing chain generation and unrelated entries
-remain intact.
+Connector sheet continuation: WalletPopupSheet now shares focus entry, Tab
+containment, Escape dismissal, focus restoration and callback-ref behavior with
+the general Popup. WalletConnect and CashConnect proposal/action dismiss
+controls now say Reject because dismissal invokes their rejection handlers;
+CashConnect error dismissal remains Close. Static/UI component tests cover
+semantics and keyboard behavior. No live dApp proposal was opened or rejected;
+connector resolution and native dialog stacking remain unverified.
 
-Live evidence in `docs/chain-interop-evidence.md` and the opt-in
-`optn-cli/tests/shv_regtest.rs` covers two peered local BCHN nodes, encrypted HD
-reopen, actual SHV recovery, repeated pruning/recovery, unchanged balance/history
-on ordinary-peer fallback, both real CLI routes, and saved-date actor refresh
-after restart at an unchanged tip. This closes the former **local P2P restart
-evidence** gap and the restored-date connection for these P2P paths. Host-created
-birthday anchors, packaged GUI/mobile interactions, public-network scale and
-automatic wallet reorg recovery are not established by this fixture. The broader
-RPA/contract union, durable outbox, Fusion and category-indexer gaps remain
-separate work; this follow-up does not claim all of #71/#75/#83 complete.
+Contract address picker continuation: source review found that failed key
+retrieval was only logged and an empty result rendered a blank modal. It now
+uses the shared modal semantics and focus behavior, labels Back as a neutral
+secondary action, announces loading, explains an empty address list, presents a
+retry on retrieval failure, and gives each shortened address an accessible
+selection name and a 44px minimum target. UI tests cover loading and selection,
+empty state, and failure/retry recovery; selected values are checked without
+including the full address in the accessible label. The Android package build
+passed, but the offline watch-only fixture exposed no contract templates on
+`/contract`, so the picker could not be opened for packaged interaction. A
+disposable contract fixture with address arguments is still required. No key
+export, transaction construction or broadcast was performed.
 
-Validation: 361 runtime library tests pass, including 16 recovery/retention/date
-regressions and four new store publication tests. The connected real-node
-runtime/CLI test passes after the review fixes; strict runtime and CLI Clippy,
-Rust formatting and the architecture boundary check pass. Remote platform
-packages and security scans remain independent checks on the pushed revision.
+UX continuation validation after the contract-picker and Arabic resource updates
+(2026-10-23, branch `codex/ux-basics-and-workflow`, source base `ac2da1cee`):
+`npm run test:core` passes 1,968 tests with 10 skipped (307 files passed, 7
+skipped); `npm run test:ui` passes 57 tests across 17 files. Standard build,
+desktop-surface build, repo lint, changed-file Prettier, typecheck, i18n resource
+regression, and `git diff --check` pass. Android assets were synced and Play
+Debug `assemblePlayDebug` succeeds with Java 21. The emulator's `/contract`
+route has no available template and shows the existing empty contract-instance
+state, so the new picker’s loading/empty/error/retry states are component-tested
+but not claimed as packaged runtime evidence.
+
+Assets fallback-read continuation: code review found the screen stored but
+never rendered `useFetchWalletData` errors. A database read failure now appears
+as a localized alert with a secondary 44px Retry action; Retry reruns the same
+local read through an explicit request key and does not request network sync.
+When the initialized shared UTXO snapshot makes the fallback unnecessary, stale
+fallback errors clear. The focused hook regression verifies initial failure,
+error clearing, and successful retry. English, Spanish, Chinese, and Arabic
+messages are present; the Arabic resource-completeness gate passes. A packaged
+Assets database-failure state is not yet exercised because the emulator has no
+disposable DB-failure fixture.
+
+Assets error-state validation (2026-10-23; source base `ac2da1cee`): after the
+retry-key and localized alert changes, full core tests pass (1,968 passed, 10
+skipped; 307 files passed, 7 skipped), and the full UI suite passes 58 tests
+across 18 files. The 12-case focused group (address-picker and Assets-fetch
+states plus locale resource checks) passes. Standard and desktop builds,
+typecheck, repo lint, formatting, `git diff --check`, Android asset sync and
+Java 21 `assemblePlayDebug` pass. This proves the fallback’s failure/retry
+logic and compiled package; it does not prove a rendered packaged Assets
+failure because the emulator fixture has no disposable database-failure mode.
+
+Transaction-history continuation (2026-10-23; branch `codex/ux-basics-and-workflow`,
+source base `ac2da1cee`): a rejected history refresh previously only logged an
+error, leaving an empty wallet indistinguishable from an offline scan failure.
+The history hook now exposes a failure state, clears it when retry starts, and
+the page presents a localized alert with a 44px Retry control. Hook regression
+tests confirm failure and retry recovery; the history component tests continue
+to verify explorer/detail separation and policy guidance. Focused hook tests
+(2/2), focused history UI tests (2/2), and changed-file Prettier pass. Native
+history refresh failure rendering and populated pagination/detail-service
+states remain unverified; this entry makes no packaged-runtime claim.
+
+CashFusion touch-target continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): source review found
+the protocol-help disclosure and three mode switches measured below 44px.
+They now expose minimum 44px height and 56px switch width while retaining their
+existing actions and disabled behavior. CashFusion settings tests pass 5/5,
+including the touch-target regression, and changed-file formatting passes.
+The disposable public-only watch-only fixture cannot expose the CashFusion
+route, so there is no packaged interaction evidence for these controls.
+
+Home refresh feedback continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): manual Home refresh
+network/history failures previously only reached logs. Home now presents a
+localized alert, clears it when a retry starts, and keeps Sync at a 44px minimum
+target. Focused Home sync and resource tests pass (14/14), including the
+existing Arabic resource-completeness gate. Full UI suite passes 58 tests across
+18 files; core typecheck/lint, standard and desktop React builds, formatting,
+and `git diff --check` pass. Native failure-state rendering needs a disposable
+network-failure fixture and is not claimed here.
+
+Contract View load recovery continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): template or instance
+load failures previously left the route in an error empty state without an
+in-place recovery path. The error screen now announces the message and exposes
+a 44px Retry action, which clears the error and reruns both reads. The focused
+UI regression verifies the alert, button target class and callback. A packaged
+retry still needs a disposable contract fixture with available templates.
+The focused UI test passes; the full UI suite passes 59 tests across 19 files.
+Core typecheck/lint, standard and desktop React builds, changed-file formatting
+and `git diff --check` pass. No contract was created, signed or broadcast.
+
+Paper Wallet Sweep failure presentation continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): code review showed a
+broadcast failure left the confirmation sheet open while its error appeared
+only behind the sheet. The shared inline notice now uses `role=alert` on the
+page and inside the sheet; Scan/Sweep actions are minimum 44px, and Back uses a
+secondary style. The focused UI regression passes and verifies alert content
+in both presentation styles. No sweep was initiated; packaged broadcast-failure
+presentation remains unverified and no funds were broadcast. The full UI suite
+passes 60 tests across 20 files; core typecheck/lint, standard and desktop React
+builds, formatting, and `git diff --check` pass.
+
+Wallet Info touch and feedback continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): Wallet Info copy
+actions now rely on the shared result-aware presenter without a redundant local
+success label or swallowed wrapper failures. Copy controls have accessible
+names and 44px targets; rename/save/cancel, key-identity and recovery controls
+also have 44px minimum targets. Wallet errors announce with `role=alert` and
+name-save feedback with `role=status`; password/biometric checks are unchanged.
+Focused copy and locale tests pass (15/15), full UI suite passes 60 tests across
+20 files, and core typecheck/lint, both React builds, formatting and
+`git diff --check` pass. No wallet secret was revealed; packaged secret-gate
+verification remains open.
+
+Receive address preparation continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): address bootstrap
+failures were logged without feedback, the action stayed enabled while deriving,
+and empty results appeared successful. Receive now guards duplicate starts,
+announces loading/failure with localized copy, treats missing main addresses as
+failure and offers a 44px retry action in both empty-address layouts. Wallet
+changes clear prior address state and cancel stale lookup results; the explicit
+bootstrap checks the active wallet before publishing. Focused Receive UI and
+resource tests pass (13/13); full UI suite passes 62 tests across 21 files.
+Core typecheck/lint, standard and desktop React builds, formatting and
+`git diff --check` pass. Native failure and wallet-switch exercise remain open.
+
+Server Settings outcome feedback continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): connection failure and
+success copy was visible without alert/status semantics, and Auto/Manual/Connect
+did not guarantee 44px targets. The screen now announces failures as alerts and
+success as a polite status, with 44px minimum targets. The focused settings test
+forces a rejected reconnect and verifies the alert and target sizing. Packaged
+network refusal and custom-server recovery remain unverified.
+After the reconnect change, `npm run test:core` passes 1,972 tests with 10
+skipped across 307 passing files and 7 skipped files; the UI suite passes 62
+tests across 21 files. Typecheck, lint, standard/desktop builds, formatting and
+`git diff --check` pass.
+
+Transaction detail recovery continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): detail lookup errors
+were rendered as muted copy without announcement or retry. The error now uses
+an alert region with a 44px Retry action that repeats the same force-refreshed
+transaction lookup. The focused UI regression rejects the first lookup and
+verifies the second call's txid and refresh option. Populated details and native
+explorer behavior remain unverified pending a disposable transaction fixture.
+Focused history and settings UI tests pass (3/3); full UI suite passes 63 tests
+across 22 files. Core typecheck/lint, standard and desktop React builds,
+formatting, and `git diff --check` pass.
+
+Transaction label editing continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): transaction labels now
+edit inline instead of using `window.prompt`. The editor has explicit
+Save/Cancel, a 200-character limit, progress and a save-failure alert; saved
+labels announce through a polite status. Spanish, Chinese and Arabic labels
+are included alongside English. The UI test forces storage failure and verifies
+the alert and that the browser prompt is not called. This is a presentational
+recovery improvement; transaction authorization and detail lookup are unchanged.
+Focused detail/resource tests pass (13/13); the full UI suite passes 64 tests
+across 22 files. Core typecheck/lint, standard and desktop React builds,
+formatting and `git diff --check` pass.
+
+UTXO personal label continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): UTXO labels used a
+browser prompt, and the shared coin-label service swallowed database write
+errors. Transaction and UTXO labels now use `PersonalLabelEditor` with
+accessible failure feedback, explicit Save/Cancel, and retry after a failed
+save. `CoinLabelService.setCoinLabel` propagates unavailable-database and write
+failures so callers cannot announce a false save. Focused editor, transaction
+detail and service regressions pass (8 tests). Full `npm run test:core` passes
+1,973 tests with 10 skipped across 307 passing and 7 skipped files; `npm run
+test:ui` passes 65 tests across 23 files. Lint, formatting, typecheck, standard
+and desktop React builds, and `git diff --check` pass. A populated packaged UTXO
+screen and native touch/rendering evidence remain open.
+
+WizardConnect notification continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): URI validation,
+scanner outcomes, pairing, and transaction approve/reject messages called the
+native Toast API directly, so browser/desktop could lose transient feedback.
+They now share `showWalletNotification`, which uses native Toast when
+available and otherwise renders the accessible wallet status presenter. The
+pairing and transaction actions are unchanged. Focused helper and connection
+status tests pass (10 tests). Full `npm run test:core` passes 1,975 tests with
+10 skipped across 307 passing and 7 skipped files; `npm run test:ui` passes 65
+tests across 23 files. Core typecheck/lint and standard/desktop React builds
+pass. A packaged connector resolution flow and stacked mobile dialog evidence
+remain open.
+
+BIP21 amount validation continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): the Receive amount
+handler silently stripped unsupported characters, turning scientific notation
+such as `1e-3` into a different value. It now preserves entered text, accepts
+one locale comma separator, validates positive BCH amounts to eight decimal
+places, announces invalid values, and blocks copy/payment-QR output until
+corrected. Arabic validation copy is translated. Twenty-seven focused Receive
+and locale tests pass; full core passes 1,987 tests with 10 skipped across 307
+passing and 7 skipped files. Full UI passes 65 tests across 23 files; lint,
+typecheck, standard and desktop React builds pass. Packaged keyboard/paste
+behavior remains unverified because no Android device is attached.
+
+Scanned BIP21 amount validation continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): shared Send parsing
+used `parseFloat`, accepting numeric prefixes such as `1e-3` and `13abc`, and
+ignored duplicate amount parameters. Parsing now flags zero, malformed,
+over-precision and duplicate amounts; QR scanning announces the localized
+problem and leaves the recipient unchanged. Scanner transient notifications
+now use the shared native/browser presenter. Focused parser/Receive/locale tests
+pass (39 tests). Full core passes 1,992 tests with 10 skipped across 307
+passing and 7 skipped files; full UI passes 65 tests across 23 files. Lint,
+typecheck, formatting and standard/desktop React builds pass. Packaged scanning
+remains unverified without an attached device.
+
+Outbox touch target continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): Sync, Copy
+transaction ID and release controls on `/outbox` lacked an explicit 44px
+minimum. All now meet it. The Outbox UI regression verifies each target and
+confirms the Fusion verification lock remains disabled with its accessible
+reason; release authorization and lock behavior are unchanged. Focused Outbox
+test passes (1/1); full UI passes 65 tests across 23 files. Lint, typecheck,
+formatting, standard/desktop React builds and `git diff --check` pass.
+Pending/unknown/retry/cancel flows still need disposable transaction
+fixtures.
+
+Transaction review keyboard interaction continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): the custom Simple
+Send review modal lacked an accessible name and keyboard focus management. It
+now labels/describes the dialog, moves focus to Close, traps Tab/Shift+Tab,
+closes on Escape only when not sending, restores prior focus on close, and uses
+a 44px Close target. The focused UI test verifies focus entry, both trap
+boundaries, Escape cancellation, focus return and no accidental send
+confirmation. Focused test passes (1/1); full UI passes 66 tests across 24
+files. Lint, typecheck, formatting and standard/desktop React builds pass. A
+populated transaction review/approval and native keyboard flow remain
+unverified.
+
+Merchant Pay recovery continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): pool fetch failures
+showed a “try again” message with no retry control. Added a localized Retry
+button that reruns pool discovery only; payment request creation and wallet
+authorization remain separate. Pool discovery/retry is now isolated in a hook;
+its mounted UI regression verifies a failed fetch, announced recovery state,
+second fetch after Retry, and no-stablecoin state (2/2 pass). Full Merchant Pay
+screen rendering and native presentation remain platform/fixture gaps.
+
+Multisig QR dialog continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): the cosigner QR
+scanner used a custom modal without a name or shared keyboard focus handling.
+It now uses the accessible wallet `Popup`, and its scan action has a 44px
+minimum. Focused UI regressions verify accessible dialog naming and initial
+focus, visible scanner errors and retry, and that empty results/cancellation
+never feed a frame into the signing flow. Focused UI tests pass (2/2); full UI
+passes 68 tests across 25 files. Lint, typecheck, formatting, standard and
+desktop React builds, and `git diff --check` pass. Camera and desktop
+image-file scanning remain platform fixture gaps.
+
+Installed add-on host recovery continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): bundle-read and
+sandbox-initialization errors were displayed as unannounced red text without a
+retry. The host now exposes errors as an alert and offers a 44px Retry action
+that destroys any failed iframe and reloads the installed bundle. UI
+regressions cover both bundle-read and iframe-init failures followed by a
+successful retry. Add-on capability policy is unchanged. Focused tests pass
+(2/2); full UI passes 70 tests across 26 files. Lint, typecheck, formatting,
+standard and desktop React builds, and `git diff --check` pass. A packaged
+installed add-on fixture remains unverified.
+
+Derivation settings accessibility continuation (2026-10-23; branch
+`codex/ux-basics-and-workflow`, source base `ac2da1cee`): invalid BIP44 coin
+type/account-index input was rendered as unannounced red text, disconnected
+from the disabled resync action. Validation now uses an alert associated with
+both path inputs and the action; settings completion/no-op feedback is a status
+message. Derivation inputs and primary actions have 44px minimum targets. The
+focused UI test passes (2/2), including alert semantics and input association;
+change confirmation, persisted reconfiguration failure, discovery and packaged
+native behavior remain unverified.
+
+App-wide UX continuation verification (2026-10-23): current checkout is
+`/home/lightswarm/projects/OPTNWallet`, branch `codex/ux-basics-and-workflow`,
+HEAD `ac2da1ceec73c8cd457e44fdfe02035cb034a173` with uncommitted task changes.
+Merchant Pay retry UI suite passes (31 files, 139 tests); full UI suite passes
+(26 files, 70 tests); core suite passes (307 files, 1,993 tests; 7 files and 10
+tests skipped). Full TypeScript check, core lint, targeted app ESLint, standard
+React build, desktop React build, formatting checks, and `git diff --check`
+pass. Safe screenshots already indexed in `docs/ui-overhaul/evidence/` document
+prior Android 34 and Chrome onboarding/settings states; they do not capture the
+latest dirty source fingerprint. No Android device/emulator is attached in this
+verification session. Native retry/toast stacking, packaged desktop UI, iOS,
+transactional fixture flows, and remaining per-route states listed in the UX
+coverage register remain explicit gaps. No spend, signing, broadcast, publish,
+commit or push was performed.
+
+Send action hierarchy correction (2026-10-23): review of the existing safe
+Android empty-Send capture found the ordinary Back navigation styled red as a
+destructive action. It now uses the secondary button hierarchy with a 44px
+minimum. The referenced capture remains explicitly pre-fix because no emulator
+is attached for a fresh package render. Source behavior is navigation-only; no
+transaction logic changed.
+
+Copy notification isolation regression (2026-10-23): the shared copy helper
+now catches failure from both the native-toast fallback path and browser
+presenter, preserving the clipboard operation's true boolean result. The added
+test forces the wallet presenter to fail after a successful clipboard write;
+all 7 copy-feedback tests pass. Copied contents remain absent from status and
+native notification text.
+
+CashToken/BCMR and Cauldron deployed-contract verification (2026-10-23;
+branch `codex/ux-basics-and-workflow`): mainnet and chipnet RiftenLabs health
+responses reported `status=healthy`, `indexed_height=chain_tip`, and deployed
+version `0.2.0`. The wallet now models the deployed health response and current
+optional token metrics, displays indexer status/version/lag in the Cauldron
+market picker, and refreshes that status with pool and wallet reconciliation.
+Missing BCMR registries remain an explicit unavailable state with a bounded
+retry window; cached metadata is preserved when refresh fails. Live
+mainnet/chipnet Cauldron discovery, liquidity planning and transaction-building
+smoke tests pass. Focused Cauldron suites pass (35 tests); BCMR/shared metadata
+suites pass (14 tests). The RiftenLabs checkout was not modified, and no
+signing, broadcast or spend was performed.
+
+Screenshot-led UX assessment (2026-10-23 local; branch
+`codex/ux-basics-and-workflow`, HEAD
+`ac2da1ceec73c8cd457e44fdfe02035cb034a173` plus uncommitted changes): reviewed
+the existing tmpfs pack against the canonical UI/UX skill and approved Home,
+Send, Receive and Cauldron references. The original capture-completion claim
+is insufficient: only 13 allowlisted frames show 11 partial surfaces among
+42 PNGs; 23 are startup frames, 3 named history/settings images are Home
+fallbacks, and 11 originals are 780×493 rather than proven mobile viewports.
+Only onboarding has loaded wide-browser evidence. The claimed Chipnet
+fixture is unsupported because captured Settings says Mainnet. Original
+capture revision/dirty fingerprint and CSS viewport/DPR were not recorded;
+current inspected-source hashes are stored separately in the temporary
+analysis context and cannot reconstruct capture-time state.
+
+Added prioritized recommendations UX-01–12 to the existing UX plan: compact
+content-space recovery; absent onboarding help (the helper returns null);
+light-theme navigation contrast (approximately 2:1 sampled against white);
+visible task/network context; Home/Send/onboarding hierarchy; ordinary Back
+styling; Apps categories; Settings exit emphasis; and truthful empty Outbox
+guidance. The user's approved private-key requirement remains ten taps plus
+masked display. Existing rapid-click screenshots do not prove the selected
+mode; an unapproved intermediate synthetic reveal image is excluded from the
+analysis gallery.
+
+All new gallery/contact-sheet images, the full report, image audit and
+per-surface gap register remain in
+`/run/user/1000/optn-ux-review-20261023/analysis/` on tmpfs. No images were added
+to the repository and no application source changed in this assessment.
+Native Android/Tauri/iOS, actual post-copy feedback, transaction
+history/explorer, all individual settings panels, Cauldron/BCMR workflows,
+populated transaction/UTXO/token states and connector/hardware flows remain
+current-pack gaps. This assessment does not supersede or re-run historical
+test/build results above and does not establish production/release readiness.
+
+Assessment verification: all 42 originals decode and their dimensions/hashes
+were recorded; 29 local gallery links resolve, all 13 linked frames are on the
+reviewed image allowlist, and all four generated PNGs decode. Three contact
+sheets and the Chromium-rendered gallery were visually inspected. The manifest
+parses; Prettier checks for the two updated documents and scoped
+`git diff --check` pass. No application tests/builds were re-run because this
+assessment changes documentation only.
+
+Screenshot-led UX corrections implemented (2026-10-23; branch
+`codex/ux-basics-and-workflow`): applied UX-01–UX-12 from the assessment to the
+existing React surfaces and canonical UI/UX skill. Changes include compact
+header sizing, restored onboarding/network help, light-theme navigation
+contrast, visible task/network context, Home action ordering, Send advanced
+disclosure, plain onboarding copy, derivation disclosure, secondary navigation,
+wrapped Apps filters, less prominent Settings exit controls, and truthful empty
+Outbox guidance. The approved Receive ten-tap private-key flow remains masked by
+default and was not broadened.
+
+Verification environment: local checkout, browser/desktop React source, current
+dirty branch; no Android/iOS device or emulator attached. `npx tsc -b`,
+`npm run format:check`, `npm run build`, `npx vite build --config
+vite.desktop.config.ts`, `git diff --check`, and the focused 43-test Vitest
+suite pass. The new contextual-help regression is included. Source and test
+evidence plus browser-rendered onboarding screenshots at 390x844 and 780x493
+are recorded temporarily under `/run/user/1000/optn-ux-review-20261023/`; they
+do not prove packaged native toast behavior or a production release. Those
+remain explicit platform gaps. No spend, signing, broadcast, publish, commit,
+push, or RiftenLabs indexer modification was performed.
+
+Startup loading surface correction (2026-10-24; branch
+`codex/ux-basics-and-workflow`): the pre-React web fallback now bootstraps the
+stored theme, shows the OPTN brand in a themed card, and announces phase changes
+while the core/security WASM gates and AppShell import complete. Capacitor's
+fixed-duration auto-hide and white splash background were removed; the native
+splash now remains until React is mounted, with the existing startup failure
+path still hiding it and offering retry. The iOS launch storyboard background
+was aligned to the wallet green surface.
+
+Focused startup-status/WASM tests pass (2 files, 3 tests); the full UI suite
+passes (26 files, 70 tests) and the core suite passes (308 files, 1,996 tests;
+7 files and 10 tests skipped). TypeScript, formatting, lint, web build and
+desktop build also pass. Packaged Android/iOS timing and visual verification
+remain an explicit gap without a device or emulator. No signing, broadcast,
+spend, publish, commit or push was performed.
+
+### 2026-10-24: transaction preview assessment (not an implementation gate)
+
+Reviewed the retained React regular Send, custom builder, watch-only/multisig,
+WalletConnect, WizardConnect, CashConnect and built-in app transaction surfaces,
+including Cauldron swap, merchant payment, pool create and withdrawal. Findings,
+reproduction steps, source locations, severity, proposed common preview and
+per-surface gaps are in the existing
+[UX improvement plan](UX_IMPROVEMENT_PLAN.md#transaction-preview-review--2026-10-24).
+
+Revision: `/home/lightswarm/projects/OPTNWallet`, branch
+`codex/ux-basics-and-workflow`, HEAD
+`ac2da1ceec73c8cd457e44fdfe02035cb034a173` plus uncommitted changes. SHA-256
+hashes of 31 inspected source/reference files and the disposable diagnostic
+fixture are recorded in
+`/run/user/1000/optn-tx-preview-review-20261024/receipt.json` on verified tmpfs.
+These identify the reviewed working files, not just HEAD. Temporary evidence may
+disappear at logout/reboot; this ledger retains the findings and check summary.
+
+Component diagnostics reproduced eight current faults: WalletConnect Chipnet
+address prefix, enabled Sign/negative fee with missing sources, blank input
+identifiers for a valid source-output shape, Wizard NFT authority/commitment
+omission, drag-only Send confirmation, missing app-modal keyboard confirmation
+and initial focus, multisig total including change, and generic mint summary
+discarding token details. Diagnostics plus existing ReviewCard/ConnectionStatus
+checks passed **3 files / 13 tests**. Passing current-bug assertions is evidence
+of reproduction, not repair. A separate focused run passed **8 files / 41 tests**
+covering the simple-send planner, WalletConnect/Wizard signing, CashConnect
+lifecycle, Cauldron preflight/quote safety, Airdrops execution and multisig review.
+The existing Vite UI-config extensionless-import warning remains.
+
+Additional source findings include indistinct signature versus broadcast
+semantics, incomplete custom/burn/Airdrops/sweep final summaries, gross merchant
+funding presented as net wallet debit, transactions rebuilt after review,
+unreachable regular-Send hardware progress inside ReviewCard, and Cauldron's
+extra quote-details step while omitting fees in normal-swap final confirmation.
+FundMe/AuthGuard/Paryon need separate per-action review integration; the SDK's
+capability consent does not establish a verified transaction preview.
+
+No new screenshots: browser inventory was empty and attempted in-app browser
+creation returned `Browser is not available: iab`. Approved Send/Cauldron image
+references were inspected. jsdom does not prove rendered dimensions, native
+touch, keyboard behavior in a package, or live connector/hardware outcomes.
+Fresh mobile/wide/compact screenshots, native platform behavior, real peer
+round-trips and final plan/approval binding remain open. No live wallet keys,
+approval, spending, broadcast, publishing, commit or push were used. Existing
+synthetic signing tests use disposable fixtures only.
+
+Assessment changes only the existing UX plan and this ledger. Its temporary
+diagnostic file was removed from the repository; a copy remains on tmpfs for
+reproduction. No application fix or production/release readiness is claimed;
+build/typecheck/platform gates must be rerun when implementation changes land.
+Documentation Prettier checks, `git diff --check`, and all 31 source/reference
+fingerprints plus the diagnostic fixture checksum pass reconciliation.
+
+### 2026-10-24: transaction-preview implementation follow-up
+
+Checkout `/home/lightswarm/projects/OPTNWallet`, branch
+`codex/ux-basics-and-workflow`. The preceding UX baseline was committed as
+`05456aa669f678a13b7497059552e9bc13ae2355` without a push. The preview
+source revision reviewed here is `6f7237e4f`. No mainnet signing,
+spending, broadcast, publication or peer approval was exercised; all transaction
+fixtures are disposable and synthetic.
+
+Implemented preview corrections and explicit partial statuses are recorded in
+[the existing UX plan](UX_IMPROVEMENT_PLAN.md#transaction-preview-implementation-follow-up--2026-10-24).
+WalletConnect validates source/output shape before approval, uses the selected
+network, and reports signed-only, hardware-not-broadcast, broadcasted,
+submitted and failed-broadcast outcomes separately. Wizard review exposes NFT
+authority/commitment. Multisig, Mint, custom builder, Airdrops, Paper Wallet
+Sweep and CashConnect received verified-summary or feedback corrections.
+The canonical UI/UX skill now calls for source-verified wallet effects,
+review-to-sign binding and distinct signature/broadcast outcomes across
+ordinary, connector and built-in-app actions.
+Cauldron ordinary swaps now go from input to final review, include fees and
+require a new quote if rebuilt signed bytes or amounts change. Pool withdrawal
+prepares before approval and pool builds require another review after a changed
+plan. Paryon's redeem path is explicitly preview-only; live borrow/stake
+errors remain visible with history guidance.
+
+Focused synthetic checks passed: WalletConnect signing/preview validation,
+component Chipnet/invalid-request review, multisig total, custom-builder token
+accounting, Airdrops rebuild binding/units, Cauldron plan binding, Mint token
+summary, shared modal keyboard/preview-only action, Paper Wallet Sweep planner
+and Arabic copy regression. Full app suite: **34 files / 148 tests passed**.
+Full UI suite: **29 files / 75 tests passed**. Full core suite initially found
+two untranslated Arabic transaction-copy strings; the focused reproduction
+failed, the strings were added, and the rerun passed **310 files / 2,002 tests**
+with 7 files / 10 tests skipped. Core TypeScript, standard React build, core
+lint, repository formatting and `git diff --check` passed after the connector
+outcome edit. The desktop React build and full UI suite also passed at the final
+code revision. These are local/package checks,
+not release evidence.
+
+The browser inventory is empty in this session and `adb devices` reports no
+attached device; no new rendered or packaged-native screenshots of this
+revision are claimed. The 18 older, redacted Android/Chrome screenshots were
+moved from the repository's untracked evidence directory to
+`/run/user/1000/optn-ui-screenshots-20261024/` (tmpfs), so they disappear on
+shutdown and are not part of the commit. Prior relative screenshot links in
+historical entries refer to their original location; those images cover an
+earlier revision and cannot validate these preview edits. Connector peer,
+hardware, native touch/focus, changed chain liquidity, and real broadcast
+outcomes remain unverified. FundMe/AuthGuard and exact wallet-effect summaries
+needed further implementation at that revision, as marked in the UX plan.
+
+### 2026-10-24: transaction-preview implementation continuation
+
+Checkout `/home/lightswarm/projects/OPTNWallet`, branch
+`codex/ux-basics-and-workflow`, Linux `7.0.0-38-generic` x86_64, Node
+`v24.14.1`, npm `11.11.0`. This continuation added five review-boundary
+commits after `6f7237e4f`: AuthGuard final reviews (`6125cdce6`), ordinary Send
+CashToken authority and final-output checks (`0796e9dbb`), Cauldron merchant net
+wallet effects (`a00f98516`), verified WalletConnect/WizardConnect effects
+(`6b214d8bc`), and persistent hardware-send progress (`1352c861b`). FundMe
+source and verification were excluded at the user's direction. No push was
+performed.
+
+AuthGuard now reviews the exact built inputs, final outputs and fee before each
+broadcast and rejects wallet/network drift. Ordinary Send displays the selected
+final CashToken output's full category, recipient, fungible amount, NFT
+capability and commitment, and blocks authorization when that output is absent.
+Cauldron merchant previews derive net BCH and token effects from wallet-owned
+inputs and final change outputs rather than presenting gross funding as a
+debit. WalletConnect and WizardConnect match validated source inputs and final
+outputs against the wallet's stored public locking bytecodes to show net BCH,
+token-atom and NFT-count changes separately from whole-transaction totals.
+CashConnect still lacks source outputs; its balance changes are labelled as
+request-reported and not independently verified.
+Simple Send now keeps the authorized plan visible while a hardware wallet signs
+and while the signed transaction is submitted; device/broadcast progress uses
+an accessible live status instead of disappearing with the mode transition.
+
+Focused checks passed for AuthGuard review data (**6 tests**), ordinary Send
+review UI (**3 tests**), Cauldron wallet-effect derivation (**2 tests**) and
+surrounding Cauldron paths (**3 files / 33 tests**), connector preview/effect
+logic (**2 files / 6 tests**), and WalletConnect/WizardConnect UI
+(**2 files / 6 tests**). At final connector revision `6b214d8bc`, the full app
+suite passed **35 files / 154 tests**, full UI passed **29 files / 77 tests**,
+and non-UI core passed **312 files / 2,008 tests**, with 7 files / 10 tests
+skipped. `npm run typecheck:core`, `npm run lint:core`, `npm run format:check`,
+explicit changed-file Prettier, `npm run build`,
+`VITE_APP_SURFACE=desktop npm run build:web`, and `git diff --check` passed.
+After `1352c861b`, the simple-send visibility/planner group passed **3 files /
+12 tests**, full UI remained **29 files / 77 tests**, and core typecheck, lint,
+standard production build, desktop React build, changed-file Prettier and diff
+checks passed. The full app and non-UI core suites were not repeated because
+the follow-up changes only the Simple Send render condition and status semantics.
+
+These results prove local source/component behavior and React bundle creation.
+No live connector peer, hardware signer, packaged Android/iOS/Tauri target,
+native touch/focus, mainnet signing, spending or broadcast was exercised. The
+browser inventory remained unavailable and no current-revision rendered
+screenshots were captured. CashConnect source-output verification, real peer
+result semantics, packaged hardware-wallet progress, and rendered/native
+transaction-review evidence remain open in the UX plan.
+
+### 2026-10-24: connector delivery outcome continuation
+
+Revision `daa7a55e9` on `codex/ux-basics-and-workflow` aligned post-approval
+copy with the actual adapter boundaries. WizardConnect now reports that the
+signed transaction was returned to the app and may be broadcast later.
+CashConnect reports that prepared transactions were returned to the app, keeps
+its source-output verification limitation visible, guards repeated approval or
+rejection, and reports success/failure through the shared native/browser
+notification presenter. FundMe remains excluded.
+
+The focused CashConnect approval regression passed **2 UI files / 5 tests**;
+the translation-resource suite passed **11 tests**; the full UI suite passed
+**30 files / 78 tests**; and `npm run typecheck:core`, `npm run lint:core`,
+changed-file Prettier, `git diff --check`, and `npm run build` passed. These are
+local source/component and React-bundle checks. No live peer, hardware signer,
+native package, mainnet action, signing, spending, broadcast, or push was
+performed.
+
+### 2026-10-24: Paryon action-boundary continuation
+
+Revision `6c0e4a4f5` clarified the Paryon transaction review boundary. Borrow
+and Stake confirmations are disabled unless the live verified workspace is
+writable, their action is labelled “Confirm and broadcast,” and a failed
+readiness check stays in the review with an error. Redeem remains explicitly
+preview-only with “Finish preview” and cannot build, sign, or send.
+
+The Paryon action-semantics regression passed **2 files / 5 tests** and the
+full built-in-app suite passed **36 files / 156 tests**. Core typecheck, lint,
+changed-file Prettier, `git diff --check`, standard production build, and
+`VITE_APP_SURFACE=desktop npm run build:web` passed. These are local
+source/component and React-bundle checks; no live Paryon contract action,
+mainnet signing, spending, or broadcast was performed.
+
+### 2026-10-24: Paryon review binding continuation
+
+Revision `efe6f7595` binds the Paryon confirmation modal to the exact current
+action preview. Borrow, Stake, and Redeem confirmation is disabled when the
+amount, metrics, details, warnings, readiness, or blocked reason changes while
+the modal is open; the user is told to close the review and prepare it again.
+The helper regression now passes **2 files / 6 tests**, and the full built-in-app
+suite passes **36 files / 157 tests**. Core typecheck, lint, changed-file
+Prettier, `git diff --check`, standard production build, and
+`VITE_APP_SURFACE=desktop npm run build:web` pass on this revision. These are
+local source/component and React-bundle checks; rendered, packaged, live
+contract, hardware, mainnet signing, spending, broadcast, and push evidence
+remain unavailable. FundMe remains excluded from this follow-up.
+
+The broader regression pass on this revision also passed `npm run test:ui`
+(**30 files / 78 tests**), `npm run test:core` (**313 passed / 7 skipped files;
+2,010 passed / 10 skipped tests**), and `npm run security:test` (**2 files / 6
+tests**). The UI run still emits the repository's existing Vite
+`configLoader: 'native'` warning; it does not fail the suite.
+
+Repository gates also passed on this revision: `npm run deps:check`,
+`npm run format:check`, and `npm run addons:validate` (**1 file / 1 test**).
+
+### 2026-10-24: Quantumroot recovery review continuation
+
+Revision `c5b274b85` moves Quantumroot regular recovery, aggregate BCH sweep,
+Quantum Lock recovery, and token-authorized recovery behind an exact prepared
+transaction review. The modal now shows the destination, input total, recovery
+amount, network fee, protected successor output when present, input outpoints,
+and transaction byte length; confirmation broadcasts only the retained raw
+transaction and guards repeated activation. A new pure review helper verifies
+that selected-input totals equal the reviewed fee, recovery amount, and any
+protected successor output.
+
+The focused Quantumroot and recovery-service regression passed **3 files / 31
+tests**; the built-in-app suite passed **36 files / 157 tests**; core typecheck,
+lint, changed-file Prettier, `git diff --check`, standard production build,
+and `VITE_APP_SURFACE=desktop npm run build:web` passed. These are local
+source/component and React-bundle checks. Rendered mobile/native, live-chain,
+hardware, and packaged evidence remain unavailable. FundMe remains excluded.
+
+### 2026-10-24: Paryon exact transaction review and dev-cache follow-up
+
+Revision `bc0456d91` prepares Paryon Borrow and Stake transactions before the
+final confirmation. The review now retains the exact raw transaction and shows
+the computed network fee, wallet-input total, output total, and byte length;
+confirmation broadcasts those retained bytes. Preparation failures remain in
+the review with an explicit “No transaction was sent” message. Redeem remains
+preview-only. The pure prepared-transaction accounting regression passed **1
+file / 2 tests**, the focused Paryon suite passed **5 files / 22 tests**, and
+the built-in-app suite passed **36 files / 157 tests**.
+
+`npm run typecheck:core`, `npm run lint:core`, targeted ESLint, Prettier,
+`git diff --check`, `npm run build`, and the desktop web build passed. The dev
+script now starts Vite with `--force` after the attached stale optimizer-cache
+module failures; a fresh forced server returned HTTP 200 for the previously
+failed source modules. The browser-extension listener/session warnings and
+TokenIndex BCMR 404s remain external or expected unavailable-metadata states;
+the BCMR service keeps cached metadata and falls back without treating those
+404s as wallet failures. Rendered, packaged, live contract, hardware, and
+native confirmation evidence remain unavailable. FundMe was intentionally
+excluded.
+
+The read-only RiftenLabs parity check was repeated against the deployed
+endpoints: both `https://indexer.riften.net/health` and
+`https://indexer-chipnet.riften.net/health` returned `status=healthy`,
+`indexed_height=chain_tip`, and `version=0.2.0`. The local reference checkout
+is already at the matching upstream `master` revision (`25bf5a2`); it was not
+modified. No wallet-side Cauldron endpoint or schema upgrade is required by
+this check.
+
+### 2026-10-25: explorer policy and settings correction
+
+Revision `bc5eb2682` makes transaction explorer links obey the selected Rust
+chain policy for both transaction and address URLs. A transaction detail popup
+now shows the selected-network explorer action, or explains why access is
+blocked and links to the dedicated Settings → Explorer panel. Explorer choice
+has been removed from the confusing mobile Server panel and is available as a
+separate settings destination; the existing preset list remains intact.
+
+The focused standard regression passed **8 files / 38 tests**; the targeted
+explorer/detail run passed **3 files / 14 tests**; and the latest desktop UI
+settings run passed **2 files / 3 tests**. These cover policy refusal, settings
+navigation, selected-network history details, retry, transaction-ID copy, and
+the blocked-access Settings link. Core typecheck, lint, Prettier and diff checks
+passed. Native browser-open behavior and a packaged settings render remain
+unverified. FundMe was not touched.
+
+The follow-up full suites also passed `npm run test:ui` (**30 files / 79
+tests**) and `npm run test:apps` (**36 files / 157 tests**); the standard and
+desktop web builds passed on the same checkout.
+
+### 2026-10-25: connector, Cauldron and history preview tightening
+
+Revision `1b7d7949d` on `codex/ux-basics-and-workflow` keeps FundMe out of scope
+and tightens the remaining transaction-preview surfaces. WizardConnect now uses
+one collapsed technical-details disclosure for inputs, outputs, scripts and
+CashToken identity, matching WalletConnect's progressive disclosure while
+leaving the verified wallet effect and whole-transaction totals visible. The
+review still distinguishes sign-and-return from broadcast behavior.
+
+Cauldron's separate quote-details overlay was removed from the normal path so a
+fresh quote leads directly to one final review. The review retains pay/receive,
+minimum receive, network fee, LP fee, route/risk warnings and the existing
+rebuild/stale-liquidity checks. Technical route and market-depth details remain
+available without another navigation step.
+
+History cards now lazily hydrate visible transactions from the existing
+Electrum verbose-details cache/in-flight requests and show a signed wallet BCH
+effect only when owned inputs or outputs can be matched. Unknown ownership is
+left blank. A pure helper regression covers outgoing change, incoming value and
+unknown ownership.
+
+Focused checks passed **3 files / 10 tests** for the new helper and connector /
+history UI paths. `npm run typecheck:core`, `npm run lint:core`, Prettier and
+`git diff --check` passed. No live connector, packaged native, hardware,
+mainnet signing/spending/broadcast, or push evidence was produced. The browser
+Vite config warning remains the repository's existing non-fatal warning.
+
+### 2026-10-25: preview localization and full verification
+
+Revision `ff7f87434` adds Arabic translations for the new transaction-preview,
+explorer-settings and history-effect labels, preserving the `{bytes}`
+interpolation used by Quantumroot recovery details. FundMe remained untouched.
+
+The full post-change gates passed: `npm run test:core` (**317 passed / 7 skipped
+files; 2,020 passed / 10 skipped tests**), `npm run test:ui` (**30 files / 79
+tests**), `npm run test:apps` (**36 files / 157 tests**),
+`npm run typecheck:core`, `npm run lint:core`, `npm run format:check`,
+`npm run deps:check`, `npm run addons:validate` (**1 test**),
+`npm run security:test` (**2 files / 6 tests**), standard `npm run build`,
+`VITE_APP_SURFACE=desktop npm run build:web`, and `git diff --check`. The
+existing Vite native-config-loader warning remains non-fatal. No live connector,
+packaged native, hardware or mainnet signing/spending/broadcast evidence was
+produced.
+
+### 2026-10-25: executable preview inventory continuation
+
+The in-scope app preview inventory was rechecked at the current branch head.
+Airdrops now presents one final confirmation sheet with recipient count,
+formatted total, fee, and an expandable exact input/output review instead of a
+separate duplicate transaction popup. Paper-wallet sweep, AuthGuard, the
+regular builder, WalletConnect/WizardConnect, and Cauldron were source-reviewed
+against the same preview contract: prepare exact bytes, show wallet-relevant
+effects and costs, keep technical identity available on demand, and require a
+deliberate confirmation before an authorized broadcast boundary.
+
+`npm run test:apps` passed **36 files / 157 tests** on this revision;
+`npm run typecheck:core`, `npm run lint:core -- --no-cache`, changed-file
+Prettier, and `git diff --check` also passed. Rendered mobile/desktop review,
+packaged native behavior, hardware approval, and live peer evidence remain
+open. No signing, spending, or broadcast was performed.
+
+### 2026-10-25: iOS startup configuration reconciliation
+
+`npm run capacitor:sync:ios` regenerated the ignored iOS Capacitor config from
+the canonical `capacitor.config.ts`: the splash now uses `#0d2a1fff`, has no
+fixed-duration auto-hide, and remains visible until the React startup path
+mounts. The same sync added the installed `CapacitorApp` pod entry to the
+tracked iOS Podfile. Sync completed successfully; CocoaPods and Xcode were not
+available, so native compilation and device launch timing remain unverified.
+
+The shared explorer action was also tightened: blocked policy explanations now
+include a Settings → Explorer recovery link anywhere the reusable component is
+used, while available links still use the selected network and preset. The
+focused `ExplorerLink` UI regression passed **1 file / 2 tests**. Browser/mobile
+popup failures now use the wallet status presenter; the focused external-link
+regression passed **1 file / 2 tests**. Tauri continues through its existing
+system-browser adapter.
+
+Transaction details now show the same verified wallet-owned BCH effect as the
+history card, with unknown ownership remaining explicit. The detail regression
+passed **1 file / 4 tests**.
+
+Visible history hydration now catches each verbose Electrum lookup separately;
+one failed transaction no longer rejects the page-wide effect hydration or
+surfaces an unhandled rejection.
+
+WalletConnect and WizardConnect now use the shared connector request summary:
+network, actual sign/broadcast behavior, and complete-request fee are visible
+first; whole-transaction totals and output rows are progressively disclosed.
+The verified wallet-owned effect remains prominent and exact preview validation
+and approval boundaries are unchanged. The focused WalletConnect UI regression
+was updated and passed **1 file / 2 tests**.
+
+The shared connector-summary labels also have Arabic translations so the
+resource fallback check remains clean. The full core suite passed **318 files /
+2,022 tests** (7 files and 10 tests skipped).
+
+### 2026-10-25: connector preview consistency verification
+
+Revision `23903a961` on `codex/ux-basics-and-workflow` is the current source
+fingerprint. `npm run test:ui` passed **31 files / 82 tests**; `npm run
+test:apps` passed **36 files / 157 tests**; `npm run typecheck:core`,
+`npm run lint:core -- --no-cache`, `npm run format:check`, `npm run deps:check`,
+`npm run addons:validate`, `npm run security:test`, `npm run build`, and
+`VITE_APP_SURFACE=desktop npm run build:web` passed. The UI Vite
+`configLoader: 'native'` extension warning remains non-fatal.
+
+The focused WalletConnect review passed **1 file / 2 tests** after the shared
+summary was introduced. No connector peer, hardware approval, native toast,
+browser external-link, or live-chain transaction was exercised; those remain
+explicit evidence gaps. FundMe remains excluded by user direction.
+
+The console-log BCMR icon issue is also covered in this revision: IPFS gateway
+icons now flow through the configured gateway/data-URI path instead of being
+handed directly to a browser image element that can be blocked by CORP/CORS.
+`src/services/__tests__/BcmrService.test.ts` passed **1 file / 9 tests** for
+the service regression. The log's extension transport warnings and historical
+Vite module-load failures are external/stale-environment evidence, not wallet
+runtime failures established by the current production build.
+
+### 2026-10-25: BCMR icon regression verification
+
+Revision `e89d66a2a` is the current source fingerprint. After routing gateway
+form IPFS icons through the configured gateway/data-URI path,
+`src/services/__tests__/BcmrService.test.ts` passed **1 file / 9 tests** and
+the full core suite passed **318 files / 2,023 tests** (7 files and 10 tests
+skipped). Typecheck, lint and diff checks remained green. The previously
+recorded UI/apps suites and both production build configurations are unchanged
+by this service-only fix; both `npm run build` and
+`VITE_APP_SURFACE=desktop npm run build:web` were rerun successfully after the
+fix.
+
+### 2026-10-25: WalletConnect Cauldron/PUSD review
+
+The WalletConnect approval sheet was reviewed against a Cauldron BCH-to-PUSD
+request. The decision-critical area now leads with the app-described action
+(`Cauldron swap … BCH → PUSD`) and the verified wallet-owned effect. BCH and
+token changes are presented as explicit spend/receive cards; the full token
+category remains available under a token-identity disclosure. Network, action,
+and complete-request fee remain visible, while raw inputs, outputs, scripts,
+and addresses are grouped under one collapsed technical-details disclosure.
+The approval and cancellation actions remain in a safe-area-aware footer while
+the request body scrolls.
+
+Focused WalletConnect, WizardConnect, request-description, and localization
+regressions passed (**3 files / 10 tests**, plus **2 resource tests / 14
+tests**). The Cauldron fixture verifies `0.00999962 BCH → PUSD`, the `PUSD`
+label, and the collapsed technical disclosure. Live WalletConnect peer,
+native-device rendering, and BCMR decimal-display evidence remain open; the
+app-supplied prompt is context only and does not replace wallet-verified
+transaction effects. FundMe remains excluded.
+
+### 2026-10-25: UX workflow integration
+
+The existing `.claude/skills/ui-ux-product/SKILL.md` is now the explicit
+workflow entry point for user-facing changes. It maps scope, journey-first
+planning, shared-layer architecture, development, rendered verification,
+state/error testing, dedicated UX review, and documentation sync without adding
+a competing skill or tracker. Its twelve-item acceptance checklist covers
+new-user clarity, primary action, progressive disclosure, recovery, truthful
+wallet effects, security/privacy boundaries, touch and keyboard behavior,
+visual consistency and proportional evidence. `AGENTS.md` points to the same
+normative checklist, and the pull-request template requests the corresponding
+evidence and explicit gaps.
+
+The workflow was checked against a hypothetical Cauldron BCH-to-PUSD approval:
+scope the user decision, map quote → review → cancel/retry → approval →
+uncertain broadcast, preserve verified wallet effects above raw transaction
+details, bind approval to exact reviewed bytes, exercise responsive dialog
+states, and record live-peer or packaged-native gaps in this ledger. No code,
+wallet authority, transaction behavior or third-party analytics were changed
+by this documentation update.
+
+Validation: skill discovery path, referenced repository documents and PR
+template links were inspected; `git diff --check` and the repository formatting
+check passed after the documentation edits. Runtime/native/connector evidence
+remains governed by the existing surface-specific entries above.
+
+### 2026-10-25: connector BCMR identity and approval hierarchy
+
+WalletConnect approval now uses the shared wallet popup shell for focus
+containment, Escape/cancel behavior, safe-area-aware action placement, and a
+scrolling request body. The first view presents the requester context, selected
+network, actual sign/return or sign/broadcast operation, complete-request fee,
+and the wallet-owned BCH/token/NFT effect. Raw inputs, outputs, addresses,
+scripts, and token categories remain available under one technical disclosure.
+
+`ConnectorWalletEffectSummary` now consumes the existing shared BCMR resolver
+(`useSharedTokenMetadata`) for connector token categories. A verified BCMR name
+and symbol replace the category as the primary user-facing identity; BCMR
+decimals format fungible amounts while atomic amounts remain visible. When BCMR
+is unavailable, the UI says so and keeps any dApp label explicitly secondary;
+the app prompt never determines wallet effect or token identity. WizardConnect
+uses the same effect/technical summary and retains sign-and-return semantics.
+
+Verification on the current working tree: focused WalletConnect/WizardConnect
+UI checks passed (**2 files / 7 tests**), the full UI suite passed (**31 files /
+83 tests**), the app suite passed (**36 files / 157 tests**), core typecheck and
+core lint passed, and Prettier was applied to changed files. The UI Vite
+`configLoader: 'native'` extension warning is non-fatal. Live connector peers,
+remote BCMR failure/recovery, decimal-bearing token fixtures, hardware approval,
+and packaged mobile/native rendering remain open evidence gaps. No signing,
+spending, broadcast, or FundMe work was performed.
+
+### 2026-10-26: Simple Send blank broadcast error recovery
+
+The supplied v1.7.4 Android capture showed a red error panel containing only
+`Error sending transaction:`. Source review traced this to blank provider or
+engine exception messages reaching `useSimpleSend` and `toErrorMessage` without
+a fallback. The shared error formatter now rejects blank `Error.message`
+values, provider-like `{ message }` objects are normalized, and broadcast
+classification/transaction results provide an actionable fallback instead of
+an empty string. Desktop engine responses also reject blank refusal messages.
+
+Regression coverage passed for `TransactionManager`, `TransactionService`,
+shared error/classification helpers, and the Simple Send hook. The reviewed
+transaction remains available for retry after a failed send; success/clear
+behavior is unchanged. This is source/component evidence only: no live
+provider, device, signing, mempool, or confirmation evidence was produced.
+
+### 2026-10-28: Full-flow visual capture
+
+Revision: current working tree on `codex/ux-basics-and-workflow`. Environment:
+local Vite development server at `127.0.0.1:5173`, disposable generated wallet,
+headless Chrome capture at mobile 411×843 and desktop 1280×900. Temporary
+screenshots are stored under `screenshots/` for visual analysis and are not
+part of the source deliverable. Rendered routes and panels include onboarding,
+wallet navigation, transaction/send/custom-send/history/outbox, receive
+progressive disclosure, settings panels, built-in apps and Cauldron, plus
+WalletConnect/WizardConnect/CashConnect approval sheets. Connector sheets use
+synthetic local fixtures; history card/detail uses a synthetic txid fixture.
+
+Evidence status: rendered browser screenshots pass for the listed surfaces.
+Native notification behavior, packaged Android/iOS rendering, live connector
+peers, live Fulcrum/indexer data, hardware signing, broadcast, mempool and
+confirmation remain unverified. Images contain no unmasked private key or seed.
+
+### 2026-10-28: Send/Receive newcomer pass
+
+Source revision: current uncommitted `codex/ux-basics-and-workflow` checkout.
+Receive keeps the intentional ten-PubKey-tap private-key disclosure gate and
+resets it on every route entry. The public receive card now explains the
+purpose of the address and provides labelled Copy address and Share address
+actions. Sharing uses the same safe-area-aware native/browser notification
+path as copy; cancellation is silent, while unsupported or failed sharing is
+actionable. The Send page keeps BCH default, token/NFT/Airdrops, coin control,
+change address, and custom builder paths. Its review card now puts network and
+wallet-effect context before technical inputs/outputs, and recipient copying
+uses contextual address feedback.
+
+Focused evidence: `src/utils/__tests__/copyWithFeedback.test.ts` covers share
+success, unavailable share, and cancellation. Remaining gaps are packaged
+native share-sheet rendering, live provider/indexer data, hardware approval,
+signing, broadcast, mempool and confirmation. No funds were signed or spent.
+
+Validation continuation: focused Send/Receive/feedback checks passed (**3 files /
+15 tests**); core passed (**319 files / 2,032 tests**, 7 skipped files and 10
+skipped tests); UI passed (**31 files / 84 tests**); apps passed (**36 files /
+157 tests**); security passed (**2 files / 6 tests**); add-on validation passed
+(**1 test**); dependency policy, typecheck, lint, formatting, `git diff
+--check`, the web build, and the desktop-surface build all passed. The Vite
+`configLoader: 'native'` message remains a non-fatal warning.
+
+### 2026-10-29: Frontend redesign safety and comprehension pass
+
+Revision: existing checkout branch `codex/frontend-redesign`, with unrelated
+user-owned `screenshots/` preserved. The retained React surfaces now share an
+explicit Mainnet/Chipnet context banner across core wallet destinations;
+Home/Assets/Send use BCH/USD segmented controls; Send keeps Max under Advanced
+options and reports spendable balance in the selected unit; incoming funds can
+remain visible as a dismissible portfolio flag; and transaction IDs and
+participant addresses, including the successful Send state, are masked with
+long-press/context-menu disclosure for the full value.
+
+Network settings now requires an explicit target-network confirmation sheet,
+repeats the real-funds/test-funds warning, explains record clearing and
+resynchronization, and exposes reload/switch failures as retryable user-facing
+states. A failed switch reopens the confirmation sheet rather than retrying a
+network mutation implicitly. Unknown Simple Send failures now use a plain
+language fallback instead of displaying transaction-builder diagnostics.
+Outbox status and release/clear-lock states now have plain-language labels and
+touch/keyboard-accessible explanations, and transaction-detail lookup failures
+show a friendly retry state while technical causes stay in the application log.
+Recoverable Send failures retain the entered form and expose an explicit Edit
+payment action that returns focus to the recipient field.
+Onboarding Help is now a step-by-step walkthrough with explicit progress,
+reversible Back/Next controls and a Done action that closes the popup, matching
+the guided-pop-up interaction standard used for this redesign. Create/import
+onboarding now repeats the explicit LIVE/TEST network banner before the network
+toggle and derivation controls.
+
+Source/component evidence added in this continuation includes the Network
+settings UI suite (confirmation/cancel, failed-switch recovery and successful
+reload), masking utility coverage, onboarding coverage, connector review
+coverage, and the affected Send/History regressions. Packaged desktop/mobile,
+native notification,
+live-provider, signing, broadcast, mempool and confirmation evidence remain
+separate open gaps. A disposable local headless render covered onboarding at
+390×844 and 1440×1000; Firefox WebDriver exercised the Help walkthrough
+through all four steps and closed it with Done, and verified the create-wallet
+LIVE Mainnet banner. This continuation changed no transaction authority or
+signing path.
+
+The connector follow-up also moved wallet-effect loading/unavailable/BCMR
+identity copy and CashConnect/WizardConnect approval labels into the shared
+translation catalog, with Arabic overrides. Focused WalletConnect and
+CashConnect review tests remained green after this copy-only UI change. The
+same network and masked-disclosure treatment now covers the watch-only/multisig
+send, custom transaction summary/error surfaces, and paper-wallet sweep. The
+watch-only Back action now returns from confirmation/error/proposal states to
+the correction point before leaving the route; no transaction authority
+changed. Ordinary and multisig Send review now uses the same masked address
+disclosure for recipient, stealth, input and output values. Custom transaction
+source-selection, selected-UTXO and pending-outbound rows now use the same
+masked disclosure pattern with keyboard selection preserved. The dedicated
+desktop Home renderer now mirrors the same network context, BCH/USD,
+incoming-funds attention and masked recent-activity behavior while retaining
+desktop-only sync progress and connector popup behavior. The Apps directory,
+marketplace host, Contracts, Quantumroot and CashFusion entry points now repeat
+the active network context; Merchant Pay and Cauldron result/history cards use
+masked transaction IDs with on-demand full disclosure.
+The remaining direct wallet-adjacent routes now follow the same boundary:
+Nostr Chat, the standalone CashTokens mint flow, and the legacy FundMe campaign
+detail route repeat the active network context. Mint's broadcast result masks
+its transaction ID while retaining copy and long-press disclosure.
+Transaction History rows now expose status help without nesting an info control
+inside the row action and use the shared localized waiting/confirmed vocabulary.
+WalletConnect and WizardConnect place network context at the modal boundary, so
+unsupported and broadcast-locked requests are labeled too. CashTokens mint
+failures now lead with the shared plain-language error panel, with raw exception
+text behind Technical details.
+Cauldron's merchant auto-prepare effect now invokes the latest quote workflow
+through a stable ref, preserving the guided review path without a per-render
+effect dependency.
+Home now exposes Assets and Apps as a secondary wallet-tools tier beneath the
+primary Receive/Send actions, with return context preserved on web/mobile and
+desktop renderers.
+Home portfolio money cards also repeat the active network with a semantic
+Mainnet/Chipnet border and tint on both mobile and desktop, in addition to the
+centered context banner.
+The primary Send heading now uses the shorter localized `Send` label so it
+remains legible beside the wallet mark at mobile widths.
+
+Validation for this revision: UI **33 files / 87 tests** passed; core **320
+files / 2,037 tests**, 7 skipped files and 10 skipped tests, passed; focused
+route/redesign checks passed (**5 files / 15 tests**); security
+passed (**2 files / 6 tests**); add-on validation passed (**1 test**);
+dependency policy, TypeScript, lint, formatting, web build and `git diff
+--check` passed. The Vite native-config message remains a non-fatal warning.
+The bounded local preview returned `200 OK` with `Content-Type: text/html` and
+5,118 bytes. The connected browser surface was unavailable; local headless
+Chrome/Firefox evidence is recorded separately above.
+
+### 2026-10-29: Advanced address and transaction disclosure continuation
+
+The remaining user-visible raw-value audit found three advanced gaps: multisig
+receive token-aware/BCH address cards, the multisig cosigner unsigned
+transaction hash, and Quantumroot receive/quantum-lock address cards. Each now
+uses the shared masked-value interaction with click-to-copy and
+long-press/context-menu full disclosure while preserving QR and explicit Copy
+actions. Technical input fields and transient diagnostics remain exact where
+editing or debugging requires them. No address reservation, PSBT validation,
+signing, or transaction behavior changed.
+
+Current focused verification: UI **34 files / 88 tests** passed; TypeScript,
+core lint, Prettier, `git diff --check`, the web build, and the desktop-surface
+build passed. An isolated Chrome/CDP fixture rendered the revised Home at
+390×844 in Mainnet and Chipnet states and the revised Send screen at 390×844;
+the shortened Send heading, network banner, and money-card color distinction
+were visually confirmed. Advanced-screen rendered re-capture, packaged native
+behavior, live providers, signing, broadcast, mempool, and confirmation remain
+explicit evidence gaps.
+
+### 2026-10-30: Address disclosure continuation
+
+Contract View and Merchant Pay had remaining active address displays that were
+shortened but did not provide the approved full-value disclosure path. They now
+use the shared masked-value control with copy feedback and
+long-press/context-menu disclosure. Contract input and signing values remain
+exact where they are editable or technical. Merchant Pay tests passed **7/7**;
+core typecheck, lint, formatting, and `git diff --check` passed. Packaged and
+live-provider evidence remains separate and open.
+Quantumroot recovery destinations/outpoints and Cauldron merchant-review
+address displays received the same shared disclosure treatment. The focused
+Cauldron and Merchant Pay app suites passed **43/43** tests combined.
+Paryon broadcast success now keeps the status copy plain and renders the
+returned transaction ID as a masked, copyable disclosure. Memo Cash Reader
+activity rows apply the same boundary to author addresses and transaction IDs.
+The complete app suite passed **36 files / 157 tests** after these changes.
+The same boundary now covers the add-on Paper Wallet Sweep result, CashFusion
+result banners, UTXO cards, watch-only address previews, and the address
+selection popup. Exact transaction values remain available through the shared
+copy and long-press/context-menu disclosure. A documented desktop build
+attempt reached Rust compilation but stopped before producing a binary because
+the host lacks `glib-2.0`/`gobject-2.0` development metadata; WebKitWebDriver
+is also not installed, so packaged desktop evidence remains unavailable.
+Quantumroot vault lists and Coin Control outpoint rows now use the same
+interactive disclosure for their visible wallet identifiers. Core verification
+after this continuation passed **320 files / 2,037 tests** and UI verification
+passed **34 files / 88 tests**.
+AuthGuard mint/broadcast status and error strings now split visible transaction
+IDs into the same masked, copyable disclosure without changing its reviewed
+transaction or broadcast authority.
+Cauldron broadcast status sentences and result-modal copy now use the same
+masked transaction-ID disclosure as their standalone result row.
+Receive’s secondary address chooser now uses the same embedded masked address
+control while retaining its tap-to-select action.
+Token details now apply the same disclosure to the visible token ID and
+authority-head transaction hash; technical contract inputs remain exact.
+The persistent pending-outbound panel now explains each send state beside its
+label, including the difference between submission, network visibility, and
+confirmation, without changing release or clear behavior.
+Paryon thread freshness now has an adjacent explanation, and preferred
+contract outpoints use the same copy/long-press disclosure as other visible
+wallet identifiers; write gating remains unchanged.
+The persistent incoming-funds flag now renders structured amount, address, and
+Transaction ID fields in both mobile and desktop Home, so the notification
+does not lose its copy/full-value path when the toast is missed.
+Quantumroot recovery broadcasts now keep a persistent result notice in the
+vault popup with a masked, copyable Transaction ID; the native toast is reduced
+to a plain awaiting-confirmation message.
+Transient UTXO and server notification cards now use the same interactive
+address and Transaction ID disclosures. Simple Send recipient previews,
+CashToken review recipients, custom-builder output recipients, and contract
+function address selections now preserve the full-value copy/long-press path.
+The enlarged Receive QR preview now uses the same interactive disclosure for
+address and BIP21 payload values instead of rendering a shortened-only label.
+The Receive Quantumroot status popup now applies the same disclosure to its
+receive and Quantum Lock addresses.
+Core typecheck, the core suite (**324 files / 2,041 tests**), UI verification
+(**34 files / 88 tests**), app verification (**36 files / 157 tests**), the web
+build, lint, and Prettier passed after this continuation.
+
+### 2026-10-29: pending-send interaction and rendered layout continuation
+
+The blocking `PendingOutboundPanel` now uses the same user-facing state labels
+as `/outbox`: broadcasting, submitted, sent to network and seen by network.
+Tor-only Fusion records that still lack independent visibility are labelled as
+awaiting verification and show the reason their inputs remain locked. Outbox,
+Sync, Dismiss, release and clear controls in the sheet now have 44px minimum
+targets. A focused static-render regression covers the lock explanation and
+target sizing. This is source/component evidence; it does not prove a packaged
+native dialog.
+
+The full Outbox labels the masked value as `Transaction ID` and wraps the
+masked transaction/address values on narrow screens so the first and last
+characters remain visible. Send Advanced now scrolls its newly opened options
+into the form viewport after expansion. A clean disposable generated-wallet
+Chrome/CDP run rendered Home, Send, expanded Send Advanced, empty Outbox and a
+synthetic submitted Outbox record at 390x844, with submitted Outbox also at
+1280x900; the network-switch confirmation sheet was rendered at 390x844. The
+synthetic outbox record was local-only and no signing, spending, broadcast,
+mempool or confirmation occurred. Capture files were temporary and contained
+masked identifiers only.
+
+Current validation: core **324 files / 2,043 tests** with 7 skipped files and
+10 skipped tests; UI **34 files / 89 tests**; apps **36 files / 157 tests**;
+focused pending-panel tests **3/3**; core typecheck, web build, lint, Prettier
+and `git diff --check` passed. Packaged desktop/mobile, live-provider,
+hardware, signing and chain-state evidence remain open.
+
+The Home visual pass also moved `PriceFeed` below the primary wallet task
+surfaces in both `Home.tsx` and `DesktopHome.tsx`. A source regression asserts
+the intended order, and a clean Chrome/CDP render at 390x844 confirmed
+Portfolio is the first card after the network banner. This is browser/source
+evidence for hierarchy only, not packaged desktop or native evidence.
+
+### 2026-10-29: send recovery and review accessibility continuation
+
+Simple Send error recovery now keeps the entered payment mounted and focuses
+the correction point: recipient for invalid-address errors and the amount field
+for insufficient-funds errors. The friendly English message now explicitly
+identifies the wallet as the source of the insufficient balance. The Review
+card Technical details disclosure has an explicit 44px target; existing focus
+containment and masked full-value disclosure remain intact.
+
+Focused Send/Review verification passed **3 files / 18 tests**. Full current
+validation passed: core **324 files / 2,044 tests** with 7 skipped files and 10
+skipped tests; UI **34 files / 89 tests**; apps **36 files / 157 tests**;
+TypeScript/build, lint, dependency policy, security (**6/6**), add-on
+validation (**1/1**), Prettier and `git diff --check` all passed. The Vite
+native-config extension message remains non-fatal. Packaged native, hardware,
+live-provider, signing, broadcast, mempool and confirmation evidence remains
+open.
+
+### 2026-10-29: Outbox state matrix continuation
+
+The Outbox UI now has focused coverage for all four supported tracker states:
+broadcasting, submitted, sent to network, and seen by network. Each state is
+paired with its explanatory info control. Stale release and unknown-broadcast
+recovery remain guarded release conditions rather than separate tracker enum
+values; no release timing or transaction authority changed.
+
+The full UI lane now passes **34 files / 92 tests**. Core remains **324 files /
+2,044 tests** with 7 skipped files and 10 skipped tests; apps remains **36
+files / 157 tests**. The Vite native-config message remains non-fatal.
+Packaged native, hardware, live-provider, signing, broadcast, mempool and
+confirmation evidence remains open.
+
+### 2026-10-29: Home parity and Outbox diagnostic continuation
+
+Desktop Home now mirrors mobile stale/unverified balance guidance with an
+explanatory info control, Server settings recovery link and announced refresh
+failure. Both Home renderers explain recent pending/confirmed activity states,
+and Home QR/utility plus Send mode/Advanced/Airdrops controls meet the 44px
+target rule.
+
+Outbox classifies common provider diagnostics into friendly balance/network
+copy and keeps the raw message behind Technical details. Send insufficient-
+funds recovery can focus BCH, fungible-token, or NFT correction fields without
+clearing the entered payment.
+
+Final current validation passed **324 core files / 2,049 tests** with 7 skipped
+files and 10 skipped tests; UI **34 files / 93 tests**; apps **36 files / 157
+tests**. Build/typecheck, lint, dependency policy, security (**6/6**), add-on
+validation (**1/1**), formatting and `git diff --check` passed. Native
+packaged, hardware, live-provider, signing, broadcast, mempool and confirmation
+evidence remains open.
+
+The final Home status-help correction keeps recent-activity navigation and the
+status explanation as sibling controls, avoiding nested buttons. Connector
+technical-detail disclosures now use explicit 44px summary targets. Focused
+Home, connector and Outbox checks remain green after the structural correction.
+
+### 2026-10-29: custom builder error disclosure continuation
+
+Custom transaction-builder failures now show actionable wallet-language by
+default for insufficient funds, network problems, and generic build/broadcast
+failures. Raw provider/builder diagnostics are retained behind a
+keyboard-reachable Technical details disclosure. The builder's existing review
+dialog remains the confirmation boundary: it shows masked IDs/addresses,
+input/output totals, fee information, and token-accounting validation before
+the drag-to-send action. Back/Try again remains local to the builder; no
+transaction construction, signing, broadcast, release, or clear authority
+changed.
+
+Focused builder disclosure/popup/transaction-summary UI checks passed **3/3**.
+Final validation passed **324 core files / 2,049 tests** with 7 skipped files
+and 10 skipped tests; UI **35 files / 94 tests**; apps **36 files / 157 tests**.
+Core typecheck, web build, core lint, dependency policy, security (**6/6**),
+add-on validation (**1/1**), Prettier and `git diff --check` passed. The Vite
+native-config extension message remains non-fatal. Packaged native, hardware,
+live-provider, signing, broadcast, mempool, confirmation, and latest custom
+builder browser-render evidence remain open.
+
+### 2026-10-29: add-on identifier disclosure continuation
+
+AuthGuard selectable UTXO rows and Paryon execution-plan targets now use the
+shared masked transaction-ID interaction with copy feedback and
+long-press/context-menu full-value disclosure. No add-on transaction
+preparation, signing, broadcast, or protocol authority changed.
+
+The app suite passed **37 files / 159 tests** after this change; the production
+web build and targeted Prettier/diff checks also passed. Packaged add-on/native,
+live-provider, hardware, signing, broadcast, mempool and confirmation
+evidence remain open.
+
+### 2026-10-30: shared destructive-action target continuation
+
+The shared `wallet-btn-danger` CSS rule now enforces the same 44px minimum
+touch target as primary and secondary wallet actions, covering clear, release,
+retry, and other destructive/recovery controls without changing behavior. A
+focused UI regression protects the rule.
+
+Final current UI validation passed **36 files / 95 tests**; the production web
+build, core lint, targeted formatting, and `git diff --check` passed. Core and
+apps remain **324 files / 2,049 tests** (10 skipped) and **37 files / 159
+tests**. Packaged desktop/mobile, screen-reader, hardware, live-provider,
+signing, broadcast, mempool, confirmation, and full route fixture evidence
+remain open.
+
+### 2026-10-30: error disclosure, network context, and app-surface continuation
+
+Watch-only send, paper-wallet sweep, custom-builder, and multisig failures now
+show actionable wallet language by default with the exact diagnostic retained
+behind a keyboard-reachable Technical details disclosure. The paper-wallet
+classifier lives in a pure helper module so the component remains compatible
+with the repository's Fast Refresh lint rule. Existing retry/back behavior and
+transaction authority were preserved.
+
+Multisig Home, Receive, Policy, and Cosigner Workspace now render known policy
+network context. Paryon, Cauldron, Merchant Pay, Paper Wallet Sweep, and
+Airdrops render the current network at their app boundary; nullable provider
+context is omitted rather than guessed. AuthGuard and Paryon execution-plan
+transaction IDs now use the shared masked copy/long-press disclosure. Outbox
+diagnostic details and the shared destructive-action style now meet the 44px
+touch-target rule.
+
+Post-fix validation passed **324 core files / 2,050 tests** with 7 skipped
+files and 10 skipped tests, **38 UI files / 97 tests**, and **38 app files /
+160 tests**. Typecheck, production web build, core lint, dependency policy,
+security (**6/6**), add-on validation (**1/1**), Prettier, and
+`git diff --check` passed. The Vite native-config extension message remains
+non-fatal. Packaged desktop/mobile, screen-reader, hardware, live-provider,
+signing, broadcast, mempool, confirmation, and full route-fixture evidence
+remain open.
+
+### 2026-10-30: multisig setup and Home currency continuation
+
+Multisig setup and QR-import failures now use the shared friendly-error panel
+with Technical details disclosure. The setup network banner follows the policy
+network being created rather than only the standard wallet's network, keeping a
+Chipnet policy visibly distinct when the open mnemonic wallet is on Mainnet.
+
+Home and Desktop Home now show the spendable/stealth balance breakdown in the
+selected BCH or USD unit. If USD pricing is unavailable, USD mode states that
+instead of silently showing BCH values. English and Arabic labels are covered,
+and a source regression protects both renderers.
+
+Final validation passed **326 core files / 2,052 tests** with 7 skipped files
+and 10 skipped tests, **38 UI files / 97 tests**, and **38 app files / 160
+tests**. Typecheck, production web build, core lint, dependency policy,
+security (**6/6**), add-on validation (**1/1**), Prettier, and
+`git diff --check` passed. The Vite native-config extension message remains
+non-fatal. Packaged desktop/mobile, screen-reader, hardware, live-provider,
+signing, broadcast, mempool, confirmation, and full route-fixture evidence
+remain open.
+
+### 2026-10-30: connector and app error-disclosure continuation
+
+CashConnect pending-approval and connection-failure states now expose
+wallet-owned explanatory info buttons. WalletConnect and WizardConnect session
+status rows and the WizardConnect sign request status use the same contextual
+help pattern. Connector status copy now has Arabic overrides.
+
+Contract loading and add-on registry failures now show a user-facing recovery
+message first, with provider/registry diagnostics behind a 44px Technical
+details disclosure. Existing retry and navigation behavior remains unchanged.
+The local headless preview rendered the current onboarding shell at 390x844 and
+1280x900 after startup, with Create Wallet, Import Wallet, and Create Watch-Only
+Wallet present in the DOM. This is browser evidence only; connected browser,
+packaged native, screen-reader, live-provider, signing, broadcast, mempool,
+confirmation, and full route-fixture evidence remain open.
+
+Final validation passed **327 core files / 2,053 tests** with 7 skipped files
+and 10 skipped tests, **38 UI files / 97 tests**, and **38 app files / 160
+tests**. Typecheck, production web build, core lint, dependency policy,
+security (**6/6**), add-on validation (**1/1**), Prettier, and
+`git diff --check` passed. The Vite native-config extension message remains
+non-fatal.
+
+### 2026-10-30: fixture-harness boundary audit
+
+The deterministic desktop E2E specs cover launch and onboarding validation
+without persisting wallet data. Create/lock/reopen is explicitly
+mutation-gated and requires the native Tauri/WebDriver path with an isolated
+profile. There is not yet a non-mutating authenticated fixture that mounts
+Home, Send, Receive, History, or Outbox with disposable balances and
+transaction-state variants. Browser onboarding captures are therefore layout
+evidence only; authenticated route interactions remain an explicit evidence
+gap. This audit used no wallet credentials, seed phrases, signing, broadcast,
+or live-chain state.
+
+### 2026-10-30: disposable authenticated fixture harness
+
+Added a development-only `VITE_UI_FIXTURE=1` entry point gated by the
+`ui-fixture` query parameter. It mounts the real LandingPage, Home, Send,
+Receive, History, Outbox, Apps, and Settings screens against a fixture-owned,
+non-persisted screen store seeded with synthetic Chipnet balances,
+confirmed/pending history, an incoming notification and an unresolved outbox
+record. The fixture screen store is non-persisted and
+contains no mnemonic or private key. The Receive, Send and Outbox data
+boundaries short-circuit to public fixture values; no signing, tracker
+operation, or live provider is accessed.
+
+The local entry point is `VITE_UI_FIXTURE=1 npm run dev -- --host
+127.0.0.1` with `/?ui-fixture&screen=home#/fixture/home`; the screen value can
+be changed to `onboarding`, `watch-only`, `send`, `receive`, `history`,
+`outbox`, `apps`, `settings`, `walletconnect`, `wizardconnect`, `cashconnect`,
+or `builder`;
+`send-review` and `builder-review` open display-only review states;
+`wizardconnect-invalid`, `cashconnect-empty`, `cashconnect-multi`, and
+`builder-token-error` cover guarded/error variants.
+
+Local headless Chrome rendered the core authenticated fixtures at 390x844 and
+visually confirmed the persistent incoming flag, Chipnet context banner,
+BCH/USD balance control, masked identifiers, pending/confirmed history and
+verification-pending Outbox disclosure. This closes the prior authenticated
+route-render boundary only. Native touch, screen-reader, packaged-platform,
+live-provider, signing, broadcast, mempool and confirmation evidence remain
+open.
+
+### 2026-10-30: fixture interaction exercise
+
+Chrome DevTools Protocol exercised the real fixture routes. Receive long-press
+opened the full public address, clipboard success announced `Address copied`,
+and Home → Receive → Back returned to fixture Home when entered through the
+fixture navigation state. Send with 2 BCH against the 1 BCH fixture preserved
+the entered fields and showed “Not enough funds in your wallet.” History kept
+pending and confirmed records visible, and Outbox kept the verification-pending
+record visible with masked identifiers.
+
+This closes the core fixture interaction slice for the feedback review. Native
+touch/screen-reader, packaged-platform, live-provider, signing, broadcast,
+mempool, confirmation and broader route-state matrices remain separate
+evidence requirements.
+
+### 2026-10-30: wide desktop fixture render
+
+The five fixture routes were also rendered at 1280×900. The centered wallet
+column stayed readable, and the shared PageHeader now wraps `Transaction
+History` instead of truncating it. Network context, persistent incoming
+disclosure, masked identifiers and Outbox verification state remained visible.
+This is browser layout evidence only; packaged desktop and native touch
+evidence remain open.
+
+### 2026-10-30: fixture state-matrix exercise
+
+The fixture now supports Home stale/unavailable, History empty/error, and
+Outbox stale, unknown-network, empty and seen variants through the real route
+components. Headless Chrome confirmed the stale Home explanation and Server
+settings link, History empty and retryable error states, Outbox `Release if
+stale` and network-error/Technical-details states, and the empty Outbox state.
+The populated History fixture leads with pending/confirmed status before
+masked identifiers and shows synthetic wallet-owned BCH effects.
+The mobile Outbox render confirmed that the in-flow Back action no longer
+covers the first transaction card. This is browser fixture evidence only.
+
+The Apps fixture route also confirmed the grouped Wallet, Token, Utils and
+Advanced sections, localized “best for” subtitles, and the wrapped mobile
+filter row. These are browser fixture renders, not packaged native evidence.
+
+### 2026-10-30: final web validation boundary
+
+`npm run test:core` passed 328 files / 2,060 tests with 7 skipped files and 10
+skipped tests; `npm run test:ui` passed 38 files / 98 tests; `npm run test:apps`
+passed 38 files / 161 tests. Typecheck, web build, core lint, formatting,
+dependency policy, security (6/6), add-on validation (1/1), and
+`git diff --check` also passed. The Tauri debug no-bundle build reached Rust
+compilation but failed because this host lacks `glib-2.0` and `gobject-2.0`
+pkg-config metadata, and `WebKitWebDriver` is not installed. This records a
+host/tooling gap, not a frontend regression or packaged-native success claim.
+
+### 2026-10-30: Home recent-activity hierarchy continuation
+
+Home and Desktop Home recent-activity cards now lead with a Pending or
+Confirmed status chip, followed by block or pending-confirmation context and a
+masked `Transaction ID`. Navigation and contextual help remain sibling
+controls, avoiding nested interactive elements. A disposable 390x844 Chrome
+fixture render confirmed the pending and confirmed cards remain readable below
+the network banner.
+
+This verifies the source and browser hierarchy only. Native touch,
+screen-reader, packaged-platform, live-provider, signing, broadcast, mempool,
+and confirmation evidence remain open. The current UI lane remains **38 files
+/ 98 tests**, and the production build passes.
+
+### 2026-10-30: Settings hierarchy fixture continuation
+
+The disposable authenticated fixture now mounts the real Settings root. A
+390x844 browser render confirms the active Chipnet banner, Quick access, and
+the grouped Wallet & security, Connections & features, and About & support
+destinations. Entering Wallet & security shows Wallet info, Derivation Path,
+Recovery Phrase, and an in-flow Back action. This is non-persisted browser
+evidence only; native touch, screen-reader, packaged-platform, and
+live-provider behavior remain open.
+
+### 2026-10-30: onboarding fixture continuation
+
+The disposable fixture now mounts the real LandingPage and Watch-Only page as
+well as the authenticated routes. A 390x844 Chrome render keeps Create Wallet,
+Import Wallet, and Create Watch-Only Wallet visible beneath the branded hero.
+Chrome exercised Help through all four walkthrough steps and closed it with
+Done. The Watch-Only route is a public-only form fixture and does not create a
+wallet or persist xPub data. Native touch, screen-reader, packaged-platform,
+and create/import persistence flows remain open.
+
+### 2026-10-30: Send review fixture continuation
+
+The fixture now supports `screen=send-review`, mounting the production Simple
+Send and ReviewCard with a deterministic display-only BCH review. A 390x844
+Chrome exercise confirmed the Review Transaction dialog leads with Chipnet
+context and wallet effect, shows amount and fee, masks the recipient, expands
+Technical details, and retains the slide-to-confirm affordance. Long-press
+revealed the full public recipient; closing the review returned to the form
+with the recipient and `0.1` BCH amount retained.
+
+The fixture branch blocks signing and broadcast and reaches no provider or
+wallet authority. Native touch, screen-reader, packaged-platform, hardware,
+live-provider, signing, broadcast, mempool, and confirmation evidence remain
+open.
+
+### 2026-10-30: WalletConnect review fixture continuation
+
+The fixture mounts the production WalletConnect sign-request modal with a
+public-only request. A 390x844 Chrome render confirmed the app-provided
+description, Chipnet banner, wallet-owned fee effect, sign/return action, and
+collapsed technical totals. Expanding the technical section showed masked
+transaction IDs and addresses; long-press revealed the full transaction ID.
+No peer, signing key, or broadcast authority is available in this fixture.
+
+### 2026-10-30: WizardConnect and CashConnect review fixtures
+
+The disposable fixture now mounts the production WizardConnect sign-request
+modal and CashConnect execute-action modal. At 390x844, WizardConnect showed
+the dApp status, Chipnet network context, sign-and-return operation,
+whole-request fee, wallet effect, and technical-details disclosure. CashConnect
+showed the dApp description, request action, prepared transaction count, and
+request-reported BCH/PUSD balance changes, including the explicit warning that
+source outputs are unavailable for independent ownership verification.
+
+Both fixtures use public-only synthetic data and do not provide signing keys,
+live peers, or broadcast authority. Their approval and rejection handlers
+explicitly no-op while the fixture flag is active. The browser render is
+layout and interaction evidence only; native touch, screen-reader,
+packaged-platform, hardware, live-peer, signing, broadcast, mempool, and
+confirmation evidence remain open.
+
+The browser exercise clicked the visible approval controls on the WalletConnect,
+WizardConnect, and CashConnect fixture routes. Each modal remained open with
+the fixture banner, confirming that the fixture guard prevented live thunks,
+signing keys, peers, and broadcasts from being reached. Current validation is
+328 core files / 2,060 tests with 7 skipped files and 10 skipped tests, plus 38
+UI files / 99 tests; build, typecheck, core lint, Prettier, and
+`git diff --check` pass.
+
+The fixture data also supports `wizardconnect-invalid`, `cashconnect-empty`,
+and `cashconnect-multi`. Chrome confirmed that the invalid WizardConnect state
+disables approval while retaining Cancel, the empty CashConnect state explains
+that no balance change was reported, and the multi-transaction state surfaces
+the multiple-transaction warning.
+
+### 2026-10-30: custom builder review fixture
+
+The fixture now wraps the production `TransactionActions` component at
+`screen=builder-review`. Chrome opened the real Send TX → Confirm Transaction
+path at 390x844 and showed masked input/output identifiers, input/output
+totals, fee, fee rate, transaction size, warning copy, and drag confirmation.
+The `builder-token-error` variant shows the unaccounted-token warning and
+disables the accessible Confirm and send transaction control.
+
+The fixture callbacks are display-only and do not build, sign, or broadcast.
+Native touch, screen-reader, packaged-platform, live UTXO, signing, broadcast,
+mempool, and confirmation evidence remain open.
+
+### 2026-10-30: watch-only onboarding contextual help
+
+Watch-Only onboarding and the desktop Watch-Only preview now expose
+keyboard/touch-accessible help for the network, account xPub, and optional
+master-fingerprint fields. The xPub copy explains that it is public derivation data and cannot spend funds by itself;
+the fingerprint copy identifies it as optional public metadata. English,
+Spanish, Chinese, and Arabic catalog entries are present. The focused
+`WatchOnlyWalletPage` regression opens the xPub note, and the shared tooltip
+regression covers the collapsed/expanded accessible state.
+
+This is source/component evidence only. It does not prove persisted
+watch-only creation, native touch, screen-reader output, packaged-platform
+behavior, signing, broadcast, mempool, or confirmation.
+
+### 2026-10-30: inline recovery-safety guidance
+
+Create Wallet now renders the recovery-safety instruction inline beside the
+generated phrase instead of relying only on the optional info control. The
+copy explains that the phrase controls spending, must be written down and
+kept safe, and must not be shared or stored digitally. The focused
+`CreateWalletPage` regression verifies the visible note after phrase
+generation. No backup gate or wallet-creation behavior changed; packaged and
+screen-reader onboarding evidence remain open.
+
+### 2026-10-30: contextual-help dismissal
+
+Shared info controls now support Escape dismissal while keeping focus on the
+trigger, and associate the open note with that trigger through
+`aria-describedby`. Focused UI regressions cover both the general `InfoButton`
+and the onboarding tooltip variant. This is source/component evidence;
+packaged keyboard, touch, and screen-reader behavior remain separate.
+
+Current validation after this pass is 330 core files / 2,062 tests with 7
+skipped files and 10 skipped tests, plus 39 UI files / 100 tests. Typecheck,
+build, core lint, focused desktop onboarding coverage, Prettier, and
+`git diff --check` pass. The Vite native-config extension warning remains
+non-fatal.
+
+### 2026-10-30: Outbox release confirmation
+
+Eligible Outbox clear/release actions now require the existing wallet
+confirmation sheet before removing the local pending record. Tracker timing
+and eligibility remain authoritative; Cancel leaves the record and its input
+lock untouched. The compact pending-send panel in the shared layout uses the
+same confirmation path, so Home/Send recovery cannot bypass it. The focused
+Outbox UI regression verifies the confirmation dialog, duplicate-click guard,
+and confirmed release path. This is source/component evidence only.
+
+### 2026-10-30: pending-lock release parity
+
+The inline pending-outgoing card on Simple Send and the multisig workspace
+panel now use the same wallet confirmation boundary as Outbox and the shared
+compact panel. Eligible records remain governed by the existing tracker; a
+cancelled confirmation leaves the record and its input lock untouched, and
+duplicate clicks are ignored while confirmation/release is in flight. The
+shared compact panel now waits for the release promise before reopening the
+action guard. This is source/component evidence only; no signing, broadcast,
+mempool, confirmation, packaged-platform, native touch, or screen-reader
+claim is made.
+
+Final validation after this continuation is **330 core files / 2,062 tests**
+with 7 skipped files and 10 skipped tests, **39 UI files / 100 tests**, and
+**38 app files / 161 tests**. Typecheck, production build, core lint,
+dependency policy, security (**6/6**), add-on validation (**1/1**), Prettier,
+and `git diff --check` passed. The non-fatal Vite native-config warning
+remains; the earlier native no-bundle build is still blocked by missing
+`glib-2.0`/`gobject-2.0` pkg-config metadata and `WebKitWebDriver`.
+
+### 2026-10-30: Send recovery fixture
+
+The disposable UI fixture now supports `screen=send-error`. It preloads a
+public Chipnet recipient and an oversized BCH amount on the real Simple Send
+route. Review enters the existing user-facing insufficient-funds state, while
+the form remains mounted for the Edit payment focus/recovery action. The
+fixture branch is display-only and does not build, sign, broadcast, or contact
+a provider. The source regression verifies the fixture guard and friendly
+error string; this is not native touch, screen-reader, packaged-platform,
+hardware, live-provider, signing, broadcast, mempool, or confirmation
+evidence.
+
+### 2026-10-30: connector uncertainty disclosure
+
+Connector wallet-effect loading and unavailable states now include the shared
+contextual help control. The copy explains that wallet-owned inputs/change are
+still being verified or could not be verified from the request, preserving the
+whole-transaction review warning before signing. A focused source regression
+covers both state-specific controls. This is source/component evidence only.
+
+Current core validation is **331 files / 2,064 tests** with 7 skipped files and
+10 skipped tests; typecheck, core lint, and the focused connector test pass.
+
+### 2026-10-30: source validation refresh
+
+After the pending-popup disclosure and Send recovery-fixture additions,
+`npm run test:core` passes **331 files / 2,064 tests** with 7 skipped files and
+10 skipped tests. The UI suite remains **39 files / 100 tests** and the app
+suite remains **38 files / 161 tests**. Typecheck, production build, core lint,
+dependency policy, security, add-on validation, Prettier, and
+`git diff --check` pass. Headless Chrome rendered the `send-error` fixture
+route with Chipnet context and the prefilled public recipient/amount; no
+connected browser, packaged/native, signing, broadcast, mempool, or
+confirmation claim is made.
+
+### 2026-10-30: FundMe broadcast disclosure
+
+FundMe campaign action results now keep the human broadcast status separate
+from the transaction identifier and render that identifier with the shared
+masked/copyable disclosure. A focused app regression covers the `actionTxid`
+handoff and masked modal rendering. The FundMe action/broadcast authority is
+unchanged; this is source/app evidence only.
+
+Current app validation is **39 files / 162 tests**.
+
+### 2026-10-30: paper-wallet UTXO disclosure
+
+The app-hosted paper-wallet sweep UTXO list now renders source transaction IDs
+with the shared masked/copyable disclosure rather than exposing the raw hash in
+the list. A focused app regression covers the value, label, and copy contract;
+transaction authority is unchanged.
+
+Current app validation is **40 files / 163 tests**.
+
+### 2026-10-30: custom builder identifier disclosure
+
+CashToken and NFT genesis-input selectors now mask transaction IDs in their
+visible labels while preserving the full hash as the raw option value used by
+the builder. A focused source regression covers both views; transaction
+selection and signing authority are unchanged.
+
+Current core validation is **332 files / 2,065 tests** with 7 skipped files and
+10 skipped tests.
+
+The production web build, core lint, Prettier, and `git diff --check` also pass
+after this builder disclosure change. Packaged/native, hardware,
+screen-reader, touch, and live-chain evidence remain separate.
+
+### 2026-10-30: mint-result identifier disclosure
+
+The CashToken mint result now uses the localized `Transaction ID` label,
+shared masked/long-press disclosure, and localized copy-success feedback. A
+focused app regression covers the label, value, and copy contract; minting
+authority and broadcast behavior are unchanged.
+
+Current app validation is **41 files / 164 tests**.
+
+### 2026-10-30: legacy FundMe toast identifier disclosure
+
+The compatibility FundMe campaign screen now masks transaction IDs in
+Capacitor toast messages rather than exposing raw hashes. The underlying value
+and broadcast behavior are unchanged; this is a presentation/privacy fix.
+
+Current app validation is **41 files / 165 tests**. Production build,
+formatting, and `git diff --check` pass. Packaged/native, screen-reader,
+touch, hardware, and live-chain evidence remain open.
+
+### 2026-10-30: Cauldron broadcast-message disclosure
+
+Cauldron swap, merchant-payment, pool-deposit, and pool-withdraw status copy
+now masks transaction IDs before interpolation. Raw IDs remain available to
+the dedicated masked result card and explorer action; broadcast and
+confirmation behavior are unchanged.
+
+App validation remains **41 files / 165 tests** and the production build passes.
+
+### 2026-10-30: AuthGuard broadcast-status disclosure
+
+AuthGuard genesis, AuthKey, and token-mint progress/error messages now mask
+transaction IDs while preserving raw IDs for UTXO matching and state handling.
+This is a presentation-only privacy fix. The identifier-disclosure regression,
+production build, formatting, and diff checks pass.
+
+### 2026-10-30: contextual-help long-press behavior
+
+The shared `InfoButton` opens after a 500 ms touch hold as well as a tap, with
+pointer cancellation and synthesized-click suppression. A focused UI
+regression covers the touch behavior and the existing test covers Escape
+dismissal.
+
+### 2026-10-30: full regression consolidation
+
+Complete current suites pass: UI **39 files / 101 tests**, apps **41 files /
+165 tests**, and core **332 files / 2,065 tests**, with 7 skipped files and 10
+skipped tests. Core lint, formatting, and `git diff --check` pass.
+
+### 2026-10-30: header network badge and Settings theme control
+
+The shared `PageHeader` now carries a compact localized Mainnet/Chipnet badge
+beside the OPTN logo. Legacy full-width banners are hidden when the shared
+header is present to avoid duplication. Settings moves the smaller light/dark
+toggle to the right side of the Quick access header. Focused UI tests,
+typecheck, production build, and diff checks pass.
+
+### 2026-10-30: Android unit-test evidence
+
+`JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 npm run android:test` passes with
+all configured app/plugin unit-test tasks. No Android emulator or device is
+connected, so instrumented touch and packaged visual evidence remain open. A
+Java 25 attempt failed during Gradle task creation because the project targets
+Java 21; this is an environment mismatch rather than a product test failure.
+
+### 2026-10-30: repository gate refresh
+
+Dependency policy, security (**2 files / 6 tests**), and built-in add-on
+manifest validation (**1 file / 1 test**) pass on the redesign branch. These
+are repository gates only; packaged-device and live-provider evidence remain
+separate.
+
+### 2026-10-30: Android debug package evidence
+
+`JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 npm run android:apk:dev` succeeds
+and produces both F-Droid and Play debug APKs under
+`android/app/build/outputs/apk/`. This proves packaging of the current web
+bundle, not device rendering or instrumented interaction; `adb devices` has no
+connected target.
+
+### 2026-10-31: connected Android render evidence
+
+The rebuilt Play debug APK was installed on the authorized Samsung SM-A205W.
+Device screenshots confirmed the compact Mainnet badge beside the OPTN logo on
+Home and Settings, removal of the duplicate full-width banner, and the smaller
+theme toggle on the right side of Quick access. `uiautomator` exposed the
+network label and `Toggle theme` control. No live-chain transaction was
+performed.
+
+### 2026-10-31: live connector review harness evidence
+
+The development-only connector lab now opens real Chipnet WalletConnect,
+WizardConnect, and CashConnect requester sessions and exposes a normalized
+review summary through its local status endpoint. Its preflight derives the
+wallet receive address from `OPTN_E2E_MNEMONIC`, decodes live parent
+transactions, identifies BCH-only versus CashToken UTXOs, and checks disjoint
+funding candidates. A WalletConnect smoke run produced a real request using a
+live Chipnet outpoint, returning `0.14631733 BCH` to the derived receive
+address with `broadcast: false`. No connector peer approval, signing, or
+broadcast was performed; Android/desktop review capture remains pending.
+
+The same lab reached the WizardConnect public relay, emitted a `wiz://` pairing
+URI, and waited for wallet key exchange without sending a request before
+pairing. This confirms the relay lifecycle and preserves the approval boundary;
+the wallet-side WizardConnect review remains unexercised until a peer is
+available.
+
+The authorized Samsung SM-A205W later became available over ADB. After switching
+the installed debug wallet to Chipnet, the live WalletConnect URI produced by
+the connector lab opened the production session proposal and was approved on
+device. The saved session reached `Waiting for session acknowledgement`, but
+the requester process ended before the transaction-review modal appeared. This
+proves the live Chipnet session-proposal surface, not transaction approval or
+broadcast; the stale test session must be disconnected before another run.
+
+### 2026-10-31: live WalletConnect transaction-review capture
+
+Using the Android WalletConnect text field directly (without the camera), a
+fresh live Chipnet URI reached the production transaction-review modal. The
+rendered review showed the requester identity and URL, app-provided description,
+wallet effect (`You spend`), matched wallet input/output count, exact
+`0.00000250 BCH` fee, technical transaction disclosure, and separate Reject and
+Sign-and-return controls. The request remained `broadcast: false`; no signing or
+broadcast was performed.
+
+The same text-field method was used for a live Chipnet WizardConnect URI on the
+authorized Android device. The production approval modal displayed the full
+`wiz://` connection URI and explicit Approve/Cancel controls; approval moved the
+wallet to `Connecting…` with `Relay available — dApp connection not verified`.
+The requester did not receive key exchange before the observation window ended,
+so no WizardConnect sign request, signing, or broadcast occurred.
+
+CashConnect was then exercised on the same Chipnet Android wallet by pasting the
+`bch-cc-v1:` invite into its text field. The production proposal and action
+review rendered successfully. The review showed `Action: sweep`, the prepared
+transaction count, request-reported balance change (`-0.00501185 BCH`), and the
+explicit warning that CashConnect did not provide source outputs for independent
+ownership/change verification. The action was rejected; no transaction was
+returned or submitted.

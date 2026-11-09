@@ -3,6 +3,7 @@ import type { AppDispatch, RootState } from '../../state/store';
 import { disconnectCashConnectThunk } from '../../state/slices/cashconnectSlice';
 import CashConnectPairCard from './CashConnectPairCard';
 import { useI18n } from '../../i18n/useI18n';
+import InfoButton from '../ui/InfoButton';
 
 export default function CashConnectPanel() {
   const dispatch = useDispatch<AppDispatch>();
@@ -22,9 +23,23 @@ export default function CashConnectPanel() {
     <div className="p-4 space-y-4">
       <CashConnectPairCard />
       {errorMessage ? (
-        <p role="alert">{t('connection.failed')}</p>
+        <div className="flex items-start gap-1 text-sm" role="alert">
+          <span>{t('connection.failed')}</span>
+          <InfoButton
+            id="cashconnect-status-failed-help"
+            ariaLabel={t('connection.failed')}
+            content={t('connection.failedHelp')}
+          />
+        </div>
       ) : pendingProposal ? (
-        <p role="status">{t('connection.awaitingApproval')}</p>
+        <div className="flex items-start gap-1 text-sm" role="status">
+          <span>{t('connection.awaitingApproval')}</span>
+          <InfoButton
+            id="cashconnect-status-awaiting-help"
+            ariaLabel={t('connection.awaitingApproval')}
+            content={t('connection.awaitingApprovalHelp')}
+          />
+        </div>
       ) : null}
 
       <div className="wallet-card p-4 space-y-3">

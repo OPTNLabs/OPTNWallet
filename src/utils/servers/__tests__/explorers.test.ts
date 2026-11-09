@@ -102,7 +102,10 @@ describe('explorer links follow the chain policy', () => {
         TXID,
         'auto'
       );
-      expect(url, `${preset.id} on chipnet`).toContain('chipnet');
+      const expected = preset.chipnetTx
+        ? preset.chipnetTx.replace('{txid}', TXID)
+        : `https://explorer.selene.cash/tx/${TXID}`;
+      expect(url, `${preset.id} on chipnet`).toBe(expected);
     }
   });
 
@@ -134,6 +137,7 @@ describe('the preset list comes from the core', () => {
     expect(getExplorerPresets().map((preset) => preset.id)).toEqual([
       'bchexplorer',
       'bch-ninja',
+      'selene',
       'imaginary',
       'blockchair',
       '3xpl',

@@ -51,6 +51,30 @@ describe('CashFusion settings mode enforcement', () => {
     activityState.current = null;
   });
 
+  it('gives CashFusion switches and protocol help comfortable touch targets', () => {
+    const store = configureStore({
+      reducer: {
+        experimental: experimentalReducer,
+        wallet_id: (state = { currentWalletId: 7 }) => state,
+        network: (state = { currentNetwork: 'chipnet' }) => state,
+        utxos: (state = { utxos: {} }) => state,
+        preferences: preferencesReducer,
+      },
+    });
+    store.dispatch(setCashFusionEnabled(true));
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <I18nProvider>
+          <CashFusionSettings />
+        </I18nProvider>
+      </Provider>
+    );
+
+    expect(html).toContain('min-h-[44px] px-2 text-left');
+    expect(html.match(/min-h-\[44px\] min-w-\[56px\]/g)).toHaveLength(3);
+  });
+
   it('mutes and disables the server Fuse Now card in P2P mode', () => {
     const store = configureStore({
       reducer: {

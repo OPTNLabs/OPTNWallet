@@ -575,6 +575,11 @@ class TransactionService {
     const trackedTxid = deriveTrackedTxid(rawTX);
 
     if (res?.errorMessage || !res?.txid) {
+      const errorMessage =
+        res?.errorMessage?.trim() ||
+        (!res?.txid
+          ? 'Broadcast failed without a reason. Refresh wallet history before retrying.'
+          : null);
       if (trackedTxid) {
         if (options?.multisig) {
           await clearRejectedBroadcastTracking(trackedTxid, currentWalletId);
@@ -582,10 +587,10 @@ class TransactionService {
           await OutboundTransactionTracker.remove(trackedTxid, currentWalletId);
         }
       }
-      if (options?.multisig && res?.errorMessage) {
+      if (options?.multisig && errorMessage) {
         await refreshRejectedMultisigWallet(currentWalletId);
       }
-      return res;
+      return { ...res, errorMessage };
     }
 
     if (res?.txid) {

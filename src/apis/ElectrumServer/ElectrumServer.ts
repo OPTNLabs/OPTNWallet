@@ -271,21 +271,14 @@ function buildBatchMessage(
   );
 }
 
-function canUseRawBatch(client: ECClient): client is ECClient & {
+type RawBatchClient = {
   requestId: number;
-  requestResolvers: Record<
-    number,
-    (error?: Error, data?: RequestResponse) => void
-  >;
-  connection: {
-    send: (message: string) => boolean;
-  };
-} {
-  const candidate = client as ECClient & {
-    requestId?: unknown;
-    requestResolvers?: unknown;
-    connection?: { send?: unknown };
-  };
+  requestResolvers: Record<number, (error?: Error, data?: RequestResponse) => void>;
+  connection: { send(message: string): boolean };
+};
+
+function canUseRawBatch(client: ECClient): boolean {
+  const candidate = client as unknown as Partial<RawBatchClient>;
 
   return (
     typeof candidate.requestId === 'number' &&
@@ -327,10 +320,11 @@ async function sendBatch(
     return results;
   }
 
+  const rawClient = client as unknown as RawBatchClient;
   const batchCalls = calls.map(({ method, params = [] }) => {
-    client.requestId += 1;
+    rawClient.requestId += 1;
     return {
-      id: client.requestId,
+      id: rawClient.requestId,
       method,
       params,
     };
@@ -339,7 +333,7 @@ async function sendBatch(
   const resolvers = batchCalls.map(
     ({ id }) =>
       new Promise<RequestResponse | Error>((resolve) => {
-        client.requestResolvers[id] = (
+        rawClient.requestResolvers[id] = (
           error?: Error,
           data?: RequestResponse
         ) => {
@@ -353,10 +347,10 @@ async function sendBatch(
   );
 
   try {
-    client.connection.send(buildBatchMessage(batchCalls));
+    rawClient.connection.send(buildBatchMessage(batchCalls));
   } catch (error) {
     for (const { id } of batchCalls) {
-      delete client.requestResolvers[id];
+      delete rawClient.requestResolvers[id];
     }
     throw error;
   }
@@ -548,7 +542,7 @@ export default function ElectrumServer(networkOverride?: Network) {
           const client = new ElectrumClient<ElectrumClientEvents>(
             'OPTNWallet',
             '1.5.1',
-            socket
+            socket as unknown as ConstructorParameters<typeof ElectrumClient>[2]
           );
 
           try {

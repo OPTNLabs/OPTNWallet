@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import { FaBitcoin } from 'react-icons/fa';
 import { RootState } from '../state/store';
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
@@ -34,6 +33,8 @@ import {
 } from '../utils/tokenPresentation';
 import { useI18n } from '../i18n/useI18n';
 import { isDesktopPlatform } from '../utils/platform';
+import BchUsdControl from '../components/ui/BchUsdControl';
+import NetworkContextBanner from '../components/ui/NetworkContextBanner';
 import { isTestNetwork, networkProfile } from '../utils/networkProfile';
 
 type AssetTab = 'BCH' | 'Tokens' | 'NFTs';
@@ -74,7 +75,8 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const [, setWalletContractAddresses] = useState<ContractAddressRecord[]>([]);
   const [, setWalletContractUtxos] = useState<UTXO[]>([]);
   const [, setDefaultChangeAddress] = useState<string>('');
-  const [, setWalletError] = useState<string | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const [walletDataRetryKey, setWalletDataRetryKey] = useState(0);
   const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
   const reduxTokenUtxos = useMemo(
     () => dedupeTokenUtxos(Object.values(reduxUTXOs).flat()),
@@ -103,8 +105,12 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
     setWalletContractUtxos,
     setDefaultChangeAddress,
     setWalletError,
-    { deferAfterPaint: true }
+    { deferAfterPaint: true, retryKey: walletDataRetryKey }
   );
+
+  useEffect(() => {
+    if (utxoSnapshotInitialized) setWalletError(null);
+  }, [utxoSnapshotInitialized]);
 
   const entries = useMemo(() => {
     const tokenTotals: Record<
@@ -241,6 +247,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
           }
           compact
         />
+        <NetworkContextBanner network={currentNetwork} />
 
         <SectionCard className="shrink-0 p-3">
           <div className="grid grid-cols-3 gap-2">
@@ -249,7 +256,7 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                 key={name}
                 type="button"
                 onClick={() => setTab(name)}
-                className={`rounded-2xl border px-3 py-2 text-sm font-semibold transition ${
+                className={`min-h-[44px] rounded-2xl border px-3 py-2 text-sm font-semibold transition ${
                   tab === name
                     ? 'wallet-segment-active border-[var(--wallet-accent)]'
                     : 'wallet-segment-inactive border-[var(--wallet-border)]'
@@ -265,6 +272,26 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
           </div>
         </SectionCard>
 
+        {walletError && !utxoSnapshotInitialized && (
+          <SectionCard className="shrink-0 border border-[var(--wallet-danger-border)] p-3">
+            <div role="alert" className="space-y-3">
+              <p className="text-sm text-[var(--wallet-danger-text)]">
+                {t('assets.loadFailed')}
+              </p>
+              <button
+                type="button"
+                className="wallet-btn-secondary min-h-[44px] px-4"
+                onClick={() => {
+                  setWalletError(null);
+                  setWalletDataRetryKey((key) => key + 1);
+                }}
+              >
+                {t('builder.tryAgain')}
+              </button>
+            </div>
+          </SectionCard>
+        )}
+
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1">
           {tab === 'BCH' && (
             <div className="flex h-full min-h-0 flex-col gap-3">
@@ -275,16 +302,8 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                   compact
                 />
                 <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDisplayMode((mode) =>
-                          mode === 'BCH' ? 'USD' : 'BCH'
-                        )
-                      }
-                      className="text-left"
-                    >
+                  <div className="min-w-0">
+                    <div className="text-left">
                       <div className="text-2xl font-bold wallet-text-strong">
                         {displayMode === 'BCH'
                           ? `${totalBch.toFixed(8)} BCH`
@@ -299,18 +318,15 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                             : t('assets.usdPriceUnavailable')
                           : `${totalBch.toFixed(8)} BCH`}
                       </div>
-                    </button>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
+                  <BchUsdControl
+                    value={displayMode.toLowerCase() as 'bch' | 'usd'}
+                    onChange={(next) =>
+                      setDisplayMode(next === 'bch' ? 'BCH' : 'USD')
                     }
-                    className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
-                    aria-label={t('assets.toggleBalance')}
-                  >
-                    <FaBitcoin className="text-2xl" />
-                  </button>
+                    className="w-[112px] shrink-0"
+                  />
                 </div>
               </SectionCard>
 

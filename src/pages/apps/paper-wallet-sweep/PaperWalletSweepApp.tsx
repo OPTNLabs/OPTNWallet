@@ -27,6 +27,11 @@ import {
 import { getReturnPath } from '../../../utils/navigation';
 import { AddonModuleI18nProvider } from '../../../i18n/AddonModuleI18nProvider';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
+import { useI18n } from '../../../i18n/useI18n';
+import MaskedValue from '../../../components/ui/MaskedValue';
+import NetworkContextBanner from '../../../components/ui/NetworkContextBanner';
+import PaperWalletSweepError from '../../../pages/PaperWalletSweepError';
+import { friendlySweepError } from '../../../pages/paperWalletSweepErrorCopy';
 
 const BASE58_WIF_PATTERN =
   /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
@@ -77,6 +82,7 @@ function decodeScannedWif(wif: string) {
 }
 function PaperWalletSweepAppScreen() {
   const { t: addonT } = useAddonI18n();
+  const { t: walletT } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
@@ -182,7 +188,7 @@ function PaperWalletSweepAppScreen() {
       const message =
         err instanceof Error ? err.message : getBarcodeScannerErrorMessage(err);
       setError(message);
-      await Toast.show({ text: message });
+      await Toast.show({ text: friendlySweepError(message, walletT) });
     } finally {
       setLoading(false);
     }
@@ -239,7 +245,7 @@ function PaperWalletSweepAppScreen() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
-      await Toast.show({ text: message });
+      await Toast.show({ text: friendlySweepError(message, walletT) });
     } finally {
       setLoading(false);
     }
@@ -260,12 +266,12 @@ function PaperWalletSweepAppScreen() {
       setConfirmOpen(false);
       setPendingSweep(null);
       await Toast.show({
-        text: `Sweep broadcast${sent.txid ? `: ${sent.txid}` : ''}`,
+        text: walletT('paper.sweepBroadcast'),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
-      await Toast.show({ text: message });
+      await Toast.show({ text: friendlySweepError(message, walletT) });
     } finally {
       setConfirmLoading(false);
     }
@@ -302,6 +308,7 @@ function PaperWalletSweepAppScreen() {
   return (
     <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-2 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
       <div className="flex-none">
+        <NetworkContextBanner network={currentNetwork} />
         <div className="flex justify-center pt-1">
           <img
             src="/assets/images/OPTNWelcome1.png"
@@ -352,13 +359,19 @@ function PaperWalletSweepAppScreen() {
                 {addonT('module.sweep', 'Sweep')} <FaChevronRight />
               </button>
               {broadcastTxid && (
-                <div className="text-xs wallet-muted break-all">
-                  {broadcastTxid}
+                <div className="text-xs wallet-muted">
+                  <MaskedValue
+                    value={broadcastTxid}
+                    label={walletT('history.transactionId')}
+                    ariaLabel={walletT('history.transactionId')}
+                    copySuccessMessageKey="history.transactionCopied"
+                    className="max-w-full text-xs wallet-muted"
+                  />
                 </div>
               )}
             </div>
 
-            {error && <div className="mt-3 wallet-danger-text">{error}</div>}
+            {error && <PaperWalletSweepError message={error} compact />}
           </div>
 
           <div className="wallet-card p-4 rounded-2xl">
@@ -372,9 +385,19 @@ function PaperWalletSweepAppScreen() {
             <ul className="mt-3 space-y-2 text-sm">
               {paperWalletUtxos.map((u) => (
                 <li key={`${u.tx_hash}:${u.tx_pos}`} className="break-all">
-                  {u.token
-                    ? `${u.token.nft ? 'NFT' : 'FT'} ${u.token.category} @ ${u.tx_hash}:${u.tx_pos}`
-                    : `BCH ${u.value} sats @ ${u.tx_hash}:${u.tx_pos}`}
+                  <span>
+                    {u.token
+                      ? `${u.token.nft ? 'NFT' : 'FT'} ${u.token.category} @ `
+                      : `BCH ${u.value} sats @ `}
+                  </span>
+                  <MaskedValue
+                    value={u.tx_hash}
+                    label={walletT('history.transactionId')}
+                    ariaLabel={walletT('history.transactionId')}
+                    copySuccessMessageKey="history.transactionCopied"
+                    className="align-middle"
+                  />
+                  <span>:{u.tx_pos}</span>
                 </li>
               ))}
             </ul>

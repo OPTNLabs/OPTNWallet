@@ -1,30 +1,49 @@
 /** @vitest-environment jsdom */
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { translations } from '../../../../i18n/resources';
 import type { TranslationKey } from '../../../../i18n/resources';
+import { interpolateMessage } from '../../../../i18n/format';
 import { SessionList } from '../../../../components/walletconnect/SessionList';
 import WizardConnectPanel from '../../../../components/wizardconnect/WizardConnectPanel';
 import CashConnectPanel from '../../../../components/cashconnect/CashConnectPanel';
 import WizardSignTransactionModal from '../../../../components/wizardconnect/WizardSignTransactionModal';
-import { binToHex, encodeTransaction, hexToBin } from '@bitauth/libauth';
+import {
+  binToHex,
+  encodeTransaction,
+  hexToBin,
+  lockingBytecodeToCashAddress,
+} from '@bitauth/libauth';
 
-const mock = vi.hoisted(() => ({ state: {} as unknown }));
+const mock = vi.hoisted(() => ({
+  state: {} as unknown,
+  loadWalletPublicAddresses: vi.fn(),
+  dispatch: vi.fn(),
+  fixture: false,
+}));
 vi.mock('react-redux', () => ({
-  useDispatch: () => vi.fn(),
+  useDispatch: () => mock.dispatch,
   useSelector: (selector: (state: unknown) => unknown) => selector(mock.state),
 }));
+vi.mock('../../../../ui-fixtures/fixtureData', () => ({
+  isUiFixtureEnabled: () => mock.fixture,
+}));
 vi.mock('../../../../i18n/useI18n', () => ({
-  useI18n: () => ({ t: (key: TranslationKey) => translations.en[key] }),
+  useI18n: () => ({
+    t: (key: TranslationKey, values?: Record<string, string | number>) =>
+      interpolateMessage(translations.en[key], values),
+  }),
 }));
 vi.mock('../../../../state/slices/wizardconnectSlice', () => ({
+  default: (state: Record<string, unknown> = {}) => state,
   disconnectWizardConnection: vi.fn(),
   approveWizardSignRequest: vi.fn(),
   rejectWizardSignRequest: vi.fn(),
 }));
 vi.mock('../../../../state/slices/cashconnectSlice', () => ({
+  default: (state: Record<string, unknown> = {}) => state,
   disconnectCashConnectThunk: vi.fn(),
 }));
 vi.mock('../../../../components/wizardconnect/WizardConnectionManager', () => ({
@@ -40,11 +59,18 @@ vi.mock('../../../../components/wizardconnect/WizardDappAvatar', () => ({
 vi.mock('../../../../components/cashconnect/CashConnectPairCard', () => ({
   default: () => null,
 }));
+vi.mock('../../../../services/connect/walletPublicAddresses', () => ({
+  loadWalletPublicAddresses: mock.loadWalletPublicAddresses,
+}));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mock.fixture = false;
+  mock.dispatch.mockReset();
+});
 
 describe('connection panels', () => {
-  it('previews raw WizardConnect transactions on Chipnet and blocks invalid previews', () => {
+  it('previews raw WizardConnect transactions on Chipnet and blocks invalid previews', async () => {
     const transaction = {
       version: 2,
       locktime: 0,
@@ -77,6 +103,12 @@ describe('connection panels', () => {
         ],
       },
     };
+    const address = lockingBytecodeToCashAddress({
+      prefix: 'bchtest',
+      bytecode: transaction.outputs[0].lockingBytecode,
+    });
+    if (typeof address === 'string') throw new Error(address);
+    mock.loadWalletPublicAddresses.mockResolvedValue([address.address]);
     mock.state = {
       wallet_id: { currentWalletId: 1, networkType: 'chipnet' },
       wizardconnect: {
@@ -85,13 +117,33 @@ describe('connection panels', () => {
       },
     };
     const view = render(<WizardSignTransactionModal />);
-    expect(screen.getByText(/^bchtest:/)).toBeInTheDocument();
+    const addressTrigger = screen.getByRole('button', { name: 'Copy address' });
+    expect(addressTrigger).not.toHaveTextContent(address.address);
+    fireEvent.contextMenu(addressTrigger);
+    const dialogs = screen.getAllByRole('dialog');
+    expect(dialogs[dialogs.length - 1]).toHaveTextContent('bchtest:');
     expect(
       screen.getByText('Relay available — dApp connection not verified')
     ).toBeInTheDocument();
     expect(
+      screen.getByRole('button', { name: 'Explain connection status' })
+    ).toBeInTheDocument();
+    expect(
       screen.getByRole('button', { name: 'Sign', exact: true })
     ).toBeEnabled();
+    expect(
+      await screen.findByText('What changes in this wallet')
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('0.00001000 BCH').length).toBeGreaterThanOrEqual(
+      2
+    );
+    expect(
+      screen.getByText('Technical transaction details (1 inputs, 1 outputs)')
+    ).toBeInTheDocument();
+    mock.fixture = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Sign', exact: true }));
+    expect(mock.dispatch).not.toHaveBeenCalled();
+    mock.fixture = false;
     request.transaction.sourceOutputs = [];
     view.rerender(<WizardSignTransactionModal />);
     expect(
@@ -134,6 +186,9 @@ describe('connection panels', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'Waiting for your approval'
     );
+    expect(
+      screen.getByRole('button', { name: 'Waiting for your approval' })
+    ).toBeInTheDocument();
     mock.state = {
       cashconnect: {
         sessions: {},
@@ -145,6 +200,11 @@ describe('connection panels', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Connection attempt failed'
     );
+    expect(
+      screen.getByRole('button', {
+        name: 'Connection attempt failed. Retry pairing to try again.',
+      })
+    ).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 

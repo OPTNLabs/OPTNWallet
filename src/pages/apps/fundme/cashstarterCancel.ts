@@ -96,14 +96,6 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
     console.log(userUTXO);
 
     const p2pkhUnlocker: Unlocker = {
-      generateLockingBytecode: () => { 
-        const result = cashAddressToLockingBytecode(usersAddress);
-  
-        if (typeof result === 'string') {
-          throw new Error(`Failed to convert CashAddress to locking bytecode: ${result}`);
-        }
-        return result.bytecode;
-      },
       generateUnlockingBytecode: () => {          // Return an empty array or a placeholder for the unlocking bytecode (scriptSig)
         return Uint8Array.from([]);
       }
@@ -112,9 +104,9 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
     const provider = new ElectrumNetworkProvider(Network.MAINNET);
 
     const txDetails = await new TransactionBuilder({ provider })
-    .addInput(cancelUTXO, contractCashStarterCancel.unlock.cancel())
-    .addInput(campaignUTXO, contractCashStarter.unlock.externalFunction())
-    .addInput(userUTXO, p2pkhUnlocker)
+    .addInput(cancelUTXO as any, contractCashStarterCancel.unlock.cancel())
+    .addInput(campaignUTXO as any, contractCashStarter.unlock.externalFunction())
+    .addInput(userUTXO as any, p2pkhUnlocker)
     .addOutput({
       to: AddressTokensCashStarterCancel,  
       amount: cancelUTXO.satoshis,
@@ -178,7 +170,7 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
         valueSatoshis: BigInt(cancelUTXO.satoshis),
         contract: {
           abiFunction: contractCashStarterCancel.artifact.abi, 
-          redeemScript: contractCashStarterCancel.redeemScript,
+          redeemScript: contractCashStarterCancel.bytecode,
           artifact: contractCashStarterCancel.artifact,
         },
         token: {
@@ -196,7 +188,7 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
         valueSatoshis: BigInt(campaignUTXO.satoshis),
         contract: {
           abiFunction: contractCashStarter.artifact.abi,        
-          redeemScript: contractCashStarter.redeemScript,
+          redeemScript: contractCashStarter.bytecode,
           artifact: contractCashStarter.artifact,
         },
         token: {

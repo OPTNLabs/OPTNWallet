@@ -15,12 +15,12 @@ const OnboardingCard = ({
   const { t } = useI18n();
   return (
     <div className="min-h-screen wallet-surface flex flex-col items-center justify-center p-4 w-full">
-      <div className={`wallet-card p-6 w-full ${maxWidthClassName}`}>
-        <div className="flex justify-center mt-4">
+      <div className={`wallet-card p-4 sm:p-6 w-full ${maxWidthClassName}`}>
+        <div className="flex justify-center mt-2 sm:mt-4">
           <img
             src={ONBOARDING_WELCOME_IMAGE}
             alt={t('onboarding.welcomeAlt')}
-            className="max-w-full h-auto"
+            className="max-w-full h-auto max-h-28 w-auto object-contain"
           />
         </div>
 

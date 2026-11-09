@@ -46,12 +46,25 @@ describe('settingsConfig', () => {
       'features'
     );
   });
+
+  it('keeps explorer selection separate from server connections', () => {
+    const server = WALLET_ROWS.find((entry) => entry.key === 'server');
+    const explorer = WALLET_ROWS.find((entry) => entry.key === 'explorer');
+    expect(server?.description).not.toContain('explorer');
+    expect(explorer).toMatchObject({
+      action: 'panel',
+      target: 'explorer',
+    });
+    expect(getParentSettingsGroup('explorer', false, Network.MAINNET)).toBe(
+      'features'
+    );
+  });
   it('exposes wallet settings including the pending tx lock screen link', () => {
     const row = WALLET_ROWS.find((entry) => entry.key === 'pending-outbox');
 
     expect(row).toMatchObject({
-      title: 'Pending Tx Locks',
-      description: 'Review outgoing transaction locks',
+      title: 'Pending outgoing transactions',
+      description: 'Review outgoing transactions still being checked',
       action: 'navigate',
       target: '/outbox',
     });

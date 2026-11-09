@@ -15,6 +15,7 @@ import { binToHex, hexToBin } from '@bitauth/libauth';
 
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import { useAddonI18n } from '../../../i18n/useAddonI18n';
+import { useI18n } from '../../../i18n/useI18n';
 import type { AddonAppDefinition, AddonManifest } from '../../../types/addons';
 import type { Network } from '../../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
@@ -23,7 +24,10 @@ import KeyService from '../../../services/KeyService';
 import useSharedTokenMetadata from '../../../hooks/useSharedTokenMetadata';
 import { ensureUint8Array, parseSatoshis } from '../../../utils/binary';
 import { derivePublicKeyHash } from '../../../utils/derivePublicKeyHash';
-import { shortenAddress, shortenHash } from '../../../utils/shortenHash';
+import MaskedValue from '../../../components/ui/MaskedValue';
+import PageHeader from '../../../components/ui/PageHeader';
+import RouteExitFooter from '../../../components/ui/RouteExitFooter';
+import { maskSensitiveValue } from '../../../utils/maskSensitiveValue';
 import {
   buildCauldronPoolV0LockingBytecode,
   getCauldronPoolV0WithdrawPublicKeyHash,
@@ -64,6 +68,7 @@ import {
   type NormalizedCauldronToken,
 } from '../../../services/cauldron';
 import { classifyCauldronQuoteFailure } from '../../../services/cauldron/quoteFailure';
+import { deriveCauldronWalletEffect } from '../../../services/cauldron/walletEffect';
 import type { UTXO } from '../../../types/types';
 import {
   parseBchInputToSats,
@@ -112,6 +117,10 @@ import {
   type CauldronQuoteSafetyBanner,
 } from './quoteSafety';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
+import {
+  matchesReviewedPoolTransaction,
+  matchesReviewedTradeQuote,
+} from './reviewBinding';
 import OutboundTransactionTracker from '../../../services/OutboundTransactionTracker';
 import {
   formatTimestamp,
@@ -177,6 +186,31 @@ const CREATED_WALLET_POOL_TOKENS_STORAGE_PREFIX =
   'optn.cauldron.created-wallet-pool-tokens';
 const CREATED_WALLET_POOL_LOCKING_BYTECODES_STORAGE_PREFIX =
   'optn.cauldron.created-wallet-pool-locking-bytecodes';
+
+function TransactionAwareMessage({
+  message,
+  label,
+}: {
+  message: string;
+  label: string;
+}) {
+  const match = message.match(/\b[0-9a-f]{64}\b/i);
+  if (!match) return <>{message}</>;
+  const [before, after] = message.split(match[0]);
+  return (
+    <>
+      {before}
+      <MaskedValue
+        value={match[0]}
+        label={label}
+        copySuccessMessageKey="history.transactionCopied"
+        className="text-xs"
+        embedded
+      />
+      {after}
+    </>
+  );
+}
 
 function dedupePoolsBySelectionId(pools: CauldronPool[]): CauldronPool[] {
   const byId = new Map<string, CauldronPool>();
@@ -1867,6 +1901,7 @@ async function resolveMerchantProposalTrades(
 
 const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const { t: addonT } = useAddonI18n();
+  const { t: walletT } = useI18n();
   const localizeCauldronErrorMessage = (
     error: unknown,
     fallbackKey: string,
@@ -1960,15 +1995,16 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [quote, setQuote] = useState<QuoteState | null>(null);
+  const [quoteNowMs, setQuoteNowMs] = useState(() => Date.now());
   const [selectedTokenSpotPriceSats, setSelectedTokenSpotPriceSats] = useState<
     number | null
   >(null);
-  const [quoteDetailsOpen, setQuoteDetailsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [merchantDetailsOpen, setMerchantDetailsOpen] = useState(false);
   const [reviewWarningsAccepted, setReviewWarningsAccepted] = useState(false);
   const [poolReview, setPoolReview] = useState<PoolReviewState | null>(null);
-  const [withdrawConfirmOpen, setWithdrawConfirmOpen] = useState(false);
+  const [poolReviewChanged, setPoolReviewChanged] = useState(false);
+  const [poolReviewRevision, setPoolReviewRevision] = useState(0);
   const [broadcastNotice, setBroadcastNotice] = useState<{
     title: string;
     subtitle: string;
@@ -1977,9 +2013,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   } | null>(null);
   const [merchantBroadcastStarted, setMerchantBroadcastStarted] =
     useState(false);
-  const [merchantSubmittedDebitSats, setMerchantSubmittedDebitSats] = useState<
-    bigint | null
-  >(null);
   const [walletPoolPositions, setWalletPoolPositions] = useState<
     CauldronWalletPoolPosition[]
   >([]);
@@ -2026,6 +2059,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     tokenSource: 'api' | 'pools' | 'mixed';
     liveUpdatesEnabled: boolean;
     liveUpdatedAt: number | null;
+    indexerStatus: string | null;
+    indexerVersion: string | null;
+    indexerLag: number | null;
   } | null>(null);
   const pendingWalletPoolsStorageKey = useMemo(
     () =>
@@ -2191,7 +2227,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setQuote(null);
     setSelectedTokenSpotPriceSats(null);
     setPoolReview(null);
-    setWithdrawConfirmOpen(false);
     setSelectedWalletPoolId(null);
     setSelectedWalletPoolHistory(null);
     setSelectedWalletPoolApy(null);
@@ -2582,13 +2617,14 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               .filter((tokenId): tokenId is string => Boolean(tokenId))
           ),
         ];
-        const [tokenRows, walletTokenRows] = await Promise.all([
+        const [tokenRows, walletTokenRows, indexerHealth] = await Promise.all([
           apiClient.listCachedTokens({
             limit: 500,
             by: 'score',
             order: 'desc',
           }),
           apiClient.listCachedTokensByIds(walletNftTokenIds),
+          apiClient.getIndexerHealth().catch(() => null),
         ]);
 
         if (cancelled) return;
@@ -2605,6 +2641,14 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           tokenSource: walletTokenRows.length > 0 ? 'mixed' : 'api',
           liveUpdatesEnabled: false,
           liveUpdatedAt: null,
+          indexerStatus: indexerHealth?.status ?? null,
+          indexerVersion: indexerHealth?.version ?? null,
+          indexerLag: indexerHealth
+            ? Math.max(
+                0,
+                indexerHealth.chain_tip - indexerHealth.indexed_height
+              )
+            : null,
         });
       } catch (error) {
         if (!cancelled) {
@@ -2981,23 +3025,35 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         .filter((value): value is string => Boolean(value))
         .join(' + ')
     : null;
-  const merchantAdditionalBchSats =
+  const merchantWalletEffect =
     merchantPaymentProposal && quote
-      ? quote.built.walletInputs.reduce(
-          (total, input) =>
-            total +
-            (!input.utxo.token
-              ? parseSatoshis(input.utxo.amount ?? input.utxo.value ?? 0)
-              : 0n),
-          0n
+      ? deriveCauldronWalletEffect(quote.built, selectedTokenId)
+      : null;
+  const merchantNetBchSats = merchantWalletEffect?.netBchDebitSats ?? null;
+  const merchantNetTokenAtomic =
+    merchantWalletEffect?.netTokenDebitAtomic ?? null;
+  const merchantBchEffectLabel =
+    merchantNetBchSats != null && merchantNetBchSats < 0n
+      ? 'Wallet BCH credit'
+      : 'Wallet BCH debit';
+  const merchantBchEffectDisplay =
+    merchantNetBchSats != null
+      ? formatCompactBchAmount(
+          merchantNetBchSats < 0n ? -merchantNetBchSats : merchantNetBchSats
         )
       : null;
-  const merchantEstimatedWalletDebitSats =
-    merchantPaymentProposal && quote
-      ? quote.built.walletInputs.reduce(
-          (total, input) =>
-            total + parseSatoshis(input.utxo.amount ?? input.utxo.value ?? 0),
-          0n
+  const merchantTokenEffectLabel =
+    merchantNetTokenAtomic != null && merchantNetTokenAtomic < 0n
+      ? `Wallet ${effectiveSymbol} credit`
+      : `Wallet ${effectiveSymbol} debit`;
+  const merchantTokenEffectDisplay =
+    merchantNetTokenAtomic != null
+      ? formatTokenDisplayAmount(
+          merchantNetTokenAtomic < 0n
+            ? -merchantNetTokenAtomic
+            : merchantNetTokenAtomic,
+          effectiveDecimals,
+          effectiveSymbol
         )
       : null;
 
@@ -3371,16 +3427,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       visibleMarketLiquidity,
     ]
   );
-  const effectiveAtomicPriceSats = useMemo(() => {
-    const totalSupply = quote?.totalSupply ?? previewPlan?.summary.supply ?? 0n;
-    const totalDemand = quote?.totalDemand ?? previewPlan?.summary.demand ?? 0n;
-    if (totalSupply <= 0n || totalDemand <= 0n) return null;
-
-    if (direction === 'bch_to_token') {
-      return Number(totalSupply) / Number(totalDemand);
-    }
-    return Number(totalDemand) / Number(totalSupply);
-  }, [direction, previewPlan, quote]);
   const swapAmountExceedsBalance =
     activeView === 'merchant'
       ? false
@@ -3449,38 +3495,13 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       : spotPreview
         ? `${spotPreview.demandDisplay} ${receiveUnitLabel}`
         : `0 ${direction === 'bch_to_token' ? effectiveSymbol : 'BCH'}`;
-  const feeRatioBps = quote
-    ? estimateBps(
-        quote.estimatedFeeSatoshis,
-        direction === 'bch_to_token' ? quote.totalSupply : quote.totalDemand
-      )
-    : 0n;
-  const priceImpactLabel = useMemo(() => {
-    if (
-      !selectedTokenSpotPriceSats ||
-      !effectiveAtomicPriceSats ||
-      !Number.isFinite(effectiveAtomicPriceSats) ||
-      effectiveAtomicPriceSats <= 0
-    ) {
-      return quote
-        ? formatUnsignedPercentValue(Number(feeRatioBps) / 100)
-        : addonT('module.getQuote', 'Get quote');
-    }
-
-    const impact =
-      Math.abs(effectiveAtomicPriceSats - selectedTokenSpotPriceSats) /
-      selectedTokenSpotPriceSats;
-    return formatUnsignedPercentValue(impact * 100);
-  }, [
-    addonT,
-    effectiveAtomicPriceSats,
-    feeRatioBps,
-    quote,
-    selectedTokenSpotPriceSats,
-  ]);
-  const previewTradeCount =
-    quote?.trades.length ?? previewPlan?.trades.length ?? 0;
   const previewedRouteRows = quote?.trades ?? [];
+  useEffect(() => {
+    if (!quote) return;
+    setQuoteNowMs(Date.now());
+    const timer = window.setInterval(() => setQuoteNowMs(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
+  }, [quote]);
   const quoteSafetyBanner = useMemo<CauldronQuoteSafetyBanner | null>(
     () =>
       buildCauldronQuoteSafetyBanner({
@@ -3493,10 +3514,16 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           : null,
         liveUpdatesEnabled: apiStatus?.liveUpdatesEnabled ?? true,
         liveUpdatedAt: apiStatus?.liveUpdatedAt ?? null,
-        nowMs: Date.now(),
+        nowMs: quoteNowMs,
         translate: addonT,
       }),
-    [addonT, apiStatus?.liveUpdatedAt, apiStatus?.liveUpdatesEnabled, quote]
+    [
+      addonT,
+      apiStatus?.liveUpdatedAt,
+      apiStatus?.liveUpdatesEnabled,
+      quote,
+      quoteNowMs,
+    ]
   );
   const quoteReviewWarnings =
     quoteSafetyBanner?.messages ?? quote?.warnings ?? [];
@@ -4259,7 +4286,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
     try {
       setSubmitting(true);
-      setMessage(null);
+      setMessage(
+        'Checking current pool liquidity and the reviewed transaction…'
+      );
       const merchantTerms = merchantPaymentProposal
         ? getMerchantPaymentTerms(merchantPaymentProposal)
         : null;
@@ -4435,14 +4464,26 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               : `Cauldron swap ${formatTokenAmount(refreshedPlan.summary.supply, effectiveDecimals)} ${effectiveSymbol} -> BCH`,
       });
 
-      if (merchantPaymentProposal) {
-        setMerchantSubmittedDebitSats(
-          built.walletInputs.reduce(
-            (total, input) =>
-              total + parseSatoshis(input.utxo.amount ?? input.utxo.value ?? 0),
-            0n
-          )
+      if (
+        !matchesReviewedTradeQuote(
+          {
+            ...quote.built,
+            totalSupply: quote.totalSupply,
+            totalDemand: quote.totalDemand,
+          },
+          {
+            ...built,
+            totalSupply: refreshedPlan.summary.supply,
+            totalDemand: refreshedPlan.summary.demand,
+          }
+        )
+      ) {
+        setQuote(null);
+        setReviewOpen(false);
+        setMessage(
+          'Pool liquidity, funding, or fee changed. Get a fresh quote and review it before confirming. No transaction was sent.'
         );
+        return;
       }
 
       if (merchantPaymentProposal) {
@@ -4501,7 +4542,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             : addonT(
                 'module.transactionWatch',
                 'Keeping {txid} under watch while the wallet refreshes in the background.',
-                { txid: result.txid }
+                { txid: maskSensitiveValue(result.txid) }
               )
           : addonT(
               activeView === 'merchant'
@@ -4510,7 +4551,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               activeView === 'merchant'
                 ? `Broadcast. Merchant output accepted at 0-conf: ${merchantReceivesDisplay ?? '—'}.`
                 : 'Broadcast completed with {txid}.',
-              activeView === 'merchant' ? undefined : { txid: result.txid }
+              activeView === 'merchant'
+                ? undefined
+                : { txid: maskSensitiveValue(result.txid) }
             ),
         'submitted',
         result.txid
@@ -4522,14 +4565,16 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               activeView === 'merchant'
                 ? `Merchant payment submitted: ${merchantReceivesDisplay ?? '—'}. Accepted at 0-conf; do not send again.`
                 : 'Swap handoff pending visibility: {txid}. Keep the txid and avoid sending it again until it appears in history.',
-              { txid: result.txid }
+              { txid: maskSensitiveValue(result.txid) }
             )
           : addonT(
               'module.swapBroadcastedMessage',
               activeView === 'merchant'
                 ? `Merchant payment broadcast: ${merchantReceivesDisplay ?? '—'}. Accepted at 0-conf.`
                 : 'Swap broadcasted: {txid}',
-              activeView === 'merchant' ? undefined : { txid: result.txid }
+              activeView === 'merchant'
+                ? undefined
+                : { txid: maskSensitiveValue(result.txid) }
             )
       );
       if (merchantPaymentProposal) {
@@ -4574,13 +4619,20 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     }
   };
 
+  // The quote builder intentionally remains an inline async workflow because
+  // it reads the full current review state. Keep the auto-prepare effect on a
+  // stable ref so it invokes the latest workflow without recreating the effect
+  // on every render.
+  const handleQuoteRef = useRef(handleQuote);
+  handleQuoteRef.current = handleQuote;
+
   useEffect(() => {
     if (!merchantProposalAutoPreparePending || !merchantPaymentProposal) {
       return;
     }
 
     setMerchantProposalAutoPreparePending(false);
-    void handleQuote().then((success) => {
+    void handleQuoteRef.current().then((success) => {
       if (success) {
         // The review card already shows the fixed receive amount, fee, and
         // wallet debit. Avoid adding a full-width notice here: on compact
@@ -4588,11 +4640,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         setMessage(null);
       }
     });
-  }, [
-    handleQuote,
-    merchantPaymentProposal,
-    merchantProposalAutoPreparePending,
-  ]);
+  }, [merchantPaymentProposal, merchantProposalAutoPreparePending]);
 
   const handleReviewSwap = () => {
     if (!quote) {
@@ -4610,10 +4658,11 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setReviewOpen(true);
   };
 
-  const handleQuoteAndOpenDetails = () => {
+  const handleQuoteAndOpenReview = () => {
     void handleQuote().then((success) => {
       if (success) {
-        setQuoteDetailsOpen(true);
+        setReviewWarningsAccepted(false);
+        setReviewOpen(true);
       }
     });
   };
@@ -4637,7 +4686,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setPoolCreateTokenAmount('');
     setPoolReview(null);
     setSelectedWalletPoolId(null);
-    setWithdrawConfirmOpen(false);
     setPoolTokenAmountAuto(true);
     setPoolSyncAnchor('bch');
   };
@@ -4662,7 +4710,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setMerchantRecipientAddress('');
     setMerchantDetailsOpen(false);
     setMerchantBroadcastStarted(false);
-    setMerchantSubmittedDebitSats(null);
     setMerchantProposalAutoPreparePending(false);
     setSelectedWalletPoolHistory(null);
     setSelectedWalletPoolApy(null);
@@ -4715,14 +4762,39 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         currentNetwork,
         apiClient
       );
+      const indexerHealthPromise = apiClient
+        .getIndexerHealth()
+        .catch(() => null);
 
-      const [refreshedPools, walletUtxos, userPools, walletCreatedPools] =
-        await Promise.all([
-          refreshedPoolsPromise,
-          walletUtxosPromise,
-          userPoolsPromise,
-          walletCreatedPoolsPromise,
-        ]);
+      const [
+        refreshedPools,
+        walletUtxos,
+        userPools,
+        walletCreatedPools,
+        indexerHealth,
+      ] = await Promise.all([
+        refreshedPoolsPromise,
+        walletUtxosPromise,
+        userPoolsPromise,
+        walletCreatedPoolsPromise,
+        indexerHealthPromise,
+      ]);
+
+      if (indexerHealth) {
+        setApiStatus((current) =>
+          current
+            ? {
+                ...current,
+                indexerStatus: indexerHealth.status,
+                indexerVersion: indexerHealth.version,
+                indexerLag: Math.max(
+                  0,
+                  indexerHealth.chain_tip - indexerHealth.indexed_height
+                ),
+              }
+            : current
+        );
+      }
 
       if (selectedTokenId) {
         setPools(refreshedPools);
@@ -4949,6 +5021,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         tokenAmount: parsedPoolCreateTokenAmount,
         ownerAddress,
       });
+      setPoolReviewChanged(false);
     } catch (error) {
       setMessage(
         localizeCauldronErrorMessage(
@@ -4960,7 +5033,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     }
   };
 
-  const handleWithdrawPool = async () => {
+  const handlePrepareWithdrawPool = async () => {
+    if (submitting) return;
+    setSubmitting(true);
     try {
       setMessage(null);
 
@@ -5005,98 +5080,12 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         userPrompt: `Withdraw Cauldron pool ${selectedPoolName}`,
       });
 
-      setSubmitting(true);
-      showBroadcastNotice(
-        addonT(
-          'module.broadcastingPoolWithdrawal',
-          'Broadcasting pool withdrawal'
-        ),
-        addonT(
-          'module.preparingTransaction',
-          'Preparing the transaction for submission.'
-        ),
-        'broadcasting'
-      );
-
-      const result = await signAndBroadcastCauldronPoolWithdrawRequest(
-        walletContext.walletId,
+      setPoolReview({
+        kind: 'withdraw',
         built,
-        {
-          sourceLabel: 'Cauldron Pool Withdraw',
-          recipientSummary: selectedPoolName,
-          amountSummary: `${formatCompactBchAmount(selectedWalletPoolPosition.pool.output.amountSatoshis)} + ${formatTokenDisplayAmount(selectedWalletPoolPosition.pool.output.tokenAmount, selectedPoolDecimals, selectedPoolSymbol)}`,
-          userPrompt: built.signRequest.transaction.userPrompt ?? null,
-        }
-      );
-      if (result.errorMessage) {
-        throw new Error(result.errorMessage);
-      }
-
-      const withdrawnPoolId = getPoolSelectionId(
-        selectedWalletPoolPosition.pool
-      );
-      removeCreatedWalletPoolPosition(
-        currentNetwork,
-        withdrawnPoolId,
-        walletContext.walletId
-      );
-      const nextSuppressedWalletPoolIds = suppressedWalletPoolIds.includes(
-        withdrawnPoolId
-      )
-        ? suppressedWalletPoolIds
-        : [withdrawnPoolId, ...suppressedWalletPoolIds];
-      setSuppressedWalletPoolIds(nextSuppressedWalletPoolIds);
-      setWalletPoolPositions((current) =>
-        current.filter(
-          (position) => getPoolSelectionId(position.pool) !== withdrawnPoolId
-        )
-      );
-      setPendingWalletPoolPositions((current) =>
-        current.filter(
-          (position) => getPoolSelectionId(position.pool) !== withdrawnPoolId
-        )
-      );
-      setSelectedWalletPoolId(null);
-      setSelectedWalletPoolHistory(null);
-      setSelectedWalletPoolApy(null);
-
-      showBroadcastNotice(
-        result.broadcastState === 'submitted'
-          ? addonT(
-              'module.poolWithdrawalSubmitted',
-              'Pool withdrawal submitted'
-            )
-          : addonT(
-              'module.poolWithdrawalBroadcasted',
-              'Pool withdrawal broadcasted'
-            ),
-        result.broadcastState === 'submitted'
-          ? addonT(
-              'module.transactionWatch',
-              'Keeping {txid} under watch while the wallet refreshes in the background.',
-              { txid: result.txid }
-            )
-          : addonT(
-              'module.broadcastComplete',
-              'Broadcast completed with {txid}.',
-              {
-                txid: result.txid,
-              }
-            ),
-        'submitted',
-        result.txid
-      );
-      setMessage(
-        addonT(
-          'module.poolWithdrawalMessage',
-          'Pool withdrawal submitted: {txid}',
-          {
-            txid: result.txid,
-          }
-        )
-      );
-      await refreshCauldronState(nextSuppressedWalletPoolIds);
-      resetCauldronViewState(nextSuppressedWalletPoolIds);
+        pool: selectedWalletPoolPosition.pool,
+      });
+      setPoolReviewChanged(false);
     } catch (error) {
       setMessage(
         localizeCauldronErrorMessage(
@@ -5105,6 +5094,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           'Unable to withdraw Cauldron pool'
         )
       );
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -5115,19 +5106,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       setSubmitting(true);
       setMessage(null);
       showBroadcastNotice(
-        poolReview.kind === 'create'
-          ? addonT(
-              'module.broadcastingPoolCreation',
-              'Broadcasting pool creation'
-            )
-          : addonT(
-              'module.broadcastingPoolWithdrawal',
-              'Broadcasting pool withdrawal'
-            ),
-        addonT(
-          'module.preparingTransaction',
-          'Preparing the transaction for submission.'
-        ),
+        'Checking pool transaction',
+        'Checking funding and reviewed terms before signing.',
         'broadcasting'
       );
 
@@ -5184,6 +5164,22 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             `Create Cauldron pool ${formatBchAmount(poolReview.bchAmount)} BCH + ${formatTokenAmount(poolReview.tokenAmount, effectiveDecimals)} ${effectiveSymbol}`,
         });
 
+        if (!matchesReviewedPoolTransaction(poolReview.built, rebuilt)) {
+          setPoolReview({ ...poolReview, built: rebuilt, ownerAddress });
+          setPoolReviewChanged(true);
+          setPoolReviewRevision((revision) => revision + 1);
+          clearBroadcastNotice();
+          setMessage(
+            'Pool funding or fee changed. Review the updated transaction before confirming.'
+          );
+          return;
+        }
+
+        showBroadcastNotice(
+          'Broadcasting pool creation',
+          'Signing and submitting the reviewed transaction.',
+          'broadcasting'
+        );
         const result = await signAndBroadcastCauldronPoolDepositRequest(
           walletContext.walletId,
           rebuilt,
@@ -5285,13 +5281,13 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             ? addonT(
                 'module.transactionWatch',
                 'Keeping {txid} under watch while the wallet refreshes in the background.',
-                { txid: result.txid }
+                { txid: maskSensitiveValue(result.txid) }
               )
             : addonT(
                 'module.broadcastComplete',
                 'Broadcast completed with {txid}.',
                 {
-                  txid: result.txid,
+                  txid: maskSensitiveValue(result.txid),
                 }
               ),
           'submitted',
@@ -5299,7 +5295,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         );
         setMessage(
           addonT('module.poolSubmitted', 'Pool submitted: {txid}', {
-            txid: result.txid,
+            txid: maskSensitiveValue(result.txid),
           })
         );
         await refreshCauldronState();
@@ -5356,6 +5352,22 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           `Withdraw Cauldron pool ${selectedPoolName}`,
       });
 
+      if (!matchesReviewedPoolTransaction(poolReview.built, rebuilt)) {
+        setPoolReview({ kind: 'withdraw', built: rebuilt, pool: currentPool });
+        setPoolReviewChanged(true);
+        setPoolReviewRevision((revision) => revision + 1);
+        clearBroadcastNotice();
+        setMessage(
+          'Pool funding or fee changed. Review the updated transaction before confirming.'
+        );
+        return;
+      }
+
+      showBroadcastNotice(
+        'Broadcasting pool withdrawal',
+        'Signing and submitting the reviewed transaction.',
+        'broadcasting'
+      );
       const result = await signAndBroadcastCauldronPoolWithdrawRequest(
         walletContext.walletId,
         rebuilt,
@@ -5410,13 +5422,13 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           ? addonT(
               'module.transactionWatch',
               'Keeping {txid} under watch while the wallet refreshes in the background.',
-              { txid: result.txid }
+              { txid: maskSensitiveValue(result.txid) }
             )
           : addonT(
               'module.broadcastComplete',
               'Broadcast completed with {txid}.',
               {
-                txid: result.txid,
+                txid: maskSensitiveValue(result.txid),
               }
             ),
         'submitted',
@@ -5427,7 +5439,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           'module.poolWithdrawalMessage',
           'Pool withdrawal submitted: {txid}',
           {
-            txid: result.txid,
+            txid: maskSensitiveValue(result.txid),
           }
         )
       );
@@ -5459,56 +5471,31 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     <div className="container relative mx-auto flex h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] min-h-0 max-w-md flex-col overflow-hidden px-4 pt-2 pb-[calc(var(--safe-bottom)+1rem)] wallet-page">
       <div className="flex-none">
         {merchantPaymentProposal ? (
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[16px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_20%,var(--wallet-surface-strong))] shadow-lg">
+          <>
+            <PageHeader title="Pay merchant" compact />
+            <div className="-mt-2 flex items-center gap-3 px-1">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[14px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_20%,var(--wallet-surface-strong))]">
                 <img
                   src="/assets/images/OPTNUIkeyline2.png"
                   alt="OPTN"
-                  className="h-7 w-7 object-contain"
+                  className="h-6 w-6 object-contain"
                 />
               </div>
-              <div className="min-w-0">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.22em] wallet-muted opacity-70">
-                  Merchant Payment
-                </div>
-                <h1 className="truncate text-xl font-extrabold leading-tight tracking-[-0.02em] wallet-text-strong">
-                  Pay merchant
-                </h1>
-                <p className="mt-0.5 text-[11px] leading-4 wallet-muted">
-                  Pay {merchantIncomingDisplay ?? '—'}, receive{' '}
-                  {merchantReceivesDisplay ?? '—'}
-                </p>
-              </div>
+              <p className="text-[11px] leading-4 wallet-muted">
+                Pay {merchantIncomingDisplay ?? '—'}, receive{' '}
+                {merchantReceivesDisplay ?? '—'}
+              </p>
             </div>
-            <button
-              type="button"
-              onClick={() => navigate(backTarget)}
-              className="wallet-btn-danger shrink-0 px-3 py-1.5 text-xs"
-            >
-              {addonT('common.back', 'Back')}
-            </button>
-          </div>
+          </>
         ) : (
           <>
-            <div className="flex justify-center">
+            <PageHeader title={app.name} compact />
+            <div className="-mt-2 flex justify-center">
               <img
                 src="/assets/images/cauldron-header-logo.png"
                 alt="Cauldron"
                 className="h-auto w-full max-w-[220px] object-contain"
               />
-            </div>
-            <div className="mt-2 flex items-center justify-between gap-3">
-              <h1 className="min-w-0 truncate text-lg font-bold tracking-[-0.02em] wallet-text-strong">
-                {app.name}
-              </h1>
-              <button
-                type="button"
-                onClick={() => navigate(backTarget)}
-                className="wallet-btn-danger px-3 py-1.5 text-xs"
-              >
-                {addonT('common.back', 'Back')}
-              </button>
             </div>
           </>
         )}
@@ -5518,11 +5505,13 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         {message ? (
           <div className="mb-2">
             <div className="wallet-warning-panel rounded-2xl px-4 py-2.5 text-sm shadow-lg">
-              {message}
+              <TransactionAwareMessage
+                message={message}
+                label={walletT('history.transactionId')}
+              />
             </div>
           </div>
         ) : null}
-
         {broadcastNotice && typeof document !== 'undefined'
           ? createPortal(
               <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/85 px-4">
@@ -5599,18 +5588,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                       </div>
                       <div className="mt-4 space-y-2 rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-left text-sm">
                         <div className="flex items-center justify-between gap-3">
-                          <span className="wallet-muted">
-                            Total from wallet
-                          </span>
-                          <span className="font-semibold wallet-text-strong">
-                            {merchantSubmittedDebitSats != null
-                              ? formatCompactBchAmount(
-                                  merchantSubmittedDebitSats
-                                )
-                              : '—'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
                           <span className="wallet-muted">Status</span>
                           <span className="font-semibold text-amber-300">
                             0-conf accepted
@@ -5618,10 +5595,17 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                         </div>
                         {broadcastNotice.txid ? (
                           <div className="flex items-center justify-between gap-3">
-                            <span className="wallet-muted">Transaction ID</span>
-                            <span className="font-mono font-semibold wallet-text-strong">
-                              {shortenHash(broadcastNotice.txid)}
+                            <span className="wallet-muted">
+                              {walletT('history.transactionId')}
                             </span>
+                            <MaskedValue
+                              value={broadcastNotice.txid}
+                              label={walletT('history.transactionId')}
+                              ariaLabel={walletT('history.transactionId')}
+                              copySuccessMessageKey="history.transactionCopied"
+                              embedded
+                              className="font-semibold"
+                            />
                           </div>
                         ) : null}
                       </div>
@@ -5686,15 +5670,26 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                         )}
                       </div>
                       <div className="mt-4 text-lg font-semibold wallet-text-strong">
-                        {broadcastNotice.title}
+                        <TransactionAwareMessage
+                          message={broadcastNotice.title}
+                          label={walletT('history.transactionId')}
+                        />
                       </div>
                       <div className="mt-2 text-sm leading-6 wallet-muted">
-                        {broadcastNotice.subtitle}
+                        <TransactionAwareMessage
+                          message={broadcastNotice.subtitle}
+                          label={walletT('history.transactionId')}
+                        />
                       </div>
                       {broadcastNotice.txid ? (
-                        <div className="mt-3 rounded-full border border-[var(--wallet-border)] px-3 py-1 text-xs tracking-[0.08em] wallet-muted">
-                          {shortenHash(broadcastNotice.txid)}
-                        </div>
+                        <MaskedValue
+                          value={broadcastNotice.txid}
+                          label={walletT('history.transactionId')}
+                          ariaLabel={walletT('history.transactionId')}
+                          copySuccessMessageKey="history.transactionCopied"
+                          embedded
+                          className="mt-3 rounded-full border border-[var(--wallet-border)] px-3 py-1 text-xs tracking-[0.08em] wallet-muted"
+                        />
                       ) : null}
                       <button
                         type="button"
@@ -5762,12 +5757,13 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                   </div>
                   <div className="mt-2 flex items-center justify-center gap-2 text-xs">
                     <span className="wallet-muted">Merchant</span>
-                    <span
+                    <MaskedValue
+                      value={merchantRecipientAddress}
+                      label={walletT('send.address')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      embedded
                       className="max-w-[15rem] truncate font-medium wallet-text-strong"
-                      title={merchantRecipientAddress}
-                    >
-                      {shortenAddress(merchantRecipientAddress)}
-                    </span>
+                    />
                   </div>
                 </div>
 
@@ -5795,26 +5791,32 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                           {formatCompactBchAmount(quote.estimatedFeeSatoshis)}
                         </span>
                       </div>
-                      {merchantTerms?.incomingAsset === 'token' &&
-                      merchantAdditionalBchSats != null ? (
+                      {merchantBchEffectDisplay ? (
                         <div className="flex items-center justify-between gap-3">
                           <span className="wallet-muted">
-                            Additional BCH input
+                            {merchantBchEffectLabel}
                           </span>
                           <span className="wallet-text-strong">
-                            {formatCompactBchAmount(merchantAdditionalBchSats)}
+                            {merchantBchEffectDisplay}
                           </span>
                         </div>
                       ) : null}
-                      <div className="flex items-center justify-between gap-3 font-semibold">
-                        <span className="wallet-text-strong">
-                          Total from wallet
-                        </span>
-                        <span className="wallet-text-strong">
-                          {formatCompactBchAmount(
-                            merchantEstimatedWalletDebitSats ?? 0n
-                          )}
-                        </span>
+                      {merchantNetTokenAtomic != null &&
+                      merchantNetTokenAtomic !== 0n &&
+                      merchantTokenEffectDisplay ? (
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="wallet-muted">
+                            {merchantTokenEffectLabel}
+                          </span>
+                          <span className="wallet-text-strong">
+                            {merchantTokenEffectDisplay}
+                          </span>
+                        </div>
+                      ) : null}
+                      <div className="text-xs wallet-muted">
+                        Net wallet effects are calculated after change and
+                        include the network fee and BCH attached to token
+                        outputs.
                       </div>
                     </div>
                   ) : null}
@@ -5923,8 +5925,15 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                           </div>
                         </div>
                         <div className="mt-3 grid gap-1 text-xs wallet-muted">
-                          <div>
-                            Merchant: {shortenAddress(merchantRecipientAddress)}
+                          <div className="flex items-center gap-1">
+                            Merchant:{' '}
+                            <MaskedValue
+                              value={merchantRecipientAddress}
+                              label={walletT('send.address')}
+                              copySuccessMessageKey="receive.addressCopied"
+                              embedded
+                              className="text-xs"
+                            />
                           </div>
                           <div>
                             Only your BCH funding and change can vary. The
@@ -5997,16 +6006,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                                 <span className="font-semibold wallet-text-strong">
                                   {formatCompactBchAmount(
                                     quote.estimatedFeeSatoshis
-                                  )}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between gap-3 border-t border-[var(--wallet-border)] pt-1">
-                                <span className="font-semibold wallet-text-strong">
-                                  Estimated wallet debit
-                                </span>
-                                <span className="font-semibold wallet-text-strong">
-                                  {formatCompactBchAmount(
-                                    merchantEstimatedWalletDebitSats ?? 0n
                                   )}
                                 </span>
                               </div>
@@ -6314,7 +6313,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                           ? handleReviewSwap
                           : activeView === 'merchant'
                             ? () => void handleQuote()
-                            : handleQuoteAndOpenDetails
+                            : handleQuoteAndOpenReview
                       }
                       disabled={
                         quoteActionsDisabled ||
@@ -6338,7 +6337,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                               : 'Review Swap'
                             : activeView === 'merchant'
                               ? 'Prepare payment'
-                              : 'Get Quote'}
+                              : 'Review Swap'}
                     </button>
                   </div>
                   <div className="mt-2 px-1 text-xs wallet-muted">
@@ -6365,15 +6364,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
                 {quoteRateLabel ? (
                   <div className="wallet-card p-2.5">
-                    <div className="flex items-center justify-between gap-3 text-sm wallet-text-strong">
+                    <div className="text-sm wallet-text-strong">
                       <span className="min-w-0 truncate">{quoteRateLabel}</span>
-                      <button
-                        type="button"
-                        onClick={() => setQuoteDetailsOpen(true)}
-                        className="wallet-btn-secondary shrink-0 px-3 py-1.5 text-xs"
-                      >
-                        {addonT('module.details', 'Details')}
-                      </button>
                     </div>
                   </div>
                 ) : previewError ? (
@@ -6777,24 +6769,31 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                       {formatCompactBchAmount(quote.estimatedFeeSatoshis)}
                     </span>
                   </div>
-                  {merchantTerms.incomingAsset === 'token' &&
-                  merchantAdditionalBchSats != null ? (
+                  {merchantBchEffectDisplay ? (
                     <div className="mt-2 flex items-center justify-between gap-3">
-                      <span className="wallet-muted">Additional BCH input</span>
+                      <span className="wallet-muted">
+                        {merchantBchEffectLabel}
+                      </span>
                       <span className="font-medium wallet-text-strong">
-                        {formatCompactBchAmount(merchantAdditionalBchSats)}
+                        {merchantBchEffectDisplay}
                       </span>
                     </div>
                   ) : null}
-                  <div className="mt-2 flex items-center justify-between gap-3 border-t border-[var(--wallet-border)] pt-2">
-                    <span className="font-semibold wallet-text-strong">
-                      Total from wallet
-                    </span>
-                    <span className="font-semibold wallet-text-strong">
-                      {formatCompactBchAmount(
-                        merchantEstimatedWalletDebitSats ?? 0n
-                      )}
-                    </span>
+                  {merchantNetTokenAtomic != null &&
+                  merchantNetTokenAtomic !== 0n &&
+                  merchantTokenEffectDisplay ? (
+                    <div className="mt-2 flex items-center justify-between gap-3">
+                      <span className="wallet-muted">
+                        {merchantTokenEffectLabel}
+                      </span>
+                      <span className="font-medium wallet-text-strong">
+                        {merchantTokenEffectDisplay}
+                      </span>
+                    </div>
+                  ) : null}
+                  <div className="mt-2 text-xs wallet-muted">
+                    Net wallet effects are calculated after change and include
+                    the network fee and BCH attached to token outputs.
                   </div>
                 </>
               ) : (
@@ -6831,15 +6830,39 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                         : formatCompactBchAmount(quote.minReceive)}
                     </span>
                   </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="wallet-muted">Network fee</span>
+                    <span className="font-medium wallet-text-strong">
+                      {formatCompactBchAmount(quote.estimatedFeeSatoshis)}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="wallet-muted">
+                      LP fee · included in quote
+                    </span>
+                    <span className="font-medium wallet-text-strong">
+                      {direction === 'bch_to_token'
+                        ? formatCompactBchAmount(totalLpFee)
+                        : formatTokenDisplayAmount(
+                            totalLpFee,
+                            effectiveDecimals,
+                            effectiveSymbol
+                          )}
+                    </span>
+                  </div>
                 </>
               ) : null}
               {merchantPaymentProposal ? (
                 <>
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <span className="wallet-muted">Merchant</span>
-                    <span className="font-medium wallet-text-strong">
-                      {shortenAddress(merchantRecipientAddress)}
-                    </span>
+                    <MaskedValue
+                      value={merchantRecipientAddress}
+                      label={walletT('send.address')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      embedded
+                      className="font-medium wallet-text-strong"
+                    />
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <span className="wallet-muted">Change</span>
@@ -6852,7 +6875,12 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             </div>
 
             {activeView !== 'merchant' && quoteRiskSummary ? (
-              <div
+              <details
+                key={quote.builtAt}
+                open={
+                  quoteRiskSummary.highSlippage ||
+                  quoteRiskSummary.highLiquidityUsage
+                }
                 className={`rounded-2xl border px-4 py-3 ${
                   quoteRiskSummary.highSlippage ||
                   quoteRiskSummary.highLiquidityUsage
@@ -6860,12 +6888,12 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     : 'border-[var(--wallet-border)]'
                 }`}
               >
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] wallet-text-strong">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.18em] wallet-text-strong">
                   {addonT(
                     'module.liquiditySlippageCheck',
                     'Liquidity & slippage check'
                   )}
-                </div>
+                </summary>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   <div
                     className={`rounded-xl border px-3 py-2 ${
@@ -6943,7 +6971,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     'Re-quote if the market moves or if you want a tighter fill. The actual transaction is still re-validated before broadcast.'
                   )}
                 </div>
-              </div>
+              </details>
             ) : null}
 
             {activeView !== 'merchant' && quoteReviewWarnings.length > 0 ? (
@@ -6983,10 +7011,10 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             ) : null}
 
             {activeView !== 'merchant' ? (
-              <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
+              <details className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
+                <summary className="cursor-pointer text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
                   {addonT('module.route', 'Route')}
-                </div>
+                </summary>
                 <div className="mt-2 space-y-2">
                   {previewedRouteRows.slice(0, 2).map((trade) => (
                     <div
@@ -7018,7 +7046,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     </div>
                   ) : null}
                 </div>
-              </div>
+              </details>
             ) : null}
           </div>
         </ContainedSwipeConfirmModal>
@@ -7076,9 +7104,13 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               ) : null}
               <div className="flex items-start justify-between gap-3">
                 <span className="wallet-muted">Merchant address</span>
-                <span className="max-w-[64%] break-all text-right font-medium wallet-text-strong">
-                  {shortenAddress(merchantPaymentProposal.merchantAddress)}
-                </span>
+                <MaskedValue
+                  value={merchantPaymentProposal.merchantAddress}
+                  label={walletT('send.address')}
+                  copySuccessMessageKey="receive.addressCopied"
+                  embedded
+                  className="max-w-[64%] truncate text-right text-xs font-medium wallet-text-strong"
+                />
               </div>
               <div className="flex items-center justify-between gap-3">
                 <span className="wallet-muted">Exchange rate</span>
@@ -7104,14 +7136,23 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     : `${formatTokenAmount(merchantPaymentProposal.route.summary.supply, effectiveDecimals)} ${effectiveSymbol}`}
                 </span>
               </div>
-              {merchantTerms?.incomingAsset === 'token' &&
-              merchantTerms.merchantBchAmountSatoshis > 0n ? (
+              {merchantBchEffectDisplay ? (
                 <div className="flex items-center justify-between gap-3">
-                  <span className="wallet-muted">Additional BCH input</span>
+                  <span className="wallet-muted">{merchantBchEffectLabel}</span>
                   <span className="text-right font-medium wallet-text-strong">
-                    {merchantAdditionalBchSats != null
-                      ? formatCompactBchAmount(merchantAdditionalBchSats)
-                      : 'Required for fees'}
+                    {merchantBchEffectDisplay}
+                  </span>
+                </div>
+              ) : null}
+              {merchantNetTokenAtomic != null &&
+              merchantNetTokenAtomic !== 0n &&
+              merchantTokenEffectDisplay ? (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="wallet-muted">
+                    {merchantTokenEffectLabel}
+                  </span>
+                  <span className="text-right font-medium wallet-text-strong">
+                    {merchantTokenEffectDisplay}
                   </span>
                 </div>
               ) : null}
@@ -7148,171 +7189,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         </div>
       ) : null}
 
-      {quoteDetailsOpen && quote ? (
-        <div className="absolute inset-0 z-30 flex items-end bg-black/50 px-4 pb-4 pt-10">
-          <div className="wallet-card flex max-h-[85vh] w-full flex-col rounded-[28px] p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
-                  {addonT('module.quoteDetails', 'Quote details')}
-                </div>
-                <h2 className="mt-1 text-lg font-semibold wallet-text-strong">
-                  {addonT(
-                    'module.currentQuoteBreakdown',
-                    'Current quote breakdown'
-                  )}
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => setQuoteDetailsOpen(false)}
-                className="wallet-btn-secondary px-3 py-1.5 text-xs"
-              >
-                {addonT('common.close', 'Close')}
-              </button>
-            </div>
-
-            <div className="mt-2 text-xs leading-5 wallet-muted">
-              {addonT('module.quotePreview', 'Quote preview.')}
-            </div>
-
-            <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm">
-              <div className="rounded-2xl border border-[var(--wallet-border)] px-3 py-2.5">
-                <div className="mb-2 text-[11px] uppercase tracking-[0.18em] wallet-muted">
-                  {addonT('module.trade', 'Trade')}
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.minReceive', 'Min receive')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {quote
-                        ? direction === 'bch_to_token'
-                          ? formatTokenDisplayAmount(
-                              quote.minReceive,
-                              effectiveDecimals,
-                              effectiveSymbol
-                            )
-                          : formatCompactBchAmount(quote.minReceive)
-                        : addonT('module.getQuote', 'Get quote')}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.priceImpact', 'Price impact')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {priceImpactLabel}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-[var(--wallet-border)] px-3 py-2.5">
-                <div className="mb-2 text-[11px] uppercase tracking-[0.18em] wallet-muted">
-                  {addonT('module.fees', 'Fees')}
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.lpFee', 'LP fee')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {direction === 'bch_to_token'
-                        ? formatCompactBchAmount(totalLpFee)
-                        : formatTokenDisplayAmount(
-                            totalLpFee,
-                            effectiveDecimals,
-                            effectiveSymbol
-                          )}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.platformFee', 'Platform fee')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      0 BCH
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.networkFee', 'Network fee')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {quote
-                        ? formatCompactBchAmount(quote.estimatedFeeSatoshis)
-                        : addonT('module.getQuote', 'Get quote')}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-[var(--wallet-border)] px-3 py-2.5">
-                <div className="mb-2 text-[11px] uppercase tracking-[0.18em] wallet-muted">
-                  {addonT('module.market', 'Market')}
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.pools', 'Pools')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {previewTradeCount}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.minRoute', 'Min route')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {visibleMarketLiquidity
-                        ? direction === 'bch_to_token'
-                          ? formatCompactBchAmount(minExecutableRouteInput)
-                          : formatTokenDisplayAmount(
-                              minExecutableRouteInput,
-                              effectiveDecimals,
-                              effectiveSymbol
-                            )
-                        : addonT('module.getQuote', 'Get quote')}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.maxBch', 'Max BCH')}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {visibleMarketLiquidity
-                        ? formatCompactBchAmount(maxRoutableBchToToken)
-                        : addonT('module.getQuote', 'Get quote')}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate wallet-muted">
-                      {addonT('module.maxToken', 'Max {symbol}', {
-                        symbol: effectiveSymbol,
-                      })}
-                    </span>
-                    <span className="min-w-0 truncate text-right wallet-text-strong">
-                      {visibleMarketLiquidity
-                        ? formatTokenDisplayAmount(
-                            maxRoutableTokenToBch,
-                            effectiveDecimals,
-                            effectiveSymbol
-                          )
-                        : addonT('module.getQuote', 'Get quote')}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {poolReview ? (
         <ContainedSwipeConfirmModal
+          key={poolReviewRevision}
           open={Boolean(poolReview)}
           title={
             poolReview.kind === 'create'
@@ -7324,10 +7203,19 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           warning={
             <span>{addonT('module.slideConfirm', 'Slide to confirm.')}</span>
           }
-          onCancel={() => setPoolReview(null)}
+          onCancel={() => {
+            setPoolReview(null);
+            setPoolReviewChanged(false);
+          }}
           onConfirm={() => void handleConfirmPoolReview()}
         >
           <div className="space-y-3 px-1 py-2 text-sm">
+            {poolReviewChanged ? (
+              <p role="status" className="wallet-warning-panel rounded-xl p-3">
+                Pool funding or fee changed. Review these updated terms before
+                confirming.
+              </p>
+            ) : null}
             <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
               {poolReview.kind === 'create' ? (
                 <>
@@ -7410,7 +7298,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             <div className="mt-4 flex gap-3">
               <button
                 type="button"
-                onClick={() => setWithdrawConfirmOpen(true)}
+                onClick={() => void handlePrepareWithdrawPool()}
                 className="wallet-btn-primary flex-1"
                 disabled={submitting}
               >
@@ -7566,9 +7454,14 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                           >
                             <div className="flex items-center justify-between gap-3 text-xs wallet-muted opacity-80">
                               <span>{formatTimestamp(entry.timestamp)}</span>
-                              <span className="truncate">
-                                {shortTokenId(entry.txid)}
-                              </span>
+                              <MaskedValue
+                                value={entry.txid}
+                                label={walletT('history.transactionId')}
+                                ariaLabel={walletT('history.transactionId')}
+                                copySuccessMessageKey="history.transactionCopied"
+                                embedded
+                                className="max-w-[10rem] truncate text-xs"
+                              />
                             </div>
                             <div className="mt-2 flex items-center justify-between gap-3 text-sm">
                               <span className="wallet-muted">BCH</span>
@@ -7639,63 +7532,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         </div>
       ) : null}
 
-      <ContainedSwipeConfirmModal
-        open={withdrawConfirmOpen}
-        title={addonT('common.withdraw', 'Withdraw LP')}
-        subtitle={selectedPoolName}
-        loading={submitting}
-        warning={
-          <span>
-            {addonT('common.slideWithdraw', 'Slide to confirm withdrawal.')}
-          </span>
-        }
-        onCancel={() => setWithdrawConfirmOpen(false)}
-        onConfirm={() => {
-          setWithdrawConfirmOpen(false);
-          void handleWithdrawPool();
-        }}
-      >
-        {selectedWalletPoolPosition ? (
-          <div className="space-y-3 px-1 py-2 text-sm">
-            <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3">
-              <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
-                {addonT('module.lpPosition', 'LP position')}
-              </div>
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <span className="wallet-muted">
-                  {addonT('common.pool', 'Pool')}
-                </span>
-                <span className="font-medium wallet-text-strong">
-                  {selectedPoolName}
-                </span>
-              </div>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="wallet-muted">
-                  {addonT('module.bchReserve', 'BCH reserve')}
-                </span>
-                <span className="font-medium wallet-text-strong">
-                  {formatCompactBchAmount(
-                    selectedWalletPoolPosition.pool.output.amountSatoshis
-                  )}
-                </span>
-              </div>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className="wallet-muted">
-                  {selectedPoolSymbol} reserve
-                </span>
-                <span className="font-medium wallet-text-strong">
-                  {formatTokenDisplayAmount(
-                    selectedWalletPoolPosition.pool.output.tokenAmount,
-                    selectedPoolDecimals,
-                    selectedPoolSymbol
-                  )}
-                </span>
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </ContainedSwipeConfirmModal>
-
       {tokenPickerOpen ? (
         <div className="absolute inset-0 z-20 flex items-end bg-black/50 px-4 pb-4 pt-4">
           <div className="wallet-card flex max-h-full w-full flex-col rounded-[28px] p-4">
@@ -7725,6 +7561,17 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             </div>
 
             <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+              {apiStatus?.indexerStatus ? (
+                <div className="rounded-xl border border-[var(--wallet-border)] px-3 py-2 text-xs wallet-muted">
+                  Indexer {apiStatus.indexerStatus}
+                  {apiStatus.indexerVersion
+                    ? ` · v${apiStatus.indexerVersion}`
+                    : ''}
+                  {apiStatus.indexerLag && apiStatus.indexerLag > 0
+                    ? ` · ${apiStatus.indexerLag} blocks behind`
+                    : ''}
+                </div>
+              ) : null}
               <div className="sticky top-0 z-10 pb-2">
                 <input
                   type="text"
@@ -7820,6 +7667,10 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           </div>
         </div>
       ) : null}
+      <RouteExitFooter
+        label={addonT('common.back', 'Back')}
+        onBack={() => navigate(backTarget)}
+      />
     </div>
   );
 };

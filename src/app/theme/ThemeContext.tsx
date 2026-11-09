@@ -52,12 +52,11 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
       skin,
       setMode,
       setSkin,
-      // The existing one-tap control stays two-state: the wallet's green
-      // surfaces, or true black. Every mode including Light and Gray is
-      // offered in Settings -> Appearance, so this control does not have to
-      // grow a third state to keep them reachable.
+      // The quick control stays two-state: neutral Light surfaces or the
+      // wallet's green Dark surfaces. Gray and Green remain available from
+      // Settings -> Appearance.
       toggleMode: () =>
-        setMode((previous) => (previous === 'dark' ? 'green' : 'dark')),
+        setMode((previous) => (previous === 'light' ? 'dark' : 'light')),
     }),
     [mode, skin]
   );

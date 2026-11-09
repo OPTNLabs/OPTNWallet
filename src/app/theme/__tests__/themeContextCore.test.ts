@@ -15,20 +15,19 @@ describe('theme modes', () => {
     document.documentElement.className = '';
   });
 
-  it('reads a previously stored "dark" as green, the colours that choice meant', () => {
-    // "dark" used to name this wallet's green surfaces. Reading it literally
-    // would hand every existing user OLED black for a choice they never made.
+  it('reads a previously stored "dark" as green Dark surfaces', () => {
+    // "dark" used to name this wallet's green surfaces, which is still the
+    // visual treatment of the new Dark mode.
     localStorage.setItem('wallet_theme_mode', 'dark');
-    expect(normalizeLegacyMode('dark')).toBe('green');
+    expect(normalizeLegacyMode('dark')).toBe('dark');
     expect(normalizeLegacyMode('light')).toBe('light');
     expect(normalizeLegacyMode('gray')).toBeNull();
-    expect(getInitialTheme()).toBe('green');
+    expect(getInitialTheme()).toBe('dark');
   });
 
   it('keeps the new Dark mode across a restart despite the legacy value', () => {
-    // Both the legacy green and the new OLED mode serialize as "dark". Sharing
-    // one key meant choosing Dark came back green on every launch, so the
-    // four-mode value has a key of its own and wins over the legacy one.
+    // The four-mode value has its own key and wins over the legacy two-state
+    // value, so explicit Gray/Green/Dark choices survive a restart.
     localStorage.setItem('wallet_theme_mode', 'dark');
     persistTheme('dark');
     expect(getInitialTheme()).toBe('dark');

@@ -31,6 +31,13 @@ import { getReturnPath } from '../utils/navigation';
 import { useI18n } from '../i18n/useI18n';
 import { AddonModuleI18nProvider } from '../i18n/AddonModuleI18nProvider';
 import { useAddonI18n } from '../i18n/useAddonI18n';
+import PaperWalletSweepError from './PaperWalletSweepError';
+import { friendlySweepError } from './paperWalletSweepErrorCopy';
+import TxSummary from '../components/confirm/TxSummary';
+import { summarizeBuilderReview } from '../features/transaction/builderReview';
+import RouteExitFooter from '../components/ui/RouteExitFooter';
+import MaskedValue from '../components/ui/MaskedValue';
+import InfoButton from '../components/ui/InfoButton';
 
 const BASE58_WIF_PATTERN =
   /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
@@ -83,6 +90,8 @@ function decodeScannedWif(wif: string) {
 type SweepState = {
   plan: Awaited<ReturnType<typeof buildPaperWalletSweepPlan>>;
   builtHex: string;
+  finalOutputs: TransactionOutput[];
+  feeSats: number;
 };
 
 function PaperWalletSweepScreen() {
@@ -211,7 +220,7 @@ function PaperWalletSweepScreen() {
       const message =
         err instanceof Error ? err.message : getBarcodeScannerErrorMessage(err);
       setError(message);
-      await Toast.show({ text: message });
+      await Toast.show({ text: friendlySweepError(message, t) });
     } finally {
       setLoading(false);
     }
@@ -257,16 +266,31 @@ function PaperWalletSweepScreen() {
         [...plan.paperWalletUtxos, ...plan.feeInputs]
       );
 
-      if (built.errorMsg || !built.finalTransaction) {
+      if (built.errorMsg || !built.finalTransaction || !built.finalOutputs) {
         throw new Error(built.errorMsg || t('paper.buildFailed'));
       }
 
-      setPendingSweep({ plan, builtHex: built.finalTransaction });
+      const review = summarizeBuilderReview(
+        [...plan.paperWalletUtxos, ...plan.feeInputs],
+        built.finalOutputs
+      );
+      if (review.unaccountedTokens.length) {
+        throw new Error(
+          'The sweep would leave tokens unaccounted for. Check the paper wallet and try again.'
+        );
+      }
+
+      setPendingSweep({
+        plan,
+        builtHex: built.finalTransaction,
+        finalOutputs: built.finalOutputs,
+        feeSats: review.feeSats,
+      });
       setConfirmOpen(true);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
-      await Toast.show({ text: message });
+      await Toast.show({ text: friendlySweepError(message, t) });
       logError('PaperWalletSweep.handleSweep', err, {
         walletId: currentWalletId,
       });
@@ -289,13 +313,11 @@ function PaperWalletSweepScreen() {
       setBroadcastTxid(sent.txid);
       setConfirmOpen(false);
       setPendingSweep(null);
-      await Toast.show({
-        text: `${t('paper.sweepBroadcast')}${sent.txid ? `: ${sent.txid}` : ''}`,
-      });
+      await Toast.show({ text: t('paper.sweepBroadcast') });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
-      await Toast.show({ text: message });
+      await Toast.show({ text: friendlySweepError(message, t) });
     } finally {
       setConfirmLoading(false);
     }
@@ -304,7 +326,13 @@ function PaperWalletSweepScreen() {
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col">
-        <PageHeader title={addonT('module.title', t('paper.title'))} compact />
+        <PageHeader
+          title={addonT('module.title', t('paper.title'))}
+          subtitle={
+            currentNetwork === 'chipnet' ? t('network.chipnet') : undefined
+          }
+          compact
+        />
         <p className="mt-2 text-sm wallet-muted">
           {addonT('module.description', t('paper.description'))}
         </p>
@@ -317,12 +345,21 @@ function PaperWalletSweepScreen() {
                   {addonT('module.title', t('paper.label'))}
                 </div>
                 <div className="mt-1 break-all text-sm wallet-text-strong">
-                  {scannedAddress ||
-                    addonT('module.notScanned', t('paper.notScanned'))}
+                  {scannedAddress ? (
+                    <MaskedValue
+                      value={scannedAddress}
+                      label={t('receive.copyAddress')}
+                      ariaLabel={t('receive.copyAddress')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      className="max-w-full"
+                    />
+                  ) : (
+                    addonT('module.notScanned', t('paper.notScanned'))
+                  )}
                 </div>
               </div>
               <button
-                className="wallet-btn-primary flex items-center gap-2 px-4 py-2"
+                className="wallet-btn-primary flex min-h-[44px] items-center gap-2 px-4 py-2"
                 onClick={handleScan}
                 disabled={loading}
               >
@@ -332,20 +369,31 @@ function PaperWalletSweepScreen() {
 
             <div className="mt-4 flex items-center gap-2">
               <button
-                className="wallet-btn-primary flex items-center gap-2 px-4 py-2"
+                className="wallet-btn-primary flex min-h-[44px] items-center gap-2 px-4 py-2"
                 onClick={handleSweep}
                 disabled={loading || paperWalletUtxos.length === 0}
               >
                 {addonT('module.sweep', t('paper.sweep'))} <FaChevronRight />
               </button>
               {broadcastTxid && (
-                <div className="text-xs wallet-muted break-all">
-                  {broadcastTxid}
+                <div className="flex items-center gap-1 text-xs wallet-muted">
+                  <MaskedValue
+                    value={broadcastTxid}
+                    label={t('history.transactionId')}
+                    ariaLabel={t('history.transactionId')}
+                    copySuccessMessageKey="history.transactionCopied"
+                    className="max-w-full"
+                  />
+                  <InfoButton
+                    id="paper-sweep-sent-help"
+                    ariaLabel={t('send.sentHelpLabel')}
+                    content={t('send.sentHelp')}
+                  />
                 </div>
               )}
             </div>
 
-            {error && <div className="mt-3 wallet-danger-text">{error}</div>}
+            {error && <PaperWalletSweepError message={error} />}
           </SectionCard>
 
           <SectionCard className="p-4">
@@ -362,10 +410,19 @@ function PaperWalletSweepScreen() {
             </div>
             <ul className="mt-3 space-y-2 text-sm">
               {paperWalletUtxos.map((u) => (
-                <li key={`${u.tx_hash}:${u.tx_pos}`} className="break-all">
-                  {u.token
-                    ? `${u.token.nft ? 'NFT' : 'FT'} ${u.token.category} @ ${u.tx_hash}:${u.tx_pos}`
-                    : `BCH ${u.value} sats @ ${u.tx_hash}:${u.tx_pos}`}
+                <li key={`${u.tx_hash}:${u.tx_pos}`}>
+                  <span>
+                    {u.token ? `${u.token.nft ? 'NFT' : 'FT'} ` : 'BCH '}
+                    {u.token ? `${u.token.category} @ ` : `${u.value} sats @ `}
+                  </span>
+                  <MaskedValue
+                    value={u.tx_hash}
+                    label={t('history.transactionId')}
+                    ariaLabel={t('history.transactionId')}
+                    copySuccessMessageKey="history.transactionCopied"
+                    className="max-w-[14rem] align-middle"
+                  />
+                  :{u.tx_pos}
                 </li>
               ))}
             </ul>
@@ -392,15 +449,10 @@ function PaperWalletSweepScreen() {
           </SectionCard>
         </div>
 
-        <div className="mt-auto flex-none pt-3">
-          <button
-            type="button"
-            onClick={() => navigate(backTarget)}
-            className="wallet-btn-danger w-full py-3 font-semibold"
-          >
-            {addonT('common.back', t('paper.back'))}
-          </button>
-        </div>
+        <RouteExitFooter
+          label={addonT('common.back', t('paper.back'))}
+          onBack={() => navigate(backTarget)}
+        />
       </div>
 
       <ContainedSwipeConfirmModal
@@ -420,6 +472,7 @@ function PaperWalletSweepScreen() {
       >
         {pendingSweep ? (
           <div className="space-y-2 text-sm wallet-text-strong">
+            {error && <PaperWalletSweepError message={error} compact />}
             <div className="flex items-center justify-between gap-3">
               <span>
                 {addonT('module.paperWalletInputs', t('paper.paperInputs'))}
@@ -448,9 +501,35 @@ function PaperWalletSweepScreen() {
                 {pendingSweep.plan.outputs.filter((o) => !o.token).length}
               </Badge>
             </div>
+            <div className="pt-2 border-t border-[var(--wallet-border)]">
+              <span className="wallet-muted">Destination</span>
+              <div className="font-mono text-xs break-all">
+                {pendingSweep.plan.destinationAddress}
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="wallet-muted">Network fee</span>
+              <span>{(pendingSweep.feeSats / 100_000_000).toFixed(8)} BCH</span>
+            </div>
             <div className="pt-2 text-xs wallet-muted">
               {t('paper.oneTransaction')} {t('paper.tokenBacking')}
             </div>
+            <details className="mt-3">
+              <summary className="cursor-pointer font-semibold">
+                Transaction details
+              </summary>
+              <div className="mt-2 max-h-[32vh] overflow-y-auto">
+                <TxSummary
+                  inputsRaw={[
+                    ...pendingSweep.plan.paperWalletUtxos,
+                    ...pendingSweep.plan.feeInputs,
+                  ]}
+                  outputsRaw={pendingSweep.finalOutputs}
+                  feeSats={pendingSweep.feeSats}
+                  txSizeBytes={pendingSweep.builtHex.length / 2}
+                />
+              </div>
+            </details>
           </div>
         ) : null}
       </ContainedSwipeConfirmModal>
