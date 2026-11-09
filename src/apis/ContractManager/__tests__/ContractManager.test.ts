@@ -77,7 +77,7 @@ vi.mock('cashscript', () => {
     Contract: MockContract,
     ElectrumNetworkProvider: MockElectrumNetworkProvider,
     SignatureTemplate: MockSignatureTemplate,
-    HashType: { SIGHASH_ALL: 'ALL' },
+    SighashType: { SIGHASH_ALL: 'ALL' },
   };
 });
 

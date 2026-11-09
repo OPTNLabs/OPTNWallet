@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  binToHex,
   hash160,
   hexToBin,
   lockingBytecodeToCashAddress,
@@ -10,7 +11,7 @@ import {
 import {
   Contract,
   type Artifact,
-  HashType,
+  SighashType,
   MockNetworkProvider,
   SignatureTemplate,
   TransactionBuilder,
@@ -43,10 +44,12 @@ function toBin(value: string | Uint8Array): Uint8Array {
 function createFixture() {
   const provider = new MockNetworkProvider();
   const ownerPk = toBin(secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY));
-  const custodianPk = toBin(secp256k1.derivePublicKeyCompressed(
-    CUSTODIAN_PRIVATE_KEY
-  ));
-  const recoveryPk = toBin(secp256k1.derivePublicKeyCompressed(RECOVERY_PRIVATE_KEY));
+  const custodianPk = toBin(
+    secp256k1.derivePublicKeyCompressed(CUSTODIAN_PRIVATE_KEY)
+  );
+  const recoveryPk = toBin(
+    secp256k1.derivePublicKeyCompressed(RECOVERY_PRIVATE_KEY)
+  );
   const ownerPkh = toUint8Array(hash160(ownerPk));
   const custodianPkh = toUint8Array(hash160(custodianPk));
   const recoveryPkh = toUint8Array(hash160(recoveryPk));
@@ -74,7 +77,7 @@ function createFixture() {
     ],
     {
       provider,
-      addressType: 'p2sh32',
+      contractType: 'p2sh32',
     }
   );
 
@@ -90,7 +93,7 @@ function createFixture() {
     ],
     {
       provider,
-      addressType: 'p2sh32',
+      contractType: 'p2sh32',
     }
   );
 
@@ -114,17 +117,18 @@ function createFixture() {
     custodianPk,
     custodianSig: new SignatureTemplate(
       CUSTODIAN_PRIVATE_KEY,
-      HashType.SIGHASH_ALL
+      SighashType.SIGHASH_ALL
     ),
     ownerAddress,
     ownerPk,
-    ownerSig: new SignatureTemplate(OWNER_PRIVATE_KEY, HashType.SIGHASH_ALL),
+    ownerLockingBytecode: binToHex(ownerLockingBytecode),
+    ownerSig: new SignatureTemplate(OWNER_PRIVATE_KEY, SighashType.SIGHASH_ALL),
     ownerUnlocker: new SignatureTemplate(OWNER_PRIVATE_KEY).unlockP2PKH(),
     provider,
     recoveryPk,
     recoverySig: new SignatureTemplate(
       RECOVERY_PRIVATE_KEY,
-      HashType.SIGHASH_ALL
+      SighashType.SIGHASH_ALL
     ),
     release,
     vault,
@@ -134,7 +138,9 @@ function createFixture() {
 describe('custody vault artifacts', () => {
   it('derive the same address for identical constructor params and different addresses for different release states', () => {
     const provider = new MockNetworkProvider();
-    const ownerPk = toBin(secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY));
+    const ownerPk = toBin(
+      secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY)
+    );
     const ownerPkh = toUint8Array(hash160(ownerPk));
     const custodianPkh = toUint8Array(
       hash160(toBin(secp256k1.derivePublicKeyCompressed(CUSTODIAN_PRIVATE_KEY)))
@@ -145,18 +151,39 @@ describe('custody vault artifacts', () => {
 
     const releaseA = new Contract(
       CUSTODY_VAULT_ARTIFACT,
-      [ownerPkh, custodianPkh, recoveryPkh, RECOVERY_TIMEOUT, RELEASE_AT, new Uint8Array(0)],
-      { provider, addressType: 'p2sh32' }
+      [
+        ownerPkh,
+        custodianPkh,
+        recoveryPkh,
+        RECOVERY_TIMEOUT,
+        RELEASE_AT,
+        new Uint8Array(0),
+      ],
+      { provider, contractType: 'p2sh32' }
     );
     const releaseB = new Contract(
       CUSTODY_VAULT_ARTIFACT,
-      [ownerPkh, custodianPkh, recoveryPkh, RECOVERY_TIMEOUT, RELEASE_AT, new Uint8Array(0)],
-      { provider, addressType: 'p2sh32' }
+      [
+        ownerPkh,
+        custodianPkh,
+        recoveryPkh,
+        RECOVERY_TIMEOUT,
+        RELEASE_AT,
+        new Uint8Array(0),
+      ],
+      { provider, contractType: 'p2sh32' }
     );
     const releaseC = new Contract(
       CUSTODY_VAULT_ARTIFACT,
-      [ownerPkh, custodianPkh, recoveryPkh, RECOVERY_TIMEOUT, RELEASE_AT + 1n, new Uint8Array(0)],
-      { provider, addressType: 'p2sh32' }
+      [
+        ownerPkh,
+        custodianPkh,
+        recoveryPkh,
+        RECOVERY_TIMEOUT,
+        RELEASE_AT + 1n,
+        new Uint8Array(0),
+      ],
+      { provider, contractType: 'p2sh32' }
     );
 
     const activeA = new Contract(
@@ -169,7 +196,7 @@ describe('custody vault artifacts', () => {
         0n,
         addressToLockScript(releaseA.address),
       ],
-      { provider, addressType: 'p2sh32' }
+      { provider, contractType: 'p2sh32' }
     );
     const activeB = new Contract(
       CUSTODY_VAULT_ARTIFACT,
@@ -181,7 +208,7 @@ describe('custody vault artifacts', () => {
         0n,
         addressToLockScript(releaseA.address),
       ],
-      { provider, addressType: 'p2sh32' }
+      { provider, contractType: 'p2sh32' }
     );
 
     expect(activeA.address).toBe(activeB.address);
@@ -214,6 +241,7 @@ describe('custody vault artifacts', () => {
           txid: 'b'.repeat(64),
           vout: 0,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -244,6 +272,7 @@ describe('custody vault artifacts', () => {
           txid: 'c'.repeat(64),
           vout: 1,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -257,8 +286,7 @@ describe('custody vault artifacts', () => {
     const ownerUtxos = await fixture.provider.getUtxos(fixture.ownerAddress);
     expect(
       ownerUtxos.some(
-        (utxo) =>
-      utxo.txid === finalizeTxid && utxo.satoshis === CONTRACT_SATS
+        (utxo) => utxo.txid === finalizeTxid && utxo.satoshis === CONTRACT_SATS
       )
     ).toBe(true);
   });
@@ -303,7 +331,9 @@ describe('custody vault artifacts', () => {
     );
 
     const vaultUtxos = await fixture.vault.getUtxos();
-    const depositedVaultUtxo = vaultUtxos.find((utxo) => utxo.txid === depositTxid);
+    const depositedVaultUtxo = vaultUtxos.find(
+      (utxo) => utxo.txid === depositTxid
+    );
     if (!depositedVaultUtxo) {
       throw new Error('Expected the deposited vault UTXO to be present');
     }
@@ -326,6 +356,7 @@ describe('custody vault artifacts', () => {
           txid: 'b'.repeat(64),
           vout: 0,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -356,6 +387,7 @@ describe('custody vault artifacts', () => {
           txid: 'c'.repeat(64),
           vout: 1,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -400,12 +432,12 @@ describe('custody vault artifacts', () => {
       satoshis: 7_000n,
     });
 
-    const depositor1Utxo = (await fixture.provider.getUtxos(
-      depositor1AddressResult.address
-    ))[0];
-    const depositor2Utxo = (await fixture.provider.getUtxos(
-      depositor2AddressResult.address
-    ))[0];
+    const depositor1Utxo = (
+      await fixture.provider.getUtxos(depositor1AddressResult.address)
+    )[0];
+    const depositor2Utxo = (
+      await fixture.provider.getUtxos(depositor2AddressResult.address)
+    )[0];
     if (!depositor1Utxo || !depositor2Utxo) {
       throw new Error('Expected both depositor UTXOs to be present');
     }
@@ -443,8 +475,12 @@ describe('custody vault artifacts', () => {
       ['a'.repeat(64), deposit1Txid, deposit2Txid].sort()
     );
 
-    const firstVaultUtxo = vaultUtxos.find((utxo) => utxo.txid === deposit1Txid);
-    const secondVaultUtxo = vaultUtxos.find((utxo) => utxo.txid === deposit2Txid);
+    const firstVaultUtxo = vaultUtxos.find(
+      (utxo) => utxo.txid === deposit1Txid
+    );
+    const secondVaultUtxo = vaultUtxos.find(
+      (utxo) => utxo.txid === deposit2Txid
+    );
     if (!firstVaultUtxo || !secondVaultUtxo) {
       throw new Error('Expected both vault UTXOs to be present');
     }
@@ -466,6 +502,7 @@ describe('custody vault artifacts', () => {
           txid: 'b'.repeat(64),
           vout: 0,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -475,9 +512,9 @@ describe('custody vault artifacts', () => {
     await fixture.provider.sendRawTransaction(releaseBuilder.build());
 
     const remainingVaultUtxos = await fixture.vault.getUtxos();
-    expect(remainingVaultUtxos.some((utxo) => utxo.txid === 'a'.repeat(64))).toBe(
-      true
-    );
+    expect(
+      remainingVaultUtxos.some((utxo) => utxo.txid === 'a'.repeat(64))
+    ).toBe(true);
     expect(remainingVaultUtxos.some((utxo) => utxo.txid === deposit2Txid)).toBe(
       true
     );
@@ -519,6 +556,7 @@ describe('custody vault artifacts', () => {
           txid: 'b'.repeat(64),
           vout: 0,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -546,6 +584,7 @@ describe('custody vault artifacts', () => {
           txid: 'b'.repeat(64),
           vout: 0,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -554,6 +593,7 @@ describe('custody vault artifacts', () => {
           txid: 'c'.repeat(64),
           vout: 1,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -567,16 +607,14 @@ describe('custody vault artifacts', () => {
       .setLocktime(Number(RECOVERY_TIMEOUT))
       .addInput(
         vaultUtxo,
-        fixture.vault.unlock.recover(
-          fixture.recoveryPk,
-          fixture.recoverySig
-        )
+        fixture.vault.unlock.recover(fixture.recoveryPk, fixture.recoverySig)
       )
       .addInput(
         {
           txid: 'b'.repeat(64),
           vout: 0,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -585,6 +623,7 @@ describe('custody vault artifacts', () => {
           txid: 'c'.repeat(64),
           vout: 1,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -617,6 +656,7 @@ describe('custody vault artifacts', () => {
           txid: 'b'.repeat(64),
           vout: 0,
           satoshis: FEE_SATS,
+          lockingBytecode: fixture.ownerLockingBytecode,
         },
         fixture.ownerUnlocker
       )
@@ -628,7 +668,9 @@ describe('custody vault artifacts', () => {
 
   it('rejects release finalization before the timelock expires', async () => {
     const provider = new MockNetworkProvider();
-    const ownerPk = toBin(secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY));
+    const ownerPk = toBin(
+      secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY)
+    );
     const ownerPkh = toUint8Array(hash160(ownerPk));
     const ownerLockingBytecode = privateKeyToP2pkhLockingBytecode({
       privateKey: OWNER_PRIVATE_KEY,
@@ -641,13 +683,25 @@ describe('custody vault artifacts', () => {
       throw new Error(ownerAddressResult);
     }
     const ownerAddress = ownerAddressResult.address;
-    const ownerUnlocker = new SignatureTemplate(OWNER_PRIVATE_KEY).unlockP2PKH();
-    const ownerSig = new SignatureTemplate(OWNER_PRIVATE_KEY, HashType.SIGHASH_ALL);
+    const ownerUnlocker = new SignatureTemplate(
+      OWNER_PRIVATE_KEY
+    ).unlockP2PKH();
+    const ownerSig = new SignatureTemplate(
+      OWNER_PRIVATE_KEY,
+      SighashType.SIGHASH_ALL
+    );
 
     const release = new Contract(
       CUSTODY_VAULT_ARTIFACT,
-      [ownerPkh, ownerPkh, ownerPkh, RECOVERY_TIMEOUT, RELEASE_AT, new Uint8Array(0)],
-      { provider, addressType: 'p2sh32' }
+      [
+        ownerPkh,
+        ownerPkh,
+        ownerPkh,
+        RECOVERY_TIMEOUT,
+        RELEASE_AT,
+        new Uint8Array(0),
+      ],
+      { provider, contractType: 'p2sh32' }
     );
 
     provider.addUtxo(release.address, {
@@ -674,6 +728,7 @@ describe('custody vault artifacts', () => {
           txid: 'e'.repeat(64),
           vout: 0,
           satoshis: FEE_SATS,
+          lockingBytecode: binToHex(ownerLockingBytecode),
         },
         ownerUnlocker
       )

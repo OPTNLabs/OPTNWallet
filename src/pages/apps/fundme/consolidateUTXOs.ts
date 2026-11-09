@@ -42,19 +42,8 @@ async function consolidateUtxos({ electrumServer, usersAddress, transactionBuild
 
     //##  Build transaction       
     const p2pkhUnlocker: Unlocker = {
-        generateLockingBytecode: () => {
-            const result = cashAddressToLockingBytecode(usersAddress);
-            if (typeof result === 'string') {
-                throw new Error(`Failed to convert CashAddress to locking bytecode: ${result}`);
-            }
-            return result.bytecode;
-        },
         generateUnlockingBytecode: () => {
-            const result = cashAddressToLockingBytecode(usersAddress);
-            if (typeof result === 'string') {
-                throw new Error(`Failed to convert CashAddress to locking bytecode: ${result}`);
-            }
-            return result.bytecode;
+            return Uint8Array.from([]);
         },
     };
 

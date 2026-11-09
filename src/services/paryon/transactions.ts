@@ -60,7 +60,7 @@ function makeContract(
     (constructorInputs ?? node.constructorInputs) as never,
     {
       provider: providerFor(sdk.wallet.getContext().network),
-      addressType: 'p2sh32',
+      contractType: 'p2sh32',
     }
   );
 }

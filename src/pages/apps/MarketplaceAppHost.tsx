@@ -16,7 +16,7 @@ import UTXOService from '../../services/UTXOService';
 import ElectrumService from '../../services/ElectrumService';
 import {
   ElectrumNetworkProvider,
-  HashType,
+  SighashType,
   SignatureTemplate,
   TransactionBuilder,
 } from 'cashscript';
@@ -821,7 +821,7 @@ export default function MarketplaceAppHost() {
             );
           signerTemplates.set(
             `${binding.purpose}:${binding.address}`,
-            new SignatureTemplate(key, HashType.SIGHASH_ALL)
+            new SignatureTemplate(key, SighashType.SIGHASH_ALL)
           );
         }
         const functionArgs = (metadata.functionArgs ?? []).map((arg: any) => {
@@ -875,7 +875,7 @@ export default function MarketplaceAppHost() {
               );
             builder.addInput(
               utxo,
-              new SignatureTemplate(key, HashType.SIGHASH_ALL).unlockP2PKH()
+              new SignatureTemplate(key, SighashType.SIGHASH_ALL).unlockP2PKH()
             );
             continue;
           }

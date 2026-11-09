@@ -35,7 +35,7 @@ import {
 import { hash160 } from '@cashscript/utils';
 import {
   ElectrumNetworkProvider,
-  HashType,
+  SighashType,
   SignatureTemplate,
   TransactionBuilder,
 } from 'cashscript';
@@ -278,7 +278,7 @@ describe.skipIf(!enabled)('RPA on chipnet', () => {
         satoshis: BigInt(paySats),
         unlocker: new SignatureTemplate(
           spendPrivkey,
-          HashType.SIGHASH_ALL
+          SighashType.SIGHASH_ALL
         ).unlockP2PKH(),
       },
     ]);

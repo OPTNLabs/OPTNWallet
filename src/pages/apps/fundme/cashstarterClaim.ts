@@ -154,11 +154,6 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
     }
 
     const p2pkhUnlocker: Unlocker = {
-      generateLockingBytecode: () => {
-        const result = cashAddressToLockingBytecode(usersAddress);
-        if (typeof result === 'string') throw new Error(result);
-        return result.bytecode;
-      },
       generateUnlockingBytecode: () => {    // Return an empty array or a placeholder for the unlocking bytecode (scriptSig)
         return Uint8Array.from([]);
       }
