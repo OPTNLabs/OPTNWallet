@@ -2,27 +2,31 @@
  * WizardConnect sign-in proofs.
  *
  * WizardConnect (hdwalletv1) has no message signing, only sign_transaction.
- * Some dApps (Badger Survivors' editor, v0.545+) prove control of an address
- * by asking the wallet to sign a transaction that can never be mined:
+ * A dApp can prove a wallet controls an address by asking it to sign a
+ * transaction that can never be mined:
  *
  *   input 0   outpoint sha256(outpointTag + code):0, worth 1000 sats, P2PKH
  *             to the address being proven. No real transaction has that txid,
  *             so the signed result spends nothing and cannot be broadcast.
- *   output 0  OP_RETURN <tag> <code>, 0 sats
+ *   output 0  OP_RETURN WCPROOF <code>, 0 sats
  *   output 1  1000 sats back to the same address
  *   version 2, locktime 0, signed SIGHASH_ALL|UTXOS|FORKID (0x61)
  *
- * The wallet does not trust the dApp's transaction. It takes only the scheme
- * tag and the one-time code from the request, rebuilds the canonical proof
- * itself, and refuses unless the dApp's request is byte-identical to it. A
- * request that carries a registered tag but differs in any way (another
- * input, a real outpoint, a changed output or value, a token, a contract) is
- * refused outright rather than signed as a normal payment.
+ * The wallet does not trust the dApp's transaction. It takes only the
+ * WCPROOF tag and the one-time code from the request, rebuilds the
+ * canonical proof itself, and refuses unless the dApp's request is
+ * byte-identical to it. A request that carries the WCPROOF tag but
+ * differs in any way (another input, a real outpoint, a changed output
+ * or value, a token, a contract) is refused outright rather than signed
+ * as a normal payment.
  *
  * Because the signature commits to every output and to the (fake) source
  * output, a server can rebuild the same transaction from the code it issued
  * and the address it expects, check that the unlocking public key hashes to
  * that address, and run the BCH VM over it.
+ *
+ * All apps use this one generic "WizardConnect sign-in" proof. There is
+ * no per-app scheme registry.
  */
 import {
   binToHex,
@@ -44,39 +48,8 @@ import { decodeWizardConnectTransaction } from './transaction';
 
 export type SignInProofPathName = 'receive' | 'change' | 'defi';
 
-export type SignInProofScheme = {
-  /** Stable identifier. */
-  id: string;
-  /** What the user is signing in to, shown on the approval screen. */
-  label: string;
-  /** First OP_RETURN push. ASCII, 1-32 bytes. */
-  opReturnTag: string;
-  /** Prefix hashed with the code to derive the fake outpoint. */
-  outpointTag: string;
-  /** Value of the fake input, returned in full by output 1. */
-  valueSatoshis: bigint;
-  /** Accepted one-time code format. Anchored. */
-  codePattern: RegExp;
-};
-
-/**
- * Badger Survivors editor sign-in, v0.545. Must stay byte-compatible with
- * shared/editor/challengeTx.js buildChallengeTx in LifestoneLabs/BadgerSurvivors.
- */
-export const BADGER_SURVIVORS_EDITOR_SCHEME: SignInProofScheme = Object.freeze({
-  id: 'badgersurvivors-editor',
-  label: 'Badger Survivors editor',
-  opReturnTag: 'BSEDITOR',
-  outpointTag: 'BadgerSurvivors editor challenge:',
-  valueSatoshis: 1000n,
-  codePattern: /^[0-9a-f]{32}$/,
-});
-
-/**
- * Generic marker any dApp can adopt without a wallet release. The approval
- * screen labels it as a generic sign-in so the user relies on the dApp name.
- */
-export const GENERIC_WIZARDCONNECT_SCHEME: SignInProofScheme = Object.freeze({
+/** The one sign-in proof format. Any dApp can adopt it without a wallet release. */
+export const WIZARDCONNECT_SIGN_IN_SCHEME = Object.freeze({
   id: 'wizardconnect-generic',
   label: 'WizardConnect sign-in',
   opReturnTag: 'WCPROOF',
@@ -85,40 +58,7 @@ export const GENERIC_WIZARDCONNECT_SCHEME: SignInProofScheme = Object.freeze({
   codePattern: /^[0-9A-Za-z_-]{16,64}$/,
 });
 
-const schemes: SignInProofScheme[] = [
-  BADGER_SURVIVORS_EDITOR_SCHEME,
-  GENERIC_WIZARDCONNECT_SCHEME,
-];
-
-export function listSignInProofSchemes(): readonly SignInProofScheme[] {
-  return schemes;
-}
-
-/** Add a scheme. Tags must be unique; an existing tag cannot be replaced. */
-export function registerSignInProofScheme(scheme: SignInProofScheme): void {
-  if (!/^[\x21-\x7e]{1,32}$/.test(scheme.opReturnTag)) {
-    throw new Error('Sign-in proof tag must be 1-32 printable ASCII bytes');
-  }
-  if (
-    !scheme.codePattern.source.startsWith('^') ||
-    !scheme.codePattern.source.endsWith('$')
-  ) {
-    throw new Error('Sign-in proof code pattern must be anchored');
-  }
-  if (scheme.valueSatoshis <= 0n || scheme.valueSatoshis > 100_000n) {
-    throw new Error('Sign-in proof value out of range');
-  }
-  if (
-    schemes.some(
-      (s) => s.opReturnTag === scheme.opReturnTag || s.id === scheme.id
-    )
-  ) {
-    throw new Error(
-      `Sign-in proof scheme already registered: ${scheme.opReturnTag}`
-    );
-  }
-  schemes.push(Object.freeze({ ...scheme }));
-}
+export type SignInProofScheme = typeof WIZARDCONNECT_SIGN_IN_SCHEME;
 
 /** Codes are pushed with a single-byte length prefix; keep them short. */
 const MAX_CODE_BYTES = 64;
@@ -147,8 +87,8 @@ function opReturnPushes(lockingBytecode: Uint8Array): Uint8Array[] | null {
 }
 
 /**
- * The scheme whose tag appears as the first push of any OP_RETURN output, or
- * null when the transaction does not claim to be a sign-in proof.
+ * The WCPROOF scheme if that tag appears as the first push of any OP_RETURN
+ * output, or null when the transaction does not claim to be a sign-in proof.
  */
 export function findClaimedSignInProofScheme(
   outputs: readonly { lockingBytecode: unknown }[]
@@ -172,19 +112,15 @@ export function findClaimedSignInProofScheme(
     )
       continue;
     const tag = binToUtf8(bytecode.slice(2, 2 + firstPushLength));
-    const scheme = schemes.find((s) => s.opReturnTag === tag);
-    if (!scheme) continue;
-    if (found && found !== scheme) {
-      throw new SignInProofError('more than one sign-in tag');
-    }
-    found = scheme;
+    if (tag !== WIZARDCONNECT_SIGN_IN_SCHEME.opReturnTag) continue;
+    found = WIZARDCONNECT_SIGN_IN_SCHEME;
   }
   return found;
 }
 
 /**
  * Claimed scheme for a WizardConnect sign payload. The dApp may send the
- * transaction as an object or as raw hex (Badger Survivors sends hex).
+ * transaction as an object or as raw hex.
  */
 export function findClaimedSignInProofSchemeInPayload(
   payload:
@@ -214,34 +150,29 @@ function pushData(bytes: Uint8Array): number[] {
   return [bytes.length, ...bytes];
 }
 
-export function signInProofOutpointHash(
-  scheme: SignInProofScheme,
-  code: string
-): Uint8Array {
-  return sha256.hash(utf8ToBin(`${scheme.outpointTag}${code}`));
+export function signInProofOutpointHash(code: string): Uint8Array {
+  return sha256.hash(
+    utf8ToBin(`${WIZARDCONNECT_SIGN_IN_SCHEME.outpointTag}${code}`)
+  );
 }
 
-export function signInProofOpReturn(
-  scheme: SignInProofScheme,
-  code: string
-): Uint8Array {
+export function signInProofOpReturn(code: string): Uint8Array {
   return Uint8Array.from([
     0x6a,
-    ...pushData(utf8ToBin(scheme.opReturnTag)),
+    ...pushData(utf8ToBin(WIZARDCONNECT_SIGN_IN_SCHEME.opReturnTag)),
     ...pushData(utf8ToBin(code)),
   ]);
 }
 
-export function assertSignInProofCode(
-  scheme: SignInProofScheme,
-  code: string
-): void {
+export function assertSignInProofCode(code: string): void {
   if (
     typeof code !== 'string' ||
     utf8ToBin(code).length > MAX_CODE_BYTES ||
-    !scheme.codePattern.test(code)
+    !WIZARDCONNECT_SIGN_IN_SCHEME.codePattern.test(code)
   ) {
-    throw new SignInProofError(`invalid one-time code for ${scheme.label}`);
+    throw new SignInProofError(
+      `invalid one-time code for ${WIZARDCONNECT_SIGN_IN_SCHEME.label}`
+    );
   }
 }
 
@@ -271,20 +202,19 @@ export type CanonicalSignInProof = {
 };
 
 /**
- * Build the unsigned proof. The only inputs are the scheme, the code, and the
- * wallet's own P2PKH locking bytecode; nothing comes from the dApp's tx.
+ * Build the unsigned proof. The only inputs are the code and the wallet's
+ * own P2PKH locking bytecode; nothing comes from the dApp's tx.
  */
 export function buildCanonicalSignInProof(
-  scheme: SignInProofScheme,
   code: string,
   lockingBytecode: Uint8Array
 ): CanonicalSignInProof {
-  assertSignInProofCode(scheme, code);
+  assertSignInProofCode(code);
   if (!isP2pkh(lockingBytecode)) {
     throw new SignInProofError('address is not P2PKH');
   }
   const input = {
-    outpointTransactionHash: signInProofOutpointHash(scheme, code),
+    outpointTransactionHash: signInProofOutpointHash(code),
     outpointIndex: 0,
     sequenceNumber: 0xffffffff,
     unlockingBytecode: new Uint8Array(0),
@@ -296,12 +226,12 @@ export function buildCanonicalSignInProof(
       inputs: [{ ...input }],
       outputs: [
         {
-          lockingBytecode: signInProofOpReturn(scheme, code),
+          lockingBytecode: signInProofOpReturn(code),
           valueSatoshis: 0n,
         },
         {
           lockingBytecode: Uint8Array.from(lockingBytecode),
-          valueSatoshis: scheme.valueSatoshis,
+          valueSatoshis: WIZARDCONNECT_SIGN_IN_SCHEME.valueSatoshis,
         },
       ],
     },
@@ -309,7 +239,7 @@ export function buildCanonicalSignInProof(
       {
         ...input,
         lockingBytecode: Uint8Array.from(lockingBytecode),
-        valueSatoshis: scheme.valueSatoshis,
+        valueSatoshis: WIZARDCONNECT_SIGN_IN_SCHEME.valueSatoshis,
       },
     ],
   };
@@ -417,7 +347,7 @@ export function validateSignInProofRequest(
   if (!sameBytes(utf8ToBin(code), pushes[1])) {
     throw new SignInProofError('code is not valid UTF-8');
   }
-  assertSignInProofCode(scheme, code);
+  assertSignInProofCode(code);
 
   const paths = request.inputPaths ?? [];
   if (paths.length !== 1 || paths[0][0] !== 0) {
@@ -439,9 +369,9 @@ export function validateSignInProofRequest(
   // dApp. The dApp's source output must already lock to it.
   const publicKey = publicKeyFor(path as SignInProofPathName, addressIndex);
   const lockingBytecode = p2pkhLockingBytecode(publicKey);
-  const proof = buildCanonicalSignInProof(scheme, code, lockingBytecode);
+  const proof = buildCanonicalSignInProof(code, lockingBytecode);
 
-  const expectedHash = signInProofOutpointHash(scheme, code);
+  const expectedHash = signInProofOutpointHash(code);
   if (
     !sameBytes(
       proof.transaction.inputs[0].outpointTransactionHash,
@@ -567,9 +497,9 @@ export function signCanonicalSignInProof(
 }
 
 /**
- * True when raw transaction bytes are a sign-in proof: a registered tag in an
- * OP_RETURN and an input spending that scheme's derived fake outpoint. Used to
- * stop a proof from ever being handed to a broadcast path.
+ * True when raw transaction bytes are a sign-in proof: a WCPROOF tag in an
+ * OP_RETURN and an input spending the derived fake outpoint. Used to stop a
+ * proof from ever being handed to a broadcast path.
  */
 export function isSignInProofTransaction(raw: Uint8Array | string): boolean {
   let bytes: Uint8Array;
@@ -580,12 +510,7 @@ export function isSignInProofTransaction(raw: Uint8Array | string): boolean {
   }
   const tx = decodeTransaction(bytes);
   if (typeof tx === 'string') return false;
-  let scheme: SignInProofScheme | null;
-  try {
-    scheme = findClaimedSignInProofScheme(tx.outputs);
-  } catch {
-    return true; // conflicting tags: treat as a proof, never broadcast
-  }
+  const scheme = findClaimedSignInProofScheme(tx.outputs);
   if (!scheme) return false;
   for (const out of tx.outputs) {
     const pushes = opReturnPushes(out.lockingBytecode);
@@ -595,7 +520,7 @@ export function isSignInProofTransaction(raw: Uint8Array | string): boolean {
       binToUtf8(pushes[0]) !== scheme.opReturnTag
     )
       continue;
-    const expected = signInProofOutpointHash(scheme, binToUtf8(pushes[1]));
+    const expected = signInProofOutpointHash(binToUtf8(pushes[1]));
     if (
       tx.inputs.some((input) =>
         sameBytes(input.outpointTransactionHash, expected)

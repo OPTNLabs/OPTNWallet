@@ -2,7 +2,7 @@ import { useI18n } from '../../i18n/useI18n';
 
 export type WizardSignInProofViewProps = {
   dappName: string;
-  /** Registered scheme label, e.g. "Badger Survivors editor". */
+  /** Scheme label shown on the approval screen, "WizardConnect sign-in". */
   schemeLabel?: string;
   address?: string;
   code?: string;

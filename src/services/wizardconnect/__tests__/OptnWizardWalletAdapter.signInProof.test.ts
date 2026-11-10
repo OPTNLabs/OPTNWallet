@@ -2,15 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   binToHex,
   createVirtualMachineBCH,
+  decodeTransaction,
   encodeTransaction,
+  hexToBin,
   secp256k1,
 } from '@bitauth/libauth';
 import type { SignTransactionRequest } from '@wizardconnect/core';
 import {
-  BS_GOLDEN,
-  buildChallengeTx,
-  verifyChallengeTx,
-} from './fixtures/badgerSurvivorsChallenge';
+  buildCanonicalSignInProof,
+  p2pkhLockingBytecode,
+} from '../signInProof';
 
 // Throwaway test key 0x00..07 stands in for every derived key.
 const testKey = () => {
@@ -18,6 +19,8 @@ const testKey = () => {
   key[31] = 7;
   return key;
 };
+
+const TEST_CODE = 'Session_abcdef-0123456789';
 
 const mocks = vi.hoisted(() => ({
   state: {} as Record<string, unknown>,
@@ -71,18 +74,17 @@ vi.mock('../../ElectrumAdapter', () => ({
 
 import { OptnWizardWalletAdapter } from '../OptnWizardWalletAdapter';
 
-function bsRequest(): SignTransactionRequest {
-  const built = buildChallengeTx(BS_GOLDEN.nonce, BS_GOLDEN.address)!;
+function proofRequest(): SignTransactionRequest {
+  const publicKey = secp256k1.derivePublicKeyCompressed(
+    testKey()
+  ) as Uint8Array;
+  const built = buildCanonicalSignInProof(
+    TEST_CODE,
+    p2pkhLockingBytecode(publicKey)
+  );
   return {
     transaction: {
-      transaction: binToHex(
-        encodeTransaction({
-          version: 2,
-          locktime: 0,
-          inputs: built.inputs,
-          outputs: built.outputs,
-        })
-      ),
+      transaction: binToHex(encodeTransaction(built.transaction)),
       sourceOutputs: built.sourceOutputs,
       broadcast: false,
     },
@@ -104,16 +106,25 @@ describe('OptnWizardWalletAdapter sign-in proofs', () => {
     mocks.signWithOneKey.mockReset();
   });
 
-  it('signs a proof in software that the Badger Survivors verifier accepts', async () => {
+  it('signs a WCPROOF in software that the BCH VM accepts', async () => {
     const adapter = await OptnWizardWalletAdapter.create(1);
-    const { signedTransaction } = await adapter.signTransaction(bsRequest());
+    const request = proofRequest();
+    const { signedTransaction } = await adapter.signTransaction(request);
+    const signed = decodeTransaction(hexToBin(signedTransaction as string));
+    if (typeof signed === 'string') throw new Error(signed);
+    const publicKey = secp256k1.derivePublicKeyCompressed(
+      testKey()
+    ) as Uint8Array;
+    const { sourceOutputs } = buildCanonicalSignInProof(
+      TEST_CODE,
+      p2pkhLockingBytecode(publicKey)
+    );
     expect(
-      verifyChallengeTx(createVirtualMachineBCH(), {
-        signedTransaction: signedTransaction as string,
-        nonce: BS_GOLDEN.nonce,
-        address: BS_GOLDEN.address,
+      createVirtualMachineBCH().verify({
+        transaction: signed,
+        sourceOutputs,
       })
-    ).toEqual({ ok: true });
+    ).toBe(true);
     expect(mocks.getElectrumAdapter).not.toHaveBeenCalled();
   });
 
@@ -122,7 +133,7 @@ describe('OptnWizardWalletAdapter sign-in proofs', () => {
     async (type) => {
       mocks.state = { hardwareWallet: { type, connected: true } };
       const adapter = await OptnWizardWalletAdapter.create(1);
-      await expect(adapter.signTransaction(bsRequest())).rejects.toThrow(
+      await expect(adapter.signTransaction(proofRequest())).rejects.toThrow(
         /not supported with a .* hardware wallet/
       );
       expect(mocks.getElectrumAdapter).not.toHaveBeenCalled();
@@ -136,23 +147,27 @@ describe('OptnWizardWalletAdapter sign-in proofs', () => {
   it('refuses when sign-in proofs are turned off', async () => {
     mocks.state = { preferences: { enableWizardSignInProofs: false } };
     const adapter = await OptnWizardWalletAdapter.create(1);
-    await expect(adapter.signTransaction(bsRequest())).rejects.toThrow(
+    await expect(adapter.signTransaction(proofRequest())).rejects.toThrow(
       /turned off/
     );
   });
 
   it('refuses a tampered proof on the Ledger path without fetching anything', async () => {
     mocks.state = { hardwareWallet: { type: 'ledger', connected: true } };
-    const request = bsRequest();
-    const built = buildChallengeTx(BS_GOLDEN.nonce, BS_GOLDEN.address)!;
-    built.outputs[1] = { ...built.outputs[1], valueSatoshis: 1n };
+    const request = proofRequest();
+    const publicKey = secp256k1.derivePublicKeyCompressed(
+      testKey()
+    ) as Uint8Array;
+    const built = buildCanonicalSignInProof(
+      TEST_CODE,
+      p2pkhLockingBytecode(publicKey)
+    );
+    built.transaction.outputs[1] = {
+      ...built.transaction.outputs[1],
+      valueSatoshis: 1n,
+    };
     (request.transaction as { transaction: string }).transaction = binToHex(
-      encodeTransaction({
-        version: 2,
-        locktime: 0,
-        inputs: built.inputs,
-        outputs: built.outputs,
-      })
+      encodeTransaction(built.transaction)
     );
     const adapter = await OptnWizardWalletAdapter.create(1);
     await expect(adapter.signTransaction(request)).rejects.toThrow(
