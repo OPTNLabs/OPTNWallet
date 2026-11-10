@@ -178,6 +178,40 @@ describe('connection panels', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('keeps a long WizardConnect URI on one row and off the action buttons', () => {
+    const uri =
+      'wiz://relay.example/connect?symKey=0123456789abcdef0123456789abcdef&p=cd4j03artjn0afc0123456789';
+    mock.state = {
+      wizardconnect: {
+        activeConnections: {
+          relay: {
+            id: 'relay',
+            connectedAt: 1,
+            status: { status: 'connected' },
+            dappName: 'Example dApp',
+            label: 'Example',
+            uri,
+          },
+        },
+      },
+    };
+    render(<WizardConnectPanel />);
+    const card = screen.getByTestId('wizard-connection-attempt');
+    expect(card).toHaveClass('flex', 'w-full', 'min-w-0', 'flex-col');
+    expect(card.className).not.toMatch(/md:flex-row/);
+    expect(card).not.toHaveTextContent(uri);
+    const uriTrigger = screen.getByTestId('wizard-connection-uri');
+    expect(uriTrigger).toBeInTheDocument();
+    expect(uriTrigger).not.toHaveTextContent(uri);
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Disconnect' })
+    ).toBeInTheDocument();
+    fireEvent.contextMenu(uriTrigger);
+    const dialogs = screen.getAllByRole('dialog');
+    expect(dialogs[dialogs.length - 1]).toHaveTextContent(uri);
+  });
+
   it('keeps CashConnect approval and failure visible with no established session', () => {
     mock.state = {
       cashconnect: { sessions: {}, pendingProposal: {}, errorMessage: null },
