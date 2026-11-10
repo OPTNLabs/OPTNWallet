@@ -451,6 +451,12 @@ const Settings: React.FC = () => {
     </div>
   );
 
+  // About OPTN scrolls its own article. Other settings panels use this
+  // wrapper's overflow; leaving both on would show two scrollbars.
+  const contentManagesScroll =
+    !groupConfig &&
+    (selectedOption === 'about' || selectedOption === 'contract');
+
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
@@ -517,23 +523,35 @@ const Settings: React.FC = () => {
             <>
               <SectionCard className="min-h-0 overflow-hidden">
                 <div className="flex h-full min-h-0 flex-col">
-                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-                    <div className="mb-4 flex items-center justify-between">
+                  <div
+                    className={
+                      contentManagesScroll
+                        ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+                        : 'min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1'
+                    }
+                  >
+                    <div className="mb-4 flex shrink-0 items-center justify-between">
                       <h2 className="text-xl font-bold wallet-text-strong">
                         {groupConfig
                           ? getGroupTitle(groupConfig.key)
                           : renderTitle()}
                       </h2>
                     </div>
-                    {groupConfig
-                      ? renderRows(
-                          getSettingsGroupRows(
-                            groupConfig.key,
-                            desktop,
-                            currentNetwork
-                          )
+                    {groupConfig ? (
+                      renderRows(
+                        getSettingsGroupRows(
+                          groupConfig.key,
+                          desktop,
+                          currentNetwork
                         )
-                      : renderContent()}
+                      )
+                    ) : contentManagesScroll ? (
+                      <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                        {renderContent()}
+                      </div>
+                    ) : (
+                      renderContent()
+                    )}
                   </div>
                 </div>
               </SectionCard>

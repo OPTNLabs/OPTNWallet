@@ -7,6 +7,7 @@ export const localeOperationalOverrides: Partial<
   Record<AddedLocale, Record<string, string>>
 > = {
   'pt-BR': {
+    'about.version': 'Versão {version}',
     'about.overview': 'Visão geral',
     'about.overviewText':
       'O aplicativo OPTN Wallet oferece controle direto e segurança sobre seus ativos digitais. Os covenants do Bitcoin permitem definir regras personalizadas para gastar fundos.',
@@ -193,6 +194,7 @@ export const localeOperationalOverrides: Partial<
       'Mantenha o OPTN Wallet aberto. A navegação está temporariamente desativada enquanto os dados da carteira são recriados.',
   },
   vi: {
+    'about.version': 'Phiên bản {version}',
     'about.overview': 'Tổng quan',
     'about.overviewText':
       'Ứng dụng OPTN Wallet cho bạn quyền kiểm soát trực tiếp và bảo mật tài sản số. Covenant Bitcoin cho phép đặt quy tắc tùy chỉnh cho việc chi tiêu tiền.',
@@ -377,6 +379,7 @@ export const localeOperationalOverrides: Partial<
       'Hãy giữ OPTN Wallet mở. Điều hướng tạm thời bị vô hiệu hóa khi dữ liệu ví được dựng lại.',
   },
   'zh-TW': {
+    'about.version': '版本 {version}',
     'about.overview': '概覽',
     'about.overviewText':
       'OPTN Wallet 應用程式讓您直接控制並保護數位資產。Bitcoin covenant 可自訂資金支出的規則，讓錢包符合您的偏好。',
@@ -546,6 +549,7 @@ export const localeOperationalOverrides: Partial<
       '請保持 OPTN Wallet 開啟。重新建立錢包資料時會暫時停用導覽。',
   },
   fr: {
+    'about.version': 'Version {version}',
     'about.overview': 'Vue d’ensemble',
     'about.overviewText':
       'L’application OPTN Wallet vous donne un contrôle direct et sécurisé de vos actifs numériques. Les covenants Bitcoin permettent de définir des règles personnalisées pour dépenser les fonds.',
@@ -739,6 +743,7 @@ export const localeOperationalOverrides: Partial<
       'Gardez OPTN Wallet ouvert. La navigation est temporairement désactivée pendant la reconstruction des données.',
   },
   ko: {
+    'about.version': '버전 {version}',
     'about.overview': '개요',
     'about.overviewText':
       'OPTN Wallet 앱은 디지털 자산을 직접 관리하고 보호할 수 있게 합니다. Bitcoin 커밋먼트는 자금 사용 규칙을 맞춤 설정합니다.',
@@ -923,6 +928,7 @@ export const localeOperationalOverrides: Partial<
       'OPTN Wallet을 열어 두세요. 지갑 데이터를 다시 구성하는 동안 탐색이 일시적으로 비활성화됩니다.',
   },
   ja: {
+    'about.version': 'バージョン {version}',
     'about.overview': '概要',
     'about.overviewText':
       'OPTN Wallet アプリはデジタル資産を直接管理し、安全に保護できます。Bitcoin covenant で資金の使用ルールを設定し、好みに合わせたウォレットを作れます。',
@@ -1108,6 +1114,7 @@ export const localeOperationalOverrides: Partial<
       'OPTN Wallet を開いたままにしてください。ウォレットデータの再構築中はナビゲーションが一時的に無効になります。',
   },
   ru: {
+    'about.version': 'Версия {version}',
     'about.overview': 'Обзор',
     'about.overviewText':
       'Приложение OPTN Wallet даёт прямой контроль и защиту цифровых активов. Bitcoin covenant позволяют задавать правила расходования средств.',
@@ -1292,6 +1299,7 @@ export const localeOperationalOverrides: Partial<
       'Не закрывайте OPTN Wallet. Навигация временно отключена, пока данные кошелька перестраиваются.',
   },
   'ha-NG': {
+    'about.version': 'Sigar {version}',
     'about.overview': 'Bayani gaba ɗaya',
     'about.overviewText':
       'Manhajar OPTN Wallet tana ba ka iko kai tsaye da tsaron kadarorin dijital. Bitcoin covenants suna ba ka damar saita ƙa’idodin kashe kuɗi na musamman.',

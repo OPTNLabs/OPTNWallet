@@ -2818,6 +2818,7 @@ export const localeOverrides = {
     'appLock.cancel': 'إلغاء',
     'appLock.checking': 'جارٍ التحقق…',
     'appLock.confirm': 'تأكيد',
+    'about.version': 'الإصدار {version}',
     'about.overview': 'نظرة عامة',
     'about.overviewText':
       'يمنحك تطبيق OPTN Wallet تحكمًا مباشرًا وأمانًا لأصولك الرقمية. تتيح لك عهود Bitcoin تحديد قواعد مخصصة لإنفاق الأموال، لتلائم المحفظة تفضيلاتك.',

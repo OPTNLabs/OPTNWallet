@@ -9,6 +9,7 @@ import preferencesReducer from '../../state/slices/preferencesSlice';
 import { I18nProvider } from '../../i18n/I18nProvider';
 import { LanguageSettings } from '../../features/settings/LanguageSettings';
 import AboutView from '../AboutView';
+import { APP_VERSION } from '../../utils/appVersion';
 
 vi.mock('../ContractDetails', () => ({
   default: () => null,
@@ -31,7 +32,17 @@ describe('AboutView localization', () => {
       </Provider>
     );
 
-    expect(screen.getByRole('heading', { name: 'Overview' })).toBeVisible();
+    const version = screen.getByTestId('about-app-version');
+    const overview = screen.getByRole('heading', { name: 'Overview' });
+    expect(version).toHaveTextContent(`Version ${APP_VERSION}`);
+    expect(
+      version.compareDocumentPosition(overview) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(overview).toBeVisible();
+    expect(screen.getByTestId('about-optn-scroll')).toHaveClass(
+      'overflow-y-auto'
+    );
     expect(screen.getByRole('combobox', { name: 'Language' })).toHaveClass(
       'wallet-language-select'
     );
@@ -40,6 +51,9 @@ describe('AboutView localization', () => {
       target: { value: 'es' },
     });
 
+    expect(screen.getByTestId('about-app-version')).toHaveTextContent(
+      `Versión ${APP_VERSION}`
+    );
     expect(
       screen.getByRole('heading', { name: 'Descripción general' })
     ).toBeVisible();
