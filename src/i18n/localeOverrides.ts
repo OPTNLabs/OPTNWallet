@@ -1532,6 +1532,20 @@ export const localeOverrides = {
       'تفاصيل المعاملة التقنية ({inputs} مدخلات، {outputs} مخرجات)',
     'wizard.nftCapability': 'قدرة NFT',
     'wizard.nftCommitment': 'التزام NFT',
+    'wizard.signInProofTitle': 'إثبات تسجيل الدخول',
+    'wizard.signInProofSignInTo': 'تسجيل الدخول إلى',
+    'wizard.signInProofAddress': 'العنوان المراد إثباته',
+    'wizard.signInProofCode': 'رمز لمرة واحدة',
+    'wizard.signInProofNoFunds': 'لا تنتقل أي أموال. لا يمكن بث هذا.',
+    'wizard.signInProofExplainer':
+      'التوقيع يثبت أنك تتحكم في هذا العنوان. أنشأت المحفظة هذا الإثبات بنفسها من الرمز لمرة واحدة؛ مدخله الوحيد مُختلَق وغير موجود على سلسلة الكتل.',
+    'wizard.signInProofApprove': 'تسجيل الدخول',
+    'wizard.signInProofInvalid': 'تم رفض طلب تسجيل الدخول هذا: {message}',
+    'wizard.signInProofDisabled':
+      'إثباتات تسجيل الدخول معطلة في إعدادات WizardConnect.',
+    'wizard.signInProofSetting': 'تفعيل إثباتات تسجيل الدخول عبر WizardConnect',
+    'wizard.signInProofSettingDescription':
+      'السماح للمواقع بطلب إثبات ملكيتك لعنوان عبر إثبات تنشئه المحفظة لا ينقل أي أموال ولا يمكن بثه.',
     'wizard.unknownDapp': 'dApp غير معروف',
     'wizard.dapp': 'dApp',
     'wizard.status': 'الحالة',

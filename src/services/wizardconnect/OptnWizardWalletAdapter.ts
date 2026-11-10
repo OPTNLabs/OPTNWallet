@@ -8,7 +8,16 @@ import {
   getOrCreateRuntimeRelayKey,
   hydrateRelayKeys,
 } from './relayKeyStore';
-import { signWizardConnectTransaction } from './signing';
+import {
+  pathNameToDerivationPath,
+  signWizardConnectSignInProof,
+  signWizardConnectTransaction,
+} from './signing';
+import {
+  SignInProofError,
+  validateSignInProofRequest,
+  type ValidatedSignInProof,
+} from './signInProof';
 import { deriveRpaGateXpub } from '../RpaService';
 import { store } from '../../state/store';
 import { signWithTrezor, signWithLedger, signWithOneKey } from '../hardware/hardwareWalletSigning';
@@ -120,14 +129,68 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
     return this.snapshot.rpaExtension;
   }
 
+  /**
+   * Null when the request is not a sign-in proof. Throws when it claims to be
+   * one but is not exactly the canonical proof for one of this wallet's own
+   * P2PKH addresses. The address comes from this wallet's xpubs, never from
+   * the dApp.
+   */
+  inspectSignInProof(request: SignTransactionRequest): ValidatedSignInProof | null {
+    return validateSignInProofRequest(request, (path, index) =>
+      this.getPublicKey(pathNameToDerivationPath(path), BigInt(index))
+    );
+  }
+
+  get network(): Network {
+    return this.snapshot.network;
+  }
+
+  private async signSignInProof(
+    proof: ValidatedSignInProof,
+    hw: { type: string; connected: boolean } | undefined
+  ): Promise<SignTransactionResult> {
+    const prefs = (store.getState() as unknown as {
+      preferences?: { enableWizardSignInProofs?: boolean };
+    }).preferences;
+    if (prefs?.enableWizardSignInProofs === false) {
+      throw new SignInProofError(
+        'sign-in proofs are turned off in WizardConnect settings'
+      );
+    }
+    // Hardware signers cannot sign this shape: the Ledger BCH app derives the
+    // outpoint from a full previous transaction (there is none to fetch: the
+    // outpoint is a bare hash) and Trezor/OneKey cannot express the OP_RETURN
+    // output. Refuse before any Electrum lookup or device call.
+    if (hw?.connected) {
+      throw new SignInProofError(
+        `sign-in proofs are not supported with a ${hw.type} hardware wallet yet`
+      );
+    }
+    const signedTransaction = await signWizardConnectSignInProof(proof, {
+      mnemonic: this.snapshot.mnemonic,
+      passphrase: this.snapshot.passphrase,
+      network: this.snapshot.network,
+      accountPath: this.snapshot.accountPath,
+    });
+    return { signedTransaction };
+  }
+
   async signTransaction(request: SignTransactionRequest): Promise<SignTransactionResult> {
+    const state = store.getState() as unknown as { hardwareWallet?: { type: string; connected: boolean } };
+    const hw = state.hardwareWallet;
+
+    // Sign-in proofs are detected and handled before anything else, so no
+    // proof ever reaches a payment signer, a hardware device, or Electrum.
+    const proof = this.inspectSignInProof(request);
+    if (proof) {
+      return this.signSignInProof(proof, hw);
+    }
+
     const decoded = decodeWizardConnectTransaction(request.transaction);
     request = {
       ...request,
       transaction: { ...request.transaction, ...decoded },
     };
-    const state = store.getState() as unknown as { hardwareWallet?: { type: string; connected: boolean } };
-    const hw = state.hardwareWallet;
 
     if (hw?.connected && hw.type === 'trezor') {
       const signedTransaction = await signWithTrezor(

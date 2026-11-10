@@ -8,6 +8,22 @@ import ElectrumService, {
 } from '../ElectrumService';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import { Network } from '../../state/slices/networkSlice';
+import { binToHex, encodeTransaction, secp256k1 } from '@bitauth/libauth';
+import {
+  buildCanonicalSignInProof,
+  p2pkhLockingBytecode,
+} from '../wizardconnect/signInProof';
+
+function unsignedSignInProofHex(): string {
+  const key = new Uint8Array(32);
+  key[31] = 7;
+  const publicKey = secp256k1.derivePublicKeyCompressed(key) as Uint8Array;
+  const proof = buildCanonicalSignInProof(
+    'Session_abcdef-0123456789',
+    p2pkhLockingBytecode(publicKey)
+  );
+  return binToHex(encodeTransaction(proof.transaction));
+}
 
 vi.mock('../../apis/ElectrumServer/ElectrumServer', () => ({
   default: vi.fn(),
@@ -532,6 +548,22 @@ describe('ElectrumService', () => {
     await expect(ElectrumService.broadcastTransaction('rawhex')).resolves.toBe(
       'Invalid transaction hash response'
     );
+  });
+
+  it('broadcastTransaction never sends a WizardConnect sign-in proof', async () => {
+    const server = {
+      request: vi.fn(async () => 'txid123'),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    await expect(
+      ElectrumService.broadcastTransaction(unsignedSignInProofHex())
+    ).resolves.toMatch(/Refusing to broadcast a WizardConnect sign-in proof/);
+    expect(mockedElectrumServer).not.toHaveBeenCalled();
+    expect(server.request).not.toHaveBeenCalled();
   });
 
   it('getTransactionHistory validates response shape', async () => {

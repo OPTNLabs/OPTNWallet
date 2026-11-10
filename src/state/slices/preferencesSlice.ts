@@ -35,6 +35,12 @@ type PreferencesState = {
   // unfinished ones. Someone who ticks both is on alpha, which includes beta.
   updateBeta: boolean;
   updateAlpha: boolean;
+  /**
+   * Allow WizardConnect sign-in proofs (a wallet-built, unbroadcastable
+   * transaction that proves address ownership). Older persisted state has no
+   * value; treat missing as enabled.
+   */
+  enableWizardSignInProofs?: boolean;
 };
 
 const initialState: PreferencesState = {
@@ -50,6 +56,7 @@ const initialState: PreferencesState = {
   chainPolicy: 'auto',
   updateBeta: false,
   updateAlpha: false,
+  enableWizardSignInProofs: true,
 };
 
 const preferencesSlice = createSlice({
@@ -99,6 +106,9 @@ const preferencesSlice = createSlice({
     setUpdateAlpha: (state, action: PayloadAction<boolean>) => {
       state.updateAlpha = action.payload;
     },
+    setEnableWizardSignInProofs: (state, action: PayloadAction<boolean>) => {
+      state.enableWizardSignInProofs = action.payload;
+    },
     setMerchantPayDefaultConversionBps: (
       state,
       action: PayloadAction<number>
@@ -124,8 +134,12 @@ export const {
   setChainPolicy,
   setUpdateBeta,
   setUpdateAlpha,
+  setEnableWizardSignInProofs,
   setMerchantPayDefaultConversionBps,
 } = preferencesSlice.actions;
+
+export const selectWizardSignInProofsEnabled = (state: RootState): boolean =>
+  state.preferences?.enableWizardSignInProofs !== false;
 
 export const selectLocale = (state: RootState): SupportedLocale =>
   state.preferences.locale ?? 'en';
