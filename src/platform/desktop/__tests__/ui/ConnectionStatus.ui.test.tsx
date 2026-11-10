@@ -203,7 +203,9 @@ describe('connection panels', () => {
     const uriTrigger = screen.getByTestId('wizard-connection-uri');
     expect(uriTrigger).toBeInTheDocument();
     expect(uriTrigger).not.toHaveTextContent(uri);
-    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Settings' })
+    ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Disconnect' })
     ).toBeInTheDocument();
