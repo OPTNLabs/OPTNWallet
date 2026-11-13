@@ -40,6 +40,7 @@ const SOURCE_TXID = '11'.repeat(32);
 const DAPP_NAME = 'OPTN Connector Lab';
 const CHIPNET_ELECTRUM_SERVERS = [
   ['electrum-chipnet.optnlabs.com', 50004],
+  ['chipnet.bch.ninja', 50004],
   ['chipnet.imaginary.cash', 50004],
   ['chipnet.c3-soft.com', 64004],
 ];

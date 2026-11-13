@@ -10,8 +10,9 @@
 import WebSocket from 'ws';
 
 export const CHIPNET_SERVERS = [
-  'electrum-chipnet.optnlabs.com',
-  'chipnet.imaginary.cash',
+  'electrum-chipnet.optnlabs.com:50004',
+  'chipnet.bch.ninja:50004',
+  'chipnet.imaginary.cash:50004',
   'chipnet.c3-soft.com:64004',
 ];
 

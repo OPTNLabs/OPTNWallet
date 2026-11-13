@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Capacitor } from '@capacitor/core';
 import BcmrService, {
+  LOCAL_BCMR_REGISTRY_URI,
   isBcmrRegistryNotFoundError,
 } from '../services/BcmrService';
 import { resolveIpfsGatewayUrl } from '../utils/ipfs';
@@ -234,7 +235,10 @@ async function loadCachedTokenMetadata(
     persistedSnapshot,
     persistedIconUri,
     {
-      freshness: 'cached',
+      freshness:
+        persistedSnapshot.registryUri === LOCAL_BCMR_REGISTRY_URI
+          ? 'offline'
+          : 'cached',
       lastFetch: persistedSnapshot.lastFetch ?? null,
       registryUri: persistedSnapshot.registryUri ?? null,
       registryHash: persistedSnapshot.registryHash ?? null,
@@ -252,7 +256,9 @@ async function loadFreshTokenMetadata(
   const normalized = normalizeCategory(category);
   const previous = metadataCache.get(normalized);
   const authbase = await bcmr.getCategoryAuthbase(normalized);
-  let registry = await bcmr.resolveIdentityRegistry(authbase);
+  // Resolve from the requested category so the BCMR service can retain the
+  // category when it falls back to the category-keyed TokenIndexer endpoint.
+  let registry = await bcmr.resolveIdentityRegistry(normalized);
   let snapshot: BcmrSnapshot;
 
   try {
@@ -269,11 +275,13 @@ async function loadFreshTokenMetadata(
 
   const iconUri = await bcmr.resolveIcon(authbase, undefined, normalized);
   const freshness: BcmrMetadataFreshness =
-    previous?.lastFetch && registry.lastFetch === previous.lastFetch
-      ? previous.freshness === 'offline'
-        ? 'offline'
-        : 'cached'
-      : 'fresh';
+    registry.registryUri === LOCAL_BCMR_REGISTRY_URI
+      ? 'offline'
+      : previous?.lastFetch && registry.lastFetch === previous.lastFetch
+        ? previous.freshness === 'offline'
+          ? 'offline'
+          : 'cached'
+        : 'fresh';
   const fresh = buildSharedMetadata(normalized, snapshot, iconUri, {
     freshness,
     lastFetch: registry.lastFetch,

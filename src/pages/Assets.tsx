@@ -168,6 +168,23 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const selectedTokenMetadata = selectedTokenCategory
     ? tokenMetadata[selectedTokenCategory]
     : null;
+  const selectedTokenFallback = selectedTokenCategory
+    ? tokenFallbackByCategory.get(selectedTokenCategory) ?? null
+    : null;
+  const selectedTokenSnapshot = selectedTokenFallback
+    ? {
+        name: selectedTokenFallback.name ?? selectedTokenCategory ?? '',
+        description: '',
+        token: {
+          category: selectedTokenCategory ?? '',
+          symbol: selectedTokenFallback.symbol ?? '',
+          decimals: selectedTokenFallback.decimals ?? 0,
+        },
+        uris: selectedTokenFallback.iconUri
+          ? { icon: selectedTokenFallback.iconUri }
+          : undefined,
+      }
+    : null;
   const nftInstances = useMemo(
     () => summarizeNftInstances(tokenUtxos),
     [tokenUtxos]
@@ -578,11 +595,13 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
           <div className="max-h-[75vh] overflow-y-auto pr-1">
             <TokenQuery
               tokenId={selectedTokenCategory}
-              prefetchedSnapshot={selectedTokenMetadata?.snapshot ?? null}
+              prefetchedSnapshot={
+                selectedTokenMetadata?.snapshot ?? selectedTokenSnapshot
+              }
               prefetchedIconDataUri={
                 selectedTokenMetadata?.status === 'ready'
                   ? selectedTokenMetadata.iconUri
-                  : null
+                  : selectedTokenFallback?.iconUri ?? null
               }
             />
           </div>

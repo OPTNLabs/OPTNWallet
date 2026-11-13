@@ -21,6 +21,9 @@ const mocks = vi.hoisted(() => ({
     openTransaction?: { txid?: string; height?: number };
   } | null,
   fetch: vi.fn(),
+  getTransactionDetails: vi.fn(),
+  tokenMetadata: {} as Record<string, unknown>,
+  walletAddresses: [] as string[],
 }));
 
 vi.mock('react-redux', () => ({
@@ -74,16 +77,26 @@ vi.mock('../../../../apis/DatabaseManager/DatabaseService', () => ({
   default: () => ({
     ensureDatabaseStarted: async () => undefined,
     getDatabase: () => ({
-      prepare: () => ({
-        bind: vi.fn(),
-        step: () => false,
-        free: vi.fn(),
-      }),
+      prepare: () => {
+        let index = 0;
+        return {
+          bind: vi.fn(),
+          step: () => index++ < mocks.walletAddresses.length,
+          getAsObject: () => ({ address: mocks.walletAddresses[index - 1] }),
+          free: vi.fn(),
+        };
+      },
     }),
   }),
 }));
 vi.mock('../../../../services/QuantumrootTrackingService', () => ({
   default: { listTrackedAddresses: async () => [] },
+}));
+vi.mock('../../../../services/ElectrumService', () => ({
+  default: { getTransactionDetails: mocks.getTransactionDetails },
+}));
+vi.mock('../../../../hooks/useSharedTokenMetadata', () => ({
+  default: () => mocks.tokenMetadata,
 }));
 vi.mock('../../../../platform/desktop/useFusionDepthRevision', () => ({
   useFusionDepthRevision: () => 0,
@@ -133,6 +146,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.state.transactions = { transactions: {} };
   mocks.locationState = null;
+  mocks.getTransactionDetails.mockResolvedValue(null);
+  mocks.tokenMetadata = {};
+  mocks.walletAddresses = [];
   mocks.explorer.tx.mockReturnValue('https://explorer.example/tx/test');
 });
 afterEach(cleanup);
@@ -190,6 +206,49 @@ it('leads each history card with status before technical identifiers', () => {
   expect(cardText.indexOf('history.confirmed')).toBeLessThan(
     cardText.indexOf('history.transactionId')
   );
+});
+
+it('shows the wallet CashToken net effect in the transaction card', async () => {
+  const category = 'ab'.repeat(32);
+  mocks.getTransactionDetails.mockResolvedValue({
+    txid: transaction.tx_hash,
+    confirmations: 1,
+    inputs: [
+      {
+        address: 'bchtest:qsender',
+        amountSats: 2_000,
+        token: { category, amount: 100n },
+      },
+    ],
+    outputs: [
+      {
+        address: 'bchtest:qwallet',
+        amountSats: 1_000,
+        token: { category, amount: 450n },
+      },
+    ],
+  });
+  mocks.walletAddresses = ['bchtest:qwallet'];
+  mocks.tokenMetadata = {
+    [category]: {
+      status: 'ready',
+      freshness: 'fresh',
+      name: 'ParyonUSD',
+      symbol: 'PUSDTEST',
+      decimals: 2,
+      iconUri: null,
+      snapshot: {},
+      isRefreshing: false,
+    },
+  };
+
+  renderHistory([transaction]);
+
+  expect(
+    await screen.findByText('history.cashTokenEffect')
+  ).toBeInTheDocument();
+  expect(screen.getByText('ParyonUSD (PUSDTEST)')).toBeInTheDocument();
+  expect(screen.getByText('+4.50 PUSDTEST')).toBeInTheDocument();
 });
 
 it('opens the transaction passed from Home activity', () => {

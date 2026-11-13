@@ -795,10 +795,13 @@ export const coreTranslations = {
     'history.statusHelp':
       'Confirmed means the transaction is in a block. Unconfirmed means the network has seen it, but it is still waiting for a block.',
     'history.walletEffect': 'Wallet effect',
+    'history.cashTokenEffect': 'CashToken effect',
     'history.fee': 'Fee',
+    'history.feeRate': 'Fee rate',
     'history.timestamp': 'Timestamp',
     'history.openExplorer': 'Open in explorer',
     'history.openExplorerSettings': 'Open explorer settings',
+    'history.openNetworkSettings': 'Open network settings',
     'history.openExplorerFailed':
       'Could not open the browser. Check browser permissions and try again.',
     'history.copyTransaction': 'Copy transaction ID',
@@ -1843,6 +1846,8 @@ export const coreTranslations = {
     'history.statusHelp':
       'Confirmada significa que la transacción está en un bloque. Sin confirmar significa que la red la ha visto, pero aún espera un bloque.',
     'history.fee': 'Comisión',
+    'history.cashTokenEffect': 'Efecto de CashToken',
+    'history.feeRate': 'Tasa de comisión',
     'history.timestamp': 'Marca de tiempo',
     'history.openExplorer': 'Abrir en el explorador',
     'history.loadingDetails': 'Cargando detalles de la transacción…',
@@ -2806,6 +2811,8 @@ export const coreTranslations = {
     'history.statusHelp':
       '已确认表示交易已进入区块。未确认表示网络已看到交易，但仍在等待区块。',
     'history.fee': '费用',
+    'history.cashTokenEffect': 'CashToken 影响',
+    'history.feeRate': '费率',
     'history.timestamp': '时间戳',
     'history.openExplorer': '在浏览器中打开',
     'history.loadingDetails': '正在加载交易详情…',

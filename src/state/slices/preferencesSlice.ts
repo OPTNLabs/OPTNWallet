@@ -6,6 +6,7 @@ import {
   type ExplorerChoice,
 } from '../../utils/servers/explorers';
 import type { SupportedLocale } from '../../i18n/types';
+import { isDesktopPlatform } from '../../utils/platform';
 
 export const DEFAULT_MERCHANT_PAY_CONVERSION_BPS = 10_000;
 
@@ -165,11 +166,13 @@ export const selectUpdateBeta = (state: RootState): boolean =>
 export const selectUpdateAlpha = (state: RootState): boolean =>
   state.preferences.updateAlpha ?? false;
 
-// Falls back to the fail-closed reading, not to 'auto': state persisted before
-// this field existed says nothing about the policy, and guessing "public is
-// fine" is the one guess that can leak.
+// Desktop reads the authoritative policy from the Rust chain-source runtime.
+// Browser/mobile installs have no ChainSourcesSettings runtime to consult, so
+// an older persisted slice with no field must reflect the legacy public pool
+// rather than inventing a private-policy refusal with no way to recover.
 export const selectChainPolicy = (state: RootState): string =>
-  state.preferences.chainPolicy ?? 'own_infrastructure';
+  state.preferences.chainPolicy ??
+  (isDesktopPlatform() ? 'own_infrastructure' : 'auto');
 
 export const selectExplorerCustom = createSelector(
   [

@@ -4,17 +4,22 @@ import { useDispatch, useSelector } from 'react-redux';
 import {
   selectExplorerCustom,
   selectExplorerId,
+  selectChainPolicy,
+  setChainPolicy,
   setExplorerCustom,
   setExplorerId,
 } from '../../state/slices/preferencesSlice';
 import { getExplorerPresets } from '../../utils/servers/explorers';
 import { useI18n } from '../../i18n/useI18n';
+import { isDesktopPlatform } from '../../utils/platform';
 
 export function ExplorerSettings() {
   const dispatch = useDispatch();
   const { t } = useI18n();
   const explorerId = useSelector(selectExplorerId);
   const explorerCustom = useSelector(selectExplorerCustom);
+  const chainPolicy = useSelector(selectChainPolicy);
+  const desktop = isDesktopPlatform();
   const [customTx, setCustomTx] = useState(explorerCustom.tx);
   const [customAddress, setCustomAddress] = useState(explorerCustom.address);
 
@@ -34,6 +39,35 @@ export function ExplorerSettings() {
           network determines whether the mainnet or Chipnet URL is used.
         </p>
       </div>
+
+      {!desktop ? (
+        <div className="space-y-2 rounded-xl border border-[var(--wallet-border)] p-3">
+          <h3 className="text-sm font-semibold wallet-text-strong">
+            {t('server.explorerAccess')}
+          </h3>
+          <p className="text-xs wallet-muted">
+            {t('server.explorerAccessDescription')}
+          </p>
+          <label className="block text-sm wallet-text-strong">
+            <span className="sr-only">{t('server.explorerAccess')}</span>
+            <select
+              value={
+                chainPolicy === 'own_infrastructure' ||
+                chainPolicy === 'privacy'
+                  ? 'own_infrastructure'
+                  : 'auto'
+              }
+              onChange={(event) => dispatch(setChainPolicy(event.target.value))}
+              className="min-h-[44px] w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+            >
+              <option value="auto">{t('server.allowPublicExplorers')}</option>
+              <option value="own_infrastructure">
+                {t('server.privateExplorerOnly')}
+              </option>
+            </select>
+          </label>
+        </div>
+      ) : null}
 
       <label className="block text-sm wallet-text-strong">
         <span className="sr-only">{t('server.blockExplorer')}</span>

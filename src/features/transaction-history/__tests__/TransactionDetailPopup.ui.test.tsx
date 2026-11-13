@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   fetchDetails: vi.fn(),
+  resolveTokenMetadata: vi.fn(),
   copyWithFeedback: vi.fn(),
   dispatch: vi.fn(),
   translate: (key: string) => key,
@@ -24,6 +25,11 @@ vi.mock('react-redux', () => ({
 }));
 vi.mock('../../../services/ElectrumService', () => ({
   default: { getTransactionDetails: mocks.fetchDetails },
+}));
+vi.mock('../../../services/BcmrService', () => ({
+  default: class {
+    resolveSnapshot = mocks.resolveTokenMetadata;
+  },
 }));
 vi.mock('../../../apis/TransactionManager/TransactionManager', () => ({
   default: () => ({ applyConfirmedHeight: vi.fn() }),
@@ -47,6 +53,7 @@ import TransactionDetailPopup from '../TransactionDetailPopup';
 
 beforeEach(() => {
   mocks.fetchDetails.mockReset();
+  mocks.resolveTokenMetadata.mockReset();
   mocks.copyWithFeedback.mockReset();
 });
 afterEach(() => {
@@ -98,6 +105,9 @@ it('copies the transaction ID from the header', async () => {
     />
   );
 
+  expect(document.querySelector('[data-mask-part="middle"]')).toHaveTextContent(
+    '*'.repeat(12)
+  );
   fireEvent.click(
     await screen.findByRole('button', { name: 'history.copyTransaction' })
   );
@@ -111,6 +121,8 @@ it('shows the verified wallet net effect in transaction details', async () => {
   mocks.fetchDetails.mockResolvedValue({
     inputs: [{ address: 'wallet', amountSats: 20_000 }],
     outputs: [{ address: 'wallet', amountSats: 15_000 }],
+    feeSats: 642,
+    sizeBytes: 642,
     confirmations: 0,
     height: 0,
   });
@@ -125,6 +137,48 @@ it('shows the verified wallet net effect in transaction details', async () => {
   );
 
   expect(await screen.findByText('-0.00005 BCH')).toBeInTheDocument();
+  expect(screen.getByText('1 sat/byte')).toBeInTheDocument();
+});
+
+it('renders CashToken metadata in participant rows', async () => {
+  mocks.resolveTokenMetadata.mockResolvedValue({
+    name: 'Paryon USD',
+    description: 'Test token',
+    token: { category: 'c'.repeat(64), symbol: 'PUSD', decimals: 2 },
+    is_nft: false,
+    uris: {},
+    extensions: {},
+  });
+  mocks.fetchDetails.mockResolvedValue({
+    inputs: [],
+    outputs: [
+      {
+        address: 'bchtest:ppqwabcdefghijklmnop12345',
+        amountSats: 1000,
+        outputIndex: 0,
+        token: { category: 'c'.repeat(64), amount: 450 },
+      },
+    ],
+    confirmations: 0,
+    height: 0,
+  });
+  render(
+    <TransactionDetailPopup
+      txid={'e'.repeat(64)}
+      txHeight={0}
+      explorerUrl={null}
+      walletAddresses={new Set()}
+      onClose={vi.fn()}
+    />
+  );
+
+  expect(await screen.findByText('Paryon USD (PUSD)')).toBeInTheDocument();
+  expect(screen.getByText('4.50 PUSD')).toBeInTheDocument();
+  expect(screen.queryByText('send.bcmrMetadata')).not.toBeInTheDocument();
+  expect(screen.queryByText(/base units/)).not.toBeInTheDocument();
+  expect(screen.queryByText('send.tokenAmount')).not.toBeInTheDocument();
+  expect(screen.getByText('bchtest:ppqwa')).toBeInTheDocument();
+  expect(screen.getByText('send.tokenCategory')).toBeInTheDocument();
 });
 
 it('explains unavailable explorer access and links to explorer settings', async () => {

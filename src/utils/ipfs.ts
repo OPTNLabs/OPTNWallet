@@ -2,6 +2,7 @@ import { store } from '../state/store';
 import { getInfraUrlPools, runWithFailover } from './servers/InfraUrls';
 
 const IPFS_GATEWAY_TIMEOUT_MS = 8000;
+const DIRECT_HTTP_TIMEOUT_MS = 8000;
 const inflightGatewayRequests = new Map<string, Promise<Response>>();
 
 function normalizeIpfsPath(path: string): string {
@@ -24,7 +25,9 @@ function extractIpfsPath(uri: string): string | null {
     const marker = '/ipfs/';
     const idx = url.pathname.indexOf(marker);
     if (idx >= 0) {
-      return normalizeIpfsPath(url.pathname.slice(idx + marker.length) + search);
+      return normalizeIpfsPath(
+        url.pathname.slice(idx + marker.length) + search
+      );
     }
 
     // Subdomain gateway form: https://<cid>.ipfs.gateway.tld/...
@@ -77,7 +80,9 @@ async function fetchFromGateways(ipfsPath: string, options?: RequestInit) {
             controller.signal
           );
           const timeoutId = globalThis.setTimeout(() => {
-            controller.abort(new Error(`Timeout after ${IPFS_GATEWAY_TIMEOUT_MS}ms`));
+            controller.abort(
+              new Error(`Timeout after ${IPFS_GATEWAY_TIMEOUT_MS}ms`)
+            );
           }, IPFS_GATEWAY_TIMEOUT_MS);
 
           try {
@@ -123,7 +128,23 @@ export async function ipfsFetch(
   }
 
   try {
-    return await fetch(fetchUri, options);
+    const controller = new AbortController();
+    const signal = mergeAbortSignals(
+      options?.signal ?? undefined,
+      controller.signal
+    );
+    const timeoutId = globalThis.setTimeout(() => {
+      controller.abort(new Error(`Timeout after ${DIRECT_HTTP_TIMEOUT_MS}ms`));
+    }, DIRECT_HTTP_TIMEOUT_MS);
+
+    try {
+      return await fetch(fetchUri, {
+        ...options,
+        signal,
+      });
+    } finally {
+      globalThis.clearTimeout(timeoutId);
+    }
   } catch (err) {
     // Browser CORS/network failures can happen on third-party IPFS URLs.
     const fallbackIpfsPath = extractIpfsPath(fetchUri);
@@ -132,7 +153,9 @@ export async function ipfsFetch(
   }
 }
 
-function mergeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+function mergeAbortSignals(
+  ...signals: Array<AbortSignal | undefined>
+): AbortSignal | undefined {
   const activeSignals = signals.filter(Boolean) as AbortSignal[];
   if (activeSignals.length === 0) return undefined;
   if (activeSignals.length === 1) return activeSignals[0];

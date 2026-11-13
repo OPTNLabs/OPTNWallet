@@ -49,6 +49,46 @@ const P2P_NODE_PORTS = new Set([8333, 48333, 18333, 28333, 38333, 18444]);
 
 const USER_SERVER_KEY = 'optn.electrum.user-server';
 const LAST_HEALTHY_KEY = 'optn.electrum.last-healthy-server';
+const MAX_SERVER_TIP_LAG = 3;
+
+type ServerAdapter = ReturnType<typeof getElectrumAdapter>;
+
+function tipHeight(value: unknown): number | null {
+  if (!value || typeof value !== 'object' || !('height' in value)) return null;
+  const height = Number((value as { height?: unknown }).height);
+  return Number.isInteger(height) && height >= 0 ? height : null;
+}
+
+async function readCurrentTipHeight(
+  adapter: ServerAdapter
+): Promise<number | null> {
+  if (!adapter.getCurrentServer()) return null;
+  try {
+    return tipHeight(await adapter.request('blockchain.headers.subscribe'));
+  } catch {
+    return null;
+  }
+}
+
+async function verifySelectedServerTip(
+  adapter: ServerAdapter,
+  previousHeight: number | null
+): Promise<void> {
+  const currentHeight = tipHeight(
+    await adapter.request('blockchain.headers.subscribe')
+  );
+  if (currentHeight === null) {
+    throw new Error('The selected server did not return a valid chain tip.');
+  }
+  if (
+    previousHeight !== null &&
+    previousHeight - currentHeight > MAX_SERVER_TIP_LAG
+  ) {
+    throw new Error(
+      `The selected server is ${previousHeight - currentHeight} blocks behind the previous tip. Choose Auto or another server.`
+    );
+  }
+}
 
 function readUserServer(): string {
   return readStorageItem(getPreferredStorage(), USER_SERVER_KEY) ?? '';
@@ -165,10 +205,12 @@ export const ServerSettings: React.FC<{
   }, [desktop, refreshCurrent]);
 
   const handleConnect = async () => {
+    const previousBackend = getBackend(currentNetwork);
     setConnecting(true);
     setError('');
     setStatus('');
     const adapter = getElectrumAdapter();
+    const previousHeight = await readCurrentTipHeight(adapter);
     try {
       const target = autoMode ? undefined : customServer.trim() || undefined;
       const selectedBackend: Backend = target
@@ -182,10 +224,28 @@ export const ServerSettings: React.FC<{
       }
       setBackend(currentNetwork, selectedBackend);
       await adapter.reconnect(target);
+      await verifySelectedServerTip(adapter, previousHeight);
       refreshCurrent();
       setStatus(t('server.connected'));
       setTimeout(() => setStatus(''), 3000);
     } catch (err) {
+      // A failed switch must not leave a bad server persisted as the active
+      // backend. Restore the prior selection and re-establish it when
+      // possible, so the next screen render does not loop on "Connecting...".
+      const previousTarget =
+        previousBackend.kind === 'server' ? previousBackend.target : undefined;
+      setBackend(currentNetwork, previousBackend);
+      saveUserServer(previousTarget ?? '');
+      setAutoMode(previousBackend.kind !== 'server');
+      setCustomServer(previousTarget ?? '');
+      try {
+        await persistDesktopBackend(currentNetwork, previousBackend);
+        await adapter.reconnect(previousTarget);
+      } catch (restoreError) {
+        console.warn('[ServerSettings] failed to restore prior backend', {
+          restoreError,
+        });
+      }
       setError(
         `${t('server.connectionFailed')}: ${err instanceof Error ? err.message : String(err)}`
       );
@@ -206,11 +266,14 @@ export const ServerSettings: React.FC<{
   // Connect directly to a server from the pool list (one click, no separate
   // Connect button needed).
   const connectToServer = async (server: string) => {
+    const previousBackend = getBackend(currentNetwork);
     setAutoMode(false);
     setCustomServer(server);
     setConnecting(true);
     setError('');
     setStatus('');
+    const adapter = getElectrumAdapter();
+    const previousHeight = await readCurrentTipHeight(adapter);
     try {
       await persistDesktopBackend(currentNetwork, {
         kind: 'server',
@@ -218,11 +281,26 @@ export const ServerSettings: React.FC<{
       });
       saveUserServer(server);
       setBackend(currentNetwork, { kind: 'server', target: server });
-      await getElectrumAdapter().reconnect(server);
+      await adapter.reconnect(server);
+      await verifySelectedServerTip(adapter, previousHeight);
       refreshCurrent();
       setStatus(t('server.connected'));
       setTimeout(() => setStatus(''), 3000);
     } catch (err) {
+      const previousTarget =
+        previousBackend.kind === 'server' ? previousBackend.target : undefined;
+      setBackend(currentNetwork, previousBackend);
+      saveUserServer(previousTarget ?? '');
+      setAutoMode(previousBackend.kind !== 'server');
+      setCustomServer(previousTarget ?? '');
+      try {
+        await persistDesktopBackend(currentNetwork, previousBackend);
+        await adapter.reconnect(previousTarget);
+      } catch (restoreError) {
+        console.warn('[ServerSettings] failed to restore prior backend', {
+          restoreError,
+        });
+      }
       setError(
         `${t('server.connectionFailed')}: ${err instanceof Error ? err.message : String(err)}`
       );
@@ -232,20 +310,38 @@ export const ServerSettings: React.FC<{
   };
 
   const resetBackendToAuto = async () => {
+    const previousBackend = getBackend(currentNetwork);
     setConnecting(true);
     setError('');
     setStatus('');
+    const adapter = getElectrumAdapter();
+    const previousHeight = await readCurrentTipHeight(adapter);
     try {
       await persistDesktopBackend(currentNetwork, { kind: 'auto' });
       saveUserServer('');
       setCustomServer('');
       setAutoMode(true);
       setBackend(currentNetwork, { kind: 'auto' });
-      await getElectrumAdapter().reconnect();
+      await adapter.reconnect();
+      await verifySelectedServerTip(adapter, previousHeight);
       refreshCurrent();
       setStatus(t('server.connected'));
       setTimeout(() => setStatus(''), 3000);
     } catch (err) {
+      const previousTarget =
+        previousBackend.kind === 'server' ? previousBackend.target : undefined;
+      setBackend(currentNetwork, previousBackend);
+      saveUserServer(previousTarget ?? '');
+      setAutoMode(previousBackend.kind !== 'server');
+      setCustomServer(previousTarget ?? '');
+      try {
+        await persistDesktopBackend(currentNetwork, previousBackend);
+        await adapter.reconnect(previousTarget);
+      } catch (restoreError) {
+        console.warn('[ServerSettings] failed to restore prior backend', {
+          restoreError,
+        });
+      }
       setError(
         `${t('server.connectionFailed')}: ${err instanceof Error ? err.message : String(err)}`
       );

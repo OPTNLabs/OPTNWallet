@@ -14,6 +14,8 @@ type MockClient = {
   __emit: (event: string, payload: unknown) => void;
 };
 
+type BackendSelection = { kind: 'auto' } | { kind: 'server'; target: string };
+
 function makeMockClient(): MockClient {
   const handlers = new Map<string, Array<(x: unknown) => void>>();
   const mock: MockClient = {
@@ -61,7 +63,8 @@ async function loadServerWithMocks(
   clients: MockClient[],
   servers: string[] = ['wss://electrum.example:50004'],
   desktop = true,
-  networkRef: { currentNetwork: string } = { currentNetwork: 'mainnet' }
+  networkRef: { currentNetwork: string } = { currentNetwork: 'mainnet' },
+  backend: BackendSelection = { kind: 'auto' }
 ) {
   vi.resetModules();
 
@@ -104,6 +107,10 @@ async function loadServerWithMocks(
     getElectrumServers: vi.fn(() => servers),
   }));
 
+  vi.doMock('../../../platform/desktop/backendSelection', () => ({
+    getBackend: vi.fn(() => backend),
+  }));
+
   const mod = await import('../ElectrumServer');
   return mod.default();
 }
@@ -111,7 +118,8 @@ async function loadServerWithMocks(
 async function loadServerWithMocksAndSpies(
   clients: MockClient[],
   servers: string[],
-  desktop = true
+  desktop = true,
+  backend: BackendSelection = { kind: 'auto' }
 ) {
   vi.resetModules();
 
@@ -153,11 +161,30 @@ async function loadServerWithMocksAndSpies(
     getElectrumServers: vi.fn(() => servers),
   }));
 
+  vi.doMock('../../../platform/desktop/backendSelection', () => ({
+    getBackend: vi.fn(() => backend),
+  }));
+
   const mod = await import('../ElectrumServer');
   return { server: mod.default(), ElectrumWebSocket };
 }
 
 describe('ElectrumServer', () => {
+  it('pins a manually selected server instead of retaining the failover pool', async () => {
+    const client = makeMockClient();
+    const pinned = 'chipnet.imaginary.cash:50004';
+    const server = await loadServerWithMocks(
+      [client],
+      ['electrum-chipnet.optnlabs.com:50004', 'chipnet.bch.ninja:50004'],
+      false,
+      { currentNetwork: 'chipnet' },
+      { kind: 'server', target: pinned }
+    );
+
+    expect(server.getServerList()).toEqual([pinned]);
+    await expect(server.electrumConnect()).resolves.toBe(client);
+  });
+
   it('request retries after a failed request by reconnecting', async () => {
     const first = makeMockClient();
     const second = makeMockClient();
@@ -213,6 +240,24 @@ describe('ElectrumServer', () => {
       'hash-2'
     );
     expect(client.connection.send).not.toHaveBeenCalled();
+  });
+
+  it('honors a manually entered host when the pool includes its default port', async () => {
+    const client = makeMockClient();
+    const { server, ElectrumWebSocket } = await loadServerWithMocksAndSpies(
+      [client],
+      ['chipnet.imaginary.cash:50004', 'electrum-chipnet.optnlabs.com:50004'],
+      false
+    );
+
+    await server.electrumConnect('chipnet.imaginary.cash');
+
+    expect(ElectrumWebSocket).toHaveBeenCalledWith(
+      'chipnet.imaginary.cash',
+      50004,
+      true,
+      4000
+    );
   });
 
   it('reconnects when the active wallet network changes', async () => {

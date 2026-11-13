@@ -44,7 +44,7 @@ async function fetchWalletAddresses(walletId: number): Promise<string[]> {
   return Array.from(new Set(addresses));
 }
 
-async function listSeenTxids(
+async function listConfirmedTxids(
   walletId: number,
   txids: string[]
 ): Promise<Set<string>> {
@@ -59,7 +59,7 @@ async function listSeenTxids(
   const wanted = new Set(txids.map((t) => t.replace(/^0x/i, '').toLowerCase()));
   const quoted = txids.map(() => '?').join(', ');
   const statement = db.prepare(`
-    SELECT tx_hash
+    SELECT tx_hash, height
     FROM transactions
     WHERE wallet_id = ?
       AND lower(replace(tx_hash, '0x', '')) IN (${quoted});
@@ -73,7 +73,11 @@ async function listSeenTxids(
   const seen = new Set<string>();
   while (statement.step()) {
     const row = statement.getAsObject();
-    if (typeof row.tx_hash === 'string' && row.tx_hash.length > 0) {
+    if (
+      typeof row.tx_hash === 'string' &&
+      row.tx_hash.length > 0 &&
+      Number(row.height ?? 0) > 0
+    ) {
       const norm = row.tx_hash.replace(/^0x/i, '').toLowerCase();
       // Return original-cased ids from input list when possible
       for (const t of txids) {
@@ -88,52 +92,6 @@ async function listSeenTxids(
   statement.free();
 
   return seen;
-}
-
-/**
- * If every spent outpoint for a record is gone from the UTXOs table, the spend
- * already applied (or the coins were replaced). Treat as seen so Simple Send
- * unlocks after a real wallet sync even when `transactions` rows lag (hardware).
- */
-async function listRecordsWithSpentCoinsGone(
-  walletId: number,
-  records: OutboundTransactionRecord[]
-): Promise<Set<string>> {
-  const withOutpoints = records.filter((r) => r.spentOutpoints.length > 0);
-  if (withOutpoints.length === 0) return new Set();
-
-  const dbService = DatabaseService();
-  await dbService.ensureDatabaseStarted();
-  const db = dbService.getDatabase();
-  if (!db) return new Set();
-
-  const remaining = new Set<string>();
-  const q = db.prepare(`
-    SELECT 1 AS ok FROM UTXOs
-    WHERE wallet_id = ?
-      AND lower(tx_hash) = lower(?)
-      AND tx_pos = ?
-    LIMIT 1
-  `);
-  try {
-    for (const record of withOutpoints) {
-      let anyStillPresent = false;
-      for (const op of record.spentOutpoints) {
-        q.bind([walletId, op.tx_hash, op.tx_pos]);
-        if (q.step()) {
-          anyStillPresent = true;
-        }
-        q.reset();
-        if (anyStillPresent) break;
-      }
-      if (!anyStillPresent) {
-        remaining.add(record.txid);
-      }
-    }
-  } finally {
-    q.free();
-  }
-  return remaining;
 }
 
 export async function reconcileOutboundTransactions(
@@ -167,9 +125,11 @@ export async function reconcileOutboundTransactions(
   );
 
   // A normal wallet sync may already have stored one of these transactions.
+  // Only confirmed history resolves the reservation. Mempool rows must keep
+  // their inputs reserved until a block includes the transaction.
   // Resolve that from the local database first; this is also the only automatic
   // reconciliation allowed for Tor-only Fusion records.
-  const locallySeen = await listSeenTxids(
+  const locallyConfirmed = await listConfirmedTxids(
     walletId,
     retryableActive.map((record) => record.txid)
   );
@@ -177,8 +137,8 @@ export async function reconcileOutboundTransactions(
     retryableActive
       .filter(
         (record) =>
-          locallySeen.has(record.txid) ||
-          locallySeen.has(record.txid.toLowerCase())
+          locallyConfirmed.has(record.txid) ||
+          locallyConfirmed.has(record.txid.toLowerCase())
       )
       .map((record) =>
         OutboundTransactionTracker.markState(
@@ -190,21 +150,9 @@ export async function reconcileOutboundTransactions(
       )
   );
 
-  // Hardware / laggy history: spent UTXOs already dropped from the table.
-  const afterLocal = await OutboundTransactionTracker.listActive(walletId);
-  const spentGone = await listRecordsWithSpentCoinsGone(walletId, afterLocal);
-  await Promise.all(
-    afterLocal
-      .filter((record) => spentGone.has(record.txid))
-      .map((record) =>
-        OutboundTransactionTracker.markState(
-          record.txid,
-          'seen',
-          null,
-          record.walletId
-        )
-      )
-  );
+  // A missing input is not sufficient confirmation: an unconfirmed child can
+  // temporarily remove an ancestor from the UTXO cache. Leave the reservation
+  // active until history or Electrum reports the tracked transaction confirmed.
 
   const unresolved = await OutboundTransactionTracker.listActive(walletId);
   const ordinary = unresolved.filter(
@@ -227,7 +175,7 @@ export async function reconcileOutboundTransactions(
 
   await Promise.all(
     ordinary
-      .filter((record) => visibilityByTxid[record.txid]?.seen)
+      .filter((record) => visibilityByTxid[record.txid]?.confirmed)
       .map((record) =>
         OutboundTransactionTracker.markState(
           record.txid,
@@ -273,14 +221,14 @@ export async function reconcileOutboundTransactions(
     historyFetchSucceeded,
   });
 
-  const seen = await listSeenTxids(
+  const confirmed = await listConfirmedTxids(
     walletId,
     afterRetry.map((record) => record.txid)
   );
 
   await Promise.all(
     afterRetry
-      .filter((record) => seen.has(record.txid))
+      .filter((record) => confirmed.has(record.txid))
       .map((record) =>
         OutboundTransactionTracker.markState(
           record.txid,

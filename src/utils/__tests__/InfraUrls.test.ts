@@ -4,17 +4,27 @@ import {
   getBcmrNativeTokenUrls,
   getElectrumServers,
   getInfraUrlPools,
+  runWithFailover,
 } from '../servers/InfraUrls';
 import { Network } from '../../state/slices/networkSlice';
 
 describe('InfraUrls', () => {
-  it('seeds WSS-verified mainnet electrum servers, imaginary.cash first', () => {
-    // The list is the Electron Cash server set filtered to those that actually
-    // accept a WebSocket connection on 50004 (see InfraUrls.ts). In the test
-    // environment (no Tauri global) only the web/WSS list is returned.
+  it('includes the verified Selene public mainnet WSS pool', () => {
+    // In the test environment (no Tauri global) only the web/WSS list is
+    // returned.
     const servers = getElectrumServers(Network.MAINNET);
-    expect(servers[0]).toBe('electrum.imaginary.cash');
-    expect(servers).toContain('bch.imaginary.cash');
+    expect(servers[0]).toBe('electrum.imaginary.cash:50004');
+    expect(servers).toEqual([
+      'electrum.imaginary.cash:50004',
+      'cashnode.bch.ninja:443',
+      'bch.imaginary.cash:50004',
+      'electroncash.dk:50004',
+      'blackie.c3-soft.com:50004',
+      'bch.loping.net:50004',
+      'bch.soul-dev.com:50004',
+      'fulcrum.criptolayer.net:50004',
+      'fulcrum.jettscythe.xyz:50004',
+    ]);
     // The old default explorer.bch.ninja was dropped — it fails WSS with a
     // certificate-hostname mismatch.
     expect(servers).not.toContain('explorer.bch.ninja');
@@ -22,7 +32,7 @@ describe('InfraUrls', () => {
     expect(servers).not.toContain('bch0.kister.net');
   });
 
-  it('prefers tokenindexer for BCMR and keeps bcmr-indexer as fallback', () => {
+  it('keeps public BCMR routes available alongside the TokenIndexer route', () => {
     expect(getInfraUrlPools(Network.MAINNET).bcmrNativeBaseUrls).toEqual([
       'https://tokenindex.optnlabs.com/v1',
     ]);
@@ -50,10 +60,30 @@ describe('InfraUrls', () => {
   it('keeps only live Chipnet WSS routes in the browser pool', () => {
     const servers = getInfraUrlPools(Network.CHIPNET).electrumServers;
     expect(servers).toEqual([
-      'electrum-chipnet.optnlabs.com',
-      'chipnet.imaginary.cash',
+      'electrum-chipnet.optnlabs.com:50004',
+      'chipnet.bch.ninja:50004',
+      'chipnet.imaginary.cash:50004',
       'chipnet.c3-soft.com:64004',
     ]);
-    expect(servers).not.toContain('chipnet.bch.ninja');
+  });
+
+  it('remembers the successful public fallback endpoint for the next request', async () => {
+    const poolKey = 'test:bcmr-failover-memory';
+    const endpoints = ['https://owned.example', 'https://public.example'];
+    const calls: string[] = [];
+
+    await runWithFailover(poolKey, endpoints, async (endpoint) => {
+      calls.push(endpoint);
+      if (endpoint === endpoints[0]) throw new Error('owned endpoint down');
+      return endpoint;
+    });
+
+    calls.length = 0;
+    await runWithFailover(poolKey, endpoints, async (endpoint) => {
+      calls.push(endpoint);
+      return endpoint;
+    });
+
+    expect(calls).toEqual([endpoints[1]]);
   });
 });

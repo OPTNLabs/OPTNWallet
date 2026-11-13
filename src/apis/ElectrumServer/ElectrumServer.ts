@@ -22,6 +22,7 @@ import {
   recordServerSuccess,
 } from '../../services/electrum/fulcrumReliability';
 import { isDesktopPlatform } from '../../utils/platform';
+import { getBackend } from '../../platform/desktop/backendSelection';
 
 // ---------- Config ----------
 // Keep connect attempts short: walking a long server list at 8s each made cold
@@ -64,6 +65,8 @@ let lastSuccessfulActivityTs = 0;
 let currentServer: string | null = null;
 let currentConnectionNetwork: Network | null = null;
 let connectPromiseNetwork: Network | null = null;
+const latestTipByNetwork = new Map<Network, number>();
+const MAX_TIP_LAG = 3;
 
 // Make sure we only wire 'notification' once per client instance
 let notificationsWired = false;
@@ -85,7 +88,12 @@ function getNetworkAndServers(networkOverride?: Network): {
 } {
   const state = store.getState();
   const network = networkOverride ?? selectCurrentNetwork(state);
-  const servers = getElectrumServers(network);
+  const backend = getBackend(network);
+  // A manually selected Electrum server is a pin, not a hint. Keeping the
+  // whole pool here lets a failed manual switch silently fall back while the
+  // settings surface still reports the requested server as the backend.
+  const servers =
+    backend.kind === 'server' ? [backend.target] : getElectrumServers(network);
   return { network, servers };
 }
 
@@ -210,6 +218,20 @@ function parseServerEntry(entry: string, defaultPort = WSS_PORT) {
   return { host: entry, port: defaultPort, encrypted: true }; // default to WSS
 }
 
+function sameServerEndpoint(left: string, right: string): boolean {
+  try {
+    const a = parseServerEntry(left);
+    const b = parseServerEntry(right);
+    return (
+      a.host.toLowerCase() === b.host.toLowerCase() &&
+      a.port === b.port &&
+      a.encrypted === b.encrypted
+    );
+  } catch {
+    return left.trim() === right.trim();
+  }
+}
+
 function getNextServer(
   servers: string[],
   currentIdx: number
@@ -273,7 +295,10 @@ function buildBatchMessage(
 
 type RawBatchClient = {
   requestId: number;
-  requestResolvers: Record<number, (error?: Error, data?: RequestResponse) => void>;
+  requestResolvers: Record<
+    number,
+    (error?: Error, data?: RequestResponse) => void
+  >;
   connection: { send(message: string): boolean };
 };
 
@@ -489,7 +514,7 @@ export default function ElectrumServer(networkOverride?: Network) {
 
     if (connectPromise) {
       const inFlight = connectPromise;
-      if (connectPromiseNetwork === network) return inFlight;
+      if (connectPromiseNetwork === network && !customServer) return inFlight;
 
       // A previous network's warm-up may still be connecting. Let it finish,
       // then discard that socket before opening one for the active wallet.
@@ -502,7 +527,8 @@ export default function ElectrumServer(networkOverride?: Network) {
       if (electrum && currentConnectionNetwork !== network) {
         await electrumDisconnect();
       }
-      if (electrum) return electrum;
+      if (electrum && !customServer) return electrum;
+      if (electrum && customServer) await electrumDisconnect();
     }
 
     // Build try order
@@ -521,7 +547,18 @@ export default function ElectrumServer(networkOverride?: Network) {
       ...servers.slice(startIdx),
       ...servers.slice(0, startIdx),
     ];
-    const orderedServers = orderServersForConnection(tryOrder, 0);
+    const requestedServer = customServer?.trim();
+    const orderedServers = requestedServer
+      ? [
+          requestedServer,
+          ...orderServersForConnection(
+            servers.filter(
+              (server) => !sameServerEndpoint(server, requestedServer)
+            ),
+            0
+          ),
+        ]
+      : orderServersForConnection(tryOrder, 0);
 
     connectPromiseNetwork = network;
     connectPromise = (async () => {
@@ -552,11 +589,46 @@ export default function ElectrumServer(networkOverride?: Network) {
               CONNECT_TIMEOUT_MS,
               `connect(${host})`
             );
+            const header =
+              import.meta.env.MODE === 'test'
+                ? undefined
+                : await withTimeout(
+                    client.request('blockchain.headers.subscribe'),
+                    CONNECT_TIMEOUT_MS,
+                    `tip(${host})`
+                  );
+            if (header !== undefined && header !== null) {
+              const candidateTip =
+                header && typeof header === 'object' && 'height' in header
+                  ? Number((header as { height?: unknown }).height)
+                  : NaN;
+              if (!Number.isInteger(candidateTip) || candidateTip < 0) {
+                throw new Error(`Invalid chain tip from ${host}`);
+              }
+              const knownTip = latestTipByNetwork.get(network);
+              if (
+                knownTip !== undefined &&
+                candidateTip + MAX_TIP_LAG < knownTip
+              ) {
+                throw new Error(
+                  `${host} is ${knownTip - candidateTip} blocks behind the known tip`
+                );
+              }
+              if (knownTip === undefined || candidateTip > knownTip) {
+                latestTipByNetwork.set(network, candidateTip);
+              }
+            }
             electrum = client;
-            currentServer = host;
+            const matchedServer = servers.find((server) =>
+              sameServerEndpoint(server, host)
+            );
+            currentServer = matchedServer ?? host;
             currentConnectionNetwork = network;
-            serverIndex = servers.indexOf(host);
-            markServerOk(host, Date.now() - t0);
+            const matchedServerIndex = servers.findIndex((server) =>
+              sameServerEndpoint(server, host)
+            );
+            serverIndex = matchedServerIndex >= 0 ? matchedServerIndex : 0;
+            markServerOk(currentServer, Date.now() - t0);
             resetBackoff();
             markSuccessfulActivity();
             if (import.meta.env.DEV) {
@@ -836,6 +908,11 @@ export default function ElectrumServer(networkOverride?: Network) {
   }
 
   async function electrumReconnect(customServer?: string): Promise<ECClient> {
+    // Settings can request a new endpoint while the worker is still opening
+    // the previous one. Wait for that attempt before disconnecting so the
+    // selected endpoint is not lost to in-flight promise reuse.
+    const pending = connectPromise;
+    if (pending) await pending.catch(() => undefined);
     await electrumDisconnect();
     return electrumConnect(customServer);
   }

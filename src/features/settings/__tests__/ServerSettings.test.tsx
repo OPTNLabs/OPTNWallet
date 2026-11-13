@@ -114,7 +114,11 @@ it('announces reconnect failures and keeps server controls touch-sized', async (
   mock.desktop = false;
   mock.adapter.mockReturnValue({
     getCurrentServer: () => null,
-    reconnect: vi.fn().mockRejectedValue(new Error('offline')),
+    request: vi.fn().mockResolvedValue({ height: 100 }),
+    reconnect: vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(undefined),
   });
   render(<ServerSettings />);
 
@@ -131,4 +135,33 @@ it('announces reconnect failures and keeps server controls touch-sized', async (
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'server.connectionFailed: offline'
   );
+});
+
+it('rejects a manually selected endpoint that is behind the active tip', async () => {
+  mock.desktop = false;
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ height: 100 })
+    .mockResolvedValueOnce({ height: 90 });
+  const reconnect = vi.fn().mockResolvedValue(undefined);
+  mock.adapter.mockReturnValue({
+    getCurrentServer: () => 'healthy.example:50004',
+    request,
+    reconnect,
+  });
+  render(<ServerSettings />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'server.manual' }));
+  fireEvent.change(
+    screen.getByPlaceholderText('server.serverInputPlaceholder'),
+    {
+      target: { value: 'stale.example:50004' },
+    }
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'server.connect' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    '10 blocks behind the previous tip'
+  );
+  expect(reconnect).toHaveBeenCalledTimes(2);
 });

@@ -15,6 +15,7 @@ dist-ssr
 dist-extension-chrome
 dist-extension-firefox
 coverage/
+.qa/
 *.local
 vite.config.js
 vite.config.d.ts

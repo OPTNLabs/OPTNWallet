@@ -15,6 +15,7 @@ import {
   selectExplorerChoice,
 } from '../../state/slices/preferencesSlice';
 import type { Network } from '../../state/slices/networkSlice';
+import { isDesktopPlatform } from '../platform';
 
 export type ExplorerLinks = {
   tx: (network: Network, txid: string) => string | null;
@@ -25,7 +26,7 @@ export type ExplorerLinks = {
 
 const REASONS: Record<string, string> = {
   'user-owned-only':
-    'Explorer links are unavailable because this wallet is restricted to your own infrastructure. Choose an allowed explorer in Settings → Explorer, or change the network privacy policy.',
+    'Public explorer links are blocked by the current network privacy policy. Change Network → Routing to allow public links, or configure an explorer you own.',
   disabled: 'Explorer links are turned off.',
 };
 
@@ -39,10 +40,14 @@ export function useExplorerLink(): ExplorerLinks {
     const address = (network: Network, value: string) =>
       buildAddressUrl(choice, network, value, policy);
     const resolved = explorerPolicyFor(policy);
+    const reason =
+      resolved === 'user-owned-only' && !isDesktopPlatform()
+        ? 'Public explorer links are blocked by the current network privacy policy. Enable public explorers in Explorer settings, or configure an explorer you own.'
+        : REASONS[resolved] ?? null;
     return {
       tx,
       address,
-      reason: REASONS[resolved] ?? null,
+      reason,
     };
   }, [choice, policy]);
 }
