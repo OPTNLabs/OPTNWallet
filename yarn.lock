@@ -3080,9 +3080,9 @@ bip39@^3.1.0:
     "@noble/hashes" "^1.2.0"
 
 bitcoinjs-lib@^6.1.7:
-  version "6.1.7"
-  resolved "https://registry.npmjs.org/bitcoinjs-lib/-/bitcoinjs-lib-6.1.7.tgz"
-  integrity sha512-tlf/r2DGMbF7ky1MgUqXHzypYHakkEnm0SZP23CJKIqNY/5uNAnMbFhMJdhjrL/7anfb/U8+AlpdjPWjPnAalg==
+  version "6.1.10"
+  resolved "https://registry.npmjs.org/bitcoinjs-lib/-/bitcoinjs-lib-6.1.10.tgz"
+  integrity sha512-9KpnS5JKVP0j0yfTsBNFIsNA6+JdBDb7VtL35F20I/pJYobosi3TmZFGtu6qxhJCfb0vubJixr5Zv61/lUYETw==
   dependencies:
     "@noble/hashes" "^1.2.0"
     bech32 "^2.0.0"
