@@ -32,6 +32,6 @@ describe('useExplorerLink', () => {
     store.dispatch(setChainPolicy('own_infrastructure'));
     rerender();
     expect(result.current.tx(Network.MAINNET, TXID)).toBeNull();
-    expect(result.current.reason).toContain('Settings → Explorer');
+    expect(result.current.reason).toContain('Explorer settings');
   });
 });

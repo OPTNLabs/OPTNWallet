@@ -1,7 +1,7 @@
 {
   "name": "optn-wallet",
   "private": true,
-  "version": "1.7.4",
+  "version": "1.7.5",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
@@ -32,7 +32,7 @@
     "deps:check": "node scripts/check-dependencies.mjs",
     "licenses:check": "node scripts/check-licenses.mjs",
     "build": "npm run typecheck:core && vite build",
-    "format:check": "prettier --check src/i18n src/components/LanguagePicker.tsx src/components/BottomNavBar.tsx src/main.tsx src/features/home/Home.tsx src/features/actions/Actions.tsx src/features/onboarding/LandingPage.tsx src/features/onboarding/CreateWalletPage.tsx src/features/onboarding/ImportWalletPage.tsx src/features/settings/LanguageSettings.tsx src/features/settings/Settings.tsx src/features/settings/settingsConfig.ts src/platform/desktop/onboarding/DesktopCreateWalletPage.tsx src/platform/desktop/onboarding/DesktopImportWalletPage.tsx src/platform/desktop/onboarding/DesktopLandingPage.tsx src/platform/desktop/onboarding/DesktopWalletPickerActions.tsx src/platform/desktop/__tests__/ui src/pages/PaperWalletSweep.tsx src/components/FaucetView.tsx src/services/Bip39Service.ts src/services/__tests__/Bip39Service.test.ts src/services/KeyService.ts src/services/diagnostics src/utils/__tests__/errorHandling.test.ts scripts/doctor.mjs scripts/check-dependencies.mjs scripts/check-licenses.mjs scripts/run-e2e-smoke.mjs e2e CONTRIBUTING.md SECURITY.md docs/branching-and-release.md docs/build-and-release.md docs/developer-troubleshooting.md docs/dependency-policy.md docs/wip-typecheck-exclusions.md docs/diagnostics.md",
+    "format:check": "prettier --check src/i18n src/components/LanguagePicker.tsx src/components/BottomNavBar.tsx src/main.tsx src/features/home/Home.tsx src/features/actions/Actions.tsx src/features/onboarding/LandingPage.tsx src/features/onboarding/CreateWalletPage.tsx src/features/onboarding/ImportWalletPage.tsx src/features/settings/LanguageSettings.tsx src/features/settings/Settings.tsx src/features/settings/settingsConfig.ts src/platform/desktop/onboarding/DesktopCreateWalletPage.tsx src/platform/desktop/onboarding/DesktopImportWalletPage.tsx src/platform/desktop/onboarding/DesktopLandingPage.tsx src/platform/desktop/onboarding/DesktopWalletPickerActions.tsx src/platform/desktop/__tests__/ui src/pages/PaperWalletSweep.tsx src/components/FaucetView.tsx src/services/Bip39Service.ts src/services/__tests__/Bip39Service.test.ts src/services/KeyService.ts src/services/diagnostics src/utils/__tests__/errorHandling.test.ts scripts/doctor.mjs scripts/check-dependencies.mjs scripts/check-licenses.mjs scripts/run-e2e-smoke.mjs scripts/run-android-release-qa.mts e2e CONTRIBUTING.md SECURITY.md docs/branching-and-release.md docs/build-and-release.md docs/developer-troubleshooting.md docs/dependency-policy.md docs/wip-typecheck-exclusions.md docs/diagnostics.md",
     "lint": "eslint . --ext ts,tsx --ignore-pattern \"src/wasm/optn-core/generated/**\" --report-unused-disable-directives --max-warnings 0",
     "lint:core": "eslint src --ext ts,tsx --ignore-pattern \"src/pages/apps/**\" --ignore-pattern \"src/wasm/optn-core/generated/**\" --report-unused-disable-directives --max-warnings 0",
     "ci:core": "npm run lint:core && npm run typecheck:core && npm run test:core && npm run test:apps && npm run test:ui && npm run test:coverage && npm run build",
@@ -57,6 +57,7 @@
     "test:e2e:addon-cashscript-chipnet": "tsx scripts/addon-sdk-cashscript-chipnet.mts",
     "test:e2e:merchant-desktop-mobile": "node scripts/run-e2e-merchant-desktop-mobile.mjs",
     "test:e2e:merchant-desktop-browser-mobile": "node scripts/run-e2e-merchant-desktop-browser-mobile.mjs",
+    "android:qa:preflight": "tsx scripts/run-android-release-qa.mts",
     "capacitor:init": "npx cap init",
     "capacitor:add:android": "npx cap add android",
     "capacitor:add:ios": "npx cap add ios",
@@ -111,8 +112,8 @@
     "@cashconnect-js/nostr": "^1.0.0-alpha.31",
     "@cashscript/utils": "0.14.0",
     "@choochmeque/tauri-plugin-biometry-api": "0.2.6",
-    "@electrum-cash/network": "^4.1.3",
-    "@electrum-cash/web-socket": "^1.0.0",
+    "@electrum-cash/network": "4.2.2",
+    "@electrum-cash/web-socket": "1.2.3",
     "@keystonehq/animated-qr": "^0.10.0",
     "@keystonehq/bc-ur-registry": "^0.8.0",
     "@keystonehq/bc-ur-registry-btc": "^0.1.1",

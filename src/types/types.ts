@@ -71,6 +71,7 @@ export interface TransactionDetailParticipant {
   address: string;
   amountSats?: number;
   outputIndex?: number;
+  token?: Token | null;
   isWalletAddress?: boolean;
 }
 
@@ -79,6 +80,7 @@ export interface TransactionDetails {
   confirmations: number;
   height?: number;
   feeSats?: number;
+  sizeBytes?: number;
   timestamp?: string;
   inputs: TransactionDetailParticipant[];
   outputs: TransactionDetailParticipant[];

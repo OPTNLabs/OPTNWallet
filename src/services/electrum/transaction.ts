@@ -12,6 +12,7 @@ import {
   isVerboseTransaction,
   toSats,
 } from './helpers';
+import { normalizeTokenField } from '../../utils/tokenNormalization';
 
 function getDbService() {
   return DatabaseService();
@@ -33,7 +34,7 @@ export async function readTransactionDetailsFromDb(
   if (!db) return null;
 
   const stmt = db.prepare(`
-    SELECT tx_hash, confirmations, height, fee_sats, timestamp, inputs_json, outputs_json
+    SELECT tx_hash, confirmations, height, fee_sats, size_bytes, timestamp, inputs_json, outputs_json
     FROM transaction_details
     WHERE wallet_id = ? AND tx_hash = ?
     LIMIT 1;
@@ -62,6 +63,10 @@ export async function readTransactionDetailsFromDb(
         row.fee_sats === null || row.fee_sats === undefined
           ? undefined
           : Number(row.fee_sats),
+      sizeBytes:
+        row.size_bytes === null || row.size_bytes === undefined
+          ? undefined
+          : Number(row.size_bytes),
       timestamp:
         typeof row.timestamp === 'string' && row.timestamp.trim()
           ? row.timestamp
@@ -91,14 +96,15 @@ export async function persistTransactionDetails(
   try {
     const stmt = db.prepare(`
       INSERT INTO transaction_details (
-        wallet_id, tx_hash, confirmations, height, fee_sats, timestamp,
-        inputs_json, outputs_json, updated_at
+        wallet_id, tx_hash, confirmations, height, fee_sats, size_bytes,
+        timestamp, inputs_json, outputs_json, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(wallet_id, tx_hash) DO UPDATE SET
         confirmations = excluded.confirmations,
         height = excluded.height,
         fee_sats = excluded.fee_sats,
+        size_bytes = excluded.size_bytes,
         timestamp = excluded.timestamp,
         inputs_json = excluded.inputs_json,
         outputs_json = excluded.outputs_json,
@@ -111,6 +117,7 @@ export async function persistTransactionDetails(
       details.confirmations,
       details.height ?? null,
       details.feeSats ?? null,
+      details.sizeBytes ?? null,
       details.timestamp ?? '',
       JSON.stringify(details.inputs),
       JSON.stringify(details.outputs),
@@ -167,6 +174,7 @@ function normalizeParticipantRows(
         typeof row.outputIndex === 'number' && Number.isFinite(row.outputIndex)
           ? row.outputIndex
           : undefined,
+      token: normalizeTokenField(row.token ?? row.token_data ?? row.tokenData),
     });
   }
   return rows;
@@ -209,6 +217,12 @@ export async function resolveInputParticipants(
     return {
       address: extractOutputAddress(prevOut),
       amountSats: toSats(prevOut.value),
+      token: normalizeTokenField(
+        prevOut.tokenData ??
+          prevOut.token_data ??
+          prevOut.scriptPubKey?.tokenData ??
+          prevOut.scriptPubKey?.token_data
+      ),
       outputIndex: prevIndex >= 0 ? prevIndex : undefined,
     };
   });

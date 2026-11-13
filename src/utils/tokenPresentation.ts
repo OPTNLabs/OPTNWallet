@@ -56,7 +56,8 @@ export function shortTokenCategory(category: string): string {
 
 export function formatAtomicTokenAmount(
   amount: bigint | number | string,
-  decimals = 0
+  decimals = 0,
+  trimTrailingZeros = true
 ): string {
   const normalizedDecimals = Math.max(0, Math.trunc(decimals));
   if (normalizedDecimals <= 0) {
@@ -79,17 +80,23 @@ export function formatAtomicTokenAmount(
   if (!/^\d+$/.test(unsigned)) return '0';
 
   if (unsigned.length <= normalizedDecimals) {
-    const fractional = unsigned
-      .padStart(normalizedDecimals, '0')
-      .replace(/0+$/, '');
-    return `${isNegative ? '-' : ''}0${fractional ? `.${fractional}` : ''}`;
+    const fractional = unsigned.padStart(normalizedDecimals, '0');
+    const displayedFractional = trimTrailingZeros
+      ? fractional.replace(/0+$/, '')
+      : fractional;
+    return `${isNegative ? '-' : ''}0${
+      displayedFractional ? `.${displayedFractional}` : ''
+    }`;
   }
 
   const whole = unsigned.slice(0, unsigned.length - normalizedDecimals);
-  const fractional = unsigned
-    .slice(unsigned.length - normalizedDecimals)
-    .replace(/0+$/, '');
-  return `${isNegative ? '-' : ''}${whole}${fractional ? `.${fractional}` : ''}`;
+  const fractional = unsigned.slice(unsigned.length - normalizedDecimals);
+  const displayedFractional = trimTrailingZeros
+    ? fractional.replace(/0+$/, '')
+    : fractional;
+  return `${isNegative ? '-' : ''}${whole}${
+    displayedFractional ? `.${displayedFractional}` : ''
+  }`;
 }
 
 export function getTokenPresentationStatusClassName(

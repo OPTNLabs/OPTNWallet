@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../state/store';
 import { useLocation, useParams } from 'react-router-dom';
@@ -26,7 +26,18 @@ import { isMempoolLike } from '../../utils/transactionHistoryOrder';
 import { useI18n } from '../../i18n/useI18n';
 import { formatNumber } from '../../i18n/format';
 import ElectrumService from '../../services/ElectrumService';
-import { deriveWalletTransactionEffect } from './transactionEffect';
+import useSharedTokenMetadata, {
+  type SharedTokenMetadata,
+} from '../../hooks/useSharedTokenMetadata';
+import {
+  deriveWalletTransactionEffect,
+  type WalletTokenEffect,
+  type WalletTransactionEffect,
+} from './transactionEffect';
+import {
+  formatAtomicTokenAmount,
+  shortTokenCategory,
+} from '../../utils/tokenPresentation';
 import NetworkContextBanner from '../../components/ui/NetworkContextBanner';
 import MaskedValue from '../../components/ui/MaskedValue';
 import InfoButton from '../../components/ui/InfoButton';
@@ -48,6 +59,32 @@ function formatWalletEffect(
   return `${sign}${formatNumber(Math.abs(amountSats) / SATS_PER_BCH, locale, {
     maximumFractionDigits: 8,
   })} BCH`;
+}
+
+function tokenEffectLabel(
+  effect: WalletTokenEffect,
+  metadata: SharedTokenMetadata | undefined
+): string {
+  if (metadata?.snapshot && metadata.name.trim()) {
+    return `${metadata.name.trim()}${
+      metadata.symbol.trim() ? ` (${metadata.symbol.trim()})` : ''
+    }`;
+  }
+  return shortTokenCategory(effect.category);
+}
+
+function formatTokenEffect(
+  effect: WalletTokenEffect,
+  metadata: SharedTokenMetadata | undefined
+): string {
+  const magnitude = effect.amount < 0n ? -effect.amount : effect.amount;
+  const decimals = metadata?.snapshot ? metadata.decimals : 0;
+  const symbol = metadata?.snapshot ? metadata.symbol.trim() : '';
+  return `${effect.amount > 0n ? '+' : '−'}${formatAtomicTokenAmount(
+    magnitude,
+    decimals,
+    false
+  )}${symbol ? ` ${symbol}` : ''}`;
 }
 
 type TransactionHistoryLocationState = {
@@ -103,7 +140,7 @@ const TransactionHistory: React.FC = () => {
     new Set()
   );
   const [walletEffects, setWalletEffects] = useState<
-    Record<string, number | null>
+    Record<string, WalletTransactionEffect | null>
   >({});
 
   const {
@@ -142,7 +179,21 @@ const TransactionHistory: React.FC = () => {
       setWalletAddresses(
         new Set([UI_FIXTURE_PRIMARY_ADDRESS, UI_FIXTURE_CHANGE_ADDRESS])
       );
-      setWalletEffects(getUiFixtureWalletEffects());
+      setWalletEffects(
+        Object.fromEntries(
+          Object.entries(getUiFixtureWalletEffects()).map(
+            ([txid, bchDeltaSats]) => [
+              txid,
+              {
+                bchDeltaSats,
+                walletInputSats: 0,
+                walletOutputSats: 0,
+                tokenDeltas: [],
+              },
+            ]
+          )
+        )
+      );
       return () => {
         cancelled = true;
       };
@@ -190,7 +241,7 @@ const TransactionHistory: React.FC = () => {
 
   // Electrum address history only contains txid and height. Hydrate the
   // visible page from verbose details so cards can show the wallet's actual
-  // net BCH movement without blocking the initial history paint.
+  // net BCH and CashToken movement without blocking the initial history paint.
   useEffect(() => {
     if (isUiFixtureEnabled()) return;
     if (walletAddresses.size === 0 || paginatedTransactions.length === 0) {
@@ -209,13 +260,13 @@ const TransactionHistory: React.FC = () => {
         const effect = details
           ? deriveWalletTransactionEffect(details, walletAddresses)
           : null;
-        return [tx.tx_hash, effect?.bchDeltaSats ?? null] as const;
+        return [tx.tx_hash, effect] as const;
       })
     ).then((entries) => {
       if (cancelled) return;
       setWalletEffects((current) => {
         const next = { ...current };
-        for (const [txid, amountSats] of entries) next[txid] = amountSats;
+        for (const [txid, effect] of entries) next[txid] = effect;
         return next;
       });
     });
@@ -223,6 +274,19 @@ const TransactionHistory: React.FC = () => {
       cancelled = true;
     };
   }, [paginatedTransactions, walletAddresses]);
+
+  const tokenCategories = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          Object.values(walletEffects).flatMap(
+            (effect) => effect?.tokenDeltas.map((token) => token.category) ?? []
+          )
+        )
+      ),
+    [walletEffects]
+  );
+  const tokenMetadata = useSharedTokenMetadata(tokenCategories);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
@@ -317,6 +381,7 @@ const TransactionHistory: React.FC = () => {
                   : fused
                     ? `Fused · ${t('history.unconfirmed')}`
                     : t('history.unconfirmed');
+                const walletEffect = walletEffects[tx.tx_hash];
                 return (
                   <li key={id + tx.tx_hash}>
                     <div className="relative">
@@ -344,6 +409,8 @@ const TransactionHistory: React.FC = () => {
                               ariaLabel={t('history.copyTransaction')}
                               copySuccessMessageKey="history.transactionCopied"
                               embedded
+                              prefixLength={5}
+                              suffixLength={5}
                               className="break-all"
                             />
                             {fused && <FusionBadge asTx className="ml-2" />}
@@ -368,13 +435,42 @@ const TransactionHistory: React.FC = () => {
                             </span>
                           )}
                         </div>
-                        {typeof walletEffects[tx.tx_hash] === 'number' ? (
+                        {typeof walletEffect?.bchDeltaSats === 'number' ? (
                           <div className="mt-2 font-semibold wallet-text-strong">
                             {t('history.walletEffect')}:{' '}
                             {formatWalletEffect(
-                              walletEffects[tx.tx_hash]!,
+                              walletEffect.bchDeltaSats,
                               locale
                             )}
+                          </div>
+                        ) : null}
+                        {walletEffect && walletEffect.tokenDeltas.length > 0 ? (
+                          <div className="mt-2 space-y-1">
+                            <div className="text-xs wallet-muted">
+                              {t('history.cashTokenEffect')}
+                            </div>
+                            {walletEffect.tokenDeltas.map((effect) => (
+                              <div
+                                key={effect.category}
+                                className="flex items-baseline justify-between gap-3 text-sm"
+                              >
+                                <span
+                                  className="min-w-0 truncate wallet-text-strong"
+                                  title={effect.category}
+                                >
+                                  {tokenEffectLabel(
+                                    effect,
+                                    tokenMetadata[effect.category]
+                                  )}
+                                </span>
+                                <span className="shrink-0 font-mono font-semibold wallet-text-strong">
+                                  {formatTokenEffect(
+                                    effect,
+                                    tokenMetadata[effect.category]
+                                  )}
+                                </span>
+                              </div>
+                            ))}
                           </div>
                         ) : null}
                       </button>
@@ -383,6 +479,7 @@ const TransactionHistory: React.FC = () => {
                           id={`history-status-${tx.tx_hash}`}
                           ariaLabel={t('history.statusHelpLabel')}
                           content={t('history.statusHelp')}
+                          popoverSide="center"
                         />
                       </div>
                     </div>

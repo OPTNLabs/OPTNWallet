@@ -8,6 +8,8 @@ import ElectrumService, {
 } from '../ElectrumService';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import { Network } from '../../state/slices/networkSlice';
+import { binToHex, hexToBin } from '../../utils/hex';
+import { sha256 } from '../../utils/hash';
 
 vi.mock('../../apis/ElectrumServer/ElectrumServer', () => ({
   default: vi.fn(),
@@ -513,7 +515,11 @@ describe('ElectrumService', () => {
     await expect(ElectrumService.getBalance('bitcoincash:q1')).resolves.toBe(0);
   });
 
-  it('broadcastTransaction returns txid string or error message fallback', async () => {
+  it('broadcastTransaction returns only a valid txid and throws on errors', async () => {
+    const rawTx = '00';
+    const expectedTxid = binToHex(
+      sha256.hash(sha256.hash(hexToBin(rawTx))).reverse()
+    );
     const server = {
       request: vi
         .fn()
@@ -526,12 +532,24 @@ describe('ElectrumService', () => {
 
     mockedElectrumServer.mockReturnValue(server as never);
 
-    await expect(ElectrumService.broadcastTransaction('rawhex')).resolves.toBe(
-      'txid123'
+    await expect(
+      ElectrumService.broadcastTransaction(rawTx)
+    ).rejects.toThrow('Invalid transaction hash response');
+    await expect(
+      ElectrumService.broadcastTransaction(rawTx)
+    ).rejects.toThrow('Invalid transaction hash response');
+
+    server.request
+      .mockReset()
+      .mockResolvedValueOnce(expectedTxid)
+      .mockRejectedValueOnce(new Error('txn-mempool-conflict'));
+
+    await expect(ElectrumService.broadcastTransaction(rawTx)).resolves.toBe(
+      expectedTxid
     );
-    await expect(ElectrumService.broadcastTransaction('rawhex')).resolves.toBe(
-      'Invalid transaction hash response'
-    );
+    await expect(
+      ElectrumService.broadcastTransaction(rawTx)
+    ).rejects.toThrow('txn-mempool-conflict');
   });
 
   it('getTransactionHistory validates response shape', async () => {
@@ -775,11 +793,13 @@ describe('ElectrumService', () => {
         confirmations: 3,
         height: 321,
         blocktime: 1_700_000_000,
+        size: 1000,
         vin: [{ txid: 'e'.repeat(64), vout: 1 }],
         vout: [
           {
             n: 0,
             value: 0.001,
+            tokenData: { category: 'c'.repeat(64), amount: 5 },
             scriptPubKey: { address: 'bitcoincash:qrecipient' },
           },
         ],
@@ -791,6 +811,7 @@ describe('ElectrumService', () => {
             {
               n: 1,
               value: 0.0011,
+              tokenData: { category: 'c'.repeat(64), amount: 7 },
               scriptPubKey: { address: 'bitcoincash:qsender' },
             },
           ],
@@ -816,13 +837,21 @@ describe('ElectrumService', () => {
       confirmations: 3,
       height: 321,
       feeSats: 10000,
+      sizeBytes: 1000,
       timestamp: '2023-11-14T22:13:20.000Z',
-      inputs: [{ address: 'bitcoincash:qsender', amountSats: 110000 }],
+      inputs: [
+        {
+          address: 'bitcoincash:qsender',
+          amountSats: 110000,
+          token: { category: 'c'.repeat(64), amount: 7 },
+        },
+      ],
       outputs: [
         {
           address: 'bitcoincash:qrecipient',
           amountSats: 100000,
           outputIndex: 0,
+          token: { category: 'c'.repeat(64), amount: 5 },
         },
       ],
     });
@@ -834,6 +863,7 @@ describe('ElectrumService', () => {
       confirmations: 9,
       height: 555,
       fee_sats: 222,
+      size_bytes: 222,
       timestamp: '2026-03-14T18:00:00.000Z',
       inputs_json: JSON.stringify([
         { address: 'bitcoincash:qfrom', amountSats: 1000 },
@@ -863,6 +893,7 @@ describe('ElectrumService', () => {
       confirmations: 9,
       height: 555,
       feeSats: 222,
+      sizeBytes: 222,
       inputs: [{ address: 'bitcoincash:qfrom', amountSats: 1000 }],
       outputs: [{ address: 'bitcoincash:qto', amountSats: 778 }],
     });

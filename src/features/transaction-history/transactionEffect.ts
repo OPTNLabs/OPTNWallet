@@ -1,11 +1,50 @@
 import type { TransactionDetails } from '../../types/types';
 
+export type WalletTokenEffect = {
+  /** Normalized CashToken category. */
+  category: string;
+  /** Wallet-owned outputs minus wallet-owned inputs in base units. */
+  amount: bigint;
+};
+
 export type WalletTransactionEffect = {
   /** Wallet-owned outputs minus wallet-owned inputs, in satoshis. */
   bchDeltaSats: number;
   walletInputSats: number;
   walletOutputSats: number;
+  tokenDeltas: WalletTokenEffect[];
 };
+
+function tokenAmountToBigInt(amount: number | bigint): bigint | null {
+  if (typeof amount === 'bigint') return amount;
+  return Number.isSafeInteger(amount) ? BigInt(amount) : null;
+}
+
+function deriveWalletTokenEffects(
+  details: TransactionDetails,
+  walletAddresses: ReadonlySet<string>
+): WalletTokenEffect[] {
+  const deltas = new Map<string, bigint>();
+  const apply = (
+    rows: TransactionDetails['inputs'],
+    direction: bigint
+  ): void => {
+    for (const row of rows) {
+      if (!walletAddresses.has(row.address) || !row.token) continue;
+      const category = row.token.category.trim().toLowerCase();
+      const amount = tokenAmountToBigInt(row.token.amount);
+      if (!category || amount === null) continue;
+      deltas.set(category, (deltas.get(category) ?? 0n) + direction * amount);
+    }
+  };
+
+  apply(details.inputs, -1n);
+  apply(details.outputs, 1n);
+
+  return Array.from(deltas, ([category, amount]) => ({ category, amount }))
+    .filter((effect) => effect.amount !== 0n)
+    .sort((left, right) => left.category.localeCompare(right.category));
+}
 
 /**
  * Derive the wallet's net BCH movement from verbose transaction participants.
@@ -36,5 +75,6 @@ export function deriveWalletTransactionEffect(
     bchDeltaSats: walletOutputSats - walletInputSats,
     walletInputSats,
     walletOutputSats,
+    tokenDeltas: deriveWalletTokenEffects(details, walletAddresses),
   };
 }
