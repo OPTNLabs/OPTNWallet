@@ -70,9 +70,7 @@ pub const PRESETS: &[ExplorerPreset] = &[
         address: "https://explorer.selene.cash/address/{address}?network=mainnet",
         block: None,
         chipnet_tx: Some("https://explorer.selene.cash/tx/{txid}?network=chipnet"),
-        chipnet_address: Some(
-            "https://explorer.selene.cash/address/{address}?network=chipnet",
-        ),
+        chipnet_address: Some("https://explorer.selene.cash/address/{address}?network=chipnet"),
     },
     ExplorerPreset {
         id: "imaginary",
@@ -391,8 +389,7 @@ mod tests {
                 );
             } else {
                 assert_eq!(
-                    url,
-                    "https://explorer.selene.cash/tx/abc123?network=chipnet",
+                    url, "https://explorer.selene.cash/tx/abc123?network=chipnet",
                     "preset {} used a non-chipnet explorer",
                     entry.id
                 );
