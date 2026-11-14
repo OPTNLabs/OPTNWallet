@@ -4817,7 +4817,7 @@ dependencies = [
 
 [[package]]
 name = "optn-wallet-desktop"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "aes 0.8.4",
  "cbc",
