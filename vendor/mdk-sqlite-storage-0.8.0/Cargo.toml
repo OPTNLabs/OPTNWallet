@@ -86,8 +86,12 @@ version = "0.9"
 features = ["rusqlite"]
 
 [dependencies.rusqlite]
-version = "0.37"
-features = ["bundled-sqlcipher"]
+version = "0.42"
+features = [
+    "bundled-sqlcipher",
+    "cache",
+    "fallible_uint",
+]
 default-features = false
 
 [dependencies.serde]
@@ -119,3 +123,7 @@ default-features = false
 
 [dev-dependencies.tempfile]
 version = "3.20"
+
+# OPTN: a standalone workspace, so this vendored crate is not a member of
+# OPTN's root workspace (see OPTN.md).
+[workspace]
