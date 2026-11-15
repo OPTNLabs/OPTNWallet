@@ -9,7 +9,6 @@ import {
   hydrateRelayKeys,
 } from './relayKeyStore';
 import {
-  pathNameToDerivationPath,
   signWizardConnectSignInProof,
   signWizardConnectTransaction,
 } from './signing';
@@ -132,17 +131,18 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
   /**
    * Null when the request is not a sign-in proof. Throws when it claims to be
    * one but is not exactly the canonical proof for one of this wallet's own
-   * P2PKH addresses. The address comes from this wallet's xpubs, never from
-   * the dApp.
+   * P2PKH addresses. The shared core derives the address from this wallet's
+   * xpubs, never from the dApp.
    */
   inspectSignInProof(request: SignTransactionRequest): ValidatedSignInProof | null {
-    return validateSignInProofRequest(request, (path, index) =>
-      this.getPublicKey(pathNameToDerivationPath(path), BigInt(index))
-    );
-  }
-
-  get network(): Network {
-    return this.snapshot.network;
+    return validateSignInProofRequest(request, {
+      network: this.snapshot.network,
+      xpubs: {
+        receive: this.snapshot.xpubs[DerivationPath.Receive],
+        change: this.snapshot.xpubs[DerivationPath.Change],
+        defi: this.snapshot.xpubs[DerivationPath.Cauldron],
+      },
+    });
   }
 
   private async signSignInProof(

@@ -189,8 +189,9 @@ export async function signWizardConnectTransaction(
 }
 
 /**
- * Sign a validated sign-in proof with the key for the proven address. Signs
- * the wallet-built canonical transaction, never the dApp's object.
+ * Sign a validated sign-in proof with the key for the proven address. The
+ * shared core builds and signs the canonical transaction, never the dApp's
+ * object; this only derives the key and wipes it.
  */
 export async function signWizardConnectSignInProof(
   validated: ValidatedSignInProof,
@@ -205,9 +206,7 @@ export async function signWizardConnectSignInProof(
     wallet.accountPath
   );
   try {
-    return signCanonicalSignInProof(validated, (context, sighash) =>
-      signConnectorP2pkh(context as CompilationContextBCH, signerKey, sighash)
-    );
+    return signCanonicalSignInProof(validated, signerKey);
   } finally {
     zeroize(signerKey);
   }

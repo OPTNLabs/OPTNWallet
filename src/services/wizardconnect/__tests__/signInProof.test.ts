@@ -1,28 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  binToHex,
   createVirtualMachineBCH,
   decodeTransaction,
-  encodeTransaction,
   hexToBin,
-  secp256k1,
-  sha256,
-  utf8ToBin,
 } from '@bitauth/libauth';
 import type { SignTransactionRequest } from '@wizardconnect/core';
 import { Network } from '../../../state/slices/networkSlice';
-import { signConnectorP2pkh } from '../../connect/ConnectSigningCore';
 import {
   SignInProofError,
-  WIZARDCONNECT_SIGN_IN_SCHEME,
-  buildCanonicalSignInProof,
   findClaimedSignInProofSchemeInPayload,
   isSignInProofTransaction,
-  p2pkhLockingBytecode,
   signCanonicalSignInProof,
-  signInProofAddress,
-  signInProofOpReturn,
-  signInProofOutpointHash,
   validateSignInProofRequest,
 } from '../signInProof';
 import {
@@ -33,489 +21,219 @@ import {
   previewWizardSignInProof,
   setSignInProofInspector,
 } from '../signInProofPreview';
+import {
+  REQUEST_FORMS,
+  libauthPrivateKey,
+  proofRequest,
+  refusalNamed,
+  sdkRequest,
+  vectorSeed,
+  vectorWallet,
+  vectors,
+  type ProofVector,
+} from './signInProofVectors';
 
-// Throwaway test key 0x00..07. Never a real wallet key.
-const testKey = () => {
-  const key = new Uint8Array(32);
-  key[31] = 7;
-  return key;
-};
+const wallet = vectorWallet();
+const validate = (request: SignTransactionRequest) =>
+  validateSignInProofRequest(request, wallet);
 
-vi.mock('../derivation', () => ({
-  derivePrivateKeyForPath: async () => {
-    const key = new Uint8Array(32);
-    key[31] = 7;
-    return key;
-  },
-}));
-
-const publicKey = secp256k1.derivePublicKeyCompressed(testKey()) as Uint8Array;
-const ownKeys = (path: string, index: number) => {
-  if (path !== 'receive' || index !== 3) {
-    // Any other path/index is a different address of this wallet.
-    return secp256k1.derivePublicKeyCompressed(
-      sha256.hash(utf8ToBin(`${path}/${index}`))
-    ) as Uint8Array;
-  }
-  return publicKey;
-};
-
-const TEST_CODE = 'Session_abcdef-0123456789';
-const lock = () => p2pkhLockingBytecode(publicKey);
-const canonical = () => buildCanonicalSignInProof(TEST_CODE, lock());
-const TEST_ADDRESS = () =>
-  signInProofAddress(
-    {
-      scheme: WIZARDCONNECT_SIGN_IN_SCHEME,
-      code: TEST_CODE,
-      path: 'receive',
-      addressIndex: 3,
-      publicKey,
-      lockingBytecode: lock(),
-      proof: canonical(),
-    },
-    'bitcoincash'
-  );
-
-const relayJson = (value: unknown) =>
-  JSON.parse(
-    JSON.stringify(value, (_key, v) =>
-      v instanceof Uint8Array
-        ? binToHex(v)
-        : typeof v === 'bigint'
-          ? `<bigint: ${v}n>`
-          : v
-    )
-  );
-
-/** Hex transaction + relay-style source outputs, the common dApp payload. */
-function proofRequest() {
-  const built = canonical();
-  const txHex = binToHex(encodeTransaction(built.transaction));
-  return {
-    transaction: {
-      transaction: txHex,
-      sourceOutputs: relayJson(built.sourceOutputs),
-      userPrompt: 'WizardConnect sign-in.',
-      broadcast: false,
-    },
-    sequence: 1,
-    inputPaths: [[0, 'receive', 3]],
-  } as unknown as SignTransactionRequest;
-}
-
-function structuredRequest() {
-  const built = canonical();
-  return {
-    built,
-    request: {
-      transaction: {
-        transaction: {
-          version: 2,
-          locktime: 0,
-          inputs: built.transaction.inputs.map((i) => ({ ...i })),
-          outputs: built.transaction.outputs.map((o) => ({ ...o })),
-        },
-        sourceOutputs: built.sourceOutputs.map((s) => ({ ...s })),
-        broadcast: false,
-      },
-      sequence: 1,
-      inputPaths: [[0, 'receive', 3]],
-    } as unknown as SignTransactionRequest,
-  };
-}
-
-function withTx(
-  mutate: (
-    tx: ReturnType<typeof structuredRequest>['built']['transaction'] & {
-      sourceOutputs?: unknown;
-    }
-  ) => void,
-  sourceMutate?: (sources: Record<string, unknown>[]) => void
-) {
-  const { built, request } = structuredRequest();
-  const tx = {
-    ...built.transaction,
-    inputs: built.transaction.inputs.map((i) => ({ ...i })),
-    outputs: built.transaction.outputs.map((o) => ({ ...o })),
-  };
-  mutate(tx);
-  const sources = built.sourceOutputs.map((s) => ({ ...s })) as Record<
-    string,
-    unknown
-  >[];
-  sourceMutate?.(sources);
-  return {
-    ...request,
-    transaction: {
-      ...request.transaction,
-      transaction: {
-        version: tx.version,
-        locktime: tx.locktime,
-        inputs: tx.inputs,
-        outputs: tx.outputs,
-      },
-      sourceOutputs: sources,
-    },
-  } as unknown as SignTransactionRequest;
-}
-
-const signWithTestKey = (
-  validated: NonNullable<ReturnType<typeof validateSignInProofRequest>>
-) =>
-  signCanonicalSignInProof(validated, (context, sighash) =>
-    signConnectorP2pkh(context as never, testKey(), sighash)
-  );
-
-function verifySignedProof(
-  signedHex: string,
-  sourceOutputs: ReturnType<typeof canonical>['sourceOutputs']
-) {
+/** The BCH VM's own verdict on a signed proof: an oracle outside the core. */
+function vmAccepts(signedHex: string, proof: ProofVector) {
   const signed = decodeTransaction(hexToBin(signedHex));
   if (typeof signed === 'string') throw new Error(signed);
-  const vm = createVirtualMachineBCH();
-  return vm.verify({ transaction: signed, sourceOutputs });
+  return createVirtualMachineBCH().verify({
+    transaction: signed,
+    sourceOutputs: [
+      {
+        lockingBytecode: hexToBin(proof.lockingBytecode),
+        valueSatoshis: BigInt(vectors.format.valueSatoshis),
+      },
+    ],
+  });
 }
 
-describe('WizardConnect sign-in proof', () => {
-  it('builds a canonical WCPROOF with the derived fake outpoint', () => {
-    const proof = canonical();
-    expect(proof.transaction.version).toBe(2);
-    expect(proof.transaction.locktime).toBe(0);
-    expect(proof.transaction.inputs).toHaveLength(1);
-    expect(proof.transaction.outputs).toHaveLength(2);
-    expect(binToHex(proof.transaction.inputs[0].outpointTransactionHash)).toBe(
-      binToHex(signInProofOutpointHash(TEST_CODE))
-    );
-    expect(proof.sourceOutputs[0].valueSatoshis).toBe(1000n);
-    expect(binToHex(proof.transaction.outputs[0].lockingBytecode)).toBe(
-      binToHex(signInProofOpReturn(TEST_CODE))
-    );
-  });
-
-  it('accepts a hex WCPROOF request and signs a proof the VM accepts', () => {
-    const validated = validateSignInProofRequest(proofRequest(), ownKeys);
-    expect(validated).not.toBeNull();
-    expect(validated!.scheme.id).toBe('wizardconnect-generic');
-    expect(validated!.scheme.label).toBe('WizardConnect sign-in');
-    expect(validated!.code).toBe(TEST_CODE);
-    expect(signInProofAddress(validated!, 'bitcoincash')).toBe(TEST_ADDRESS());
-
-    const signedHex = signWithTestKey(validated!);
-    const signed = decodeTransaction(hexToBin(signedHex));
-    if (typeof signed === 'string') throw new Error(signed);
-    // SIGHASH_ALL|UTXOS|FORKID
-    expect(signed.inputs[0].unlockingBytecode[65]).toBe(0x61);
-    expect(verifySignedProof(signedHex, validated!.proof.sourceOutputs)).toBe(
-      true
-    );
-    expect(isSignInProofTransaction(signedHex)).toBe(true);
-  });
-
-  it('signs through the wallet signing path with the canonical tx only', async () => {
-    const validated = validateSignInProofRequest(proofRequest(), ownKeys)!;
-    const signedHex = await signWizardConnectSignInProof(validated, {
-      mnemonic: 'mocked test key',
-      passphrase: '',
-      network: Network.MAINNET,
-    });
-    expect(verifySignedProof(signedHex, validated.proof.sourceOutputs)).toBe(
-      true
-    );
-  });
-
-  it('accepts the structured (object) form too', () => {
-    expect(
-      validateSignInProofRequest(structuredRequest().request, ownKeys)
-    ).not.toBeNull();
-  });
-
-  it('ignores ordinary transactions', () => {
-    const request = withTx((tx) => {
-      tx.outputs[0] = {
-        lockingBytecode: Uint8Array.from([0x6a, 0x03, 0x41, 0x42, 0x43]),
-        valueSatoshis: 0n,
-      };
-    });
-    expect(validateSignInProofRequest(request, ownKeys)).toBeNull();
-  });
-
-  it('does not treat a BSEDITOR tag as a sign-in proof', () => {
-    const request = withTx((tx) => {
-      const code = utf8ToBin('0123456789abcdef0123456789abcdef');
-      const tag = utf8ToBin('BSEDITOR');
-      tx.outputs[0] = {
-        lockingBytecode: Uint8Array.from([
-          0x6a,
-          tag.length,
-          ...tag,
-          code.length,
-          ...code,
-        ]),
-        valueSatoshis: 0n,
-      };
-    });
-    expect(validateSignInProofRequest(request, ownKeys)).toBeNull();
-    expect(
-      findClaimedSignInProofSchemeInPayload(request.transaction)
-    ).toBeNull();
-  });
-
-  const refusals: [string, () => SignTransactionRequest][] = [
-    [
-      'an extra real input',
-      () =>
-        withTx(
-          (tx) => {
-            tx.inputs.push({
-              ...tx.inputs[0],
-              outpointTransactionHash: new Uint8Array(32).fill(9),
-            });
+describe('WizardConnect sign-in proof glue over the shared Rust core', () => {
+  describe.each(REQUEST_FORMS)('a %s request', (form) => {
+    it.each(vectors.proofs)(
+      'is validated to the wallet’s own address: $name',
+      (proof) => {
+        const request = proofRequest(proof, form);
+        expect(
+          findClaimedSignInProofSchemeInPayload(request.transaction)?.id
+        ).toBe('wizardconnect-generic');
+        const validated = validate(request);
+        expect(validated).toMatchObject({
+          scheme: {
+            id: 'wizardconnect-generic',
+            label: 'WizardConnect sign-in',
           },
-          (sources) => {
-            sources.push({
-              ...sources[0],
-              outpointTransactionHash: new Uint8Array(32).fill(9),
-            });
-          }
-        ),
-    ],
-    [
-      'a real outpoint instead of the derived one',
-      () =>
-        withTx((tx) => {
-          tx.inputs[0] = {
-            ...tx.inputs[0],
-            outpointTransactionHash: new Uint8Array(32).fill(1),
-          };
-        }),
-    ],
-    [
-      'a non-zero outpoint index',
-      () =>
-        withTx((tx) => {
-          tx.inputs[0] = { ...tx.inputs[0], outpointIndex: 1 };
-        }),
-    ],
-    [
-      'a tampered output value',
-      () =>
-        withTx((tx) => {
-          tx.outputs[1] = { ...tx.outputs[1], valueSatoshis: 999n };
-        }),
-    ],
-    [
-      'output 1 paying a different address',
-      () =>
-        withTx((tx) => {
-          tx.outputs[1] = {
-            ...tx.outputs[1],
-            lockingBytecode: hexToBin(
-              '76a914000000000000000000000000000000000000000088ac'
-            ),
-          };
-        }),
-    ],
-    [
-      'an extra output',
-      () =>
-        withTx((tx) => {
-          tx.outputs.push({ ...tx.outputs[1], valueSatoshis: 0n });
-        }),
-    ],
-    [
-      'token data on an output',
-      () =>
-        withTx((tx) => {
-          (tx.outputs[1] as Record<string, unknown>).token = {
-            category: new Uint8Array(32).fill(4),
-            amount: 1n,
-          };
-        }),
-    ],
-    [
-      'token data on the source output',
-      () =>
-        withTx(
-          () => {},
-          (sources) => {
-            sources[0].token = {
-              category: new Uint8Array(32).fill(4),
-              amount: 1n,
-            };
-          }
-        ),
-    ],
-    [
-      'a bigger source value',
-      () =>
-        withTx(
-          () => {},
-          (sources) => {
-            sources[0].valueSatoshis = 100000n;
-          }
-        ),
-    ],
-    [
-      'a different version',
-      () =>
-        withTx((tx) => {
-          tx.version = 1;
-        }),
-    ],
-    [
-      'a non-zero locktime',
-      () =>
-        withTx((tx) => {
-          tx.locktime = 5;
-        }),
-    ],
-    [
-      'a malformed code',
-      () => {
-        const badCode = 'too short';
-        const lockingBytecode = lock();
-        const input = {
-          outpointTransactionHash: signInProofOutpointHash(badCode),
-          outpointIndex: 0,
-          sequenceNumber: 0xffffffff,
-          unlockingBytecode: new Uint8Array(0),
-        };
-        return {
-          transaction: {
-            transaction: {
-              version: 2,
-              locktime: 0,
-              inputs: [{ ...input }],
-              outputs: [
-                {
-                  lockingBytecode: signInProofOpReturn(badCode),
-                  valueSatoshis: 0n,
-                },
-                {
-                  lockingBytecode,
-                  valueSatoshis: 1000n,
-                },
-              ],
-            },
-            sourceOutputs: [
-              {
-                ...input,
-                lockingBytecode,
-                valueSatoshis: 1000n,
-              },
-            ],
-          },
-          inputPaths: [[0, 'receive', 3]],
-        } as unknown as SignTransactionRequest;
-      },
-    ],
-    [
-      'an address that is not the one at the requested path',
-      () =>
-        ({
-          ...proofRequest(),
-          inputPaths: [[0, 'receive', 4]],
-        }) as unknown as SignTransactionRequest,
-    ],
-    [
-      'a second input path',
-      () =>
-        ({
-          ...proofRequest(),
-          inputPaths: [
-            [0, 'receive', 3],
-            [1, 'receive', 3],
-          ],
-        }) as unknown as SignTransactionRequest,
-    ],
-    [
-      'broadcast: true',
-      () => {
-        const request = proofRequest();
-        return {
-          ...request,
-          transaction: { ...request.transaction, broadcast: true },
-        } as SignTransactionRequest;
-      },
-    ],
-  ];
-
-  it.each(refusals)('refuses %s', (_label, make) => {
-    expect(() => validateSignInProofRequest(make(), ownKeys)).toThrow(
-      SignInProofError
+          code: proof.code,
+          path: proof.path,
+          addressIndex: proof.addressIndex,
+          address: proof.addresses.mainnet,
+        });
+        expect(validated!.publicKey).toEqual(hexToBin(proof.publicKey));
+      }
     );
+
+    it.each(vectors.refusals)('is refused: $name', (refusal) => {
+      const request = sdkRequest(refusal.request, form);
+      expect(
+        findClaimedSignInProofSchemeInPayload(request.transaction)
+      ).not.toBeNull();
+      let thrown: unknown;
+      try {
+        validate(request);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(SignInProofError);
+      expect((thrown as Error).message).toBe(
+        `WizardConnect sign-in proof refused: ${refusal.reason}`
+      );
+    });
+
+    it.each(vectors.unclaimed)('is not a proof at all: $name', (unclaimed) => {
+      const request = sdkRequest(unclaimed.request, form);
+      expect(
+        findClaimedSignInProofSchemeInPayload(request.transaction)
+      ).toBeNull();
+      expect(validate(request)).toBeNull();
+    });
+  });
+
+  it('names the address under the wallet’s own network', () => {
+    const proof = vectors.proofs[0];
+    expect(
+      validateSignInProofRequest(
+        proofRequest(proof),
+        vectorWallet(Network.CHIPNET)
+      )?.address
+    ).toBe(proof.addresses.chipnet);
+  });
+
+  it.each(vectors.proofs)(
+    'signs the reference proof through the wallet signing path: $name',
+    async (proof) => {
+      const validated = validate(proofRequest(proof))!;
+      const signedHex = await signWizardConnectSignInProof(
+        validated,
+        vectorSeed()
+      );
+      expect(signedHex).toBe(proof.signed);
+      const signed = decodeTransaction(hexToBin(signedHex));
+      if (typeof signed === 'string') throw new Error(signed);
+      // SIGHASH_ALL|UTXOS|FORKID
+      expect(signed.inputs[0].unlockingBytecode[65]).toBe(
+        vectors.format.sighash
+      );
+      expect(vmAccepts(signedHex, proof)).toBe(true);
+      expect(isSignInProofTransaction(signedHex)).toBe(true);
+    }
+  );
+
+  it('signs with a key libauth derived, and with no other', () => {
+    const [proof, other] = vectors.proofs;
+    const validated = validate(proofRequest(proof))!;
+    expect(
+      signCanonicalSignInProof(
+        validated,
+        libauthPrivateKey(proof.derivationPath)
+      )
+    ).toBe(proof.signed);
+    expect(() =>
+      signCanonicalSignInProof(
+        validated,
+        libauthPrivateKey(other.derivationPath)
+      )
+    ).toThrow(SignInProofError);
+  });
+
+  it('turns SDK values the wallet cannot decode into refusals', () => {
+    const withSources = (sourceOutputs: unknown) => {
+      const request = proofRequest();
+      return {
+        ...request,
+        transaction: { ...request.transaction, sourceOutputs },
+      } as unknown as SignTransactionRequest;
+    };
+    const [source] = proofRequest().transaction
+      .sourceOutputs as unknown as Record<string, unknown>[];
+    for (const request of [
+      withSources([{ ...source, valueSatoshis: 'not a number' }]),
+      withSources([{ ...source, lockingBytecode: 'not bytes' }]),
+      withSources([]),
+    ]) {
+      expect(() => validate(request)).toThrow(SignInProofError);
+    }
+    for (const inputPaths of [
+      [[0, 'receive', -1]],
+      [[0, 'receive', 1.5]],
+      [[0, 7, 3]],
+      [['0', 'receive', 3]],
+      'receive',
+    ]) {
+      expect(() =>
+        validate({
+          ...proofRequest(),
+          inputPaths,
+        } as unknown as SignTransactionRequest)
+      ).toThrow('WizardConnect sign-in proof refused: malformed request');
+    }
   });
 
   it('never signs a tagged request as a payment', async () => {
-    for (const request of [proofRequest(), refusals[0][1]()]) {
+    for (const request of [
+      proofRequest(),
+      sdkRequest(refusalNamed('an extra real input').request),
+    ]) {
       await expect(
-        signWizardConnectTransaction(request, {
-          mnemonic: 'mocked test key',
-          passphrase: '',
-          network: Network.MAINNET,
-        })
+        signWizardConnectTransaction(request, vectorSeed())
       ).rejects.toThrow(SignInProofError);
     }
   });
 
-  it('detects the claim in both hex and structured payloads', () => {
-    expect(
-      findClaimedSignInProofSchemeInPayload(proofRequest().transaction)?.id
-    ).toBe('wizardconnect-generic');
-    expect(
-      findClaimedSignInProofSchemeInPayload(
-        structuredRequest().request.transaction
-      )?.id
-    ).toBe('wizardconnect-generic');
-  });
+  it.each(vectors.broadcastGuard)(
+    'flags what the broadcast guard must stop: $name',
+    (guard) => {
+      expect(isSignInProofTransaction(guard.transaction)).toBe(
+        guard.signInProof
+      );
+      expect(isSignInProofTransaction(hexToBin(guard.transaction))).toBe(
+        guard.signInProof
+      );
+    }
+  );
 
-  it('flags proofs for the broadcast guard but not ordinary transactions', () => {
-    expect(
-      isSignInProofTransaction(encodeTransaction(canonical().transaction))
-    ).toBe(true);
-    const ordinary = canonical();
-    const real = encodeTransaction({
-      ...ordinary.transaction,
-      inputs: [
-        {
-          ...ordinary.transaction.inputs[0],
-          outpointTransactionHash: new Uint8Array(32).fill(1),
-        },
-      ],
-    });
-    expect(isSignInProofTransaction(real)).toBe(false);
-    expect(isSignInProofTransaction('zz')).toBe(false);
+  it('does not flag bytes that are no transaction', () => {
+    for (const raw of ['zz', '', '00', vectors.proofs[0].unsigned + '00']) {
+      expect(isSignInProofTransaction(raw)).toBe(false);
+    }
   });
 
   it('previews proofs for the approval screen from the wallet, not the dapp', () => {
+    const proof = vectors.proofs[0];
     setSignInProofInspector(null);
-    expect(previewWizardSignInProof(proofRequest()).kind).toBe('invalid');
-    setSignInProofInspector({
-      network: Network.MAINNET,
-      inspectSignInProof: (request) =>
-        validateSignInProofRequest(request, ownKeys),
-    });
-    expect(previewWizardSignInProof(proofRequest())).toEqual({
+    expect(previewWizardSignInProof(proofRequest(proof)).kind).toBe('invalid');
+    setSignInProofInspector({ inspectSignInProof: validate });
+    expect(previewWizardSignInProof(proofRequest(proof))).toEqual({
       kind: 'proof',
       schemeId: 'wizardconnect-generic',
       schemeLabel: 'WizardConnect sign-in',
-      code: TEST_CODE,
-      address: TEST_ADDRESS(),
+      code: proof.code,
+      address: proof.addresses.mainnet,
     });
-    expect(previewWizardSignInProof(refusals[3][1]())).toMatchObject({
+    const tampered = refusalNamed('a tampered output value');
+    expect(previewWizardSignInProof(sdkRequest(tampered.request))).toEqual({
       kind: 'invalid',
+      message: `WizardConnect sign-in proof refused: ${tampered.reason}`,
     });
-    expect(
-      previewWizardSignInProof(
-        withTx((tx) => {
-          tx.outputs[0] = {
-            lockingBytecode: Uint8Array.from([0x6a]),
-            valueSatoshis: 0n,
-          };
-        })
-      )
-    ).toEqual({ kind: 'none' });
+    const untagged = vectors.unclaimed.find(
+      (unclaimed) => unclaimed.name === 'a bare OP_RETURN'
+    )!;
+    expect(previewWizardSignInProof(sdkRequest(untagged.request))).toEqual({
+      kind: 'none',
+    });
     setSignInProofInspector(null);
   });
 });
