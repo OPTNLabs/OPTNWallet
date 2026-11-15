@@ -2366,6 +2366,10 @@ MDK does and does not do; each gap was checked against MDK's source.
   private fields), so it serves the tests only. On Windows, SQLCipher's
   OpenSSL is built from source and needs Strawberry Perl as `OPENSSL_SRC_PERL`;
   Git's Perl lacks `Locale::Maketext::Simple`, `IPC::Cmd` and others.
+  **Replaced 2026-11-15** by `crates/optn-mdk-store` (pure Rust; redb with
+  every record sealed), with no conversion of existing stores: see
+  `docs/chat-store-rust.md`. Component and MDK-level evidence only so far; no
+  packaged-desktop or live chipnet run on it yet.
 - Relays: `optn-nostr` gained `nip59` (gift wraps for any rumor; Marmot
   welcomes are kind 444), targeted publish, fetch and subscribe for a group's
   own relays, and `RelayRoute::Dialer`. Through the dialer the desktop's

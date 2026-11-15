@@ -57,12 +57,13 @@ impl EngineState {
 
 /// The key that encrypts `identity`'s chat store: HKDF-SHA256 of the chat
 /// identity's secret key. Whoever holds the wallet seed the identity comes
-/// from can open the store; nobody else can.
+/// from can open the store; nobody else can. Its label is the store's own:
+/// the SQLCipher store before it had another, so no key serves two ciphers.
 pub fn store_key(identity: &Keys) -> Zeroizing<[u8; 32]> {
     let secret = Zeroizing::new(identity.secret_key().to_secret_bytes());
     let mut key = Zeroizing::new([0u8; 32]);
     Hkdf::<Sha256>::new(Some(b"optn-chat"), secret.as_ref())
-        .expand(b"mdk sqlcipher store v1", key.as_mut())
+        .expand(b"mdk rust store v1", key.as_mut())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
     key
 }

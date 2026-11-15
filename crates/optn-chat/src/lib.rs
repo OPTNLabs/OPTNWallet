@@ -4,7 +4,7 @@
 //!
 //! MDK -- the Marmot Development Kit, the MLS layer from the rust-nostr
 //! project -- is used as published, unmodified. This crate gives it a store
-//! keyed from the chat identity, the holder's relays ([`optn_nostr`]), and
+//! keyed from the chat identity ([`MdkStore`], pure Rust), the holder's relays ([`optn_nostr`]), and
 //! turns what it returns into chat a wallet can show:
 //!
 //! - key packages (kind 30443, one slot per device, rotated in place) and the
@@ -27,8 +27,7 @@ mod engine;
 mod state;
 
 pub use engine::{ChatConfig, ChatEngine};
-#[cfg(feature = "sqlite")]
-pub use mdk_sqlite_storage::MdkSqliteStorage;
+pub use optn_mdk_store::MdkStore;
 pub use state::{store_key, EngineState};
 
 use serde::Serialize;

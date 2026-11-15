@@ -1,6 +1,7 @@
-# A pure-Rust encrypted store for MDK chat (design, not yet built)
+# A pure-Rust encrypted store for MDK chat
 
-Status: **design for approval, 2026-11-15.** Nothing here is implemented. Base:
+Status: **approved by the owner on 2026-11-15 and built** (see "Decisions
+taken" and "What was built" at the end): `crates/optn-mdk-store`. Base:
 `agent/deps-bitcoinjs-20261114` at 29430001 (PR #123).
 
 ## Why
@@ -302,18 +303,78 @@ implements MDK's traits and nothing chat-specific.
 5. A desktop build on Windows without `OPENSSL_SRC_PERL`, and a live chipnet
    conversation with a restart in the middle.
 
-## Open questions for the owner
+## Decisions taken 2026-11-15
 
-1. **Migration:** start fresh (B, recommended), fresh plus a separate converter
-   tool (C), or convert inside the wallet and keep SQLCipher one more release
-   (A)? Did any preview build with MDK chat reach people whose groups matter?
-2. **Metadata:** is it acceptable that record count, padded record sizes and
-   the commit count are visible on disk, where SQLCipher showed only file size?
-3. **redb version:** pin `=4.6.0`, released two days ago, or wait for it to
-   age first?
-4. **`backend()`** has to return `Backend::SQLite` for MDK to treat the store
-   as persistent, although nothing in it is SQLite. Accept that, with a
-   comment, until MDK's enum grows?
-5. **New crate** `crates/optn-mdk-store`, or a module inside `optn-chat`?
-6. **Store key label:** a new HKDF label for the new store (recommended), or
-   reuse today's 32 bytes?
+The owner approved every recommendation above, and asked for no SQL where
+possible: the store has none (redb is a key-value store), and with nothing
+converted, no SQL is left in the chat.
+
+1. **Migration: B, start fresh.** No converter. `ChatEngine::open` makes
+   `<pubkey>.mdk.redb` and leaves an earlier `<pubkey>.mdk.sqlite` on disk,
+   unread and untouched (a user's file is never deleted). A store made fresh
+   also drops the state file's record of earlier key packages, keeping only
+   the key-package slot, so a new key package goes out at once and replaces
+   the old one, whose private key is in the old file. Anyone with MDK groups
+   from a dev or preview build is re-invited; ts-mls groups are untouched.
+2. **Metadata: accepted.** The record count, padded record sizes and the
+   commit count are visible on disk.
+3. **redb: pinned `=4.6.0`.**
+4. **`backend()` returns `Backend::SQLite`**, with a comment, until MDK's enum
+   grows a variant for other persistent stores.
+5. **A new crate, `crates/optn-mdk-store`.**
+6. **A new HKDF label, `mdk rust store v1`.** `store_key` now derives with it;
+   the SQLCipher label went with SQLCipher, so no key serves two ciphers.
+
+## What was built
+
+- `crates/optn-mdk-store`: the 93 trait methods, the record layer
+  (`record.rs`), in-memory indexes rebuilt at open (`index.rs`), and units of
+  work (`MdkStore::begin_unit`). `ChatEngine::open` makes every MDK call one
+  unit, and starts MDK again over the store after a rollback.
+- Where MDK's two stores answer differently, this one follows:
+
+  | Behaviour | SQLite store | Memory store | This store |
+  | --- | --- | --- | --- |
+  | Group name, description | 255, 2000 bytes | 256, 4096 | 255, 2000 (SQLite) |
+  | Admins per group | 50 KiB of JSON (about 750) | 100 | 100 (memory) |
+  | `replace_group_relays` | not validated | 100 relays, 512-byte URLs | validated (memory) |
+  | Welcome name, description, event | 255, 2000, 100 KiB | not checked | checked (SQLite) |
+  | Messages kept per group | all | the newest 10,000 | all (SQLite) |
+  | `save_message`, no such group | foreign-key error | `InvalidParameters("Group not found")` | memory |
+  | Snapshot under an existing name | adds rows beside the old | replaces it | replaces (memory) |
+  | Rolling back a missing snapshot | `Database("Snapshot not found")` | `NotFound` | `NotFound` (memory) |
+  | `prune_expired_snapshots` returns | rows deleted | snapshots deleted | snapshots (memory) |
+  | `find_message_epoch_by_tag_content` | `LIKE`: ASCII case-insensitive | case-sensitive | case-sensitive (memory) |
+  | Rollback giving two groups one Nostr id | refused (unique index) | allowed; one becomes unfindable | refused (SQLite) |
+
+  Random 32-byte Nostr ids never meet, so the last row is never reached in use.
+- A second `MdkStore::open` of a file this process already has open shares
+  the open store (with the same key; another key is refused), because redb
+  locks a file to one process and the desktop reopens an engine while the
+  last one's catch-up task may still hold it. A unit of work is exclusive:
+  calls from other threads wait for it, so two engines on one store cannot
+  mix their writes. A nested unit dropped uncommitted rolls back the
+  outermost.
+- Every open verifies the whole file (`set_check_integrity_on_open`), so a
+  file damaged outside redb fails to open with an error instead of a panic,
+  which release builds turn into an abort.
+- Tests, `cargo test -p optn-mdk-store`: the record format; wrong key (no
+  record changed), a changed byte, swapped values, a later format, nothing
+  readable on disk, a file held elsewhere refused, a second open in the
+  process shared, nested units, a unit keeping other threads out; MDK making, joining, changing,
+  reopening and deleting a group; a failed write at every point of reading a
+  commit and of merging one's own, each leaving the old epoch and applying
+  cleanly on retry; a child process killed at several points while reading a
+  commit; and 12,000 calls compared with MDK's memory store across three
+  seeds, with the store closed and reopened along the way. That comparison
+  found two quirks of the memory store, which the test now avoids: it caches
+  messages by event id alone (so two groups sharing an id lose one), and it
+  can leave a group unfindable by Nostr id after a colliding rollback.
+- `crates/optn-chat`: `tests/persistent_store.rs` runs on every `cargo test`
+  (it needed `--features sqlite` before), with new tests for starting fresh
+  beside an old SQLCipher file and for reopening while the last engine is
+  still held.
+- Removed as section 5 lists. `openssl-src` and `openssl-sys` are gone from
+  both lockfiles, so no desktop build compiles OpenSSL.
+- Not done here: a desktop build on Windows CI, and a live chipnet
+  conversation with a restart, through the packaged app.

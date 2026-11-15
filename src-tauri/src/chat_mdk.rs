@@ -1,9 +1,9 @@
 // Marmot chat through MDK (crates/optn-chat), beside the renderer's ts-mls
 // engine, which keeps every group it made. Built only with the `mdk-chat`
-// feature: MDK's encrypted store is SQLCipher, whose crypto off Apple
-// platforms is OpenSSL built from source (a full Perl on Windows). Without the
-// feature these commands answer that the engine is not in this build, and the
-// chat stays on ts-mls.
+// feature (on by default, desktop only); MDK's state is kept in an encrypted
+// store that is pure Rust (crates/optn-mdk-store). Without the feature these
+// commands answer that the engine is not in this build, and the chat stays on
+// ts-mls.
 //
 // One chat identity at a time, owned by the page that opened it: its events go
 // to that page alone, and it closes when the page reloads or its window goes,
@@ -104,7 +104,7 @@ mod enabled {
     use std::time::Duration;
 
     use futures_util::StreamExt;
-    use optn_chat::{ChatConfig, ChatEngine, MdkSqliteStorage};
+    use optn_chat::{ChatConfig, ChatEngine, MdkStore};
     use optn_core::network::Network;
     use optn_nostr::nostr::prelude::Keys;
     use optn_nostr::{Dialed, RelayDialer, RelayEndpoint, RelayIo, RelayRoute, Relays};
@@ -119,7 +119,7 @@ mod enabled {
     const RELAY_TIMEOUT: Duration = Duration::from_secs(30);
 
     struct Session {
-        engine: ChatEngine<MdkSqliteStorage>,
+        engine: ChatEngine<MdkStore>,
         owner: String,
         forwarder: tokio::task::AbortHandle,
     }
