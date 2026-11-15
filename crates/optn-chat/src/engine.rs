@@ -14,6 +14,7 @@ use mdk_nostr as mn;
 use mdk_storage_traits::groups::Pagination;
 use mdk_storage_traits::messages::types::ProcessedMessageState;
 use openmls_traits::OpenMlsProvider;
+use optn_mdk_store::MdkStore;
 use optn_nostr::nostr::prelude as on;
 use optn_nostr::nostr::prelude::FinalizeEvent;
 use optn_nostr::{nip59, Published, Relays};
@@ -74,6 +75,9 @@ impl<S: MdkStorageProvider> Clone for ChatEngine<S> {
 
 struct Inner<S: MdkStorageProvider> {
     mdk: Mutex<MDK<S>>,
+    /// The store [`ChatEngine::open`] made: each MDK call is one unit of work
+    /// on it, landing whole or not at all. None for a store a host brings.
+    units: Option<Units<S>>,
     keys: on::Keys,
     me: mn::PublicKey,
     relays: Relays,
@@ -89,6 +93,12 @@ struct Inner<S: MdkStorageProvider> {
     events: broadcast::Sender<ChatEvent>,
     /// The live reader, while [`ChatEngine::listen`] runs.
     pump: AsyncMutex<Option<Pump>>,
+}
+
+/// The engine's own handle on its store, and how to give MDK a new one.
+struct Units<S> {
+    store: MdkStore,
+    fresh: fn(MdkStore) -> S,
 }
 
 /// The task feeding relay notifications to the engine, and the inbox
@@ -110,33 +120,54 @@ struct KeyPackage {
     relays: Vec<String>,
 }
 
-#[cfg(feature = "sqlite")]
-impl ChatEngine<mdk_sqlite_storage::MdkSqliteStorage> {
-    /// Open, or create, `identity`'s chat store in `dir`: MDK's SQLCipher
-    /// store `<pubkey>.mdk.sqlite`, encrypted with [`crate::store_key`], and
-    /// the engine's state file beside it.
+impl ChatEngine<MdkStore> {
+    /// Open, or create, `identity`'s chat store in `dir`: the encrypted store
+    /// `<pubkey>.mdk.redb` ([`MdkStore`], keyed with [`crate::store_key`]),
+    /// and the engine's state file beside it.
+    ///
+    /// A `<pubkey>.mdk.sqlite` left by an earlier build is not read and not
+    /// touched. A new store has no groups and no key packages, so the state
+    /// file's record of earlier ones is dropped, keeping only the key-package
+    /// slot: a new key package then goes out at once and replaces the old one.
     pub async fn open(
         dir: &std::path::Path,
         keys: on::Keys,
         relays: Relays,
         config: ChatConfig,
     ) -> Result<Self, ChatError> {
-        use mdk_sqlite_storage::{EncryptionConfig, MdkSqliteStorage};
-
         std::fs::create_dir_all(dir)
             .map_err(|error| ChatError::Store(format!("{}: {error}", dir.display())))?;
         let name = keys.public_key().to_hex();
-        let database = dir.join(format!("{name}.mdk.sqlite"));
+        let database = dir.join(format!("{name}.mdk.redb"));
         let state_path = dir.join(format!("{name}.state.json"));
         let key = crate::store_key(&keys);
         let store = tokio::task::spawn_blocking(move || {
-            MdkSqliteStorage::new_with_key(&database, EncryptionConfig::new(*key))
+            MdkStore::open(&database, &key)
                 .map_err(|error| ChatError::Store(format!("{}: {error}", database.display())))
         })
         .await
         .map_err(|error| ChatError::Stopped(error.to_string()))??;
-        let state = EngineState::load(&state_path)?;
-        Self::with_store(store, keys, relays, config, state, Some(state_path))
+        let mut state = EngineState::load(&state_path)?;
+        if store.created() {
+            state = EngineState {
+                key_package_slot: state.key_package_slot,
+                ..EngineState::default()
+            };
+            state.save(&state_path)?;
+        }
+        let units = Units {
+            store: store.clone(),
+            fresh: |store| store,
+        };
+        Self::with_store(
+            store,
+            keys,
+            relays,
+            config,
+            state,
+            Some(state_path),
+            Some(units),
+        )
     }
 }
 
@@ -153,7 +184,15 @@ where
         relays: Relays,
         config: ChatConfig,
     ) -> Result<Self, ChatError> {
-        Self::with_store(store, keys, relays, config, EngineState::default(), None)
+        Self::with_store(
+            store,
+            keys,
+            relays,
+            config,
+            EngineState::default(),
+            None,
+            None,
+        )
     }
 
     fn with_store(
@@ -163,11 +202,13 @@ where
         config: ChatConfig,
         state: EngineState,
         state_path: Option<PathBuf>,
+        units: Option<Units<S>>,
     ) -> Result<Self, ChatError> {
         let me = cross(&keys.public_key())?;
         Ok(Self {
             inner: Arc::new(Inner {
                 mdk: Mutex::new(MDK::new(store)),
+                units,
                 keys,
                 me,
                 relays,
@@ -188,7 +229,9 @@ where
     }
 
     /// Run `work` on MDK off the async threads: MDK is synchronous and its
-    /// store does disk I/O.
+    /// store does disk I/O. On the engine's own store, everything `work` has
+    /// MDK write is one unit: a commit merged, a welcome accepted, a message
+    /// read with the ratchet step it took, each land whole or not at all.
     async fn mdk<T, F>(&self, work: F) -> Result<T, ChatError>
     where
         T: Send + 'static,
@@ -196,10 +239,21 @@ where
     {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let mdk = inner.mdk.lock().map_err(|_| {
+            let mut mdk = inner.mdk.lock().map_err(|_| {
                 ChatError::Stopped("an earlier operation failed midway; reopen the store".into())
             })?;
-            work(&mdk)
+            let Some(units) = &inner.units else {
+                return work(&mdk);
+            };
+            let unit = units.store.begin_unit();
+            let done = work(&mdk);
+            if let Err(error) = unit.commit() {
+                // MDK keeps some state between calls (which snapshots it
+                // holds); after a rollback it starts again from the store.
+                *mdk = MDK::new((units.fresh)(units.store.clone()));
+                return Err(ChatError::Store(error.to_string()));
+            }
+            done
         })
         .await
         .map_err(|error| ChatError::Stopped(error.to_string()))?

@@ -30,7 +30,7 @@ made them.
 | Messages | Text is kind 9 and inline files are kind 15 (a `data:` URL, as ts-mls sends them), as MLS application messages in kind 445 events tagged with the group's `h`. |
 | Order | Relays order nothing beyond `created_at`, and MDK never retries an event it failed to read. So nothing is published in the same second as the newest commit the engine has made or read (waiting up to 3 s), and each read is sorted by time. |
 | Reading | Catch-up reads the inbox (with the two days of NIP-59 timestamp skew) and every active group since the last read, then reads live. Every event read goes to one stream, once. MDK's own processed-event records decide what is new. |
-| Store | MDK's SQLCipher store, `<app data>/chat-mdk/<pubkey>.mdk.sqlite`. Its key is HKDF-SHA256 of the chat identity's secret key, so whoever holds the wallet seed can open it and nobody else can. Beside it, a plain state file holds the key-package slot and read times; neither is secret. |
+| Store | `crates/optn-mdk-store`: `<app data>/chat-mdk/<pubkey>.mdk.redb`, one redb file with every record sealed (XChaCha20-Poly1305, keys looked up by HMAC-SHA256). Its key is HKDF-SHA256 of the chat identity's secret key, so whoever holds the wallet seed can open it and nobody else can. Each MDK operation lands whole or not at all: a commit merged, a welcome accepted, a message read with its ratchet step. A `<pubkey>.mdk.sqlite` from an earlier build is left untouched and not read (`docs/chat-store-rust.md`). Beside the store, a plain state file holds the key-package slot and read times; neither is secret. |
 | Relays | `optn-nostr` (rust-nostr 0.45) over the desktop's own egress: the Tor switch, the holder's declared hosts, public addresses only for anyone else's relay, and plain `ws` only on this machine. These are the same rules the renderer's relay sockets follow. |
 
 ## What MDK does not do (yet)
@@ -58,19 +58,9 @@ release.
 
 ## Building
 
-MDK's store is SQLCipher. Off Apple platforms its crypto is OpenSSL, built
-from source with `libsqlite3-sys`'s `bundled-sqlcipher-vendored-openssl`
-(Apple builds use CommonCrypto). OpenSSL's configure script needs a full Perl.
-Git for Windows' Perl lacks `Locale::Maketext::Simple`, `IPC::Cmd` and others,
-so on Windows `OPENSSL_SRC_PERL` must name Strawberry Perl:
-
-```sh
-OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl.exe npx --no-install tauri build
-```
-
-GitHub's Windows runners have Strawberry Perl at `C:/Strawberry/perl/bin`;
-the desktop workflows set `OPENSSL_SRC_PERL` there. Only desktop targets
-compile MDK (`src-tauri/build.rs`); the Android and iOS builds have no chat
-screen and no OpenSSL. `--no-default-features` builds a desktop without MDK,
-whose chat runs on ts-mls alone. `crates/optn-chat` builds without OpenSSL unless its `sqlite`
-feature is on: its tests run MDK on its in-memory store against a local relay.
+MDK's store is pure Rust (`crates/optn-mdk-store`: redb and RustCrypto), so a
+desktop build needs no C database, no OpenSSL and no Perl. Only desktop
+targets compile MDK (`src-tauri/build.rs`); the Android and iOS builds have
+no chat screen. `--no-default-features` builds a desktop without MDK, whose
+chat runs on ts-mls alone. `crates/optn-chat`'s tests run MDK on the store
+and on MDK's in-memory one, against a local relay.

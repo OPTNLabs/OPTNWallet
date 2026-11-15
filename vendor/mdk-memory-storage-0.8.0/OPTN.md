@@ -11,7 +11,8 @@ except its `Cargo.lock`: upstream's own development lockfile, which OPTN's
 builds never read and which still names lru 0.16, so GitHub's dependency
 scanning would keep reporting the advisory this patch removes.
 This is a path patch from `[patch.crates-io]` in the root manifest. optn-chat
-uses it only as a dev-dependency: its tests' in-memory MDK store.
+and optn-mdk-store use it only as a dev-dependency: optn-chat's tests' in-memory
+MDK store, and the reference optn-mdk-store's differential test compares with.
 
 ## Why
 
@@ -39,5 +40,5 @@ repairs; a new advisory against the crate fails the job.
 
 ## Remove when
 
-`mdk-memory-storage` on crates.io moves to `lru >= 0.18.2`, or optn-chat's tests
-stop using it.
+`mdk-memory-storage` on crates.io moves to `lru >= 0.18.2`, or neither
+optn-chat's nor optn-mdk-store's tests use it.
