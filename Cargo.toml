@@ -12,6 +12,8 @@ members = [
   # cover it, but not a default member: MDK brings OpenMLS and its media
   # stack, which builds of the wallet crates need not wait for.
   "crates/optn-chat",
+  # The encrypted store under optn-chat: redb and RustCrypto, no C.
+  "crates/optn-mdk-store",
   "crates/optn-fusion",
   "crates/optn-fusion-native",
   "crates/optn-nostr",
