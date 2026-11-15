@@ -37,8 +37,9 @@ mod snapshots;
 mod welcomes;
 
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::thread::ThreadId;
 
 use mdk_storage_traits::groups::error::GroupError;
 use mdk_storage_traits::messages::error::MessageError;
@@ -153,11 +154,17 @@ impl From<Fault> for WelcomeError {
 }
 
 /// An MDK store in one encrypted file. Cheap to clone; clones are the same
-/// store.
+/// store. Opening a file this process already has open gives another handle
+/// on the same store, so an engine can be reopened while tasks of the last
+/// one finish: redb locks the file to one process.
 #[derive(Clone)]
 pub struct MdkStore {
     inner: Arc<Inner>,
+    created: bool,
 }
+
+/// The stores this process has open, by canonical path.
+static OPEN: Mutex<Vec<(PathBuf, Weak<Inner>)>> = Mutex::new(Vec::new());
 
 impl std::fmt::Debug for MdkStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -169,7 +176,8 @@ struct Inner {
     database: Database,
     crypt: Crypt,
     state: Mutex<State>,
-    created: bool,
+    /// Signalled when a unit ends, for calls waiting their turn.
+    turn: Condvar,
 }
 
 struct State {
@@ -177,8 +185,10 @@ struct State {
     /// What the open unit has written and not yet committed: sealed values by
     /// disk key, `None` for a deletion.
     pending: BTreeMap<[u8; 32], Option<Vec<u8>>>,
-    /// Units of work open now.
-    units: usize,
+    /// The thread whose unit of work is open. Other threads wait for it to end.
+    owner: Option<ThreadId>,
+    /// How deep that thread's units are nested.
+    depth: usize,
     /// A storage fault happened in the open unit: it must not be committed.
     faulted: bool,
     /// The store stopped: a commit failed, or the indexes could not be rebuilt.
@@ -211,8 +221,39 @@ impl MdkStore {
     pub fn open(path: &Path, key: &[u8; 32]) -> Result<Self, StoreError> {
         let crypt = Crypt::new(key);
         owner_only(path)?;
+        let canonical = std::fs::canonicalize(path)
+            .map_err(|error| StoreError::Io(format!("{}: {error}", path.display())))?;
+        let mut open = OPEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        open.retain(|(_, inner)| inner.strong_count() > 0);
+        let already = open
+            .iter()
+            .find(|(at, _)| *at == canonical)
+            .and_then(|(_, inner)| inner.upgrade());
+        if let Some(inner) = already {
+            // The same store, if the same key: where each key puts the header
+            // says so, without comparing keys.
+            let header = Family::Header;
+            if inner.crypt.disk_key(header, b"") != crypt.disk_key(header, b"") {
+                return Err(StoreError::WrongKey);
+            }
+            return Ok(Self {
+                inner,
+                created: false,
+            });
+        }
+        let (inner, created) = Self::open_file(path, crypt)?;
+        let inner = Arc::new(inner);
+        open.push((canonical, Arc::downgrade(&inner)));
+        Ok(Self { inner, created })
+    }
+
+    fn open_file(path: &Path, crypt: Crypt) -> Result<(Inner, bool), StoreError> {
         let database = Database::builder()
             .set_cache_size(CACHE_BYTES)
+            // Verify every page at each open: a file damaged outside redb is
+            // an error, where a plain open may panic (and release builds
+            // abort on panic). The store is small; the check is quick.
+            .set_check_integrity_on_open(true)
             .create(path)
             .map_err(|error| match error {
                 DatabaseError::DatabaseAlreadyOpen => StoreError::InUse,
@@ -243,15 +284,17 @@ impl MdkStore {
             state: Mutex::new(State {
                 index: Index::default(),
                 pending: BTreeMap::new(),
-                units: 0,
+                owner: None,
+                depth: 0,
                 faulted: false,
                 stopped: None,
                 unreadable: 0,
                 #[cfg(any(test, feature = "test-utils"))]
                 fail_after: None,
             }),
-            created: !matches!(found, Some((Some(_), _))),
+            turn: Condvar::new(),
         };
+        let created = !matches!(found, Some((Some(_), _)));
         match found {
             Some((Some(header), _)) => {
                 // Another key finds no header at its own hash, or cannot open this one.
@@ -287,14 +330,13 @@ impl MdkStore {
             let mut state = inner.state.lock().expect("nothing else holds a new store");
             state.reload(&inner).map_err(io)?;
         }
-        Ok(Self {
-            inner: Arc::new(inner),
-        })
+        Ok((inner, created))
     }
 
-    /// Whether [`MdkStore::open`] made this store rather than found it.
+    /// Whether the [`MdkStore::open`] that gave this handle made the store,
+    /// rather than found it on disk or open already.
     pub fn created(&self) -> bool {
-        self.inner.created
+        self.created
     }
 
     /// Records the last read of the whole store could not open: damaged on
@@ -304,11 +346,24 @@ impl MdkStore {
         self.lock().unreadable
     }
 
-    /// Start a unit of work: every write, by any clone of this store, is held
-    /// until [`Unit::commit`] and then lands in one transaction. Reads see the
-    /// unit's own writes.
+    /// Start a unit of work on this thread: every storage call it makes is
+    /// held until [`Unit::commit`] and then lands in one transaction, or, if
+    /// any of them faulted or a nested unit was dropped, not at all. Reads see
+    /// the unit's own writes. Calls from other threads wait until it ends, so
+    /// a unit sees no one else's writes and no one sees its own early. Units
+    /// nest on one thread; the outermost decides.
+    ///
+    /// After a unit rolls back, anything that keeps its own copy of what is
+    /// stored (MDK's list of snapshots) must start again from the store.
     pub fn begin_unit(&self) -> Unit {
-        self.lock().units += 1;
+        let me = std::thread::current().id();
+        let mut state = self.turn();
+        if state.owner == Some(me) {
+            state.depth += 1;
+        } else {
+            state.owner = Some(me);
+            state.depth = 1;
+        }
         Unit {
             store: self.clone(),
             open: true,
@@ -335,10 +390,18 @@ impl MdkStore {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        match self.inner.state.lock() {
+        let state = self.inner.state.lock();
+        self.unpoison(state)
+    }
+
+    /// A panic inside a call: what its unit wrote is not to be trusted.
+    fn unpoison<'a>(
+        &'a self,
+        state: std::sync::LockResult<MutexGuard<'a, State>>,
+    ) -> MutexGuard<'a, State> {
+        match state {
             Ok(state) => state,
             Err(poisoned) => {
-                // A panic inside a call: what the unit wrote is not to be trusted.
                 let mut state = poisoned.into_inner();
                 state
                     .stopped
@@ -347,6 +410,17 @@ impl MdkStore {
                 state
             }
         }
+    }
+
+    /// The state, once no other thread's unit is open.
+    fn turn(&self) -> MutexGuard<'_, State> {
+        let me = std::thread::current().id();
+        let mut state = self.lock();
+        while state.owner.is_some_and(|owner| owner != me) {
+            let waited = self.inner.turn.wait(state);
+            state = self.unpoison(waited);
+        }
+        state
     }
 
     /// Run one storage call. Outside a unit, the call is a unit of its own.
@@ -358,7 +432,7 @@ impl MdkStore {
     where
         E: From<Fault>,
     {
-        let mut state = self.lock();
+        let mut state = self.turn();
         if let Some(reason) = &state.stopped {
             return Err(Fault::new(format!("the store stopped: {reason}; reopen it")).into());
         }
@@ -377,7 +451,7 @@ impl MdkStore {
                 Err(E::from(fault))
             }
         };
-        if state.units == 0 {
+        if state.owner.is_none() {
             if let Err((fault, _)) = state.settle(&self.inner) {
                 // A failed call has said why already; a successful one whose
                 // commit failed says so now.
@@ -571,34 +645,39 @@ pub struct Unit {
 
 impl Unit {
     /// Make the unit's writes durable, all of them or none. If a storage call
-    /// failed inside the unit, nothing is written and this says so.
+    /// failed inside the unit, or a unit nested in it was dropped, nothing is
+    /// written and this says so. A nested unit's commit leaves the decision to
+    /// the outermost.
     pub fn commit(mut self) -> Result<(), StoreError> {
         self.open = false;
+        self.end(false)
+    }
+
+    fn end(&self, abandoned: bool) -> Result<(), StoreError> {
         let mut state = self.store.lock();
-        state.units = state.units.saturating_sub(1);
-        if state.units > 0 {
+        if abandoned {
+            state.faulted = true;
+        }
+        state.depth = state.depth.saturating_sub(1);
+        if state.depth > 0 {
             return Ok(());
         }
-        state
-            .settle(&self.store.inner)
-            .map_err(|(fault, stopped)| match stopped {
-                true => StoreError::Io(fault.0),
-                false => StoreError::RolledBack(fault.0),
-            })
+        state.owner = None;
+        let settled = state.settle(&self.store.inner);
+        drop(state);
+        self.store.inner.turn.notify_all();
+        settled.map_err(|(fault, stopped)| match stopped {
+            true => StoreError::Io(fault.0),
+            false => StoreError::RolledBack(fault.0),
+        })
     }
 }
 
 impl Drop for Unit {
     fn drop(&mut self) {
-        if !self.open {
-            return;
-        }
-        let mut state = self.store.lock();
-        state.units = state.units.saturating_sub(1);
-        if state.units == 0 {
-            state.faulted = true;
+        if self.open {
             // Rolled back; an error here has already stopped the store.
-            let _ = state.settle(&self.store.inner);
+            let _ = self.end(true);
         }
     }
 }

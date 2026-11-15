@@ -85,13 +85,73 @@ fn another_key_does_not_open_a_store_and_changes_no_record() {
 }
 
 #[test]
-fn a_store_open_elsewhere_is_refused() {
+fn a_store_another_process_holds_is_refused() {
     let dir = tempfile::tempdir().unwrap();
-    let _open = MdkStore::open(&path(&dir), &KEY).unwrap();
+    drop(MdkStore::open(&path(&dir), &KEY).unwrap());
+    // A redb handle outside this crate's own: as another process holds it.
+    let _elsewhere = redb::Database::create(path(&dir)).unwrap();
     assert_eq!(
         MdkStore::open(&path(&dir), &KEY).unwrap_err(),
         StoreError::InUse
     );
+}
+
+#[test]
+fn a_second_open_in_this_process_shares_the_store() {
+    // The desktop reopens an engine while the last one's tasks may still
+    // hold its store.
+    let dir = tempfile::tempdir().unwrap();
+    let first = MdkStore::open(&path(&dir), &KEY).unwrap();
+    assert!(first.created());
+    first.save_group(group(1, "one")).unwrap();
+
+    let second = MdkStore::open(&path(&dir), &KEY).unwrap();
+    assert!(!second.created());
+    assert_eq!(second.all_groups().unwrap().len(), 1);
+    second.save_group(group(2, "two")).unwrap();
+    assert_eq!(first.all_groups().unwrap().len(), 2);
+
+    // Not with another key, even while it is open.
+    assert_eq!(
+        MdkStore::open(&path(&dir), &[8; 32]).unwrap_err(),
+        StoreError::WrongKey
+    );
+
+    // The last handle keeps it open; once none is left, the file is closed.
+    drop(first);
+    assert_eq!(second.all_groups().unwrap().len(), 2);
+    drop(second);
+    let _elsewhere = redb::Database::create(path(&dir)).unwrap();
+}
+
+#[test]
+fn a_unit_keeps_other_threads_out_until_it_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MdkStore::open(&path(&dir), &KEY).unwrap();
+    let unit = store.begin_unit();
+    store.save_group(group(1, "mine")).unwrap();
+
+    let (done, finished) = std::sync::mpsc::channel();
+    let other = store.clone();
+    let writer = std::thread::spawn(move || {
+        // Waits for the unit: it neither sees nor joins it.
+        let seen = other.all_groups().unwrap().len();
+        other.save_group(group(2, "theirs")).unwrap();
+        done.send(seen).unwrap();
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        finished.try_recv().is_err(),
+        "the other thread ran inside the unit"
+    );
+
+    // The unit is dropped: its write goes, and the other thread's lands alone.
+    drop(unit);
+    assert_eq!(finished.recv().unwrap(), 0);
+    writer.join().unwrap();
+    let groups = store.all_groups().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].name, "theirs");
 }
 
 #[test]
@@ -204,6 +264,23 @@ fn units_nest_and_land_at_the_outermost_commit() {
     inner.commit().unwrap();
     drop(outer);
     assert!(store.all_groups().unwrap().is_empty());
+
+    // A nested unit dropped uncommitted takes the outer one with it.
+    let outer = store.begin_unit();
+    store.save_group(group(1, "one")).unwrap();
+    let inner = store.begin_unit();
+    store.save_group(group(2, "two")).unwrap();
+    drop(inner);
+    assert!(matches!(outer.commit(), Err(StoreError::RolledBack(_))));
+    assert!(store.all_groups().unwrap().is_empty());
+
+    // Both committed: both land.
+    let outer = store.begin_unit();
+    let inner = store.begin_unit();
+    store.save_group(group(1, "one")).unwrap();
+    inner.commit().unwrap();
+    outer.commit().unwrap();
+    assert_eq!(store.all_groups().unwrap().len(), 1);
 }
 
 #[test]
