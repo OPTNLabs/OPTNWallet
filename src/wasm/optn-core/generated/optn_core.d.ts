@@ -324,6 +324,11 @@ export function hdPublicKeyChild(hd_public_key: string, index: number): Uint8Arr
 export function isLegacyPaycode(candidate: string): boolean;
 
 /**
+ * Whether raw transaction bytes are a sign-in proof. The broadcast guard.
+ */
+export function isSignInProofTransaction(raw: Uint8Array): boolean;
+
+/**
  * The P2 value for an address encoding. `cashaddr` is 3.
  */
 export function ledgerAddressFormat(name: string): number;
@@ -428,6 +433,24 @@ export function sendBlockReason(code: string): string | undefined;
 export function sharedSecret(privkey: Uint8Array, counterpart_pubkey: Uint8Array, txid: string, vout: number): Uint8Array;
 
 /**
+ * Whether an output's locking bytecode claims to be a sign-in proof.
+ */
+export function signInProofClaims(locking_bytecode: Uint8Array): boolean;
+
+/**
+ * Sign the canonical proof for `code` with the key of the proven address,
+ * returning the signed transaction. Nothing of the dApp's request is signed.
+ */
+export function signInProofSign(code: string, public_key: Uint8Array, private_key: Uint8Array): Uint8Array;
+
+/**
+ * Validate a request that claims to be a sign-in proof against the wallet's
+ * own branch xpubs. Returns JSON `{code, path, addressIndex, address,
+ * publicKey}` with the key in hex, or throws the refusal reason.
+ */
+export function signInProofValidate(request_json: string, receive_xpub: string, change_xpub: string, defi_xpub: string, network: string): string;
+
+/**
  * The private key that spends a payment at `index`.
  */
 export function spendingKey(spend_privkey: Uint8Array, secret: Uint8Array, index: number): Uint8Array;
@@ -529,6 +552,7 @@ export interface InitOutput {
     readonly hdPublicKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly hdPublicKeyChild: (a: number, b: number, c: number) => [number, number, number, number];
     readonly isLegacyPaycode: (a: number, b: number) => number;
+    readonly isSignInProofTransaction: (a: number, b: number) => number;
     readonly ledgerAddressFormat: (a: number, b: number) => [number, number, number];
     readonly ledgerEncodeBip32Path: (a: number, b: number) => [number, number, number, number];
     readonly ledgerGetWalletPublicKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
@@ -546,6 +570,9 @@ export interface InitOutput {
     readonly scanTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly sendBlockReason: (a: number, b: number) => [number, number, number, number];
     readonly sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+    readonly signInProofClaims: (a: number, b: number) => number;
+    readonly signInProofSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly signInProofValidate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly spentOutputLabel: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly tokenSpendPsbt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: bigint, e1: number, f1: number, g1: number, h1: number, i1: number, j1: number, k1: number, l1: number, m1: number, n1: number, o1: number, p1: number) => [number, number, number, number];

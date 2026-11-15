@@ -53,6 +53,9 @@ pub mod psbt;
 pub mod release_channel;
 pub mod rpa;
 pub mod scan;
+/// WizardConnect sign-in proofs: an unbroadcastable transaction that proves
+/// an address is the wallet's, built and judged here rather than per surface.
+pub mod sign_in_proof;
 pub mod sources;
 pub mod spend;
 pub mod token;

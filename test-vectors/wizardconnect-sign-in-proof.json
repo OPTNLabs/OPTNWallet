@@ -1,0 +1,1085 @@
+{
+  "reference": "Bytes from OPTNLabs/OPTNWallet PR #120 at d9d2ef64 (src/services/wizardconnect/signInProof.ts on @bitauth/libauth 3.1.0-next.8), which also refused every case under refusals and saw no claim in any case under unclaimed. Every signed proof was accepted by the libauth BCH VM. Each request is in the shape crates/optn-core/src/sign_in_proof.rs takes and each reason is that module's wording. Keys come from the public BIP39 test mnemonic; never a wallet or network credential.",
+  "format": {
+    "opReturnTag": "WCPROOF",
+    "outpointTag": "WizardConnect sign-in proof:",
+    "valueSatoshis": "1000",
+    "version": 2,
+    "locktime": 0,
+    "sequenceNumber": 4294967295,
+    "sighash": 97
+  },
+  "wallet": {
+    "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    "accountPath": "m/44'/145'/0'",
+    "xpubs": {
+      "receive": "xpub6F2iaK2JUPcgrZ6RTGH6t8VybLPu1XzfrHsDsaKvK6NfULznU6i6aw6ZoefDW2DpNruSLw73RwQg46qvpqB3eryeJJ2tkFCF4Z6gbr8Pjja",
+      "change": "xpub6F2iaK2JUPcgtVdwfStHoxEXce7FjBCH1sqwmCVKaBWk8g9r4M3j1p518VUcubb3WMcuHqfeR5Z7eNcVpbQkrE9hXMnGWpQZFaTMRkFA9cL",
+      "defi": "xpub6F2iaK2JUPch9FPfgnkFBFCg8KSjMNx7QsftpKmHfEAeyWnjPJEoJXp76tXDK2VoYnGbiHFhXsUVv3D22a5MJccjci6FZBPCHhiHvVszfkj"
+    }
+  },
+  "proofs": [
+    {
+      "name": "a receive address",
+      "code": "Session_abcdef-0123456789",
+      "path": "receive",
+      "addressIndex": 3,
+      "derivationPath": "m/44'/145'/0'/0/3",
+      "publicKey": "0281a5613b0c8a9870d0bc281eb4dfb688028b8e562bc71a9a612994c85bdc2755",
+      "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+      "addresses": {
+        "mainnet": "bitcoincash:qzcyvxr0e23d408u62ulf6cnspc0k4dyduy8kh77nc",
+        "chipnet": "bchtest:qzcyvxr0e23d408u62ulf6cnspc0k4dyduq4jsuf5y"
+      },
+      "outpointHash": "4cfb5b0a2a744ae0d4a5ba1485802199a5198f0627b6e00de1358133abae275c",
+      "opReturn": "6a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839",
+      "unsigned": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+      "signed": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c000000006441f88e776a2c231484633447846e8b99c438f79691cdefb0c53b384bcb13bfe2e2fb11d7cdac68b1ef136eb4a74092bc5462524eb69c7186ea84baf290f21a3fb661210281a5613b0c8a9870d0bc281eb4dfb688028b8e562bc71a9a612994c85bdc2755ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000"
+    },
+    {
+      "name": "the shortest code, on a change address",
+      "code": "0123456789abcdef",
+      "path": "change",
+      "addressIndex": 0,
+      "derivationPath": "m/44'/145'/0'/1/0",
+      "publicKey": "02f178b9410d11e47e10bef8a8e4bc53e48d9ae15864a024a54f87a802dad5f514",
+      "lockingBytecode": "76a914cfdcdfa3e0483ddd3c7b6ab6ee13c5087c26d5f188ac",
+      "addresses": {
+        "mainnet": "bitcoincash:qr8aeharupyrmhfu0d4tdmsnc5y8cfk47y6qrsjsrx",
+        "chipnet": "bchtest:qr8aeharupyrmhfu0d4tdmsnc5y8cfk47y7j8hs8y6"
+      },
+      "outpointHash": "2bc5fb87e8e4c924170c9cc98d681fcdcb739e240f51e5614bab467be6db7261",
+      "opReturn": "6a07574350524f4f461030313233343536373839616263646566",
+      "unsigned": "02000000016172dbe67b46ab4b61e5510f249e73cbcd1f688dc99c0c1724c9e4e887fbc52b0000000000ffffffff0200000000000000001a6a07574350524f4f461030313233343536373839616263646566e8030000000000001976a914cfdcdfa3e0483ddd3c7b6ab6ee13c5087c26d5f188ac00000000",
+      "signed": "02000000016172dbe67b46ab4b61e5510f249e73cbcd1f688dc99c0c1724c9e4e887fbc52b0000000064417a55c27073534408912297041b86d34aa5272f1f97951eca940a565e07ca90a6c01bbe9a4e2306d00ce510b76574b4cfb9d18453e1eea8a8f68fd912bbe423c6612102f178b9410d11e47e10bef8a8e4bc53e48d9ae15864a024a54f87a802dad5f514ffffffff0200000000000000001a6a07574350524f4f461030313233343536373839616263646566e8030000000000001976a914cfdcdfa3e0483ddd3c7b6ab6ee13c5087c26d5f188ac00000000"
+    },
+    {
+      "name": "the longest code and the last non-hardened index, on a defi address",
+      "code": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-",
+      "path": "defi",
+      "addressIndex": 2147483647,
+      "derivationPath": "m/44'/145'/0'/7/2147483647",
+      "publicKey": "02f03e793b48883897351f14afeb7db2c7d936a8500d82ad1bdc823d66811e33df",
+      "lockingBytecode": "76a9148c773fb350e26359fb6d169e2941c3997445724b88ac",
+      "addresses": {
+        "mainnet": "bitcoincash:qzx8w0an2r3xxk0md5tfu22pcwvhg3tjfv39s00cfh",
+        "chipnet": "bchtest:qzx8w0an2r3xxk0md5tfu22pcwvhg3tjfv4h5gd0wt"
+      },
+      "outpointHash": "5f157c13b63ad871e34e4e287ba50082c59756e9f6be622ba7c997cf3db5ac3f",
+      "opReturn": "6a07574350524f4f46404142434445464748494a4b4c4d4e4f505152535455565758595a6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738395f2d",
+      "unsigned": "02000000013facb53dcf97c9a72b62bef6e95697c58200a57b284e4ee371d83ab6137c155f0000000000ffffffff0200000000000000004a6a07574350524f4f46404142434445464748494a4b4c4d4e4f505152535455565758595a6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738395f2de8030000000000001976a9148c773fb350e26359fb6d169e2941c3997445724b88ac00000000",
+      "signed": "02000000013facb53dcf97c9a72b62bef6e95697c58200a57b284e4ee371d83ab6137c155f0000000064412a26618ae34ec73256bb02cc70ceeabdc0946cfef28ba3d6c1138e82246a3b03bb4c4135f0b3c5b44119b33b72b167cd905880d53b89c5922a5d2a8362086268612102f03e793b48883897351f14afeb7db2c7d936a8500d82ad1bdc823d66811e33dfffffffff0200000000000000004a6a07574350524f4f46404142434445464748494a4b4c4d4e4f505152535455565758595a6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738395f2de8030000000000001976a9148c773fb350e26359fb6d169e2941c3997445724b88ac00000000"
+    }
+  ],
+  "refusals": [
+    {
+      "name": "an extra real input",
+      "reason": "a proof has exactly one (fake) input",
+      "request": {
+        "transaction": "02000000025c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff09090909090909090909090909090909090909090909090909090909090909090000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          },
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a real outpoint instead of the derived one",
+      "reason": "outpoint is not the derived fake outpoint",
+      "request": {
+        "transaction": "020000000101010101010101010101010101010101010101010101010101010101010101010000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a non-zero outpoint index",
+      "reason": "outpoint is not the derived fake outpoint",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0100000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a sequence number that is not final",
+      "reason": "transaction differs from the canonical proof",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000feffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "an input that already carries an unlocking script",
+      "reason": "source output is not the fake proof input for this address",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c000000000151ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": "51"
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "an unlocked input whose source output claims an empty unlocking script",
+      "reason": "input is already unlocked",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c000000000151ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a tampered output value",
+      "reason": "transaction differs from the canonical proof",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e7030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a value on the OP_RETURN output",
+      "reason": "transaction differs from the canonical proof",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020100000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e7030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "output 1 paying a different address",
+      "reason": "transaction differs from the canonical proof",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a91456231f7128a5ce118349f508d88ee7f2d4dd6a9688ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "an extra output",
+      "reason": "a proof has exactly two outputs",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff030000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "the two outputs in the other order",
+      "reason": "output 0 must be OP_RETURN <tag> <code>",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff02e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac0000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d3031323334353637383900000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "token data on an output",
+      "reason": "token data is not allowed",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000003cef0404040404040404040404040404040404040404040404040404040404040404100176a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "token data on the source output",
+      "reason": "source output is not the fake proof input for this address",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": true,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a contract on the source output",
+      "reason": "source output is not the fake proof input for this address",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": true,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "an unlocking script on the source output",
+      "reason": "source output is not the fake proof input for this address",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": "51"
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a bigger source value",
+      "reason": "source output is not the fake proof input for this address",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "100000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a source output locked to a different address",
+      "reason": "source output is not the fake proof input for this address",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a91456231f7128a5ce118349f508d88ee7f2d4dd6a9688ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a different version",
+      "reason": "transaction differs from the canonical proof",
+      "request": {
+        "transaction": "01000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a non-zero locktime",
+      "reason": "transaction differs from the canonical proof",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac05000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a malformed code",
+      "reason": "invalid one-time code for WizardConnect sign-in",
+      "request": {
+        "transaction": "020000000192539c742ed58146a04f8ab1992360a8183d47bb5542f40c6dc87f9091cfd8c30000000000ffffffff020000000000000000136a07574350524f4f4609746f6f2073686f7274e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a code one character too short",
+      "reason": "invalid one-time code for WizardConnect sign-in",
+      "request": {
+        "transaction": "0200000001301b0cc6c215003a09eebff183475ef94bad8c517364bdb7c1198534c4003d4a0000000000ffffffff020000000000000000196a07574350524f4f460f303132333435363738396162636465e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a code one character too long",
+      "reason": "invalid one-time code for WizardConnect sign-in",
+      "request": {
+        "transaction": "0200000001b34539be15ab0e7659dfb448712a919a390f4ddc5548906c0ba596bfb7965c7a0000000000ffffffff0200000000000000004b6a07574350524f4f46414142434445464748494a4b4c4d4e4f505152535455565758595a6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738395f2d78e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a code with a character outside the alphabet",
+      "reason": "invalid one-time code for WizardConnect sign-in",
+      "request": {
+        "transaction": "0200000001d1de35e241a9978b7f0ed156ff861fb546409d39a51a67187ece3b65c09f75c40000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e2e6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a third push after the code",
+      "reason": "output 0 must be OP_RETURN <tag> <code>",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff0200000000000000002f6a07574350524f4f461953657373696f6e5f6162636465662d303132333435363738390b6578616d706c652e636f6de8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a tag with no code",
+      "reason": "output 0 must be OP_RETURN <tag> <code>",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000096a07574350524f4f46e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a code pushed with OP_PUSHDATA1",
+      "reason": "transaction differs from the canonical proof",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000246a07574350524f4f464c1953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a truncated push after the tag",
+      "reason": "output 0 must be OP_RETURN <tag> <code>",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff0200000000000000000d6a07574350524f4f4628010203e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "an address that is not the one at the requested path",
+      "reason": "source output is not the fake proof input for this address",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            4
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a second input path",
+      "reason": "exactly one wallet input path, for input 0",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ],
+          [
+            1,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "no input path",
+      "reason": "exactly one wallet input path, for input 0",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "an input path for another input",
+      "reason": "exactly one wallet input path, for input 0",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            1,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "an address path the wallet does not have",
+      "reason": "unsupported address path",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "rpa",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a hardened address index",
+      "reason": "invalid address index",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            2147483648
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "broadcast: true",
+      "reason": "a sign-in proof is never broadcast",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": true
+      }
+    }
+  ],
+  "unclaimed": [
+    {
+      "name": "an ordinary OP_RETURN",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000056a03414243e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "another protocol tag (BSEDITOR)",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff0200000000000000002b6a084253454449544f52203031323334353637383961626364656630313233343536373839616263646566e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a bare OP_RETURN",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000016ae8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a longer tag that only starts with WCPROOF",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000246a08574350524f4f46321953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "the tag as the second push",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a1953657373696f6e5f6162636465662d3031323334353637383907574350524f4f46e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    },
+    {
+      "name": "a payment with no OP_RETURN",
+      "request": {
+        "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff0120030000000000001976a91456231f7128a5ce118349f508d88ee7f2d4dd6a9688ac00000000",
+        "sourceOutputs": [
+          {
+            "valueSatoshis": "1000",
+            "lockingBytecode": "76a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac",
+            "token": false,
+            "contract": false,
+            "unlockingBytecode": ""
+          }
+        ],
+        "inputPaths": [
+          [
+            0,
+            "receive",
+            3
+          ]
+        ],
+        "broadcast": false
+      }
+    }
+  ],
+  "broadcastGuard": [
+    {
+      "name": "the unsigned proof",
+      "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+      "signInProof": true
+    },
+    {
+      "name": "the signed proof",
+      "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c000000006441f88e776a2c231484633447846e8b99c438f79691cdefb0c53b384bcb13bfe2e2fb11d7cdac68b1ef136eb4a74092bc5462524eb69c7186ea84baf290f21a3fb661210281a5613b0c8a9870d0bc281eb4dfb688028b8e562bc71a9a612994c85bdc2755ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+      "signInProof": true
+    },
+    {
+      "name": "the proof beside an extra real input",
+      "transaction": "02000000025c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff09090909090909090909090909090909090909090909090909090909090909090000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+      "signInProof": true
+    },
+    {
+      "name": "the proof with a third push after the code",
+      "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff0200000000000000002f6a07574350524f4f461953657373696f6e5f6162636465662d303132333435363738390b6578616d706c652e636f6de8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+      "signInProof": true
+    },
+    {
+      "name": "the proof with a tampered output value",
+      "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e7030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+      "signInProof": true
+    },
+    {
+      "name": "the tag over a real outpoint",
+      "transaction": "020000000101010101010101010101010101010101010101010101010101010101010101010000000000ffffffff020000000000000000236a07574350524f4f461953657373696f6e5f6162636465662d30313233343536373839e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+      "signInProof": false
+    },
+    {
+      "name": "a tag with no code",
+      "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000096a07574350524f4f46e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+      "signInProof": false
+    },
+    {
+      "name": "an ordinary OP_RETURN",
+      "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff020000000000000000056a03414243e8030000000000001976a914b046186fcaa2dabcfcd2b9f4eb138070fb55a46f88ac00000000",
+      "signInProof": false
+    },
+    {
+      "name": "a payment with no OP_RETURN",
+      "transaction": "02000000015c27aeab338135e10de0b627068f19a59921808514baa5d4e04a742a0a5bfb4c0000000000ffffffff0120030000000000001976a91456231f7128a5ce118349f508d88ee7f2d4dd6a9688ac00000000",
+      "signInProof": false
+    }
+  ]
+}

@@ -69,6 +69,7 @@ export const hdPrivateKeyAtPath: (a: number, b: number, c: number, d: number, e:
 export const hdPublicKeyAtPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const hdPublicKeyChild: (a: number, b: number, c: number) => [number, number, number, number];
 export const isLegacyPaycode: (a: number, b: number) => number;
+export const isSignInProofTransaction: (a: number, b: number) => number;
 export const ledgerAddressFormat: (a: number, b: number) => [number, number, number];
 export const ledgerEncodeBip32Path: (a: number, b: number) => [number, number, number, number];
 export const ledgerGetWalletPublicKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
@@ -86,6 +87,9 @@ export const rpaKeyPaths: (a: number, b: number) => [number, number];
 export const scanTransaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const sendBlockReason: (a: number, b: number) => [number, number, number, number];
 export const sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+export const signInProofClaims: (a: number, b: number) => number;
+export const signInProofSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+export const signInProofValidate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
 export const spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const spentOutputLabel: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const tokenSpendPsbt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: bigint, e1: number, f1: number, g1: number, h1: number, i1: number, j1: number, k1: number, l1: number, m1: number, n1: number, o1: number, p1: number) => [number, number, number, number];
