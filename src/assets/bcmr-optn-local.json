@@ -5,10 +5,26 @@
     "minor": 0,
     "patch": 1
   },
-  "latestRevision": "2025-04-23T00:00:00.000Z",
+  "latestRevision": "2026-11-11T00:00:00.000Z",
   "registryIdentity": {
     "name": "Optn Wallet Local Registry",
     "description": "All registry data that your OPTN Wallet is aware of."
   },
-  "identities": {}
+  "identities": {
+    "dfe50223c8d5cba8dcef8dff6d92b61deb88a8ba44947367f2b746487b56039b": {
+      "2026-11-11T00:00:00.000Z": {
+        "name": "ParyonUSD (chipnet-16)",
+        "description": "A dollar pegged stablecoin on Bitcoin Cash.",
+        "token": {
+          "category": "dfe50223c8d5cba8dcef8dff6d92b61deb88a8ba44947367f2b746487b56039b",
+          "symbol": "PUSDTEST",
+          "decimals": 2
+        },
+        "uris": {
+          "icon": "https://paryonusd.com/logo.svg",
+          "web": "https://paryonusd.com"
+        }
+      }
+    }
+  }
 }

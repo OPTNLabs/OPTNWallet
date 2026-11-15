@@ -48,3 +48,14 @@ allow = [
   "Unlicense",
   "Zlib",
 ]
+
+# sqlcipher-src is the SQLCipher source libsqlite3-sys 0.40 builds for the chat
+# store, the first on a SQLite without RUSTSEC-2026-0459. Its expression adds
+# two licences to the MIT and BSD-3-Clause allowed above: SQLite's
+# public-domain dedication, for code libsqlite3-sys 0.35 shipped inside a
+# package it declared as MIT, and the WTFPL, for libtomcrypt, which the crate
+# carries as source and libsqlite3-sys never compiles (it builds SQLCipher on
+# OpenSSL or CommonCrypto). Both are allowed for this crate only.
+[[licenses.exceptions]]
+crate = "sqlcipher-src"
+allow = ["blessing", "WTFPL"]

@@ -139,6 +139,17 @@ export const createTransactionDetailsTable = (db: DatabaseRunner) => {
       UNIQUE(wallet_id, tx_hash)
     );
   `);
+
+  try {
+    db.run('ALTER TABLE transaction_details ADD COLUMN size_bytes INT');
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !/duplicate column name/i.test(error.message)
+    ) {
+      throw error;
+    }
+  }
 };
 
 export const createTables = (db: DatabaseRunner) => {

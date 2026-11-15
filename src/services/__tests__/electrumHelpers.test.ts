@@ -16,8 +16,18 @@ describe('electrumHelpers', () => {
         { address: 123, amountSats: 'bad' },
       ])
     ).toEqual([
-      { address: 'bitcoincash:q1', amountSats: 100, outputIndex: 0 },
-      { address: 'Unknown', amountSats: undefined, outputIndex: undefined },
+      {
+        address: 'bitcoincash:q1',
+        amountSats: 100,
+        outputIndex: 0,
+        token: null,
+      },
+      {
+        address: 'Unknown',
+        amountSats: undefined,
+        outputIndex: undefined,
+        token: null,
+      },
     ]);
   });
 

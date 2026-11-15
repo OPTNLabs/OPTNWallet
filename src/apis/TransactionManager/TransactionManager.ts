@@ -1,6 +1,7 @@
 // src/apis/TransactionManager/TransactionManager.ts
 
 import { store } from '../../state/store';
+import { decodeTransaction } from '@bitauth/libauth';
 import { addTxOutput } from '../../state/slices/transactionBuilderSlice';
 import ElectrumService from '../../services/ElectrumService';
 import {
@@ -270,6 +271,24 @@ export default function TransactionManager() {
           errorMessage: 'Unable to read the signed transaction inputs.',
         };
       }
+    } else {
+      // Mobile/web do not load the desktop WASM inspection path, but the
+      // signed transaction still has to reserve the exact inputs before the
+      // network handoff. Without this, a follow-up workflow can select a fee
+      // UTXO already consumed by an earlier mobile broadcast while the local
+      // refresh is still catching up.
+      try {
+        const decoded = decodeTransaction(hexToBin(rawTX));
+        if (typeof decoded !== 'string') {
+          spentInputs = decoded.inputs.map((input) => ({
+            tx_hash: binToHex(input.outpointTransactionHash),
+            tx_pos: input.outpointIndex,
+          }));
+        }
+      } catch {
+        // ElectrumService still validates the raw transaction at broadcast;
+        // keep the existing error path for malformed test/connector payloads.
+      }
     }
     await OutboundTransactionTracker.trackAttempt({
       rawTx: rawTX,
@@ -329,7 +348,10 @@ export default function TransactionManager() {
         }
         txid = result.txid;
       } else {
-        txid = await TransactionBuilderHelper().sendTransaction(rawTX);
+        // Mobile/web broadcasts must use the app-owned Electrum connection so
+        // manual endpoint selection, public failover, tip checks, and privacy
+        // policy all apply to the same transaction path used for sync.
+        txid = await ElectrumService.broadcastTransaction(rawTX);
       }
       if (derivedTxid) {
         await OutboundTransactionTracker.markState(

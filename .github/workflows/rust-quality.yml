@@ -189,6 +189,46 @@ jobs:
           cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" --format json check advisories 2> "$audit_dir/report.jsonl" || status=$?
           python3 scripts/check-vendored-advisories.py "$audit_dir/report.jsonl" "$status" $REPAIRED_IN_VENDOR
 
+      # vendor/mdk-sqlite-storage-0.8.0 (optn-chat's SQLCipher store) takes rusqlite 0.42, whose SQLCipher is on a fixed SQLite; see its OPTN.md.
+      - name: Preserve vendored mdk-sqlite-storage advisory coverage
+        env:
+          REPAIRED_IN_VENDOR: RUSTSEC-2026-0459
+        run: |
+          audit_dir="$RUNNER_TEMP/optn-mdk-sqlite-storage-advisory"
+          mkdir -p "$audit_dir/src"
+          touch "$audit_dir/src/lib.rs"
+          cat > "$audit_dir/Cargo.toml" <<'EOF'
+          [package]
+          name = "optn-mdk-sqlite-storage-advisory"
+          version = "0.0.0"
+          edition = "2021"
+          [dependencies]
+          mdk-sqlite-storage = "=0.8.0"
+          EOF
+          status=0
+          cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" --format json check advisories 2> "$audit_dir/report.jsonl" || status=$?
+          python3 scripts/check-vendored-advisories.py "$audit_dir/report.jsonl" "$status" $REPAIRED_IN_VENDOR
+
+      # vendor/refinery-core-0.9.2 (the store's migrations) accepts that rusqlite; with its `rusqlite` driver, as MDK enables it. See its OPTN.md.
+      - name: Preserve vendored refinery-core advisory coverage
+        env:
+          REPAIRED_IN_VENDOR: RUSTSEC-2026-0459
+        run: |
+          audit_dir="$RUNNER_TEMP/optn-refinery-core-advisory"
+          mkdir -p "$audit_dir/src"
+          touch "$audit_dir/src/lib.rs"
+          cat > "$audit_dir/Cargo.toml" <<'EOF'
+          [package]
+          name = "optn-refinery-core-advisory"
+          version = "0.0.0"
+          edition = "2021"
+          [dependencies]
+          refinery-core = { version = "=0.9.2", features = ["rusqlite"] }
+          EOF
+          status=0
+          cargo deny --manifest-path "$audit_dir/Cargo.toml" --config "$GITHUB_WORKSPACE/deny.toml" --format json check advisories 2> "$audit_dir/report.jsonl" || status=$?
+          python3 scripts/check-vendored-advisories.py "$audit_dir/report.jsonl" "$status" $REPAIRED_IN_VENDOR
+
   feature-matrix:
     name: Rust feature and fuzz compile
     runs-on: ubuntu-latest

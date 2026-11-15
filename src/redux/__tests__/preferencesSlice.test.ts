@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import reducer, {
   DEFAULT_MERCHANT_PAY_CONVERSION_BPS,
   selectMerchantPayDefaultConversionBps,
+  selectChainPolicy,
   selectTooltipsEnabled,
   setEnableTooltips,
   setMerchantPayDefaultConversionBps,
@@ -10,6 +11,15 @@ import reducer, {
 } from '../../state/slices/preferencesSlice';
 
 describe('preferencesSlice', () => {
+  it('allows legacy browser state to use public explorer links', () => {
+    const state = reducer(undefined, { type: 'unknown' });
+    const legacyState = { ...state, chainPolicy: undefined };
+
+    expect(selectChainPolicy({ preferences: legacyState } as never)).toBe(
+      'auto'
+    );
+  });
+
   it('defaults tooltips to disabled', () => {
     const state = reducer(undefined, { type: 'unknown' });
 

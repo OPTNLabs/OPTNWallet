@@ -42,6 +42,7 @@ assert.equal(
 );
 
 const allowBroadcast = process.env.OPTN_E2E_ALLOW_BROADCAST === '1';
+const allowBackgroundSync = process.env.OPTN_E2E_ALLOW_BACKGROUND_SYNC === '1';
 if (process.env.OPTN_E2E_ALLOW_BROADCAST && !allowBroadcast) {
   throw new Error(
     'Set OPTN_E2E_ALLOW_BROADCAST=1 for live Chipnet sends, or omit it for review-only mode.'
@@ -90,6 +91,7 @@ const browserWidth = Number(process.env.OPTN_E2E_BROWSER_WIDTH ?? '390');
 const browserHeight = Number(process.env.OPTN_E2E_BROWSER_HEIGHT ?? '844');
 const chipnetElectrumServers = [
   ['electrum-chipnet.optnlabs.com', 50004],
+  ['chipnet.bch.ninja', 50004],
   ['chipnet.imaginary.cash', 50004],
   ['chipnet.c3-soft.com', 64004],
 ];
@@ -192,10 +194,21 @@ async function importChipnetWallet(session) {
     await input.setValue(words[index]);
   }
 
-  const mainnetSwitch = await session.$(
-    'button[aria-label*="Current: Mainnet"]'
+  const chipnetSwitch = await waitFor(
+    session,
+    'button[data-testid="network-option-chipnet"]'
   );
-  if (await mainnetSwitch.isExisting()) await mainnetSwitch.click();
+  if ((await chipnetSwitch.getAttribute('aria-checked')) !== 'true') {
+    await chipnetSwitch.click();
+  }
+  await session.waitUntil(
+    async () => (await chipnetSwitch.getAttribute('aria-checked')) === 'true',
+    {
+      timeout: 30_000,
+      timeoutMsg: 'The import flow did not select Chipnet.',
+    }
+  );
+  await waitForText(session, 'body', "m/44'/1'/0'", 30_000);
   await click(session, 'button=Import Wallet');
   await waitFor(session, 'h1=Home', 90_000);
   await waitForText(session, 'body', 'tBCH', 120_000);
@@ -214,10 +227,19 @@ async function syncAndReadBalance(session) {
       .catch(() => '');
     const match = bodyText.match(/([0-9]+(?:\.[0-9]{8})?)\s+tBCH\b/);
     const stillSyncing = bodyText.includes('Syncing');
-    if (match && !stillSyncing) {
+    if (match) {
       const balance = Number(match[1]);
       assert.equal(Number.isFinite(balance), true);
-      return balance;
+      const settled = !stillSyncing;
+      const usableDuringBackgroundSync = allowBackgroundSync && balance > 0;
+      if (settled || usableDuringBackgroundSync) {
+        if (stillSyncing) {
+          console.log(
+            '[transaction-audit] Chipnet balance is visible; continuing while optional background address discovery remains active.'
+          );
+        }
+        return balance;
+      }
     }
     await sleep(500);
   }

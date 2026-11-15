@@ -104,7 +104,7 @@ describe('explorer links follow the chain policy', () => {
       );
       const expected = preset.chipnetTx
         ? preset.chipnetTx.replace('{txid}', TXID)
-        : `https://explorer.selene.cash/tx/${TXID}`;
+        : `https://explorer.selene.cash/tx/${TXID}?network=chipnet`;
       expect(url, `${preset.id} on chipnet`).toBe(expected);
     }
   });

@@ -4,10 +4,14 @@ import { Link } from 'react-router-dom';
 import Popup from '../../components/transaction/Popup';
 import StatusChip from '../../components/ui/StatusChip';
 import type {
+  BcmrTokenMetadata,
+  Token,
   TransactionDetails,
   TransactionDetailParticipant,
 } from '../../types/types';
 import ElectrumService from '../../services/ElectrumService';
+import BcmrService from '../../services/BcmrService';
+import { normalizeHexId } from '../../services/bcmr';
 import TransactionManager from '../../apis/TransactionManager/TransactionManager';
 import { addTransactions } from '../../state/slices/transactionSlice';
 import { selectWalletId } from '../../state/slices/walletSlice';
@@ -16,6 +20,7 @@ import { useI18n } from '../../i18n/useI18n';
 import { formatDate, formatNumber } from '../../i18n/format';
 import type { SupportedLocale } from '../../i18n/types';
 import { handleExternalLinkClick } from '../../utils/openExternalLink';
+import { isDesktopPlatform } from '../../utils/platform';
 import { deriveWalletTransactionEffect } from './transactionEffect';
 import MaskedValue from '../../components/ui/MaskedValue';
 import InfoButton from '../../components/ui/InfoButton';
@@ -44,6 +49,26 @@ function formatSats(
   })} BCH`;
 }
 
+function formatFeeRate(
+  feeSats: number | undefined,
+  sizeBytes: number | undefined,
+  locale: SupportedLocale,
+  unknown: string
+): string {
+  if (
+    feeSats == null ||
+    sizeBytes == null ||
+    !Number.isFinite(feeSats) ||
+    !Number.isFinite(sizeBytes) ||
+    sizeBytes <= 0
+  ) {
+    return unknown;
+  }
+  return `${formatNumber(feeSats / sizeBytes, locale, {
+    maximumFractionDigits: 2,
+  })} sat/byte`;
+}
+
 function formatTimestamp(
   locale: SupportedLocale,
   timestamp: string | undefined,
@@ -58,6 +83,27 @@ function formatTimestamp(
   });
 }
 
+function formatTokenAmount(amount: Token['amount']): string {
+  return typeof amount === 'bigint' ? amount.toString() : String(amount);
+}
+
+function formatTokenAmountWithDecimals(
+  amount: Token['amount'],
+  decimals: number
+): string {
+  const raw = formatTokenAmount(amount);
+  const places = Number.isInteger(decimals) && decimals > 0 ? decimals : 0;
+  if (places === 0 || !/^-?\d+$/.test(raw)) return raw;
+
+  const negative = raw.startsWith('-');
+  const digits = (negative ? raw.slice(1) : raw).padStart(places + 1, '0');
+  const integer = digits.slice(0, -places) || '0';
+  const fraction = digits.slice(-places);
+  return `${negative ? '-' : ''}${integer}.${fraction}`;
+}
+
+type TokenMetadataByCategory = Record<string, BcmrTokenMetadata | null>;
+
 function markWalletParticipants(
   rows: TransactionDetailParticipant[],
   walletAddresses: Set<string>
@@ -71,9 +117,11 @@ function markWalletParticipants(
 function Section({
   title,
   rows,
+  tokenMetadataByCategory,
 }: {
   title: string;
   rows: TransactionDetailParticipant[];
+  tokenMetadataByCategory: TokenMetadataByCategory;
 }) {
   const { locale, t } = useI18n();
   return (
@@ -87,36 +135,110 @@ function Section({
         {rows.length === 0 ? (
           <div className="text-sm wallet-muted">{t('history.noData')}</div>
         ) : (
-          rows.map((row, index) => (
-            <div
-              key={`${title}-${row.address}-${row.outputIndex ?? 'na'}-${index}`}
-              className="rounded-2xl border border-[var(--wallet-border)] p-3"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <MaskedValue
-                    value={row.address}
-                    label={t('send.address')}
-                    copySuccessMessageKey="receive.addressCopied"
-                    className="block max-w-full break-all text-xs"
-                  />
-                  {typeof row.outputIndex === 'number' ? (
-                    <div className="text-xs wallet-muted mt-1">
-                      {t('history.output')} #{row.outputIndex}
-                    </div>
+          rows.map((row, index) => {
+            const tokenCategory = row.token
+              ? normalizeHexId(row.token.category)
+              : '';
+            const tokenMetadata = tokenCategory
+              ? tokenMetadataByCategory[tokenCategory]
+              : null;
+
+            return (
+              <div
+                key={`${title}-${row.address}-${row.outputIndex ?? 'na'}-${index}`}
+                className="rounded-2xl border border-[var(--wallet-border)] p-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <MaskedValue
+                      value={row.address}
+                      label={t('send.address')}
+                      copySuccessMessageKey="receive.addressCopied"
+                      preserveCashAddressPrefix
+                      prefixLength={5}
+                      suffixLength={5}
+                      className="block max-w-full break-all text-xs"
+                    />
+                    {typeof row.outputIndex === 'number' ? (
+                      <div className="text-xs wallet-muted mt-1">
+                        {t('history.output')} #{row.outputIndex}
+                      </div>
+                    ) : null}
+                  </div>
+                  {row.isWalletAddress ? (
+                    <StatusChip tone="neutral">
+                      {t('history.yourWallet')}
+                    </StatusChip>
                   ) : null}
                 </div>
-                {row.isWalletAddress ? (
-                  <StatusChip tone="neutral">
-                    {t('history.yourWallet')}
-                  </StatusChip>
+                <div className="text-sm mt-2 wallet-text-strong">
+                  {formatSats(row.amountSats, locale, t('history.unknown'))}
+                </div>
+                {row.token ? (
+                  <div className="mt-3 space-y-2 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] p-3 text-xs">
+                    {tokenMetadata ? (
+                      <div className="text-sm font-semibold wallet-text-strong">
+                        {tokenMetadata.name}
+                        {tokenMetadata.token.symbol
+                          ? ` (${tokenMetadata.token.symbol})`
+                          : ''}
+                      </div>
+                    ) : null}
+                    <div>
+                      <div className="wallet-muted">
+                        {t('send.tokenCategory')}
+                      </div>
+                      <MaskedValue
+                        value={row.token.category}
+                        label={t('send.tokenCategory')}
+                        copySuccessMessageKey="receive.addressCopied"
+                        prefixLength={5}
+                        suffixLength={5}
+                        className="block max-w-full text-xs"
+                      />
+                    </div>
+                    <div className="font-mono text-right wallet-text-strong">
+                      {tokenMetadata
+                        ? `${formatTokenAmountWithDecimals(
+                            row.token.amount,
+                            tokenMetadata.token.decimals
+                          )}${
+                            tokenMetadata.token.symbol
+                              ? ` ${tokenMetadata.token.symbol}`
+                              : ''
+                          }`
+                        : formatTokenAmount(row.token.amount)}
+                    </div>
+                    {row.token.nft ? (
+                      <>
+                        <div className="flex items-baseline justify-between gap-3">
+                          <span className="wallet-muted">
+                            {t('builder.capability')}
+                          </span>
+                          <span className="wallet-text-strong">
+                            {row.token.nft.capability}
+                          </span>
+                        </div>
+                        <div>
+                          <div className="wallet-muted">
+                            {t('send.nftCommitment')}
+                          </div>
+                          <MaskedValue
+                            value={row.token.nft.commitment}
+                            label={t('send.nftCommitment')}
+                            copySuccessMessageKey="receive.addressCopied"
+                            prefixLength={5}
+                            suffixLength={5}
+                            className="block max-w-full text-xs"
+                          />
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
-              <div className="text-sm mt-2 wallet-text-strong">
-                {formatSats(row.amountSats, locale, t('history.unknown'))}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>
@@ -138,6 +260,8 @@ export default function TransactionDetailPopup({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retryCount, setRetryCount] = useState(0);
+  const [tokenMetadataByCategory, setTokenMetadataByCategory] =
+    useState<TokenMetadataByCategory>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -195,6 +319,36 @@ export default function TransactionDetailPopup({
     };
   }, [txid, walletId, dispatch, t, retryCount]);
 
+  useEffect(() => {
+    const categories = Array.from(
+      new Set(
+        [...(details?.inputs ?? []), ...(details?.outputs ?? [])]
+          .map((row) => (row.token ? normalizeHexId(row.token.category) : ''))
+          .filter(Boolean)
+      )
+    );
+
+    setTokenMetadataByCategory({});
+    if (categories.length === 0) return;
+
+    let cancelled = false;
+    const bcmr = new BcmrService();
+
+    void Promise.all(
+      categories.map(async (category) => {
+        const metadata = await bcmr.resolveSnapshot(category);
+        return [category, metadata] as const;
+      })
+    ).then((entries) => {
+      if (cancelled) return;
+      setTokenMetadataByCategory(Object.fromEntries(entries));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [details]);
+
   const markedInputs = useMemo(
     () => markWalletParticipants(details?.inputs ?? [], walletAddresses),
     [details?.inputs, walletAddresses]
@@ -219,6 +373,8 @@ export default function TransactionDetailPopup({
             label={t('history.transactionId')}
             ariaLabel={t('history.copyTransaction')}
             copySuccessMessageKey="history.transactionCopied"
+            prefixLength={5}
+            suffixLength={5}
             className="block w-full text-sm"
           />
         </div>
@@ -232,6 +388,7 @@ export default function TransactionDetailPopup({
                   id="transaction-status-help"
                   ariaLabel={t('history.statusHelpLabel')}
                   content={t('history.statusHelp')}
+                  popoverSide="center"
                 />
               </div>
               <div className="text-sm wallet-text-strong">
@@ -293,6 +450,19 @@ export default function TransactionDetailPopup({
                     )}
               </div>
             </div>
+            <div>
+              <div className="text-xs wallet-muted">{t('history.feeRate')}</div>
+              <div className="wallet-text-strong">
+                {loading
+                  ? '…'
+                  : formatFeeRate(
+                      details?.feeSats,
+                      details?.sizeBytes,
+                      locale,
+                      t('history.unknown')
+                    )}
+              </div>
+            </div>
             <div className="col-span-2">
               <div className="text-xs wallet-muted">
                 {t('history.timestamp')}
@@ -327,10 +497,16 @@ export default function TransactionDetailPopup({
                 <p className="text-sm wallet-muted" role="status">
                   {explorerReason}{' '}
                   <Link
-                    to="/settings?panel=explorer"
+                    to={
+                      isDesktopPlatform()
+                        ? '/settings?panel=server'
+                        : '/settings?panel=explorer'
+                    }
                     className="underline wallet-text-strong"
                   >
-                    {t('history.openExplorerSettings')}
+                    {isDesktopPlatform()
+                      ? t('history.openNetworkSettings')
+                      : t('history.openExplorerSettings')}
                   </Link>
                 </p>
               ) : null}
@@ -355,8 +531,16 @@ export default function TransactionDetailPopup({
           </div>
         ) : (
           <>
-            <Section title={t('history.senders')} rows={markedInputs} />
-            <Section title={t('history.recipients')} rows={markedOutputs} />
+            <Section
+              title={t('history.senders')}
+              rows={markedInputs}
+              tokenMetadataByCategory={tokenMetadataByCategory}
+            />
+            <Section
+              title={t('history.recipients')}
+              rows={markedOutputs}
+              tokenMetadataByCategory={tokenMetadataByCategory}
+            />
           </>
         )}
       </div>

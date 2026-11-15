@@ -1041,8 +1041,11 @@ export const localeOverrides = {
     'history.statusHelp':
       'تعني الحالة المؤكدة أن المعاملة موجودة في كتلة. وتعني غير المؤكدة أن الشبكة رأت المعاملة لكنها تنتظر كتلة.',
     'history.fee': 'الرسوم',
+    'history.cashTokenEffect': 'تأثير CashToken',
+    'history.feeRate': 'معدل الرسوم',
     'history.timestamp': 'الطابع الزمني',
     'history.openExplorer': 'فتح في المستكشف',
+    'history.openNetworkSettings': 'فتح إعدادات الشبكة',
     'history.openExplorerFailed':
       'تعذر فتح المتصفح. تحقق من أذونات المتصفح وحاول مرة أخرى.',
     'history.copyTransaction': 'نسخ معرّف المعاملة',
@@ -1621,6 +1624,11 @@ export const localeOverrides = {
     'server.blockExplorer': 'مستكشف الكتل',
     'server.explorerDescription':
       'يُستخدم لروابط «فتح في المستكشف» الخاصة بالمعاملات.',
+    'server.explorerAccess': 'الوصول إلى المستكشف',
+    'server.explorerAccessDescription':
+      'اختر ما إذا كان يمكن لهذه المحفظة فتح روابط المستكشفات العامة.',
+    'server.allowPublicExplorers': 'السماح بالمستكشفات العامة',
+    'server.privateExplorerOnly': 'بنيتي التحتية فقط',
     'server.custom': 'مخصص…',
     'server.txUrlPlaceholder':
       'رابط المعاملة، مثل https://example.com/tx/{txid}',

@@ -24,7 +24,9 @@ use crate::network::Network;
 /// `chipnet_*` is present only where the operator runs a test-network site.
 /// Where it is absent the chipnet fallback is used instead, because sending a
 /// chipnet txid to a mainnet explorer produces a confident "not found" that
-/// reads like the transaction failed.
+/// reads like the transaction failed. The Selene route carries the network
+/// explicitly in the query string so the same public host can serve both
+/// mainnet and Chipnet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerPreset {
     pub id: &'static str,
@@ -56,17 +58,19 @@ pub const PRESETS: &[ExplorerPreset] = &[
         tx: "https://explorer.bch.ninja/tx/{txid}",
         address: "https://explorer.bch.ninja/address/{address}",
         block: None,
-        chipnet_tx: Some("https://explorer.selene.cash/tx/{txid}"),
-        chipnet_address: Some("https://explorer.selene.cash/address/{address}"),
+        // The legacy BCH Ninja Chipnet route is no longer the public Selene
+        // explorer. Let the shared Chipnet fallback select Selene instead.
+        chipnet_tx: None,
+        chipnet_address: None,
     },
     ExplorerPreset {
         id: "selene",
         label: "Selene Explorer (explorer.selene.cash)",
-        tx: "https://explorer.selene.cash/tx/{txid}",
-        address: "https://explorer.selene.cash/address/{address}",
+        tx: "https://explorer.selene.cash/tx/{txid}?network=mainnet",
+        address: "https://explorer.selene.cash/address/{address}?network=mainnet",
         block: None,
-        chipnet_tx: None,
-        chipnet_address: None,
+        chipnet_tx: Some("https://explorer.selene.cash/tx/{txid}?network=chipnet"),
+        chipnet_address: Some("https://explorer.selene.cash/address/{address}?network=chipnet"),
     },
     ExplorerPreset {
         id: "imaginary",
@@ -106,10 +110,11 @@ pub const PRESETS: &[ExplorerPreset] = &[
     },
 ];
 
-/// Chipnet links fall back to Selene Explorer unless the chosen preset defines
-/// its own test-network route.
-const CHIPNET_FALLBACK_TX: &str = "https://explorer.selene.cash/tx/{txid}";
-const CHIPNET_FALLBACK_ADDRESS: &str = "https://explorer.selene.cash/address/{address}";
+/// Chipnet links fall back to Selene's current public Chipnet explorer unless
+/// the chosen preset defines its own test-network route.
+const CHIPNET_FALLBACK_TX: &str = "https://explorer.selene.cash/tx/{txid}?network=chipnet";
+const CHIPNET_FALLBACK_ADDRESS: &str =
+    "https://explorer.selene.cash/address/{address}?network=chipnet";
 
 pub fn preset(id: &str) -> &'static ExplorerPreset {
     PRESETS
@@ -366,7 +371,7 @@ mod tests {
     fn chipnet_never_resolves_to_a_mainnet_explorer() {
         // A chipnet txid on a mainnet explorer renders a confident "not found"
         // that reads like the transaction failed. Presets without an explicit
-        // chipnet route use the Selene Explorer fallback.
+        // chipnet route use the Selene Chipnet explorer fallback.
         for entry in PRESETS {
             let url = explorer_url(
                 &ExplorerChoice::Preset(entry.id.into()),
@@ -384,7 +389,7 @@ mod tests {
                 );
             } else {
                 assert_eq!(
-                    url, "https://explorer.selene.cash/tx/abc123",
+                    url, "https://explorer.selene.cash/tx/abc123?network=chipnet",
                     "preset {} used a non-chipnet explorer",
                     entry.id
                 );

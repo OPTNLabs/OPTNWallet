@@ -30,6 +30,7 @@ import {
   isVerboseTransaction,
   mapOutputParticipant,
   mapUtxoRows,
+  toPositiveInteger,
   toVisibilityFromResponse,
 } from './electrum/helpers';
 import {
@@ -39,6 +40,8 @@ import {
 } from './electrum/transaction';
 import { isDesktopPlatform } from '../utils/platform';
 import { Network } from '../state/slices/networkSlice';
+import { binToHex, hexToBin } from '../utils/hex';
+import { sha256 } from '../utils/hash';
 import {
   clearBlockHeaderListeners,
   registerAddressSubscription,
@@ -588,15 +591,28 @@ const ElectrumService = {
   async broadcastTransaction(txHex: string): Promise<string> {
     const server = ElectrumServer();
     try {
+      const expectedTxid = binToHex(
+        sha256.hash(sha256.hash(hexToBin(txHex))).reverse()
+      );
       const txHash: RequestResponse = await server.request(
         'blockchain.transaction.broadcast',
         txHex
       );
-      if (isStringResponse(txHash)) return txHash;
-      throw new Error('Invalid transaction hash response');
+      if (
+        isStringResponse(txHash) &&
+        /^[0-9a-f]{64}$/i.test(txHash) &&
+        txHash.toLowerCase() === expectedTxid
+      ) {
+        return txHash;
+      }
+      throw new Error(
+        isStringResponse(txHash) && /^[0-9a-f]{64}$/i.test(txHash)
+          ? `Broadcast returned txid ${txHash}, expected ${expectedTxid}.`
+          : 'Invalid transaction hash response'
+      );
     } catch (error) {
       logError('ElectrumService.broadcastTransaction', error);
-      return toErrorMessage(error);
+      throw new Error(toErrorMessage(error, 'Broadcast failed without a reason.'));
     }
   },
 
@@ -1129,6 +1145,7 @@ const ElectrumService = {
           confirmations: confs,
           height: txHeight,
           feeSats: deriveFeeSats(response.fee, inputs, outputs),
+          sizeBytes: toPositiveInteger(response.size ?? response.vsize),
           timestamp: extractTimestamp(response),
           inputs,
           outputs,

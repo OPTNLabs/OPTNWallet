@@ -616,7 +616,7 @@ flows require fixtures for their full states.
    transaction card now opens its detail popup, where the separately labelled
    “Open in explorer” action uses the selected explorer and current network
    under the shared policy. If policy blocks public access, the popup explains
-   why and links to Settings → Explorer. The list card remains the details
+   the Network → Routing cause and links to Network settings. The list card remains the details
    action so the two purposes are not conflated.
 2. **Medium — copy had no dependable confirmation.** Copy the selected Receive
    address on mobile: clipboard could succeed without a visible response.
@@ -2315,3 +2315,61 @@ duplicate full-width network banner. Settings also places the smaller theme
 toggle on the right side of Quick access. `uiautomator` exposed the active
 network label and `Toggle theme` control. No live-chain transaction was
 performed.
+
+### Android release QA preflight harness — 2026-11-12
+
+The repository now includes `npm run android:qa:preflight`, which records the
+candidate revision, checkout state, Android package/device identity, release
+artifacts and SHA-256 hashes, probes the public Chipnet Electrum pool through
+WSS `server.version` and `blockchain.headers.subscribe`, and optionally probes
+public BCMR/TokenIndexer metadata for a supplied category. `--run-gates` runs
+the ordered local, Android and tooling checks with one log per command. The
+default height-lag threshold is three blocks, and endpoint failures/staleness
+fail the command unless explicitly waived for diagnosis. Output is written to
+the ignored `.qa/android-release/` evidence directory. The harness is
+preflight evidence only: live Android transaction paths, browser opening,
+physical QR scanning, merchant settlement, Cauldron liquidity and the full
+twelve-item UX review remain separate device/chain evidence.
+
+### Selene explorer network routing — 2026-11-12
+
+Selene transaction and address links now use the shared public host with an
+explicit `network=mainnet` or `network=chipnet` query. This replaces the
+previous Chipnet routes to `chipnet.bch.ninja` and is generated into the
+Rust/WASM explorer bridge so renderer and packaged Android links use the same
+routing. A connected-device intent test opened the Chipnet landing page in
+Chrome; transaction-link routing is covered by the core and renderer explorer
+tests. Private-network explorer policy remains fail-closed.
+
+### Android connectivity and live Chipnet evidence — 2026-11-12
+
+Manual Electrum selection now pins the selected server instead of silently
+retaining the failover pool. A reconnect also validates the selected
+`blockchain.headers.subscribe` tip against the active tip; a server more than
+three blocks behind is rejected, the previous selection is restored, and the
+user receives an actionable failure rather than an indefinite Connecting
+state. The focused Electrum and Server Settings regressions pass. The public
+preflight still identifies `chipnet.bch.ninja:50004` as 109 blocks stale while
+the other three configured public peers report height 332096, so this remains
+a release blocker for endpoint-pool freshness until the stale peer is removed,
+repaired, or explicitly treated as degraded.
+
+On the attached Samsung SM-A205W (Android 11, 720x1560), a disposable Chipnet
+wallet completed receive-address QR generation, physical QR scanning, manual
+endpoint switching to `chipnet.imaginary.cash:50004`, BCH review/signing,
+broadcast, mempool observation, and confirmation at block 332100. The masked
+transaction was `c032b********647b3`; the wallet effect was `-0.00010241 BCH`,
+paid fee `0.00000241 BCH`, and observed fee rate `1.1 sat/byte`. The packaged
+transaction detail action opened Selene in Chrome with the Chipnet query.
+The transaction detail popup was centered and readable at font scale 1.0.
+
+The physical route sweep found remaining release gaps: Custom Send reported
+zero discoverable wallet sources despite the wallet balance; Mint opened a
+source-creation review but had no mint source; Airdrops did not reach a
+verified Step 2 state; Merchant Pay produced a quote but request/settlement
+was not verified; and Cauldron displayed an above-current-range quote state
+without a live swap proof. FundMe and Paryon were excluded as requested.
+Instrumentation remains opt-in in the QA harness because the current suite is
+stateful and can replace app data; run it only with an isolated disposable
+fixture. The signed-release candidate, packaged upgrade path, and remaining
+advanced-app flows still require explicit release evidence.

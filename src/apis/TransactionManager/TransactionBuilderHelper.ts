@@ -6,6 +6,7 @@ import {
   SignatureTemplate,
   SighashType,
 } from 'cashscript';
+import { cashAddressToLockingBytecode } from '@bitauth/libauth';
 import ContractManager from '../ContractManager/ContractManager';
 import { UTXO, TransactionOutput } from '../../types/types';
 import { store } from '../../state/store';
@@ -13,6 +14,7 @@ import KeyService from '../../services/KeyService';
 import { PaperWalletSecretStore } from '../../services/PaperWalletSecretStore';
 import { deriveRpaUtxoSigningKey } from '../../services/RpaSpendKeyService';
 import { TOKEN_OUTPUT_SATS } from '../../utils/constants';
+import { binToHex } from '../../utils/hex';
 
 type TransactionBuilderHelperOptions = {
   allowImplicitFungibleTokenBurn?: boolean;
@@ -221,6 +223,15 @@ export default function TransactionBuilderHelper(
     });
   }
 
+  function resolveLockingBytecode(utxo: UTXO): string | undefined {
+    const existing = (utxo as UTXO & { lockingBytecode?: unknown })
+      .lockingBytecode;
+    if (typeof existing === 'string' && existing.length > 0) return existing;
+
+    const decoded = cashAddressToLockingBytecode(utxo.address);
+    return typeof decoded === 'string' ? undefined : binToHex(decoded.bytecode);
+  }
+
   /**
    * Builds a transaction using selected UTXOs and outputs.
    */
@@ -343,11 +354,14 @@ export default function TransactionBuilderHelper(
           unlocker = contractUnlockFunction.unlocker;
         }
 
+        const lockingBytecode = resolveLockingBytecode(processedUtxo);
+
         return {
           txid: processedUtxo.tx_hash,
           vout: processedUtxo.tx_pos,
           satoshis: BigInt(processedUtxo.value),
           unlocker,
+          ...(lockingBytecode ? { lockingBytecode } : {}),
           token: processedUtxo.token
             ? {
                 ...processedUtxo.token,
@@ -395,7 +409,7 @@ export default function TransactionBuilderHelper(
     // IMPORTANT: do not swallow broadcast errors
     const txid = await provider.sendRawTransaction(tx);
 
-    if (!txid || typeof txid !== 'string') {
+    if (!txid || typeof txid !== 'string' || !/^[0-9a-f]{64}$/i.test(txid)) {
       throw new Error(`Broadcast returned invalid txid: ${String(txid)}`);
     }
 

@@ -211,6 +211,11 @@ export const remainingTranslations = {
     'server.blockExplorer': 'Block explorer',
     'server.explorerDescription':
       'Used for “open in explorer” links on transactions.',
+    'server.explorerAccess': 'Explorer access',
+    'server.explorerAccessDescription':
+      'Choose whether this browser or mobile wallet may open public explorer links.',
+    'server.allowPublicExplorers': 'Allow public explorers',
+    'server.privateExplorerOnly': 'Only my infrastructure',
     'server.custom': 'Custom…',
     'server.txUrlPlaceholder': 'Tx URL, e.g. https://example.com/tx/{txid}',
     'server.addressUrlPlaceholder':
@@ -1316,6 +1321,11 @@ export const remainingTranslations = {
     'server.blockExplorer': 'Explorador de bloques',
     'server.explorerDescription':
       'Se usa para los enlaces “abrir en el explorador” de las transacciones.',
+    'server.explorerAccess': 'Acceso al explorador',
+    'server.explorerAccessDescription':
+      'Elige si esta billetera web o móvil puede abrir enlaces de exploradores públicos.',
+    'server.allowPublicExplorers': 'Permitir exploradores públicos',
+    'server.privateExplorerOnly': 'Solo mi infraestructura',
     'server.custom': 'Personalizado…',
     'server.txUrlPlaceholder':
       'URL de transacción, p. ej. https://example.com/tx/{txid}',
@@ -2385,6 +2395,11 @@ export const remainingTranslations = {
     'server.add': '添加',
     'server.blockExplorer': '区块浏览器',
     'server.explorerDescription': '用于交易中的“在浏览器中打开”链接。',
+    'server.explorerAccess': '浏览器访问权限',
+    'server.explorerAccessDescription':
+      '选择此网页或移动钱包是否可以打开公共区块浏览器链接。',
+    'server.allowPublicExplorers': '允许公共浏览器',
+    'server.privateExplorerOnly': '仅使用我的基础设施',
     'server.custom': '自定义…',
     'server.txUrlPlaceholder': '交易 URL，例如 https://example.com/tx/{txid}',
     'server.addressUrlPlaceholder':

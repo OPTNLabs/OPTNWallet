@@ -112,31 +112,59 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
     : null;
 
   useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      setError(null);
-      setBcmrError(null);
-      setSnapshot(displaySnapshot);
-      setIconDataUri(displayIconDataUri);
+    setSnapshot(displaySnapshot);
+    setIconDataUri(displayIconDataUri);
+    setBcmrError(
+      !displaySnapshot && sharedTokenMetadata?.status === 'error'
+        ? sharedTokenMetadata.error || t('token.bcmrUnavailable')
+        : null
+    );
+    setLoading(
+      !displaySnapshot &&
+        !runtimeMetadata &&
+        (!sharedTokenMetadata || sharedTokenMetadata.status === 'loading')
+    );
+  }, [
+    runtimeMetadata,
+    prefetchedSnapshot,
+    prefetchedIconDataUri,
+    sharedTokenMetadata,
+    displaySnapshot,
+    displayIconDataUri,
+    t,
+  ]);
 
-      if (runtimeMetadata) {
-        // Owned identity is projected by Rust. Global statistics have no shared
-        // query contract here; mounting the details must not contact Chaingraph.
-        setTotalSupply(null);
-        setActiveMinting(null);
-        setNftSupply(null);
-        setAuthHead(null);
-        setLoading(false);
-        return;
-      }
+  useEffect(() => {
+    let cancelled = false;
+
+    setError(null);
+    if (runtimeMetadata) {
+      // Owned identity is projected by Rust. Global statistics have no shared
+      // query contract here; mounting the details must not contact Chaingraph.
+      setTotalSupply(null);
+      setActiveMinting(null);
+      setNftSupply(null);
+      setAuthHead(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadChainStats = async () => {
+      const results = await Promise.allSettled([
+        queryTotalSupplyFT(tokenId),
+        queryActiveMinting(tokenId),
+        querySupplyNFTs(tokenId),
+        queryAuthHead(tokenId),
+      ]);
+      if (cancelled) return;
 
       let failedCoreQueries = 0;
+      const [totalResult, mintResult, nftResult, authResult] = results;
 
-      try {
-        // 1) Total supply (non-fatal if this specific query fails)
-        const totalData = await queryTotalSupplyFT(tokenId);
+      if (totalResult.status === 'fulfilled') {
         const totalTransactions = (
-          totalData as {
+          totalResult.value as {
             data?: { transaction?: Array<{ outputs?: unknown }> };
           }
         )?.data?.transaction;
@@ -152,33 +180,27 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
             }, 0)
           : 0;
         setTotalSupply(total);
-      } catch {
+      } else {
         failedCoreQueries += 1;
       }
 
-      try {
-        // 2) Active minting (non-fatal if this specific query fails)
-        const mintData = await queryActiveMinting(tokenId);
-        const mintOutputs = mintData?.data?.output;
+      if (mintResult.status === 'fulfilled') {
+        const mintOutputs = mintResult.value?.data?.output;
         setActiveMinting(Array.isArray(mintOutputs) && mintOutputs.length > 0);
-      } catch {
+      } else {
         failedCoreQueries += 1;
       }
 
-      try {
-        // 3) NFT supply (non-fatal if this specific query fails)
-        const nftData = await querySupplyNFTs(tokenId);
-        const nftOutputs = nftData?.data?.output;
+      if (nftResult.status === 'fulfilled') {
+        const nftOutputs = nftResult.value?.data?.output;
         setNftSupply(Array.isArray(nftOutputs) ? nftOutputs.length : 0);
-      } catch {
+      } else {
         failedCoreQueries += 1;
       }
 
-      try {
-        // 4) Auth head (non-fatal if this specific query fails)
-        const ahData = await queryAuthHead(tokenId);
+      if (authResult.status === 'fulfilled') {
         const ahRaw = (
-          ahData as {
+          authResult.value as {
             data?: {
               transaction?: Array<{
                 authchains?: Array<{
@@ -191,52 +213,21 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
           }
         )?.data?.transaction?.[0]?.authchains?.[0]?.authhead
           ?.identity_output?.[0]?.transaction_hash;
-        const ahTx = stripChaingraphHexBytes(ahRaw) || null;
-        setAuthHead(ahTx);
-      } catch {
+        setAuthHead(stripChaingraphHexBytes(ahRaw) || null);
+      } else {
         failedCoreQueries += 1;
-      }
-
-      try {
-        if (
-          !displaySnapshot &&
-          (!sharedTokenMetadata || sharedTokenMetadata.status === 'loading')
-        ) {
-          // Shared metadata is still loading; avoid flashing an error state.
-        } else if (
-          !displaySnapshot &&
-          sharedTokenMetadata?.status === 'error'
-        ) {
-          throw new Error(
-            sharedTokenMetadata.error || t('token.bcmrUnavailable')
-          );
-        } else if (!displaySnapshot) {
-          throw new Error(t('token.loading'));
-        }
-      } catch (err: unknown) {
-        if (!displaySnapshot) {
-          setBcmrError(err instanceof Error ? err.message : t('token.loading'));
-        }
       }
 
       if (failedCoreQueries >= 4) {
         setError(t('token.chainStatsError'));
       }
-
-      setLoading(false);
     };
 
-    fetchData();
-  }, [
-    runtimeMetadata,
-    tokenId,
-    prefetchedSnapshot,
-    prefetchedIconDataUri,
-    sharedTokenMetadata,
-    displaySnapshot,
-    displayIconDataUri,
-    t,
-  ]);
+    void loadChainStats();
+    return () => {
+      cancelled = true;
+    };
+  }, [runtimeMetadata, tokenId, t]);
 
   if (loading && !snapshot)
     return <p className="wallet-muted">{t('token.loading')}</p>;

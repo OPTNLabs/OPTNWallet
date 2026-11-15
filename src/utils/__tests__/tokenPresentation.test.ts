@@ -40,6 +40,10 @@ describe('tokenPresentation', () => {
     expect(formatAtomicTokenAmount(123n, 0)).toBe('123');
   });
 
+  it('can preserve BCMR decimal places for signed effect summaries', () => {
+    expect(formatAtomicTokenAmount(450n, 2, false)).toBe('4.50');
+  });
+
   it('uses BCMR metadata first and hides status once loaded', () => {
     const presentation = resolveTokenPresentation(
       '0123456789abcdef',
@@ -55,31 +59,24 @@ describe('tokenPresentation', () => {
   });
 
   it('shows a status while bcmr metadata is still loading', () => {
-    const presentation = resolveTokenPresentation(
-      '0123456789abcdef',
-      {
-        ...makeMetadata(),
-        status: 'loading',
-        freshness: 'refreshing',
-        isRefreshing: true,
-      }
-    );
+    const presentation = resolveTokenPresentation('0123456789abcdef', {
+      ...makeMetadata(),
+      status: 'loading',
+      freshness: 'refreshing',
+      isRefreshing: true,
+    });
 
     expect(presentation.statusLabel).toBe('Refreshing');
     expect(presentation.statusTone).toBe('accent');
   });
 
   it('falls back to local token data before a shortened category hash', () => {
-    const presentation = resolveTokenPresentation(
-      '0123456789abcdef',
-      null,
-      {
-        name: 'Local Token',
-        symbol: 'LT',
-        decimals: 0,
-        iconUri: '/local-icon.png',
-      }
-    );
+    const presentation = resolveTokenPresentation('0123456789abcdef', null, {
+      name: 'Local Token',
+      symbol: 'LT',
+      decimals: 0,
+      iconUri: '/local-icon.png',
+    });
 
     expect(presentation.primaryLabel).toBe('Local Token');
     expect(presentation.secondaryLabel).toBe('LT');

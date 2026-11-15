@@ -1,20 +1,25 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { MdInfoOutline } from 'react-icons/md';
 
 type InfoButtonProps = {
   content: string;
   ariaLabel: string;
   id?: string;
+  /** Align the popover toward the available side of its trigger. */
+  popoverSide?: 'left' | 'right' | 'center';
 };
 
 export default function InfoButton({
   content,
   ariaLabel,
   id,
+  popoverSide = 'left',
 }: InfoButtonProps) {
   const generatedId = useId();
   const contentId = `${id ?? generatedId}-info`;
   const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | undefined>();
   const longPressTriggered = useRef(false);
 
@@ -41,6 +46,7 @@ export default function InfoButton({
   return (
     <span className="relative inline-flex min-h-[44px] min-w-[44px] items-center justify-center">
       <button
+        ref={buttonRef}
         type="button"
         className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--wallet-focus-ring)]"
         aria-label={ariaLabel}
@@ -70,15 +76,36 @@ export default function InfoButton({
           className="text-lg font-bold wallet-accent-icon"
         />
       </button>
-      {open ? (
-        <span
-          id={contentId}
-          role="note"
-          className="absolute right-0 top-full z-50 mt-1 w-[min(18rem,calc(100vw-2rem))] rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3 text-left text-sm leading-snug wallet-text-strong shadow-xl"
-        >
-          {content}
-        </span>
-      ) : null}
+      {open
+        ? (() => {
+            const popover = (
+              <span
+                id={contentId}
+                role="note"
+                className={`${
+                  popoverSide === 'center'
+                    ? 'fixed left-1/2 top-1/2 z-[1300] -translate-x-1/2 -translate-y-1/2'
+                    : `absolute ${
+                        popoverSide === 'right'
+                          ? 'left-0 right-auto'
+                          : 'right-0'
+                      } top-full z-50 mt-1`
+                } w-[min(18rem,calc(100vw-2rem))] max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-xl border border-[var(--wallet-border)] p-3 text-left text-sm leading-snug wallet-text-strong shadow-2xl`}
+                style={{
+                  backgroundColor: 'var(--wallet-surface)',
+                  opacity: 1,
+                  isolation: 'isolate',
+                }}
+              >
+                {content}
+              </span>
+            );
+
+            return popoverSide === 'center' && typeof document !== 'undefined'
+              ? createPortal(popover, document.body)
+              : popover;
+          })()
+        : null}
     </span>
   );
 }

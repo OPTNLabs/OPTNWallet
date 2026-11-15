@@ -19,17 +19,13 @@ export type InfraUrlPools = {
 
 const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
   [Network.CHIPNET]: {
-    // Seeded from Electron Cash's server list, but only the entries that were
-    // actually verified to accept a WebSocket (WSS) connection on port 50004 —
-    // this app connects over WSS, and most Fulcrum servers publish only a raw
-    // TCP-SSL port (50002) with no WSS listener, so seeding those unverified
-    // would just add dead endpoints to the failover pool. OPTN's own server is
-    // kept first (first-party infra). The C3-Soft endpoint uses its explicit
-    // WSS port; chipnet.bch.ninja is raw-TLS reachable but its WSS handshake
-    // fails, so it must not be in this browser/mobile pool.
+    // OPTN's own server stays first. The remaining active public entries are
+    // the Selene Wallet Chipnet pool, verified here with WSS server.version
+    // and blockchain.headers.subscribe using protocol 1.5.1.
     electrumServers: [
-      'electrum-chipnet.optnlabs.com',
-      'chipnet.imaginary.cash',
+      'electrum-chipnet.optnlabs.com:50004',
+      'chipnet.bch.ninja:50004',
+      'chipnet.imaginary.cash:50004',
       'chipnet.c3-soft.com:64004',
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
@@ -50,25 +46,27 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
   },
 
   [Network.MAINNET]: {
-    // Seeded from Electron Cash's server list, filtered to only those verified
-    // to accept a WebSocket (WSS) connection on port 50004 — see the CHIPNET
-    // note above. Dropped the previous 'explorer.bch.ninja' default: it fails
-    // WSS with a certificate-hostname mismatch. Order is roughly most-reliable
-    // first; the failover logic skips any that are down at runtime anyway.
+    // Merge OPTN's existing public pool with Selene Wallet's active public
+    // entries. Ports are explicit because Selene uses port 443 for the
+    // cashnode WSS endpoint. All entries were verified with WSS
+    // server.version and blockchain.headers.subscribe using protocol 1.5.1.
     electrumServers: [
-      'electrum.imaginary.cash',
-      'bch.imaginary.cash',
-      'cashnode.bch.ninja',
-      'bch.loping.net',
-      'bch.soul-dev.com',
-      'blackie.c3-soft.com',
-      'electroncash.dk',
-      'fulcrum.criptolayer.net',
-      'fulcrum.jettscythe.xyz',
+      'electrum.imaginary.cash:50004',
+      'cashnode.bch.ninja:443',
+      'bch.imaginary.cash:50004',
+      'electroncash.dk:50004',
+      'blackie.c3-soft.com:50004',
+      'bch.loping.net:50004',
+      'bch.soul-dev.com:50004',
+      'fulcrum.criptolayer.net:50004',
+      'fulcrum.jettscythe.xyz:50004',
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
     bcmrNativeBaseUrls: ['https://tokenindex.optnlabs.com/v1'],
-    bcmrApiBaseUrls: ['https://bcmr.optnlabs.com/api', 'https://bcmr.paytaca.com/api'],
+    bcmrApiBaseUrls: [
+      'https://bcmr.optnlabs.com/api',
+      'https://bcmr.paytaca.com/api',
+    ],
     ipfsGateways: [
       'https://ipfs.optnlabs.com/ipfs',
       'https://ipfs.io/ipfs',

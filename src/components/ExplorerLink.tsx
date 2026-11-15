@@ -12,6 +12,7 @@ import { useI18n } from '../i18n/useI18n';
 import type { Network } from '../state/slices/networkSlice';
 import { useExplorerLink } from '../utils/servers/useExplorerLink';
 import { handleExternalLinkClick } from '../utils/openExternalLink';
+import { isDesktopPlatform } from '../utils/platform';
 
 type Props = {
   network: Network;
@@ -35,10 +36,16 @@ export default function ExplorerLink({
       <p className="mt-3 text-xs opacity-70">
         {explorer.reason}{' '}
         <Link
-          to="/settings?panel=explorer"
+          to={
+            isDesktopPlatform()
+              ? '/settings?panel=server'
+              : '/settings?panel=explorer'
+          }
           className="underline wallet-text-strong"
         >
-          {t('history.openExplorerSettings')}
+          {isDesktopPlatform()
+            ? t('history.openNetworkSettings')
+            : t('history.openExplorerSettings')}
         </Link>
       </p>
     ) : null;

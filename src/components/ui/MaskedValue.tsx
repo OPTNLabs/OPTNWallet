@@ -52,6 +52,10 @@ export default function MaskedValue({
     : '';
   const visiblePrefixLength = cashAddressPrefix.length + prefixLength;
   const hasMask = value.length > visiblePrefixLength + suffixLength;
+  const remainingValueLength = Math.max(
+    1,
+    value.length - visiblePrefixLength - suffixLength
+  );
   const masked = hasMask ? (
     <span className="flex min-w-0 max-w-full items-center overflow-hidden whitespace-nowrap">
       <span data-mask-part="prefix" className="shrink-0">
@@ -61,10 +65,7 @@ export default function MaskedValue({
         data-mask-part="middle"
         className="min-w-0 flex-1 overflow-hidden px-0.5 text-center tracking-[0.18em]"
       >
-        {'*'.repeat(
-          maskLength ??
-            Math.max(4, value.length - visiblePrefixLength - suffixLength)
-        )}
+        {'*'.repeat(Math.min(maskLength ?? 12, remainingValueLength))}
       </span>
       <span data-mask-part="suffix" className="shrink-0">
         {value.slice(-suffixLength)}

@@ -104,7 +104,7 @@ describe('OutboundTransactionReconciler privacy routes', () => {
         stepped = true;
         return true;
       }),
-      getAsObject: vi.fn(() => ({ tx_hash: torOnlyRecord.txid })),
+      getAsObject: vi.fn(() => ({ tx_hash: torOnlyRecord.txid, height: 1 })),
       free: vi.fn(),
     });
 
@@ -127,7 +127,7 @@ describe('OutboundTransactionReconciler privacy routes', () => {
     let active = [ordinaryRecord];
     listActiveMock.mockImplementation(async () => active);
     visibilityMock.mockResolvedValue({
-      [ordinaryRecord.txid]: { seen: true, confirmed: false },
+      [ordinaryRecord.txid]: { seen: true, confirmed: true },
     });
     markStateMock.mockImplementation(async () => {
       active = [];
@@ -155,6 +155,39 @@ describe('OutboundTransactionReconciler privacy routes', () => {
     await expect(reconcileOutboundTransactions(5)).resolves.toEqual([]);
     expect(visibilityMock).toHaveBeenCalledWith([ordinaryRecord.txid]);
     expect(reconnectMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps a mempool transaction active until confirmation', async () => {
+    const active = [ordinaryRecord];
+    listActiveMock.mockImplementation(async () => active);
+    visibilityMock.mockResolvedValue({
+      [ordinaryRecord.txid]: { seen: true, confirmed: false },
+    });
+    prepareMock.mockImplementation((sql: string) => {
+      let stepped = false;
+      return {
+        bind: vi.fn(),
+        step: vi.fn(() => {
+          if (!sql.includes('FROM keys') || stepped) return false;
+          stepped = true;
+          return true;
+        }),
+        getAsObject: vi.fn(() => ({ address: 'bitcoincash:qtest' })),
+        free: vi.fn(),
+      };
+    });
+
+    const { reconcileOutboundTransactions } = await import(
+      '../OutboundTransactionReconciler'
+    );
+
+    await expect(reconcileOutboundTransactions(5)).resolves.toEqual(active);
+    expect(markStateMock).not.toHaveBeenCalledWith(
+      ordinaryRecord.txid,
+      'seen',
+      null,
+      5
+    );
   });
 
   it('retries under the recorded wallet rather than the currently selected wallet', async () => {

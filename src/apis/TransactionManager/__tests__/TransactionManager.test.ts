@@ -37,6 +37,7 @@ vi.mock('../../DatabaseManager/DatabaseService', () => ({
 vi.mock('../../../services/ElectrumService', () => ({
   default: {
     getTransactionHistory: vi.fn(),
+    broadcastTransaction: vi.fn(),
   },
 }));
 
@@ -70,11 +71,36 @@ describe('TransactionManager', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(isDesktopPlatform).mockReturnValue(false);
+    mockedElectrumService.broadcastTransaction.mockResolvedValue('a'.repeat(64));
     mockedStore.getState.mockReturnValue({
       wallet_id: { currentWalletId: 7, sessionGeneration: 4 },
       network: { currentNetwork: 'chipnet' },
     } as never);
     mockedOutboundTracker.getByTxid.mockResolvedValue(null);
+  });
+
+  it('mobile broadcasts reserve the signed transaction inputs before handoff', async () => {
+    const rawTx =
+      '0200000001' +
+      'aa'.repeat(32) +
+      '00000000' +
+      '00' +
+      'ffffffff' +
+      '01' +
+      'e803000000000000' +
+      '19' +
+      '76a914' +
+      '00'.repeat(20) +
+      '88ac' +
+      '00000000';
+
+    await TransactionManager().sendTransaction(rawTx);
+
+    expect(mockedOutboundTracker.trackAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spentInputs: [{ tx_hash: 'aa'.repeat(32), tx_pos: 0 }],
+      })
+    );
   });
 
   it('desktop send carries the selected session and signed bytes only to Rust', async () => {
@@ -246,20 +272,14 @@ describe('TransactionManager', () => {
   });
 
   it('sendTransaction returns txid on success and errorMessage on failure', async () => {
-    const sendTransaction = vi
-      .fn()
-      .mockResolvedValueOnce('txid-ok')
+    mockedElectrumService.broadcastTransaction
+      .mockResolvedValueOnce('a'.repeat(64))
       .mockRejectedValueOnce(new Error('broadcast failed'));
-
-    mockedTxBuilderHelper.mockReturnValue({
-      sendTransaction,
-      buildTransaction: vi.fn(),
-    } as never);
 
     const tm = TransactionManager();
 
     await expect(tm.sendTransaction('00aa')).resolves.toEqual({
-      txid: 'txid-ok',
+      txid: 'a'.repeat(64),
       errorMessage: null,
       broadcastState: 'broadcasted',
     });
@@ -267,15 +287,16 @@ describe('TransactionManager', () => {
     const fail = await tm.sendTransaction('00bb');
     expect(fail.txid).toBeNull();
     expect(fail.errorMessage).toContain('broadcast failed');
+    expect(mockedElectrumService.broadcastTransaction).toHaveBeenNthCalledWith(
+      1,
+      '00aa'
+    );
   });
 
   it('keeps blank provider errors actionable', async () => {
-    const sendTransaction = vi.fn().mockRejectedValue(new Error(''));
-
-    mockedTxBuilderHelper.mockReturnValue({
-      sendTransaction,
-      buildTransaction: vi.fn(),
-    } as never);
+    mockedElectrumService.broadcastTransaction.mockRejectedValueOnce(
+      new Error('')
+    );
 
     const tm = TransactionManager();
     const result = await tm.sendTransaction('00ab');
@@ -309,19 +330,13 @@ describe('TransactionManager', () => {
   });
 
   it('sendTransaction retries the same raw tx after an ambiguous broadcast failure', async () => {
-    const sendTransaction = vi
-      .fn()
+    mockedElectrumService.broadcastTransaction
       .mockRejectedValueOnce(
         new Error(
           'request(blockchain.transaction.broadcast) timed out after 12000ms'
         )
       )
-      .mockResolvedValueOnce('txid-ok');
-
-    mockedTxBuilderHelper.mockReturnValue({
-      sendTransaction,
-      buildTransaction: vi.fn(),
-    } as never);
+      .mockResolvedValueOnce('a'.repeat(64));
 
     const tm = TransactionManager();
     const rawTx = '01000000000100';
@@ -332,22 +347,17 @@ describe('TransactionManager', () => {
 
     const second = await tm.sendTransaction(rawTx);
     expect(second).toEqual({
-      txid: 'txid-ok',
+      txid: 'a'.repeat(64),
       errorMessage: null,
       broadcastState: 'broadcasted',
     });
-    expect(sendTransaction).toHaveBeenCalledTimes(2);
+    expect(mockedElectrumService.broadcastTransaction).toHaveBeenCalledTimes(2);
   });
 
   it('sendTransaction returns a friendly duplicate-input error and clears tracker', async () => {
-    const sendTransaction = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('bad-txns-inputs-duplicate (code 16)'));
-
-    mockedTxBuilderHelper.mockReturnValue({
-      sendTransaction,
-      buildTransaction: vi.fn(),
-    } as never);
+    mockedElectrumService.broadcastTransaction.mockRejectedValueOnce(
+      new Error('bad-txns-inputs-duplicate (code 16)')
+    );
 
     const tm = TransactionManager();
     const result = await tm.sendTransaction('01000000000100');
@@ -360,18 +370,11 @@ describe('TransactionManager', () => {
   });
 
   it('sendTransaction returns a friendly script-verification error and clears tracker', async () => {
-    const sendTransaction = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new Error(
-          'mandatory-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) (code 16)'
-        )
-      );
-
-    mockedTxBuilderHelper.mockReturnValue({
-      sendTransaction,
-      buildTransaction: vi.fn(),
-    } as never);
+    mockedElectrumService.broadcastTransaction.mockRejectedValueOnce(
+      new Error(
+        'mandatory-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) (code 16)'
+      )
+    );
 
     const tm = TransactionManager();
     const result = await tm.sendTransaction('02000000000100');
@@ -382,14 +385,9 @@ describe('TransactionManager', () => {
   });
 
   it('sendTransaction returns a friendly min-relay-fee error and clears tracker', async () => {
-    const sendTransaction = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('min relay fee not met (code 66)'));
-
-    mockedTxBuilderHelper.mockReturnValue({
-      sendTransaction,
-      buildTransaction: vi.fn(),
-    } as never);
+    mockedElectrumService.broadcastTransaction.mockRejectedValueOnce(
+      new Error('min relay fee not met (code 66)')
+    );
 
     const tm = TransactionManager();
     const result = await tm.sendTransaction('03000000000100');

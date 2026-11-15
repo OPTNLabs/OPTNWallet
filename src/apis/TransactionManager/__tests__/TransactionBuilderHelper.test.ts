@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { binToHex, cashAddressToLockingBytecode } from '@bitauth/libauth';
 
 import { TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 import TransactionBuilderHelper from '../TransactionBuilderHelper';
@@ -173,6 +174,35 @@ describe('TransactionBuilderHelper', () => {
     });
   });
 
+  it('derives locking bytecode for wallet inputs loaded from Electrum rows', async () => {
+    mockedKeyService.fetchAddressPrivateKey.mockResolvedValue(
+      Uint8Array.from([1, 2, 3])
+    );
+
+    const address =
+      'bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a';
+    const decoded = cashAddressToLockingBytecode(address);
+    expect(typeof decoded).not.toBe('string');
+    if (typeof decoded === 'string') return;
+
+    const helper = TransactionBuilderHelper();
+    await helper.buildTransaction(
+      [
+        {
+          address,
+          height: 0,
+          tx_hash: 'd'.repeat(64),
+          tx_pos: 0,
+          value: 1000,
+        },
+      ],
+      [{ recipientAddress: address, amount: 546 }]
+    );
+
+    const addedInput = txBuilderInstances[0].addInputs.mock.calls[0][0][0];
+    expect(addedInput.lockingBytecode).toBe(binToHex(decoded.bytecode));
+  });
+
   it('buildTransaction sets locktime for contract functions that use time keywords', async () => {
     mockGetContractInstanceByAddress.mockResolvedValue({
       artifact: {
@@ -230,7 +260,9 @@ describe('TransactionBuilderHelper', () => {
   it('sendTransaction returns txid string and throws for invalid txid response', async () => {
     const helper = TransactionBuilderHelper();
 
-    await expect(helper.sendTransaction('rawtx')).resolves.toBe('txid-ok');
+    const validTxid = 'a'.repeat(64);
+    providerSendRawResponse = validTxid;
+    await expect(helper.sendTransaction('rawtx')).resolves.toBe(validTxid);
 
     providerSendRawResponse = 42;
     const helper2 = TransactionBuilderHelper();

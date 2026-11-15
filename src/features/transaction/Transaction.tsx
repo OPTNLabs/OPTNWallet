@@ -726,10 +726,12 @@ const Transaction: React.FC = () => {
             </div>
           </SectionCard>
 
-          <RouteExitFooter
-            label={t('apps.back')}
-            onBack={() => navigate(backTarget)}
-          />
+          {activeStep !== 4 && (
+            <RouteExitFooter
+              label={t('apps.back')}
+              onBack={() => navigate(backTarget)}
+            />
+          )}
 
           <ErrorAndStatusPopups
             showRawTxPopup={showRawTxPopup}

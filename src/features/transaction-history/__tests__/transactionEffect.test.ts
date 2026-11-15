@@ -48,4 +48,63 @@ describe('deriveWalletTransactionEffect', () => {
       )
     ).toBeNull();
   });
+
+  it('derives CashToken net effects by category from wallet-owned rows', () => {
+    const effect = deriveWalletTransactionEffect(
+      {
+        txid: 'token-transfer',
+        confirmations: 1,
+        inputs: [
+          {
+            address: 'bitcoincash:qwallet',
+            amountSats: 20_000,
+            token: { category: 'AB'.repeat(32), amount: 10_000n },
+          },
+        ],
+        outputs: [
+          {
+            address: 'bitcoincash:qwallet',
+            amountSats: 19_000,
+            token: { category: 'ab'.repeat(32), amount: 9_250n },
+          },
+          {
+            address: 'bitcoincash:qrecipient',
+            amountSats: 1_000,
+            token: { category: 'ab'.repeat(32), amount: 750n },
+          },
+        ],
+      },
+      wallet
+    );
+
+    expect(effect?.tokenDeltas).toEqual([
+      { category: 'ab'.repeat(32), amount: -750n },
+    ]);
+  });
+
+  it('omits token categories whose wallet change nets to zero', () => {
+    const effect = deriveWalletTransactionEffect(
+      {
+        txid: 'token-change',
+        confirmations: 1,
+        inputs: [
+          {
+            address: 'bitcoincash:qwallet',
+            amountSats: 20_000,
+            token: { category: 'cd'.repeat(32), amount: 10n },
+          },
+        ],
+        outputs: [
+          {
+            address: 'bitcoincash:qwallet',
+            amountSats: 19_000,
+            token: { category: 'cd'.repeat(32), amount: 10n },
+          },
+        ],
+      },
+      wallet
+    );
+
+    expect(effect?.tokenDeltas).toEqual([]);
+  });
 });

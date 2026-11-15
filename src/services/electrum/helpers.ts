@@ -28,10 +28,14 @@ export type ElectrumVin = {
 export type ElectrumVout = {
   value?: unknown;
   n?: unknown;
+  tokenData?: unknown;
+  token_data?: unknown;
   scriptPubKey?: {
     address?: unknown;
     addresses?: unknown;
     hex?: unknown;
+    tokenData?: unknown;
+    token_data?: unknown;
   };
 };
 
@@ -42,9 +46,21 @@ export type ElectrumVerboseTransaction = {
   time?: unknown;
   height?: unknown;
   fee?: unknown;
+  size?: unknown;
+  vsize?: unknown;
   vin?: ElectrumVin[];
   vout?: ElectrumVout[];
 };
+
+export function toPositiveInteger(value: unknown): number | undefined {
+  const numeric =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : NaN;
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined;
+}
 
 function currentAddressPrefix(): 'bitcoincash' | 'bchtest' {
   const network = store.getState().network.currentNetwork;
@@ -66,7 +82,9 @@ export function isTransactionHistoryArray(
   );
 }
 
-export function isStringResponse(response: RequestResponse): response is string {
+export function isStringResponse(
+  response: RequestResponse
+): response is string {
   return typeof response === 'string';
 }
 
@@ -82,7 +100,9 @@ export function toSats(value: unknown): number | undefined {
   }
   if (typeof value === 'string' && value.trim()) {
     const parsed = Number(value);
-    return Number.isFinite(parsed) ? Math.round(parsed * 100_000_000) : undefined;
+    return Number.isFinite(parsed)
+      ? Math.round(parsed * 100_000_000)
+      : undefined;
   }
   return undefined;
 }
@@ -124,24 +144,40 @@ export function extractOutputAddress(vout: ElectrumVout): string {
 
   const addresses = Array.isArray(script?.addresses)
     ? script.addresses.filter(
-        (entry): entry is string => typeof entry === 'string' && entry.trim().length > 0
+        (entry): entry is string =>
+          typeof entry === 'string' && entry.trim().length > 0
       )
     : [];
   if (addresses.length > 0) {
     return addresses.join(', ');
   }
 
-  return decodeAddressFromScriptHex(script?.hex) ?? 'Unknown / non-standard output';
+  return (
+    decodeAddressFromScriptHex(script?.hex) ?? 'Unknown / non-standard output'
+  );
 }
 
-export function extractTimestamp(tx: ElectrumVerboseTransaction): string | undefined {
+export function extractTimestamp(
+  tx: ElectrumVerboseTransaction
+): string | undefined {
   const candidate =
     typeof tx.blocktime === 'number'
       ? tx.blocktime
       : typeof tx.time === 'number'
         ? tx.time
         : null;
-  return candidate != null ? new Date(candidate * 1000).toISOString() : undefined;
+  return candidate != null
+    ? new Date(candidate * 1000).toISOString()
+    : undefined;
+}
+
+function extractOutputToken(vout: ElectrumVout) {
+  return normalizeTokenField(
+    vout.tokenData ??
+      vout.token_data ??
+      vout.scriptPubKey?.tokenData ??
+      vout.scriptPubKey?.token_data
+  );
 }
 
 export function mapOutputParticipant(
@@ -150,6 +186,7 @@ export function mapOutputParticipant(
   return {
     address: extractOutputAddress(vout),
     amountSats: toSats(vout.value),
+    token: extractOutputToken(vout),
     outputIndex:
       typeof vout.n === 'number' && Number.isFinite(vout.n)
         ? vout.n
@@ -157,7 +194,9 @@ export function mapOutputParticipant(
   };
 }
 
-export function sumKnownSats(rows: TransactionDetailParticipant[]): number | undefined {
+export function sumKnownSats(
+  rows: TransactionDetailParticipant[]
+): number | undefined {
   let total = 0;
   for (const row of rows) {
     if (row.amountSats == null || !Number.isFinite(row.amountSats)) {
@@ -184,7 +223,9 @@ export function deriveFeeSats(
   return derived >= 0 ? derived : undefined;
 }
 
-export function normalizeParticipantRows(raw: unknown): TransactionDetailParticipant[] {
+export function normalizeParticipantRows(
+  raw: unknown
+): TransactionDetailParticipant[] {
   if (!Array.isArray(raw)) return [];
   const rows: TransactionDetailParticipant[] = [];
   for (const entry of raw) {
@@ -200,12 +241,16 @@ export function normalizeParticipantRows(raw: unknown): TransactionDetailPartici
         typeof row.outputIndex === 'number' && Number.isFinite(row.outputIndex)
           ? row.outputIndex
           : undefined,
+      token: normalizeTokenField(row.token ?? row.token_data ?? row.tokenData),
     });
   }
   return rows;
 }
 
-export function mapUtxoRows(address: string, rows: Array<Record<string, unknown>>): UTXO[] {
+export function mapUtxoRows(
+  address: string,
+  rows: Array<Record<string, unknown>>
+): UTXO[] {
   return rows.map((u) => {
     const token = normalizeTokenField(u.token ?? u.token_data);
 
