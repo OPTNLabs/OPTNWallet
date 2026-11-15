@@ -438,15 +438,16 @@ export function sharedSecret(privkey: Uint8Array, counterpart_pubkey: Uint8Array
 export function signInProofClaims(locking_bytecode: Uint8Array): boolean;
 
 /**
- * Sign the canonical proof for `code` with the key of the proven address,
- * returning the signed transaction. Nothing of the dApp's request is signed.
+ * Sign the canonical proof for `code` and `domain` with the key of the
+ * proven address, returning the signed transaction. Nothing of the dApp's
+ * request is signed.
  */
-export function signInProofSign(code: string, public_key: Uint8Array, private_key: Uint8Array): Uint8Array;
+export function signInProofSign(code: string, domain: string, public_key: Uint8Array, private_key: Uint8Array): Uint8Array;
 
 /**
  * Validate a request that claims to be a sign-in proof against the wallet's
- * own branch xpubs. Returns JSON `{code, path, addressIndex, address,
- * publicKey}` with the key in hex, or throws the refusal reason.
+ * own branch xpubs. Returns JSON `{code, domain, path, addressIndex,
+ * address, publicKey}` with the key in hex, or throws the refusal reason.
  */
 export function signInProofValidate(request_json: string, receive_xpub: string, change_xpub: string, defi_xpub: string, network: string): string;
 
@@ -571,7 +572,7 @@ export interface InitOutput {
     readonly sendBlockReason: (a: number, b: number) => [number, number, number, number];
     readonly sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly signInProofClaims: (a: number, b: number) => number;
-    readonly signInProofSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly signInProofSign: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly signInProofValidate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
     readonly spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly spentOutputLabel: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];

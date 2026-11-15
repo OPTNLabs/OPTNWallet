@@ -1229,8 +1229,8 @@ pub fn is_sign_in_proof_transaction(raw: &[u8]) -> bool {
 }
 
 /// Validate a request that claims to be a sign-in proof against the wallet's
-/// own branch xpubs. Returns JSON `{code, path, addressIndex, address,
-/// publicKey}` with the key in hex, or throws the refusal reason.
+/// own branch xpubs. Returns JSON `{code, domain, path, addressIndex,
+/// address, publicKey}` with the key in hex, or throws the refusal reason.
 #[wasm_bindgen(js_name = signInProofValidate)]
 pub fn sign_in_proof_validate(
     request_json: &str,
@@ -1250,6 +1250,7 @@ pub fn sign_in_proof_validate(
         .map_err(|refusal| refusal.to_string())?;
     Ok(serde_json::json!({
         "code": validated.proof.code(),
+        "domain": validated.proof.domain(),
         "path": validated.path.name(),
         "addressIndex": validated.address_index,
         "address": validated.proof.address(prefix),
@@ -1258,17 +1259,19 @@ pub fn sign_in_proof_validate(
     .to_string())
 }
 
-/// Sign the canonical proof for `code` with the key of the proven address,
-/// returning the signed transaction. Nothing of the dApp's request is signed.
+/// Sign the canonical proof for `code` and `domain` with the key of the
+/// proven address, returning the signed transaction. Nothing of the dApp's
+/// request is signed.
 #[wasm_bindgen(js_name = signInProofSign)]
 pub fn sign_in_proof_sign(
     code: &str,
+    domain: &str,
     public_key: &[u8],
     private_key: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
     // A refused code or key must erase the transferred WASM key buffer too.
     let mut key = Zeroizing::new(private_key);
-    let proof = sign_in_proof::Challenge::new(code)
+    let proof = sign_in_proof::Challenge::new(code, domain)
         .and_then(|challenge| sign_in_proof::Proof::new(challenge, public_key))
         .map_err(|refusal| refusal.to_string())?;
     proof

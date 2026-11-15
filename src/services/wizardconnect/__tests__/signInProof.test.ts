@@ -37,11 +37,14 @@ const wallet = vectorWallet();
 const validate = (request: SignTransactionRequest) =>
   validateSignInProofRequest(request, wallet);
 
-/** The BCH VM's own verdict on a signed proof: an oracle outside the core. */
-function vmAccepts(signedHex: string, proof: ProofVector) {
+/**
+ * The BCH VM's own verdict on a signed proof: an oracle outside the core.
+ * `standard` adds relay policy, which a proof never has to meet.
+ */
+function vmAccepts(signedHex: string, proof: ProofVector, standard: boolean) {
   const signed = decodeTransaction(hexToBin(signedHex));
   if (typeof signed === 'string') throw new Error(signed);
-  return createVirtualMachineBCH().verify({
+  return createVirtualMachineBCH(standard).verify({
     transaction: signed,
     sourceOutputs: [
       {
@@ -68,6 +71,7 @@ describe('WizardConnect sign-in proof glue over the shared Rust core', () => {
             label: 'WizardConnect sign-in',
           },
           code: proof.code,
+          domain: proof.domain,
           path: proof.path,
           addressIndex: proof.addressIndex,
           address: proof.addresses.mainnet,
@@ -127,7 +131,8 @@ describe('WizardConnect sign-in proof glue over the shared Rust core', () => {
       expect(signed.inputs[0].unlockingBytecode[65]).toBe(
         vectors.format.sighash
       );
-      expect(vmAccepts(signedHex, proof)).toBe(true);
+      expect(vmAccepts(signedHex, proof, false)).toBe(true);
+      expect(vmAccepts(signedHex, proof, true) === true).toBe(proof.standard);
       expect(isSignInProofTransaction(signedHex)).toBe(true);
     }
   );
@@ -220,6 +225,7 @@ describe('WizardConnect sign-in proof glue over the shared Rust core', () => {
       kind: 'proof',
       schemeId: 'wizardconnect-generic',
       schemeLabel: 'WizardConnect sign-in',
+      domain: proof.domain,
       code: proof.code,
       address: proof.addresses.mainnet,
     });

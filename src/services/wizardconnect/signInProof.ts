@@ -8,8 +8,9 @@
  * crates/optn-core/src/sign_in_proof.rs, where every surface shares them.
  *
  * This file reshapes the SDK's request into what that core takes and carries
- * its answer (code, path, address index, address, or a refusal reason) back
- * to the wallet. It decides nothing about what a proof is.
+ * its answer (code, relying-party domain, path, address index, address, or a
+ * refusal reason) back to the wallet. It decides nothing about what a proof
+ * is.
  */
 import {
   binToHex,
@@ -176,6 +177,8 @@ export type SignInProofWallet = {
 export type ValidatedSignInProof = {
   scheme: SignInProofScheme;
   code: string;
+  /** The relying party the proof is for. The signature commits to it. */
+  domain: string;
   path: SignInProofPathName;
   addressIndex: number;
   address: string;
@@ -206,6 +209,7 @@ export function validateSignInProofRequest(
         )
       ) as {
         code: string;
+        domain: string;
         path: SignInProofPathName;
         addressIndex: number;
         address: string;
@@ -215,6 +219,7 @@ export function validateSignInProofRequest(
   return {
     scheme,
     code: proof.code,
+    domain: proof.domain,
     path: proof.path,
     addressIndex: proof.addressIndex,
     address: proof.address,
@@ -233,7 +238,12 @@ export function signCanonicalSignInProof(
 ): string {
   return binToHex(
     refusable(() =>
-      signInProofSign(validated.code, validated.publicKey, privateKey)
+      signInProofSign(
+        validated.code,
+        validated.domain,
+        validated.publicKey,
+        privateKey
+      )
     )
   );
 }

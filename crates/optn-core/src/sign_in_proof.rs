@@ -5,25 +5,37 @@
 //! sign a transaction that can never be mined:
 //!
 //! ```text
-//! input 0   outpoint sha256(OUTPOINT_TAG || code):0, worth 1000 sats, P2PKH
-//!           to the address being proven. No transaction has that id, so the
-//!           signed result spends nothing and cannot be broadcast.
-//! output 0  OP_RETURN "WCPROOF" <code>, 0 sats
+//! input 0   outpoint sha256(OUTPOINT_TAG || code || ":" || domain):0, worth
+//!           1000 sats, P2PKH to the address being proven. No transaction has
+//!           that id, so the signed result spends nothing and cannot be
+//!           broadcast.
+//! output 0  OP_RETURN "WCPROOF" <code> <domain>, 0 sats
 //! output 1  1000 sats back to the same address
 //! version 2, locktime 0, sequence 0xffffffff, SIGHASH_ALL|UTXOS|FORKID (0x61)
 //! ```
 //!
 //! The wallet never signs the dApp's transaction. It reads the one-time code
-//! out of the request, builds the proof itself for one of its own addresses,
-//! and refuses unless the request is byte-identical to what it built. A
-//! request that carries the tag but differs in any way (another input, a real
-//! outpoint, a changed output or value, a token, a contract) is refused
-//! outright rather than signed as a payment.
+//! and the relying party's domain out of the request, builds the proof itself
+//! for one of its own addresses, and refuses unless the request is
+//! byte-identical to what it built. A request that carries the tag but differs
+//! in any way (another input, a real outpoint, a changed output or value, a
+//! token, a contract) is refused outright rather than signed as a payment.
+//!
+//! The domain says who the proof is for. Without it, a dApp the user is
+//! connected to could start a login at another service, pass that service's
+//! code to the wallet, and forward the proof: the user would approve under the
+//! dApp's name and the other service would accept. With it, the approval
+//! screen names the service being signed in to and the signature commits to
+//! that name. This holds only if every relying party checks for its own
+//! domain.
 //!
 //! Because the signature commits to every output and to the (fake) source
-//! output, a server can rebuild the same transaction from the code it issued
-//! and the address it expects, check that the unlocking public key hashes to
-//! that address, and run the BCH VM over it.
+//! output, a server can rebuild the same transaction from the code it issued,
+//! its own domain and the address it expects, check that the unlocking public
+//! key hashes to that address, and run the BCH VM over it. A proof is never
+//! relayed, so consensus rules are the ones that apply. Relay policy agrees
+//! for any domain of up to 146 bytes; a longer one can take the OP_RETURN
+//! past the 223-byte limit on data carriers, which the vectors record.
 //!
 //! Signing goes through [`crate::connect`], the same path every connector
 //! payment takes. This module decides what may be signed; it holds no
@@ -41,8 +53,12 @@ use crate::tx;
 
 /// First push of the OP_RETURN output. Compared as exact bytes.
 pub const OP_RETURN_TAG: &[u8] = b"WCPROOF";
-/// Hashed with the code to make an outpoint no real transaction can have.
+/// Hashed with the code and the domain to make an outpoint no real
+/// transaction can have.
 pub const OUTPOINT_TAG: &[u8] = b"WizardConnect sign-in proof:";
+/// Between the code and the domain in that hash. Neither may contain it, so
+/// no two challenges hash the same bytes.
+pub const OUTPOINT_SEPARATOR: &[u8] = b":";
 /// Value of the fake input and of the output that returns it.
 pub const VALUE_SATOSHIS: u64 = 1000;
 pub const VERSION: u32 = 2;
@@ -53,6 +69,9 @@ pub const SIGHASH: u8 = ALL_OUTPUTS_ALL_UTXOS;
 
 /// `^[0-9A-Za-z_-]{16,64}$`. Short enough for a single-byte push.
 const CODE_LENGTH: RangeInclusive<usize> = 16..=64;
+/// A DNS name is at most 253 bytes of labels of at most 63 (RFC 1035).
+const DOMAIN_LENGTH: RangeInclusive<usize> = 1..=253;
+const LABEL_LENGTH: RangeInclusive<usize> = 1..=63;
 const OP_RETURN: u8 = 0x6a;
 /// Largest length a script states in its own opcode.
 const MAX_DIRECT_PUSH: u8 = 75;
@@ -71,6 +90,7 @@ pub enum Refusal {
     Outputs,
     OpReturn,
     Code,
+    Domain,
     InputPath,
     AddressPath,
     AddressIndex,
@@ -93,8 +113,9 @@ impl fmt::Display for Refusal {
             Refusal::Transaction => "invalid transaction",
             Refusal::Inputs => "a proof has exactly one (fake) input",
             Refusal::Outputs => "a proof has exactly two outputs",
-            Refusal::OpReturn => "output 0 must be OP_RETURN <tag> <code>",
+            Refusal::OpReturn => "output 0 must be OP_RETURN <tag> <code> <domain>",
             Refusal::Code => "invalid one-time code for WizardConnect sign-in",
+            Refusal::Domain => "invalid relying-party domain",
             Refusal::InputPath => "exactly one wallet input path, for input 0",
             Refusal::AddressPath => "unsupported address path",
             Refusal::AddressIndex => "invalid address index",
@@ -113,25 +134,30 @@ impl std::error::Error for Refusal {}
 
 pub type Result<T> = std::result::Result<T, Refusal>;
 
-/// What the relying party issued and the proof commits to.
+/// What the proof commits to: the one-time code the relying party issued,
+/// and the relying party's own domain.
 ///
-/// Today that is the one-time code alone. Anything a proof later binds (a
-/// relying-party domain was raised in review) is one more field here and one
-/// more push in [`Challenge::pushes`] and [`Challenge::from_pushes`]; the
-/// builder, the validator and the signer take it from this type.
+/// The builder, the validator and the signer take the statement from this
+/// type. Anything a proof binds is a field here and a push in
+/// [`Challenge::pushes`] and [`Challenge::from_pushes`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Challenge {
     code: String,
+    domain: String,
 }
 
 impl Challenge {
-    pub fn new(code: &str) -> Result<Self> {
+    pub fn new(code: &str, domain: &str) -> Result<Self> {
         let alphabet = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-';
         if !CODE_LENGTH.contains(&code.len()) || !code.bytes().all(alphabet) {
             return Err(Refusal::Code);
         }
+        if !is_domain(domain) {
+            return Err(Refusal::Domain);
+        }
         Ok(Challenge {
             code: code.to_owned(),
+            domain: domain.to_owned(),
         })
     }
 
@@ -139,38 +165,77 @@ impl Challenge {
         &self.code
     }
 
+    /// The relying party the proof is for, as the user must be shown it.
+    pub fn domain(&self) -> &str {
+        &self.domain
+    }
+
     /// The pushes that follow the tag, in order.
-    fn pushes(&self) -> [&[u8]; 1] {
-        [self.code.as_bytes()]
+    fn pushes(&self) -> [&[u8]; 2] {
+        [self.code.as_bytes(), self.domain.as_bytes()]
     }
 
     /// Read back what [`Challenge::pushes`] wrote. A different number of
-    /// pushes is a different format, not a challenge with something extra.
+    /// pushes is a different format, not a challenge with something missing
+    /// or extra: the form without a domain is refused, not read as "any".
     fn from_pushes(pushes: &[&[u8]]) -> Result<Self> {
-        let [code] = pushes else {
+        let [code, domain] = pushes else {
             return Err(Refusal::OpReturn);
         };
-        Challenge::new(std::str::from_utf8(code).map_err(|_| Refusal::Code)?)
+        Challenge::new(
+            std::str::from_utf8(code).map_err(|_| Refusal::Code)?,
+            std::str::from_utf8(domain).map_err(|_| Refusal::Domain)?,
+        )
     }
 
     fn op_return(&self) -> Vec<u8> {
         let mut script = vec![OP_RETURN];
         for data in std::iter::once(OP_RETURN_TAG).chain(self.pushes()) {
-            // Both lengths are bounded well below a direct push: the tag is a
-            // constant and `new` caps the code.
-            script.push(data.len() as u8);
-            script.extend_from_slice(data);
+            script.extend_from_slice(&tx::push_data(data));
         }
         script
     }
 
     /// Transaction id of the fake outpoint, in display order.
     fn outpoint_hash(&self) -> [u8; 32] {
-        outpoint_hash(self.code.as_bytes())
+        outpoint_hash(self.code.as_bytes(), self.domain.as_bytes())
     }
 }
 
-fn outpoint_hash(code: &[u8]) -> [u8; 32] {
+/// A lowercase DNS host name and nothing else: no scheme, port, path, user or
+/// trailing dot, so that what the user is shown is exactly what is signed.
+///
+/// Internationalized names appear in their ASCII (`xn--`) form, which is also
+/// the form that cannot be confused with another name on screen. A name
+/// ending in a number is an IPv4 address, not a domain.
+fn is_domain(domain: &str) -> bool {
+    let label = |label: &str| {
+        LABEL_LENGTH.contains(&label.len())
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    };
+    let numeric = |label: &str| label.bytes().all(|byte| byte.is_ascii_digit());
+    DOMAIN_LENGTH.contains(&domain.len())
+        && domain.split('.').all(label)
+        && !domain.rsplit('.').next().is_some_and(numeric)
+}
+
+fn outpoint_hash(code: &[u8], domain: &[u8]) -> [u8; 32] {
+    Sha256::new()
+        .chain_update(OUTPOINT_TAG)
+        .chain_update(code)
+        .chain_update(OUTPOINT_SEPARATOR)
+        .chain_update(domain)
+        .finalize()
+        .into()
+}
+
+/// The outpoint of the format before the domain was bound: the code alone.
+/// Never built or accepted, only recognised by the broadcast guard.
+fn unbound_outpoint_hash(code: &[u8]) -> [u8; 32] {
     Sha256::new()
         .chain_update(OUTPOINT_TAG)
         .chain_update(code)
@@ -230,25 +295,32 @@ pub fn claims(locking_bytecode: &[u8]) -> bool {
 }
 
 /// Whether raw transaction bytes are a sign-in proof, signed or not: a tagged
-/// OP_RETURN and an input spending the outpoint derived from its code.
+/// OP_RETURN and an input spending the outpoint derived from what it states.
 ///
 /// This is the broadcast guard. It is deliberately looser than
-/// [`validate`]: anything built around the fake outpoint can never confirm,
+/// [`validate`]: anything built around a fake outpoint can never confirm,
 /// whatever else was done to it, so none of it may be handed to the network.
+/// That includes a proof in the form from before the domain was bound.
 pub fn is_sign_in_proof(raw: &[u8]) -> bool {
     let Ok(decoded) = tx::decode(raw) else {
         return false;
+    };
+    let spends = |mut wire: [u8; 32]| {
+        wire.reverse();
+        decoded.inputs.iter().any(|(txid, _, _)| *txid == wire)
     };
     decoded.outputs.iter().any(|output| {
         let Some(pushes) = op_return_pushes(&output.script_pubkey) else {
             return false;
         };
-        let [tag, code, ..] = pushes.as_slice() else {
-            return false;
-        };
-        let mut wire = outpoint_hash(code);
-        wire.reverse();
-        *tag == OP_RETURN_TAG && decoded.inputs.iter().any(|(txid, _, _)| *txid == wire)
+        match pushes.as_slice() {
+            [tag, ..] if *tag != OP_RETURN_TAG => false,
+            [_, code] => spends(unbound_outpoint_hash(code)),
+            [_, code, domain, ..] => {
+                spends(outpoint_hash(code, domain)) || spends(unbound_outpoint_hash(code))
+            }
+            _ => false,
+        }
     })
 }
 
@@ -273,6 +345,10 @@ impl Proof {
 
     pub fn code(&self) -> &str {
         self.challenge.code()
+    }
+
+    pub fn domain(&self) -> &str {
+        self.challenge.domain()
     }
 
     pub fn public_key(&self) -> &[u8] {
@@ -596,6 +672,7 @@ mod tests {
     struct Format {
         op_return_tag: String,
         outpoint_tag: String,
+        outpoint_separator: String,
         #[serde(with = "decimal")]
         value_satoshis: u64,
         version: u32,
@@ -632,6 +709,7 @@ mod tests {
     struct ProofVector {
         name: String,
         code: String,
+        domain: String,
         path: String,
         address_index: u32,
         derivation_path: String,
@@ -648,6 +726,9 @@ mod tests {
         unsigned: Vec<u8>,
         #[serde(with = "hex")]
         signed: Vec<u8>,
+        /// Whether relay policy accepts it too. A proof is never relayed.
+        #[serde(rename = "standard")]
+        _standard: bool,
     }
 
     #[derive(Deserialize)]
@@ -729,6 +810,7 @@ mod tests {
         let format = vectors().format;
         assert_eq!(format.op_return_tag.as_bytes(), OP_RETURN_TAG);
         assert_eq!(format.outpoint_tag.as_bytes(), OUTPOINT_TAG);
+        assert_eq!(format.outpoint_separator.as_bytes(), OUTPOINT_SEPARATOR);
         assert_eq!(format.value_satoshis, VALUE_SATOSHIS);
         assert_eq!(format.version, VERSION);
         assert_eq!(format.locktime, LOCKTIME);
@@ -742,7 +824,7 @@ mod tests {
         assert!(!vectors.proofs.is_empty());
         for vector in &vectors.proofs {
             let name = &vector.name;
-            let challenge = Challenge::new(&vector.code).unwrap();
+            let challenge = Challenge::new(&vector.code, &vector.domain).unwrap();
             assert_eq!(
                 challenge.outpoint_hash()[..],
                 vector.outpoint_hash,
@@ -751,11 +833,53 @@ mod tests {
             assert_eq!(challenge.op_return(), vector.op_return, "{name}");
             let proof = Proof::new(challenge, &vector.public_key).unwrap();
             assert_eq!(proof.code(), vector.code, "{name}");
+            assert_eq!(proof.domain(), vector.domain, "{name}");
             assert_eq!(proof.public_key(), vector.public_key, "{name}");
             assert_eq!(proof.locking_bytecode(), vector.locking_bytecode, "{name}");
             assert_eq!(proof.unsigned(), vector.unsigned, "{name}");
             assert_eq!(proof.address("bitcoincash"), vector.addresses.mainnet);
             assert_eq!(proof.address("bchtest"), vector.addresses.chipnet);
+        }
+    }
+
+    #[test]
+    fn a_domain_is_a_lowercase_dns_host_name_and_nothing_else() {
+        let longest_label = "a".repeat(63);
+        for domain in [
+            "example.com",
+            "localhost",
+            "login.example.co.uk",
+            "xn--bcher-kva.example",
+            "3com.example",
+            "a-b.c-d.example",
+            "a.b",
+            &format!("{longest_label}.example"),
+        ] {
+            assert!(is_domain(domain), "{domain}");
+        }
+        for domain in [
+            "",
+            ".",
+            "Example.com",
+            "example.com.",
+            ".example.com",
+            "example..com",
+            "example.com:443",
+            "example.com/login",
+            "https://example.com",
+            "user@example.com",
+            "exa mple.com",
+            "my_app.example",
+            "-example.com",
+            "example-.com",
+            "127.0.0.1",
+            "example.123",
+            "12345",
+            "ex\u{e4}mple.com",
+            "example.com\n",
+            &format!("a{longest_label}.example"),
+        ] {
+            assert!(!is_domain(domain), "{domain:?}");
         }
     }
 
@@ -769,6 +893,7 @@ mod tests {
             assert_eq!(validated.path.name(), vector.path, "{name}");
             assert_eq!(validated.address_index, vector.address_index, "{name}");
             assert_eq!(validated.proof.code(), vector.code, "{name}");
+            assert_eq!(validated.proof.domain(), vector.domain, "{name}");
             assert_eq!(validated.proof.public_key(), vector.public_key, "{name}");
             assert_eq!(validated.proof.unsigned(), vector.unsigned, "{name}");
         }
@@ -874,8 +999,9 @@ mod tests {
         for vector in &vectors.unclaimed {
             let name = &vector.name;
             assert!(!transaction_claims(&vector.request.transaction), "{name}");
-            assert!(!is_sign_in_proof(&vector.request.transaction), "{name}");
-            // Asked directly, the validator still accepts nothing but a proof.
+            // What the broadcast guard makes of each is under `broadcastGuard`:
+            // it is wider than the claim. Asked directly, the validator still
+            // accepts nothing but a proof.
             assert!(vectors.validate(&vector.request).is_err(), "{name}");
         }
     }

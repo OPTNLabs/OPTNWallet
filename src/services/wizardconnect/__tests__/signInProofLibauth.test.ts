@@ -1,8 +1,9 @@
 // Cross-check of the Rust sign-in proof core against @bitauth/libauth.
 //
 // For every proof in test-vectors/wizardconnect-sign-in-proof.json, libauth
-// rebuilds the canonical transaction from the vector's fields alone (the code
-// and the proven address), signs it itself, and runs its BCH VM. The Rust
+// rebuilds the canonical transaction from the vector's fields alone (the code,
+// the relying party's domain and the proven address), signs it itself, and
+// runs its BCH VM. The Rust
 // core, through the committed WASM, must accept libauth's bytes as its own
 // canonical proof and must sign them to exactly libauth's signed bytes.
 //
@@ -43,8 +44,10 @@ const OP_RETURN = 0x6a;
 /** What the proof states after the tag, and what its outpoint hashes. */
 function statement(proof: ProofVector) {
   return {
-    pushes: [utf8ToBin(proof.code)],
-    outpointPreimage: utf8ToBin(`${format.outpointTag}${proof.code}`),
+    pushes: [utf8ToBin(proof.code), utf8ToBin(proof.domain)],
+    outpointPreimage: utf8ToBin(
+      `${format.outpointTag}${proof.code}${format.outpointSeparator}${proof.domain}`
+    ),
   };
 }
 
@@ -145,6 +148,7 @@ describe.each(vectors.proofs)(
       const validated = validateSignInProofRequest(request, vectorWallet());
       expect(validated).toMatchObject({
         code: proof.code,
+        domain: proof.domain,
         path: proof.path,
         addressIndex: proof.addressIndex,
       });
@@ -176,7 +180,11 @@ describe.each(vectors.proofs)(
       expect(binToHex(encodeTransaction(decoded))).toBe(binToHex(unsigned));
 
       expect(libauthVerifies(rustSigned, proof, false)).toBe(true);
-      expect(libauthVerifies(rustSigned, proof, true)).toBe(true);
+      // A proof is never relayed. A long domain can take it past the relay
+      // limit on data carriers; the vector says which.
+      expect(libauthVerifies(rustSigned, proof, true) === true).toBe(
+        proof.standard
+      );
     });
   }
 );

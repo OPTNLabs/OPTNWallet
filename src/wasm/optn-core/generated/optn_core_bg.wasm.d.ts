@@ -88,7 +88,7 @@ export const scanTransaction: (a: number, b: number, c: number, d: number, e: nu
 export const sendBlockReason: (a: number, b: number) => [number, number, number, number];
 export const sharedSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const signInProofClaims: (a: number, b: number) => number;
-export const signInProofSign: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+export const signInProofSign: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const signInProofValidate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
 export const spendingKey: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const spentOutputLabel: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];

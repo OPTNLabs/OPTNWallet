@@ -1915,33 +1915,37 @@ export function signInProofClaims(locking_bytecode) {
 }
 
 /**
- * Sign the canonical proof for `code` with the key of the proven address,
- * returning the signed transaction. Nothing of the dApp's request is signed.
+ * Sign the canonical proof for `code` and `domain` with the key of the
+ * proven address, returning the signed transaction. Nothing of the dApp's
+ * request is signed.
  * @param {string} code
+ * @param {string} domain
  * @param {Uint8Array} public_key
  * @param {Uint8Array} private_key
  * @returns {Uint8Array}
  */
-export function signInProofSign(code, public_key, private_key) {
+export function signInProofSign(code, domain, public_key, private_key) {
     const ptr0 = passStringToWasm0(code, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray8ToWasm0(public_key, wasm.__wbindgen_malloc);
+    const ptr1 = passStringToWasm0(domain, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArray8ToWasm0(private_key, wasm.__wbindgen_malloc);
+    const ptr2 = passArray8ToWasm0(public_key, wasm.__wbindgen_malloc);
     const len2 = WASM_VECTOR_LEN;
-    const ret = wasm.signInProofSign(ptr0, len0, ptr1, len1, ptr2, len2);
+    const ptr3 = passArray8ToWasm0(private_key, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.signInProofSign(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
-    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    var v5 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v4;
+    return v5;
 }
 
 /**
  * Validate a request that claims to be a sign-in proof against the wallet's
- * own branch xpubs. Returns JSON `{code, path, addressIndex, address,
- * publicKey}` with the key in hex, or throws the refusal reason.
+ * own branch xpubs. Returns JSON `{code, domain, path, addressIndex,
+ * address, publicKey}` with the key in hex, or throws the refusal reason.
  * @param {string} request_json
  * @param {string} receive_xpub
  * @param {string} change_xpub

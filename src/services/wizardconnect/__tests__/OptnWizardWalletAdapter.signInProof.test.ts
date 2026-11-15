@@ -74,6 +74,7 @@ describe('OptnWizardWalletAdapter sign-in proofs', () => {
     const adapter = await OptnWizardWalletAdapter.create(1);
     expect(adapter.inspectSignInProof(proofRequest(proof))).toMatchObject({
       code: proof.code,
+      domain: proof.domain,
       path: proof.path,
       addressIndex: proof.addressIndex,
       address: proof.addresses.mainnet,

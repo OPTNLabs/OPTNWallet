@@ -130,7 +130,7 @@ pub fn varint(n: u64) -> Vec<u8> {
     }
 }
 
-fn push_data(data: &[u8]) -> Vec<u8> {
+pub(crate) fn push_data(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() + 5);
     match data.len() {
         0..=75 => out.push(data.len() as u8),

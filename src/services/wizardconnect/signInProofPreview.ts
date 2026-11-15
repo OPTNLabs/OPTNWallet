@@ -26,6 +26,8 @@ export type WizardSignInProofPreview =
       kind: 'proof';
       schemeId: string;
       schemeLabel: string;
+      /** Who the proof is for, as validated by the wallet. */
+      domain: string;
       code: string;
       address: string;
     }
@@ -52,6 +54,7 @@ export function previewWizardSignInProof(
       kind: 'proof',
       schemeId: proof.scheme.id,
       schemeLabel: proof.scheme.label,
+      domain: proof.domain,
       code: proof.code,
       address: proof.address,
     };

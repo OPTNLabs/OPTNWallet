@@ -2,8 +2,11 @@ import { useI18n } from '../../i18n/useI18n';
 
 export type WizardSignInProofViewProps = {
   dappName: string;
-  /** Scheme label shown on the approval screen, "WizardConnect sign-in". */
-  schemeLabel?: string;
+  /**
+   * The relying party the proof is for. The signature commits to it, so this
+   * is who the user is signing in to whatever the connected dApp calls itself.
+   */
+  domain?: string;
   address?: string;
   code?: string;
   /** Validation failure. Approval stays disabled. */
@@ -17,12 +20,12 @@ export type WizardSignInProofViewProps = {
 
 /**
  * Approval screen for a WizardConnect sign-in proof. Distinct from the
- * payment screen: there are no amounts, only who is asking, which address is
- * being proven, and the one-time code.
+ * payment screen: there are no amounts, only who is asking, who the proof
+ * is for, which address is being proven, and the one-time code.
  */
 export default function WizardSignInProofView({
   dappName,
-  schemeLabel,
+  domain,
   address,
   code,
   error,
@@ -33,7 +36,7 @@ export default function WizardSignInProofView({
 }: WizardSignInProofViewProps) {
   const { t } = useI18n();
   const canApprove =
-    !error && !disabledBySetting && !!address && !!code && !busy;
+    !error && !disabledBySetting && !!domain && !!address && !!code && !busy;
 
   return (
     <div className="wallet-popup-backdrop">
@@ -52,13 +55,16 @@ export default function WizardSignInProofView({
               {dappName}
             </div>
           </div>
-          {schemeLabel && (
+          {domain && (
             <div>
               <div className="wallet-muted">
                 {t('wizard.signInProofSignInTo')}
               </div>
-              <div className="font-semibold wallet-text-strong break-words">
-                {schemeLabel}
+              <div
+                className="font-mono font-semibold wallet-text-strong break-all"
+                data-testid="wizard-sign-in-proof-domain"
+              >
+                {domain}
               </div>
             </div>
           )}
