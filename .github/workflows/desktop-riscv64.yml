@@ -68,6 +68,49 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libevent-2.1-7
 
+      # riscv64 packages live only on ports.ubuntu.com. The action below gets
+      # them by adding ports to the runner's apt mirror list, which only works
+      # on runners whose sources go through that list (Azure-hosted ones use
+      # `mirror+file:/etc/apt/apt-mirrors.txt`). Other runners carry plain
+      # sources (us-east-2.ec2.archive.ubuntu.com and security.ubuntu.com were
+      # seen on image ubuntu24/20261111.127); there apt asks security.ubuntu.com
+      # for riscv64 indexes it does not host, and the update fails with a 404.
+      # So, whatever the runner: the existing sources serve the host's
+      # architectures only, and riscv64 comes from an explicit ports source.
+      - name: Point riscv64 packages at ports.ubuntu.com
+        run: |
+          set -euo pipefail
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          for file in /etc/apt/sources.list.d/*.sources; do
+            # A stanza with no Architectures field serves every enabled
+            # architecture; give those the host's. Blocks of comments alone
+            # are not stanzas and are left as they are.
+            sudo awk '
+              function flush() {
+                if (n) { if (types && !arch) print "Architectures: amd64 i386"; for (i = 1; i <= n; i++) print buf[i]; print "" }
+                n = 0; arch = 0; types = 0
+              }
+              /^[[:space:]]*$/ { flush(); next }
+              { buf[++n] = $0 }
+              /^Architectures:/ { arch = 1 }
+              /^Types:/ { types = 1 }
+              END { flush() }
+            ' "$file" | sudo tee "$file.tmp" >/dev/null
+            sudo mv "$file.tmp" "$file"
+          done
+          if [ -f /etc/apt/sources.list ]; then
+            sudo sed -i -E 's/^deb ([^[])/deb [arch=amd64,i386] \1/' /etc/apt/sources.list
+          fi
+          sudo tee /etc/apt/sources.list.d/ubuntu-ports-riscv64.sources >/dev/null <<EOF
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports/
+          Suites: ${codename} ${codename}-updates ${codename}-backports ${codename}-security
+          Components: main restricted universe multiverse
+          Architectures: riscv64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          grep -H -E '^(URIs|Suites|Architectures):' /etc/apt/sources.list.d/*.sources
+
       - name: Setup riscv64 cross toolchain
         uses: taiki-e/setup-cross-toolchain-action@12b7ad4acfa95a1476779d6c06699b96ec1691f8 # v1
         with:
