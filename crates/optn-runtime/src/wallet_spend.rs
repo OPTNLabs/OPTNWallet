@@ -28,6 +28,9 @@ use std::collections::BTreeSet;
 /// check the hex length before allocating decoded bytes.
 pub const MAX_SIGNED_TRANSACTION_BYTES: usize = 100_000;
 
+/// Why [`validate_signed_submission`] turns a sign-in proof away.
+pub const SIGN_IN_PROOF_NOT_BROADCAST: &str = "A WizardConnect sign-in proof is never broadcast.";
+
 /// Exact bytes and identities of a transaction that passed wallet preflight.
 /// This is neither a signature-verification result nor a broadcast receipt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +113,12 @@ pub fn validate_signed_submission(
         return Err(TransportError::InvalidData(
             "Transaction bytes must match the bounded hexadecimal request.".into(),
         ));
+    }
+    // A WizardConnect sign-in proof is a login credential built around an
+    // outpoint that does not exist. It is never a payment, whichever surface
+    // or signer handed it over, and no provider may be shown it.
+    if optn_core::sign_in_proof::is_sign_in_proof(raw) {
+        return Err(TransportError::Other(SIGN_IN_PROOF_NOT_BROADCAST.into()));
     }
     let decoded =
         tx::decode(raw).map_err(|error| TransportError::InvalidData(error.to_string()))?;
@@ -662,6 +671,57 @@ mod tests {
         fixture.replace_raw(original);
         fixture.request.raw_hex.replace_range(..2, "ff");
         assert!(fixture.validate(BTreeSet::new()).is_err());
+    }
+
+    #[test]
+    fn signed_submission_never_admits_a_wizardconnect_sign_in_proof() {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../test-vectors/wizardconnect-sign-in-proof.json"
+        ))
+        .unwrap();
+        let bytes = |hex: &serde_json::Value| -> Vec<u8> {
+            let hex = hex.as_str().unwrap();
+            (0..hex.len())
+                .step_by(2)
+                .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
+                .collect()
+        };
+        let mut fixture = SubmissionFixture::new();
+        let receive_address = fixture
+            .state
+            .wallet
+            .as_ref()
+            .unwrap()
+            .receive_address
+            .clone();
+        // A provider that invented a coin at the fake outpoint must not turn
+        // the proof into a spend of an owned input: the guard does not depend
+        // on what the coin set says.
+        for proof in vectors["proofs"].as_array().unwrap() {
+            let fake = Outpoint::parse(proof["outpointHash"].as_str().unwrap(), 0).unwrap();
+            fixture
+                .state
+                .coins
+                .insert(optn_core::coins::Coin::new(fake, 1000, receive_address.clone()).unwrap())
+                .unwrap();
+        }
+        let mut refused = 0;
+        for case in vectors["broadcastGuard"].as_array().unwrap() {
+            fixture.replace_raw(bytes(&case["transaction"]));
+            let outcome = fixture.validate(BTreeSet::new());
+            let is_guard = matches!(
+                &outcome,
+                Err(TransportError::Other(message)) if message == SIGN_IN_PROOF_NOT_BROADCAST
+            );
+            assert_eq!(
+                is_guard,
+                case["signInProof"].as_bool().unwrap(),
+                "{}: {outcome:?}",
+                case["name"]
+            );
+            refused += usize::from(is_guard);
+        }
+        assert!(refused >= 2, "unsigned and signed proofs are both covered");
     }
 
     #[test]
