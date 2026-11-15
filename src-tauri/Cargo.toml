@@ -164,3 +164,8 @@ glib = { path = "../vendor/glib-0.18.5" }
 # each OPTN.md.
 openmls_basic_credential = { path = "../vendor/openmls_basic_credential-0.5.0" }
 openmls_rust_crypto = { path = "../vendor/openmls_rust_crypto-0.5.1" }
+# MDK 0.8's SQLCipher store on rusqlite 0.42, whose SQLCipher 4.20.0 is on
+# SQLite 3.54.1 (RUSTSEC-2026-0459), and refinery-core 0.9.2 accepting that
+# rusqlite; see each OPTN.md.
+mdk-sqlite-storage = { path = "../vendor/mdk-sqlite-storage-0.8.0" }
+refinery-core = { path = "../vendor/refinery-core-0.9.2" }
