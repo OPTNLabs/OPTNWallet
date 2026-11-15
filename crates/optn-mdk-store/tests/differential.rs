@@ -65,6 +65,29 @@ where
     }
 }
 
+/// Both answers equal, for calls that carry exporter secrets: the same check
+/// as [`same`], but a failure names only the step, the call and which side
+/// erred. Neither the secrets nor the stores' error text reach the test
+/// output, which CI keeps.
+fn same_secret<T, E>(step: usize, call: &str, ours: Result<T, E>, theirs: Result<T, E>)
+where
+    T: PartialEq,
+    E: std::fmt::Display,
+{
+    let outcome = |answer: &Result<T, E>| if answer.is_ok() { "Ok" } else { "Err" };
+    let agree = match (&ours, &theirs) {
+        (Ok(ours), Ok(theirs)) => ours == theirs,
+        (Err(ours), Err(theirs)) => ours.to_string() == theirs.to_string(),
+        _ => false,
+    };
+    assert!(
+        agree,
+        "step {step}: {call}: ours {}, theirs {} (values withheld: secret material)",
+        outcome(&ours),
+        outcome(&theirs)
+    );
+}
+
 fn describe<T: std::fmt::Debug, E: std::fmt::Display>(answer: &Result<T, E>) -> String {
     match answer {
         Ok(value) => format!("Ok({value:?})"),
@@ -346,19 +369,19 @@ fn run(seed: u64) {
                     secret: Secret::new([dice.roll(255) as u8; 32]),
                 };
                 match dice.roll(3) {
-                    0 => same(
+                    0 => same_secret(
                         step,
                         "save_secret",
                         ours.save_group_exporter_secret(secret.clone()),
                         theirs.save_group_exporter_secret(secret),
                     ),
-                    1 => same(
+                    1 => same_secret(
                         step,
                         "save_legacy",
                         ours.save_group_legacy_exporter_secret(secret.clone()),
                         theirs.save_group_legacy_exporter_secret(secret),
                     ),
-                    _ => same(
+                    _ => same_secret(
                         step,
                         "save_mip04",
                         ours.save_group_mip04_exporter_secret(secret.clone()),
@@ -366,7 +389,7 @@ fn run(seed: u64) {
                     ),
                 }
                 let at = dice.roll(8);
-                same(
+                same_secret(
                     step,
                     "secret",
                     ours.get_group_exporter_secret(&g, at)
@@ -375,7 +398,7 @@ fn run(seed: u64) {
                         .get_group_exporter_secret(&g, at)
                         .map(|s| s.map(|s| *s.secret)),
                 );
-                same(
+                same_secret(
                     step,
                     "legacy",
                     ours.get_group_legacy_exporter_secret(&g, at)
@@ -384,7 +407,7 @@ fn run(seed: u64) {
                         .get_group_legacy_exporter_secret(&g, at)
                         .map(|s| s.map(|s| *s.secret)),
                 );
-                same(
+                same_secret(
                     step,
                     "mip04",
                     ours.get_group_mip04_exporter_secret(&g, at)
@@ -396,7 +419,7 @@ fn run(seed: u64) {
             }
             19 => {
                 let keep = dice.roll(8);
-                same(
+                same_secret(
                     step,
                     "prune_secrets",
                     ours.prune_group_exporter_secrets_before_epoch(&g, keep),
