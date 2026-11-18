@@ -1,26 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  binToHex,
   createVirtualMachineBCH,
   decodeTransaction,
-  encodeTransaction,
   hexToBin,
-  secp256k1,
 } from '@bitauth/libauth';
-import type { SignTransactionRequest } from '@wizardconnect/core';
 import {
-  buildCanonicalSignInProof,
-  p2pkhLockingBytecode,
-} from '../signInProof';
+  proofRequest,
+  refusalNamed,
+  sdkRequest,
+  vectors,
+} from './signInProofVectors';
 
-// Throwaway test key 0x00..07 stands in for every derived key.
-const testKey = () => {
-  const key = new Uint8Array(32);
-  key[31] = 7;
-  return key;
-};
-
-const TEST_CODE = 'Session_abcdef-0123456789';
+// The wallet is the public BIP39 test mnemonic the shared vectors were made
+// from, so the adapter derives real keys and must reproduce the vector bytes.
+const proof = vectors.proofs[0];
 
 const mocks = vi.hoisted(() => ({
   state: {} as Record<string, unknown>,
@@ -34,26 +27,16 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../../apis/WalletManager/WalletManager', () => ({
   default: () => ({
     getWalletInfo: async () => ({
-      mnemonic: 'mocked test key',
+      mnemonic: vectors.wallet.mnemonic,
       passphrase: '',
       networkType: 'mainnet',
       wallet_name: 'Test',
-      derivation_path: "m/44'/145'/0'",
+      derivation_path: vectors.wallet.accountPath,
     }),
   }),
 }));
 vi.mock('../../KeyService', () => ({
-  default: {
-    getWalletXpubs: async () => ({
-      receive: 'xpub-r',
-      change: 'xpub-c',
-      defi: 'xpub-d',
-    }),
-  },
-}));
-vi.mock('../derivation', () => ({
-  derivePublicKeyFromXpub: () => secp256k1.derivePublicKeyCompressed(testKey()),
-  derivePrivateKeyForPath: async () => testKey(),
+  default: { getWalletXpubs: async () => vectors.wallet.xpubs },
 }));
 vi.mock('../relayKeyStore', () => ({
   hydrateRelayKeys: async () => undefined,
@@ -74,25 +57,6 @@ vi.mock('../../ElectrumAdapter', () => ({
 
 import { OptnWizardWalletAdapter } from '../OptnWizardWalletAdapter';
 
-function proofRequest(): SignTransactionRequest {
-  const publicKey = secp256k1.derivePublicKeyCompressed(
-    testKey()
-  ) as Uint8Array;
-  const built = buildCanonicalSignInProof(
-    TEST_CODE,
-    p2pkhLockingBytecode(publicKey)
-  );
-  return {
-    transaction: {
-      transaction: binToHex(encodeTransaction(built.transaction)),
-      sourceOutputs: built.sourceOutputs,
-      broadcast: false,
-    },
-    sequence: 1,
-    inputPaths: [[0, 'receive', 0]],
-  } as unknown as SignTransactionRequest;
-}
-
 describe('OptnWizardWalletAdapter sign-in proofs', () => {
   beforeEach(() => {
     mocks.state = {};
@@ -106,23 +70,34 @@ describe('OptnWizardWalletAdapter sign-in proofs', () => {
     mocks.signWithOneKey.mockReset();
   });
 
+  it('inspects a proof to the address at the requested path', async () => {
+    const adapter = await OptnWizardWalletAdapter.create(1);
+    expect(adapter.inspectSignInProof(proofRequest(proof))).toMatchObject({
+      code: proof.code,
+      domain: proof.domain,
+      path: proof.path,
+      addressIndex: proof.addressIndex,
+      address: proof.addresses.mainnet,
+    });
+  });
+
   it('signs a WCPROOF in software that the BCH VM accepts', async () => {
     const adapter = await OptnWizardWalletAdapter.create(1);
-    const request = proofRequest();
-    const { signedTransaction } = await adapter.signTransaction(request);
+    const { signedTransaction } = await adapter.signTransaction(
+      proofRequest(proof)
+    );
+    expect(signedTransaction).toBe(proof.signed);
     const signed = decodeTransaction(hexToBin(signedTransaction as string));
     if (typeof signed === 'string') throw new Error(signed);
-    const publicKey = secp256k1.derivePublicKeyCompressed(
-      testKey()
-    ) as Uint8Array;
-    const { sourceOutputs } = buildCanonicalSignInProof(
-      TEST_CODE,
-      p2pkhLockingBytecode(publicKey)
-    );
     expect(
       createVirtualMachineBCH().verify({
         transaction: signed,
-        sourceOutputs,
+        sourceOutputs: [
+          {
+            lockingBytecode: hexToBin(proof.lockingBytecode),
+            valueSatoshis: BigInt(vectors.format.valueSatoshis),
+          },
+        ],
       })
     ).toBe(true);
     expect(mocks.getElectrumAdapter).not.toHaveBeenCalled();
@@ -133,9 +108,9 @@ describe('OptnWizardWalletAdapter sign-in proofs', () => {
     async (type) => {
       mocks.state = { hardwareWallet: { type, connected: true } };
       const adapter = await OptnWizardWalletAdapter.create(1);
-      await expect(adapter.signTransaction(proofRequest())).rejects.toThrow(
-        /not supported with a .* hardware wallet/
-      );
+      await expect(
+        adapter.signTransaction(proofRequest(proof))
+      ).rejects.toThrow(/not supported with a .* hardware wallet/);
       expect(mocks.getElectrumAdapter).not.toHaveBeenCalled();
       expect(mocks.electrumRequest).not.toHaveBeenCalled();
       expect(mocks.signWithLedger).not.toHaveBeenCalled();
@@ -147,31 +122,19 @@ describe('OptnWizardWalletAdapter sign-in proofs', () => {
   it('refuses when sign-in proofs are turned off', async () => {
     mocks.state = { preferences: { enableWizardSignInProofs: false } };
     const adapter = await OptnWizardWalletAdapter.create(1);
-    await expect(adapter.signTransaction(proofRequest())).rejects.toThrow(
+    await expect(adapter.signTransaction(proofRequest(proof))).rejects.toThrow(
       /turned off/
     );
   });
 
   it('refuses a tampered proof on the Ledger path without fetching anything', async () => {
     mocks.state = { hardwareWallet: { type: 'ledger', connected: true } };
-    const request = proofRequest();
-    const publicKey = secp256k1.derivePublicKeyCompressed(
-      testKey()
-    ) as Uint8Array;
-    const built = buildCanonicalSignInProof(
-      TEST_CODE,
-      p2pkhLockingBytecode(publicKey)
-    );
-    built.transaction.outputs[1] = {
-      ...built.transaction.outputs[1],
-      valueSatoshis: 1n,
-    };
-    (request.transaction as { transaction: string }).transaction = binToHex(
-      encodeTransaction(built.transaction)
-    );
+    const tampered = refusalNamed('a tampered output value');
     const adapter = await OptnWizardWalletAdapter.create(1);
-    await expect(adapter.signTransaction(request)).rejects.toThrow(
-      /sign-in proof refused/
+    await expect(
+      adapter.signTransaction(sdkRequest(tampered.request))
+    ).rejects.toThrow(
+      `WizardConnect sign-in proof refused: ${tampered.reason}`
     );
     expect(mocks.getElectrumAdapter).not.toHaveBeenCalled();
     expect(mocks.signWithLedger).not.toHaveBeenCalled();

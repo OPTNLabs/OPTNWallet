@@ -8,22 +8,7 @@ import ElectrumService, {
 } from '../ElectrumService';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import { Network } from '../../state/slices/networkSlice';
-import { binToHex, encodeTransaction, secp256k1 } from '@bitauth/libauth';
-import {
-  buildCanonicalSignInProof,
-  p2pkhLockingBytecode,
-} from '../wizardconnect/signInProof';
-
-function unsignedSignInProofHex(): string {
-  const key = new Uint8Array(32);
-  key[31] = 7;
-  const publicKey = secp256k1.derivePublicKeyCompressed(key) as Uint8Array;
-  const proof = buildCanonicalSignInProof(
-    'Session_abcdef-0123456789',
-    p2pkhLockingBytecode(publicKey)
-  );
-  return binToHex(encodeTransaction(proof.transaction));
-}
+import signInProofVectors from '../../../test-vectors/wizardconnect-sign-in-proof.json';
 
 vi.mock('../../apis/ElectrumServer/ElectrumServer', () => ({
   default: vi.fn(),
@@ -559,9 +544,13 @@ describe('ElectrumService', () => {
     };
     mockedElectrumServer.mockReturnValue(server as never);
 
-    await expect(
-      ElectrumService.broadcastTransaction(unsignedSignInProofHex())
-    ).resolves.toMatch(/Refusing to broadcast a WizardConnect sign-in proof/);
+    // Unsigned and signed: the shared vectors the Rust core is tested with.
+    const [proof] = signInProofVectors.proofs;
+    for (const raw of [proof.unsigned, proof.signed]) {
+      await expect(
+        ElectrumService.broadcastTransaction(raw)
+      ).resolves.toMatch(/Refusing to broadcast a WizardConnect sign-in proof/);
+    }
     expect(mockedElectrumServer).not.toHaveBeenCalled();
     expect(server.request).not.toHaveBeenCalled();
   });

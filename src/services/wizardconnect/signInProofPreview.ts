@@ -1,15 +1,11 @@
 import type { PendingSignRequest } from '@wizardconnect/wallet';
-import type { Network } from '../../state/slices/networkSlice';
-import { PREFIX } from '../../utils/constants';
 import {
   findClaimedSignInProofSchemeInPayload,
-  signInProofAddress,
   type ValidatedSignInProof,
 } from './signInProof';
 
 /** The part of OptnWizardWalletAdapter the approval screen needs. */
 type SignInProofInspector = {
-  readonly network: Network;
   inspectSignInProof(
     request: PendingSignRequest['request']
   ): ValidatedSignInProof | null;
@@ -30,6 +26,8 @@ export type WizardSignInProofPreview =
       kind: 'proof';
       schemeId: string;
       schemeLabel: string;
+      /** Who the proof is for, as validated by the wallet. */
+      domain: string;
       code: string;
       address: string;
     }
@@ -56,8 +54,9 @@ export function previewWizardSignInProof(
       kind: 'proof',
       schemeId: proof.scheme.id,
       schemeLabel: proof.scheme.label,
+      domain: proof.domain,
       code: proof.code,
-      address: signInProofAddress(proof, PREFIX[activeInspector.network]),
+      address: proof.address,
     };
   } catch (error) {
     return {

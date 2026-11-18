@@ -201,9 +201,7 @@ export default function WizardSignTransactionModal() {
         dappName={
           connection?.dappName ?? connection?.label ?? t('wizard.unknownDapp')
         }
-        schemeLabel={
-          signInProof.kind === 'proof' ? signInProof.schemeLabel : undefined
-        }
+        domain={signInProof.kind === 'proof' ? signInProof.domain : undefined}
         address={signInProof.kind === 'proof' ? signInProof.address : undefined}
         code={signInProof.kind === 'proof' ? signInProof.code : undefined}
         error={signInProof.kind === 'invalid' ? signInProof.message : undefined}
