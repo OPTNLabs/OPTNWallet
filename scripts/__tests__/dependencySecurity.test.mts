@@ -241,3 +241,36 @@ it('installs no elliptic: crypto-browserify is the throwing stand-in', () => {
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
 });
+
+it('rejects a block whose transaction list was padded with a duplicate', () => {
+  // GHSA-8vv3-6qpc-gpw6: bitcoinjs-lib 6.0.0-6.1.7 (reached only through the
+  // Ledger libraries) accepted [A, B, C, C] for a block committing to
+  // [A, B, C], since both lists hash to the same merkle root.
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--eval',
+      String.raw`
+        const assert = require('node:assert/strict');
+        const { Block, Transaction } = require('bitcoinjs-lib');
+        const spend = (byte) => {
+          const tx = new Transaction();
+          tx.addInput(Buffer.alloc(32, byte), 0);
+          tx.addOutput(Buffer.from('6a', 'hex'), 0);
+          return tx;
+        };
+        const honest = [spend(1), spend(2), spend(3)];
+        const forged = [...honest, honest[2]];
+        const root = Block.calculateMerkleRoot(honest);
+        assert.deepEqual(Block.calculateMerkleRoot(forged), root);
+        const block = (transactions) =>
+          Object.assign(new Block(), { merkleRoot: root, transactions });
+        assert.equal(block(honest).checkTxRoots(), true);
+        assert.equal(block(forged).checkTxRoots(), false);
+      `,
+    ],
+    { cwd: repoRoot, encoding: 'utf8', timeout: 10_000 }
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+});
