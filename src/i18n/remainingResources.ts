@@ -601,6 +601,7 @@ export const remainingTranslations = {
     'appLock.checking': 'Checking…',
     'appLock.confirm': 'Confirm',
 
+    'about.version': 'Version {version}',
     'about.overview': 'Overview',
     'about.overviewText':
       'The OPTN Wallet App gives you direct control and security over your digital assets. Bitcoin covenants let you set custom rules for how funds can be spent, so your wallet can match your preferences.',
@@ -1603,6 +1604,7 @@ export const remainingTranslations = {
     'reconfiguration.keepOpen':
       'Mantén OPTN Wallet abierta. La navegación está temporalmente desactivada mientras se reconstruyen los datos de la billetera.',
 
+    'about.version': 'Versión {version}',
     'about.overview': 'Descripción general',
     'about.overviewText':
       'OPTN Wallet te ofrece control directo y seguridad sobre tus activos digitales. Los covenants de Bitcoin permiten definir reglas personalizadas para gastar fondos y adaptar la billetera a tus preferencias.',
@@ -2650,6 +2652,7 @@ export const remainingTranslations = {
     'reconfiguration.keepOpen':
       '请保持 OPTN Wallet 打开。重建钱包数据期间，导航功能会暂时禁用。',
 
+    'about.version': '版本 {version}',
     'about.overview': '概览',
     'about.overviewText':
       'OPTN Wallet 为你提供对数字资产的直接控制和安全保护。Bitcoin covenant 允许你为资金使用设置自定义规则，让钱包符合你的偏好。',

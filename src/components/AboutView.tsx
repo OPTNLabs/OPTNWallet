@@ -1,4 +1,5 @@
 import { useI18n } from '../i18n/useI18n';
+import { APP_VERSION } from '../utils/appVersion';
 import ContractDetails from './ContractDetails';
 
 const AboutView = () => {
@@ -16,8 +17,17 @@ const AboutView = () => {
     ['about.community', 'about.communityText'],
   ] as const;
   return (
-    <div className="flex flex-col items-center justify-center p-4">
-      <div className="w-full max-w-2xl overflow-y-auto max-h-[65vh]">
+    <div className="flex h-full min-h-0 min-w-0 w-full flex-col">
+      <div
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain"
+        data-testid="about-optn-scroll"
+      >
+        <p
+          className="mb-4 text-sm font-medium wallet-text-strong"
+          data-testid="about-app-version"
+        >
+          {t('about.version', { version: APP_VERSION })}
+        </p>
         <h2 className="text-3xl font-bold mb-4">{t('about.overview')}</h2>
         <p className="mb-4">{t('about.overviewText')}</p>
 
