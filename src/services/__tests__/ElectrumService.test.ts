@@ -8,6 +8,7 @@ import ElectrumService, {
 } from '../ElectrumService';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import { Network } from '../../state/slices/networkSlice';
+import signInProofVectors from '../../../test-vectors/wizardconnect-sign-in-proof.json';
 
 vi.mock('../../apis/ElectrumServer/ElectrumServer', () => ({
   default: vi.fn(),
@@ -532,6 +533,26 @@ describe('ElectrumService', () => {
     await expect(ElectrumService.broadcastTransaction('rawhex')).resolves.toBe(
       'Invalid transaction hash response'
     );
+  });
+
+  it('broadcastTransaction never sends a WizardConnect sign-in proof', async () => {
+    const server = {
+      request: vi.fn(async () => 'txid123'),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    // Unsigned and signed: the shared vectors the Rust core is tested with.
+    const [proof] = signInProofVectors.proofs;
+    for (const raw of [proof.unsigned, proof.signed]) {
+      await expect(
+        ElectrumService.broadcastTransaction(raw)
+      ).resolves.toMatch(/Refusing to broadcast a WizardConnect sign-in proof/);
+    }
+    expect(mockedElectrumServer).not.toHaveBeenCalled();
+    expect(server.request).not.toHaveBeenCalled();
   });
 
   it('getTransactionHistory validates response shape', async () => {

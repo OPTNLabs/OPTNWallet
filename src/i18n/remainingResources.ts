@@ -985,6 +985,20 @@ export const remainingTranslations = {
       'Technical transaction details ({inputs} inputs, {outputs} outputs)',
     'wizard.nftCapability': 'NFT capability',
     'wizard.nftCommitment': 'NFT commitment',
+    'wizard.signInProofTitle': 'Sign-in proof',
+    'wizard.signInProofSignInTo': 'Signing in to',
+    'wizard.signInProofAddress': 'Address being proven',
+    'wizard.signInProofCode': 'One-time code',
+    'wizard.signInProofNoFunds': "No funds move. This can't be broadcast.",
+    'wizard.signInProofExplainer':
+      'Signing proves you control this address. The wallet built this proof itself from the one-time code; its only input is made up and does not exist on the blockchain.',
+    'wizard.signInProofApprove': 'Sign in',
+    'wizard.signInProofInvalid': 'This sign-in request was refused: {message}',
+    'wizard.signInProofDisabled':
+      'Sign-in proofs are turned off in WizardConnect settings.',
+    'wizard.signInProofSetting': 'Enable WizardConnect sign-in proofs',
+    'wizard.signInProofSettingDescription':
+      'Let sites ask you to prove you own an address with a wallet-built proof that moves no funds and cannot be broadcast.',
     'wizard.unknownDapp': 'Unknown dApp',
     'wizard.dapp': 'DApp',
     'wizard.status': 'Status',

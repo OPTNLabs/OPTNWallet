@@ -12,6 +12,7 @@ import {
   wizardConnectPair,
 } from '../../redux/wizardconnect/thunks';
 import { initialState, type ActiveWizardConnections } from '../../redux/wizardconnect/types';
+import { setSignInProofInspector } from '../../services/wizardconnect/signInProofPreview';
 
 let wizardManagerSingleton: WalletConnectionManager | null = null;
 let wizardAdapterSingleton: OptnWizardWalletAdapter | null = null;
@@ -66,6 +67,7 @@ async function initializeWizardConnect(walletId: number, dispatch: AppDispatch) 
     wizardManagerSingleton?.disconnectAll();
     wizardManagerSingleton = null;
     wizardAdapterSingleton = null;
+    setSignInProofInspector(null);
     wizardListenersBoundWalletId = null;
     return {
       manager: null,
@@ -87,6 +89,7 @@ async function initializeWizardConnect(walletId: number, dispatch: AppDispatch) 
   }
 
   wizardAdapterSingleton = await OptnWizardWalletAdapter.create(walletId);
+  setSignInProofInspector(wizardAdapterSingleton);
   wizardManagerSingleton = new WalletConnectionManager(wizardAdapterSingleton);
   wizardListenersBoundWalletId = walletId;
   registerWizardListeners(wizardManagerSingleton, dispatch);
